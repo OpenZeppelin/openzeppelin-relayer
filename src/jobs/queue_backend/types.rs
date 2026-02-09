@@ -1,49 +1,59 @@
 //! Queue backend type definitions.
 //!
 //! This module defines types for the queue backend abstraction layer:
-//! - QueueType: Enum representing different queue types (Stellar-specific)
+//! - QueueType: Enum representing different queue types
 //! - QueueBackendError: Error types for queue operations
 //! - WorkerHandle: Handle to running worker tasks
 //! - QueueHealth: Queue health status information
 
+use actix_web::web::ThinData;
+use apalis::prelude::{Attempt, Data, Error, TaskId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
-/// Queue types for Stellar relayer operations.
+/// Queue types for relayer operations.
 ///
 /// Each variant represents a specific job processing queue with its own
 /// configuration, concurrency limits, and retry behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum QueueType {
     /// Transaction request queue - initial validation and preparation
-    StellarTransactionRequest,
+    TransactionRequest,
     /// Transaction submission queue - network submission (Submit/Resubmit/Cancel/Resend)
-    StellarTransactionSubmission,
-    /// Stellar status check queue - high-frequency status monitoring
-    StellarStatusCheck,
+    TransactionSubmission,
+    /// Status check queue - high-frequency status monitoring
+    StatusCheck,
     /// Notification queue - webhook delivery
-    StellarNotification,
+    Notification,
+    /// Token swap request queue
+    TokenSwapRequest,
+    /// Relayer health check queue
+    RelayerHealthCheck,
 }
 
 impl QueueType {
     /// Returns the queue name for logging and identification purposes.
     pub fn queue_name(&self) -> &'static str {
         match self {
-            Self::StellarTransactionRequest => "transaction-request",
-            Self::StellarTransactionSubmission => "transaction-submission",
-            Self::StellarStatusCheck => "status-check",
-            Self::StellarNotification => "notification",
+            Self::TransactionRequest => "transaction-request",
+            Self::TransactionSubmission => "transaction-submission",
+            Self::StatusCheck => "status-check",
+            Self::Notification => "notification",
+            Self::TokenSwapRequest => "token-swap-request",
+            Self::RelayerHealthCheck => "relayer-health-check",
         }
     }
 
     /// Returns the Redis namespace for this queue type (Apalis format).
     pub fn redis_namespace(&self) -> &'static str {
         match self {
-            Self::StellarTransactionRequest => "relayer:transaction_request",
-            Self::StellarTransactionSubmission => "relayer:transaction_submission",
-            Self::StellarStatusCheck => "relayer:transaction_status_stellar",
-            Self::StellarNotification => "relayer:notification",
+            Self::TransactionRequest => "relayer:transaction_request",
+            Self::TransactionSubmission => "relayer:transaction_submission",
+            Self::StatusCheck => "relayer:transaction_status_stellar",
+            Self::Notification => "relayer:notification",
+            Self::TokenSwapRequest => "relayer:token_swap_request",
+            Self::RelayerHealthCheck => "relayer:relayer_health_check",
         }
     }
 
@@ -55,30 +65,36 @@ impl QueueType {
     /// - Notification: 5 retries (webhook delivery can be retried)
     pub fn max_retries(&self) -> usize {
         match self {
-            Self::StellarTransactionRequest => 5,
-            Self::StellarTransactionSubmission => 1,
-            Self::StellarStatusCheck => usize::MAX, // Circuit breaker terminates
-            Self::StellarNotification => 5,
+            Self::TransactionRequest => 5,
+            Self::TransactionSubmission => 1,
+            Self::StatusCheck => usize::MAX, // Circuit breaker terminates
+            Self::Notification => 5,
+            Self::TokenSwapRequest => 5,
+            Self::RelayerHealthCheck => 5,
         }
     }
 
     /// Returns the visibility timeout in seconds for SQS (how long worker has to process).
     pub fn visibility_timeout_secs(&self) -> u32 {
         match self {
-            Self::StellarTransactionRequest => 300,    // 5 minutes
-            Self::StellarTransactionSubmission => 120, // 2 minutes
-            Self::StellarStatusCheck => 300,           // 5 minutes
-            Self::StellarNotification => 180,          // 3 minutes
+            Self::TransactionRequest => 300,    // 5 minutes
+            Self::TransactionSubmission => 120, // 2 minutes
+            Self::StatusCheck => 300,           // 5 minutes
+            Self::Notification => 180,          // 3 minutes
+            Self::TokenSwapRequest => 300,      // 5 minutes
+            Self::RelayerHealthCheck => 300,    // 5 minutes
         }
     }
 
     /// Returns the polling interval in seconds (how often to check for new messages).
     pub fn polling_interval_secs(&self) -> u64 {
         match self {
-            Self::StellarTransactionRequest => 20,
-            Self::StellarTransactionSubmission => 20,
-            Self::StellarStatusCheck => 2, // High frequency for status checks
-            Self::StellarNotification => 20,
+            Self::TransactionRequest => 20,
+            Self::TransactionSubmission => 20,
+            Self::StatusCheck => 2, // High frequency for status checks
+            Self::Notification => 20,
+            Self::TokenSwapRequest => 20,
+            Self::RelayerHealthCheck => 20,
         }
     }
 }
@@ -154,6 +170,12 @@ pub struct QueueHealth {
     pub is_healthy: bool,
 }
 
+/// Shared worker argument types used by queue backends.
+pub type QueueWorkerData = Data<ThinData<crate::models::DefaultAppState>>;
+pub type QueueWorkerAttempt = Attempt;
+pub type QueueWorkerTaskId = TaskId;
+pub type QueueWorkerError = Error;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,73 +183,83 @@ mod tests {
     #[test]
     fn test_queue_type_names() {
         assert_eq!(
-            QueueType::StellarTransactionRequest.queue_name(),
+            QueueType::TransactionRequest.queue_name(),
             "transaction-request"
         );
         assert_eq!(
-            QueueType::StellarTransactionSubmission.queue_name(),
+            QueueType::TransactionSubmission.queue_name(),
             "transaction-submission"
         );
-        assert_eq!(QueueType::StellarStatusCheck.queue_name(), "status-check");
-        assert_eq!(QueueType::StellarNotification.queue_name(), "notification");
+        assert_eq!(QueueType::StatusCheck.queue_name(), "status-check");
+        assert_eq!(QueueType::Notification.queue_name(), "notification");
+        assert_eq!(
+            QueueType::TokenSwapRequest.queue_name(),
+            "token-swap-request"
+        );
+        assert_eq!(
+            QueueType::RelayerHealthCheck.queue_name(),
+            "relayer-health-check"
+        );
     }
 
     #[test]
     fn test_queue_type_redis_namespaces() {
         assert_eq!(
-            QueueType::StellarTransactionRequest.redis_namespace(),
+            QueueType::TransactionRequest.redis_namespace(),
             "relayer:transaction_request"
         );
         assert_eq!(
-            QueueType::StellarTransactionSubmission.redis_namespace(),
+            QueueType::TransactionSubmission.redis_namespace(),
             "relayer:transaction_submission"
         );
         assert_eq!(
-            QueueType::StellarStatusCheck.redis_namespace(),
+            QueueType::StatusCheck.redis_namespace(),
             "relayer:transaction_status_stellar"
         );
         assert_eq!(
-            QueueType::StellarNotification.redis_namespace(),
+            QueueType::Notification.redis_namespace(),
             "relayer:notification"
+        );
+        assert_eq!(
+            QueueType::TokenSwapRequest.redis_namespace(),
+            "relayer:token_swap_request"
+        );
+        assert_eq!(
+            QueueType::RelayerHealthCheck.redis_namespace(),
+            "relayer:relayer_health_check"
         );
     }
 
     #[test]
     fn test_queue_type_max_retries() {
-        assert_eq!(QueueType::StellarTransactionRequest.max_retries(), 5);
-        assert_eq!(QueueType::StellarTransactionSubmission.max_retries(), 1);
-        assert_eq!(QueueType::StellarStatusCheck.max_retries(), usize::MAX);
-        assert_eq!(QueueType::StellarNotification.max_retries(), 5);
+        assert_eq!(QueueType::TransactionRequest.max_retries(), 5);
+        assert_eq!(QueueType::TransactionSubmission.max_retries(), 1);
+        assert_eq!(QueueType::StatusCheck.max_retries(), usize::MAX);
+        assert_eq!(QueueType::Notification.max_retries(), 5);
+        assert_eq!(QueueType::TokenSwapRequest.max_retries(), 5);
+        assert_eq!(QueueType::RelayerHealthCheck.max_retries(), 5);
     }
 
     #[test]
     fn test_queue_type_visibility_timeout() {
+        assert_eq!(QueueType::TransactionRequest.visibility_timeout_secs(), 300);
         assert_eq!(
-            QueueType::StellarTransactionRequest.visibility_timeout_secs(),
-            300
-        );
-        assert_eq!(
-            QueueType::StellarTransactionSubmission.visibility_timeout_secs(),
+            QueueType::TransactionSubmission.visibility_timeout_secs(),
             120
         );
-        assert_eq!(QueueType::StellarStatusCheck.visibility_timeout_secs(), 300);
-        assert_eq!(
-            QueueType::StellarNotification.visibility_timeout_secs(),
-            180
-        );
+        assert_eq!(QueueType::StatusCheck.visibility_timeout_secs(), 300);
+        assert_eq!(QueueType::Notification.visibility_timeout_secs(), 180);
+        assert_eq!(QueueType::TokenSwapRequest.visibility_timeout_secs(), 300);
+        assert_eq!(QueueType::RelayerHealthCheck.visibility_timeout_secs(), 300);
     }
 
     #[test]
     fn test_queue_type_polling_interval() {
-        assert_eq!(
-            QueueType::StellarTransactionRequest.polling_interval_secs(),
-            20
-        );
-        assert_eq!(
-            QueueType::StellarTransactionSubmission.polling_interval_secs(),
-            20
-        );
-        assert_eq!(QueueType::StellarStatusCheck.polling_interval_secs(), 2);
-        assert_eq!(QueueType::StellarNotification.polling_interval_secs(), 20);
+        assert_eq!(QueueType::TransactionRequest.polling_interval_secs(), 20);
+        assert_eq!(QueueType::TransactionSubmission.polling_interval_secs(), 20);
+        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 2);
+        assert_eq!(QueueType::Notification.polling_interval_secs(), 20);
+        assert_eq!(QueueType::TokenSwapRequest.polling_interval_secs(), 20);
+        assert_eq!(QueueType::RelayerHealthCheck.polling_interval_secs(), 20);
     }
 }

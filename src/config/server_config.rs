@@ -218,6 +218,40 @@ impl ServerConfig {
         format!("{conf_dir}{config_file_name}")
     }
 
+    /// Gets the queue backend from environment variable or default.
+    ///
+    /// Supported values: "redis", "sqs"
+    /// Defaults to "redis" when not set.
+    pub fn get_queue_backend() -> String {
+        env::var("QUEUE_BACKEND").unwrap_or_else(|_| "redis".to_string())
+    }
+
+    /// Gets the AWS region from environment variable.
+    ///
+    /// Required when using SQS queue backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_REGION is not set.
+    pub fn get_aws_region() -> Result<String, String> {
+        env::var("AWS_REGION")
+            .map_err(|_| "AWS_REGION not set. Required for SQS backend.".to_string())
+    }
+
+    /// Gets the AWS account ID from environment variable.
+    ///
+    /// Required when using SQS queue backend and SQS_QUEUE_URL_PREFIX is not provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_ACCOUNT_ID is not set.
+    pub fn get_aws_account_id() -> Result<String, String> {
+        env::var("AWS_ACCOUNT_ID").map_err(|_| {
+            "AWS_ACCOUNT_ID not set. Required when SQS_QUEUE_URL_PREFIX is not provided."
+                .to_string()
+        })
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));

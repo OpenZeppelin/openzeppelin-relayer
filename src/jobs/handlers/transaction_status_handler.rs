@@ -49,8 +49,8 @@ pub async fn transaction_status_handler(
     process_transaction_status(job, state, attempt, task_id).await
 }
 
-/// SQS-compatible entrypoint without Apalis Redis context argument.
-pub async fn transaction_status_handler_sqs(
+/// Queue-backend-compatible entrypoint without Apalis Redis context argument.
+pub async fn transaction_status_handler_queue(
     job: Job<TransactionStatusCheck>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,

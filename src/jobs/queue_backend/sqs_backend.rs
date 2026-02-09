@@ -11,7 +11,11 @@ use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    jobs::{Job, NotificationSend, TransactionRequest, TransactionSend, TransactionStatusCheck},
+    config::ServerConfig,
+    jobs::{
+        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        TransactionSend, TransactionStatusCheck,
+    },
     models::DefaultAppState,
 };
 use actix_web::web::ThinData;
@@ -51,8 +55,8 @@ impl SqsBackend {
     ///
     /// # Environment Variables
     /// - `AWS_REGION` - AWS region (required)
-    /// - `AWS_ACCOUNT_ID` - AWS account ID (required for queue URLs)
-    /// - `SQS_QUEUE_URL_PREFIX` - Optional custom prefix (default: auto-generated)
+    /// - `SQS_QUEUE_URL_PREFIX` - Optional custom prefix
+    /// - `AWS_ACCOUNT_ID` - Required only when `SQS_QUEUE_URL_PREFIX` is not set
     ///
     /// # Errors
     /// Returns ConfigError if required environment variables are missing
@@ -71,36 +75,64 @@ impl SqsBackend {
             })?
             .to_string();
 
-        // Build queue URLs
-        let account_id = std::env::var("AWS_ACCOUNT_ID").map_err(|_| {
-            QueueBackendError::ConfigError(
-                "AWS_ACCOUNT_ID not set. Required for SQS queue URLs.".to_string(),
-            )
-        })?;
+        // Build queue URLs.
+        // If an explicit prefix is provided, avoid forcing AWS_ACCOUNT_ID.
+        let prefix = match std::env::var("SQS_QUEUE_URL_PREFIX") {
+            Ok(prefix) => prefix,
+            Err(_) => {
+                let account_id =
+                    ServerConfig::get_aws_account_id().map_err(QueueBackendError::ConfigError)?;
+                format!("https://sqs.{region}.amazonaws.com/{account_id}/relayer-")
+            }
+        };
 
-        let prefix = std::env::var("SQS_QUEUE_URL_PREFIX").unwrap_or_else(|_| {
-            format!("https://sqs.{region}.amazonaws.com/{account_id}/relayer-stellar-")
-        });
-
-        // Build queue URL mapping for Stellar queues
+        // Build queue URL mapping
         let queue_urls = HashMap::from([
             (
-                QueueType::StellarTransactionRequest,
+                QueueType::TransactionRequest,
                 format!("{prefix}transaction-request.fifo"),
             ),
             (
-                QueueType::StellarTransactionSubmission,
+                QueueType::TransactionSubmission,
                 format!("{prefix}transaction-submission.fifo"),
             ),
+            (QueueType::StatusCheck, format!("{prefix}status-check.fifo")),
             (
-                QueueType::StellarStatusCheck,
-                format!("{prefix}status-check.fifo"),
-            ),
-            (
-                QueueType::StellarNotification,
+                QueueType::Notification,
                 format!("{prefix}notification.fifo"),
             ),
+            (
+                QueueType::TokenSwapRequest,
+                format!("{prefix}token-swap-request.fifo"),
+            ),
+            (
+                QueueType::RelayerHealthCheck,
+                format!("{prefix}relayer-health-check.fifo"),
+            ),
         ]);
+
+        // Fail fast at startup when expected queues are missing/misconfigured.
+        // This avoids silent runtime polling failures and makes infra drift explicit.
+        let mut missing_queues = Vec::new();
+        for (queue_type, queue_url) in &queue_urls {
+            let probe = sqs_client
+                .get_queue_attributes()
+                .queue_url(queue_url)
+                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
+                .send()
+                .await;
+
+            if let Err(err) = probe {
+                missing_queues.push(format!("{queue_type} ({queue_url}): {err}"));
+            }
+        }
+
+        if !missing_queues.is_empty() {
+            return Err(QueueBackendError::ConfigError(format!(
+                "SQS backend initialization failed. Missing/inaccessible queues: {}",
+                missing_queues.join(", ")
+            )));
+        }
 
         info!(
             region = %region,
@@ -299,17 +331,15 @@ impl QueueBackend for SqsBackend {
     ) -> Result<String, QueueBackendError> {
         let queue_url = self
             .queue_urls
-            .get(&QueueType::StellarTransactionRequest)
-            .ok_or_else(|| {
-                QueueBackendError::QueueNotFound("StellarTransactionRequest".to_string())
-            })?;
+            .get(&QueueType::TransactionRequest)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("TransactionRequest".to_string()))?;
 
         let body = serde_json::to_string(&job).map_err(|e| {
             error!(error = %e, "Failed to serialize TransactionRequest job");
             QueueBackendError::SerializationError(e.to_string())
         })?;
 
-        let message_group_id = job.data.transaction_id.clone();
+        let message_group_id = job.data.relayer_id.clone();
         let message_deduplication_id = job.message_id.clone();
         let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
 
@@ -331,17 +361,15 @@ impl QueueBackend for SqsBackend {
     ) -> Result<String, QueueBackendError> {
         let queue_url = self
             .queue_urls
-            .get(&QueueType::StellarTransactionSubmission)
-            .ok_or_else(|| {
-                QueueBackendError::QueueNotFound("StellarTransactionSubmission".to_string())
-            })?;
+            .get(&QueueType::TransactionSubmission)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("TransactionSubmission".to_string()))?;
 
         let body = serde_json::to_string(&job).map_err(|e| {
             error!(error = %e, "Failed to serialize TransactionSend job");
             QueueBackendError::SerializationError(e.to_string())
         })?;
 
-        let message_group_id = job.data.transaction_id.clone();
+        let message_group_id = job.data.relayer_id.clone();
         let message_deduplication_id = job.message_id.clone();
         let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
 
@@ -363,8 +391,8 @@ impl QueueBackend for SqsBackend {
     ) -> Result<String, QueueBackendError> {
         let queue_url = self
             .queue_urls
-            .get(&QueueType::StellarStatusCheck)
-            .ok_or_else(|| QueueBackendError::QueueNotFound("StellarStatusCheck".to_string()))?;
+            .get(&QueueType::StatusCheck)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("StatusCheck".to_string()))?;
 
         let body = serde_json::to_string(&job).map_err(|e| {
             error!(error = %e, "Failed to serialize TransactionStatusCheck job");
@@ -393,8 +421,8 @@ impl QueueBackend for SqsBackend {
     ) -> Result<String, QueueBackendError> {
         let queue_url = self
             .queue_urls
-            .get(&QueueType::StellarNotification)
-            .ok_or_else(|| QueueBackendError::QueueNotFound("StellarNotification".to_string()))?;
+            .get(&QueueType::Notification)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("Notification".to_string()))?;
 
         let body = serde_json::to_string(&job).map_err(|e| {
             error!(error = %e, "Failed to serialize NotificationSend job");
@@ -403,6 +431,66 @@ impl QueueBackend for SqsBackend {
 
         // Notifications use notification_id as the group ID
         let message_group_id = job.data.notification_id.clone();
+        let message_deduplication_id = job.message_id.clone();
+        let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
+
+        self.send_message_to_sqs(
+            queue_url,
+            body,
+            message_group_id,
+            message_deduplication_id,
+            delay_seconds,
+            scheduled_on,
+        )
+        .await
+    }
+
+    async fn produce_token_swap_request(
+        &self,
+        job: Job<TokenSwapRequest>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError> {
+        let queue_url = self
+            .queue_urls
+            .get(&QueueType::TokenSwapRequest)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("TokenSwapRequest".to_string()))?;
+
+        let body = serde_json::to_string(&job).map_err(|e| {
+            error!(error = %e, "Failed to serialize TokenSwapRequest job");
+            QueueBackendError::SerializationError(e.to_string())
+        })?;
+
+        let message_group_id = job.data.relayer_id.clone();
+        let message_deduplication_id = job.message_id.clone();
+        let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
+
+        self.send_message_to_sqs(
+            queue_url,
+            body,
+            message_group_id,
+            message_deduplication_id,
+            delay_seconds,
+            scheduled_on,
+        )
+        .await
+    }
+
+    async fn produce_relayer_health_check(
+        &self,
+        job: Job<RelayerHealthCheck>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError> {
+        let queue_url = self
+            .queue_urls
+            .get(&QueueType::RelayerHealthCheck)
+            .ok_or_else(|| QueueBackendError::QueueNotFound("RelayerHealthCheck".to_string()))?;
+
+        let body = serde_json::to_string(&job).map_err(|e| {
+            error!(error = %e, "Failed to serialize RelayerHealthCheck job");
+            QueueBackendError::SerializationError(e.to_string())
+        })?;
+
+        let message_group_id = job.data.relayer_id.clone();
         let message_deduplication_id = job.message_id.clone();
         let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
 
@@ -618,33 +706,38 @@ mod tests {
     fn test_queue_url_construction() {
         // Test that queue URLs are correctly constructed
         let mut queue_urls = HashMap::new();
-        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-stellar-";
+        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-";
 
         queue_urls.insert(
-            QueueType::StellarTransactionRequest,
+            QueueType::TransactionRequest,
             format!("{prefix}transaction-request.fifo"),
         );
         queue_urls.insert(
-            QueueType::StellarTransactionSubmission,
+            QueueType::TransactionSubmission,
             format!("{prefix}transaction-submission.fifo"),
         );
+        queue_urls.insert(QueueType::StatusCheck, format!("{prefix}status-check.fifo"));
         queue_urls.insert(
-            QueueType::StellarStatusCheck,
-            format!("{prefix}status-check.fifo"),
+            QueueType::Notification,
+            format!("{prefix}notification.fifo"),
         );
         queue_urls.insert(
-            QueueType::StellarNotification,
-            format!("{prefix}notification.fifo"),
+            QueueType::TokenSwapRequest,
+            format!("{prefix}token-swap-request.fifo"),
+        );
+        queue_urls.insert(
+            QueueType::RelayerHealthCheck,
+            format!("{prefix}relayer-health-check.fifo"),
         );
 
         // Verify all queue types have URLs
-        assert_eq!(queue_urls.len(), 4);
+        assert_eq!(queue_urls.len(), 6);
         assert!(queue_urls
-            .get(&QueueType::StellarTransactionRequest)
+            .get(&QueueType::TransactionRequest)
             .unwrap()
             .ends_with(".fifo"));
         assert!(queue_urls
-            .get(&QueueType::StellarTransactionSubmission)
+            .get(&QueueType::TransactionSubmission)
             .unwrap()
             .contains("transaction-submission"));
     }
@@ -659,7 +752,7 @@ mod tests {
                     .build(),
             ),
             queue_urls: HashMap::from([(
-                QueueType::StellarTransactionRequest,
+                QueueType::TransactionRequest,
                 "https://sqs.us-east-1.amazonaws.com/123/test.fifo".to_string(),
             )]),
             region: "us-east-1".to_string(),

@@ -8,10 +8,12 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::{
+    bootstrap,
     jobs::{
-        Job, NotificationSend, Queue, TransactionRequest, TransactionSend, TransactionStatusCheck,
+        Job, NotificationSend, Queue, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        TransactionSend, TransactionStatusCheck,
     },
-    models::DefaultAppState,
+    models::{DefaultAppState, NetworkType},
     utils::RedisConnections,
 };
 use actix_web::web::ThinData;
@@ -122,8 +124,12 @@ impl QueueBackend for RedisBackend {
         job: Job<TransactionStatusCheck>,
         scheduled_on: Option<i64>,
     ) -> Result<String, QueueBackendError> {
-        // Always use Stellar queue for now (since we're Stellar-focused)
-        let mut storage = self.queue.transaction_status_queue_stellar.clone();
+        // Route by network_type to preserve existing Redis queue behavior.
+        let mut storage = match job.data.network_type {
+            Some(NetworkType::Evm) => self.queue.transaction_status_queue_evm.clone(),
+            Some(NetworkType::Stellar) => self.queue.transaction_status_queue_stellar.clone(),
+            _ => self.queue.transaction_status_queue.clone(),
+        };
         let job_id = job.message_id.clone();
 
         match scheduled_on {
@@ -170,26 +176,80 @@ impl QueueBackend for RedisBackend {
         Ok(job_id)
     }
 
+    async fn produce_token_swap_request(
+        &self,
+        job: Job<TokenSwapRequest>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError> {
+        let mut storage = self.queue.token_swap_request_queue.clone();
+        let job_id = job.message_id.clone();
+
+        match scheduled_on {
+            Some(on) => {
+                storage
+                    .schedule(job, on)
+                    .await
+                    .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
+            }
+            None => {
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
+            }
+        }
+
+        Ok(job_id)
+    }
+
+    async fn produce_relayer_health_check(
+        &self,
+        job: Job<RelayerHealthCheck>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError> {
+        let mut storage = self.queue.relayer_health_check_queue.clone();
+        let job_id = job.message_id.clone();
+
+        match scheduled_on {
+            Some(on) => {
+                storage
+                    .schedule(job, on)
+                    .await
+                    .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
+            }
+            None => {
+                storage
+                    .push(job)
+                    .await
+                    .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
+            }
+        }
+
+        Ok(job_id)
+    }
+
     async fn initialize_workers(
         &self,
-        _app_state: Arc<ThinData<DefaultAppState>>,
+        app_state: Arc<ThinData<DefaultAppState>>,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
-        info!("Redis backend workers are initialized separately via bootstrap::initialize_workers");
+        info!("Initializing Redis backend workers via bootstrap::initialize_workers");
 
-        // For Redis backend, workers are initialized through the existing
-        // bootstrap::initialize_workers flow, not through this trait method.
-        // This method is a no-op for Redis, but required by the trait.
-        //
-        // SQS backend will actually use this method to spawn worker tasks.
+        bootstrap::initialize_workers((*app_state).clone())
+            .await
+            .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
+
+        // Apalis workers are owned by the monitor started in bootstrap; no explicit
+        // worker handles are returned from that flow.
         Ok(vec![])
     }
 
     async fn health_check(&self) -> Result<Vec<QueueHealth>, QueueBackendError> {
-        // For Redis backend, we could query queue lengths from Redis
-        // For now, return basic health status indicating backend is responsive
+        // Intentionally avoid per-request Redis queue depth calls here to keep
+        // health checks lightweight and avoid adding pressure to Redis.
+        // Return static backend health metadata only.
         let health_statuses = vec![
             QueueHealth {
-                queue_type: QueueType::StellarTransactionRequest,
+                queue_type: QueueType::TransactionRequest,
                 messages_visible: 0, // Would need Redis LLEN query
                 messages_in_flight: 0,
                 messages_dlq: 0,
@@ -197,7 +257,7 @@ impl QueueBackend for RedisBackend {
                 is_healthy: true,
             },
             QueueHealth {
-                queue_type: QueueType::StellarTransactionSubmission,
+                queue_type: QueueType::TransactionSubmission,
                 messages_visible: 0,
                 messages_in_flight: 0,
                 messages_dlq: 0,
@@ -205,7 +265,7 @@ impl QueueBackend for RedisBackend {
                 is_healthy: true,
             },
             QueueHealth {
-                queue_type: QueueType::StellarStatusCheck,
+                queue_type: QueueType::StatusCheck,
                 messages_visible: 0,
                 messages_in_flight: 0,
                 messages_dlq: 0,
@@ -213,7 +273,23 @@ impl QueueBackend for RedisBackend {
                 is_healthy: true,
             },
             QueueHealth {
-                queue_type: QueueType::StellarNotification,
+                queue_type: QueueType::Notification,
+                messages_visible: 0,
+                messages_in_flight: 0,
+                messages_dlq: 0,
+                backend: "redis".to_string(),
+                is_healthy: true,
+            },
+            QueueHealth {
+                queue_type: QueueType::TokenSwapRequest,
+                messages_visible: 0,
+                messages_in_flight: 0,
+                messages_dlq: 0,
+                backend: "redis".to_string(),
+                is_healthy: true,
+            },
+            QueueHealth {
+                queue_type: QueueType::RelayerHealthCheck,
                 messages_visible: 0,
                 messages_in_flight: 0,
                 messages_dlq: 0,

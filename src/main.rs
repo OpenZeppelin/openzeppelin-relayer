@@ -50,7 +50,7 @@ use openzeppelin_relayer::{
     api,
     bootstrap::{
         initialize_app_state, initialize_plugin_pool, initialize_relayers,
-        initialize_token_swap_workers, initialize_workers, precompile_plugins, process_config_file,
+        initialize_token_swap_workers, precompile_plugins, process_config_file,
         shutdown_plugin_pool,
     },
     config,
@@ -98,22 +98,17 @@ async fn main() -> Result<()> {
 
     initialize_token_swap_workers(app_state.clone()).await?;
 
-    // Setup workers for processing jobs
-    initialize_workers(app_state.clone()).await?;
-
-    // Start SQS workers when queue backend is configured to SQS.
-    if matches!(env::var("QUEUE_BACKEND"), Ok(value) if value.eq_ignore_ascii_case("sqs")) {
-        let queue = app_state.job_producer.get_queue().await?;
-        let queue_backend = create_queue_backend(queue.redis_connections()).await?;
-        let handles = queue_backend
-            .initialize_workers(Arc::new(app_state.clone()))
-            .await?;
-        info!(
-            backend = queue_backend.backend_type(),
-            worker_count = handles.len(),
-            "Initialized queue backend workers"
-        );
-    }
+    // Setup workers for processing jobs using the configured queue backend.
+    let queue = app_state.job_producer.get_queue().await?;
+    let queue_backend = create_queue_backend(queue.redis_connections()).await?;
+    let handles = queue_backend
+        .initialize_workers(Arc::new(app_state.clone()))
+        .await?;
+    info!(
+        backend = queue_backend.backend_type(),
+        worker_count = handles.len(),
+        "Initialized queue backend workers"
+    );
 
     // Initialize plugin worker pool (enabled by default for better performance)
     // Set PLUGIN_USE_POOL=false to use legacy ts-node mode

@@ -14,7 +14,7 @@
 //! let backend = create_queue_backend(redis_connections).await?;
 //!
 //! // Produce a job
-//! backend.produce(job, QueueType::StellarTransactionRequest, None).await?;
+//! backend.produce(job, QueueType::TransactionRequest, None).await?;
 //!
 //! // Initialize workers
 //! let workers = backend.initialize_workers(app_state).await?;
@@ -24,7 +24,11 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::{
-    jobs::{Job, NotificationSend, TransactionRequest, TransactionSend, TransactionStatusCheck},
+    config::ServerConfig,
+    jobs::{
+        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
+        TransactionSend, TransactionStatusCheck,
+    },
     models::DefaultAppState,
     utils::RedisConnections,
 };
@@ -35,7 +39,10 @@ pub mod sqs_backend;
 pub mod sqs_worker;
 pub mod types;
 
-pub use types::{QueueBackendError, QueueHealth, QueueType, WorkerHandle};
+pub use types::{
+    QueueBackendError, QueueHealth, QueueType, QueueWorkerAttempt, QueueWorkerData,
+    QueueWorkerError, QueueWorkerTaskId, WorkerHandle,
+};
 
 /// Queue backend abstraction trait.
 ///
@@ -78,6 +85,20 @@ pub trait QueueBackend: Send + Sync {
     async fn produce_notification(
         &self,
         job: Job<NotificationSend>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError>;
+
+    /// Produces a token swap request job to the queue.
+    async fn produce_token_swap_request(
+        &self,
+        job: Job<TokenSwapRequest>,
+        scheduled_on: Option<i64>,
+    ) -> Result<String, QueueBackendError>;
+
+    /// Produces a relayer health check job to the queue.
+    async fn produce_relayer_health_check(
+        &self,
+        job: Job<RelayerHealthCheck>,
         scheduled_on: Option<i64>,
     ) -> Result<String, QueueBackendError>;
 
@@ -124,7 +145,7 @@ pub trait QueueBackend: Send + Sync {
 pub async fn create_queue_backend(
     redis_connections: Arc<RedisConnections>,
 ) -> Result<Arc<dyn QueueBackend>, QueueBackendError> {
-    let backend_type = std::env::var("QUEUE_BACKEND").unwrap_or_else(|_| "redis".to_string());
+    let backend_type = ServerConfig::get_queue_backend();
 
     match backend_type.to_lowercase().as_str() {
         "redis" => {
@@ -149,10 +170,12 @@ mod tests {
     fn test_queue_type_enum_values() {
         // Ensure all QueueType variants are covered
         let types = vec![
-            QueueType::StellarTransactionRequest,
-            QueueType::StellarTransactionSubmission,
-            QueueType::StellarStatusCheck,
-            QueueType::StellarNotification,
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
         ];
 
         for queue_type in types {
@@ -165,28 +188,28 @@ mod tests {
     #[test]
     fn test_queue_type_visibility_timeouts_in_range() {
         // All visibility timeouts should be reasonable (2-15 minutes)
-        assert!(QueueType::StellarTransactionRequest.visibility_timeout_secs() >= 120);
-        assert!(QueueType::StellarTransactionRequest.visibility_timeout_secs() <= 900);
+        assert!(QueueType::TransactionRequest.visibility_timeout_secs() >= 120);
+        assert!(QueueType::TransactionRequest.visibility_timeout_secs() <= 900);
 
-        assert!(QueueType::StellarTransactionSubmission.visibility_timeout_secs() >= 120);
-        assert!(QueueType::StellarTransactionSubmission.visibility_timeout_secs() <= 900);
+        assert!(QueueType::TransactionSubmission.visibility_timeout_secs() >= 120);
+        assert!(QueueType::TransactionSubmission.visibility_timeout_secs() <= 900);
 
-        assert!(QueueType::StellarStatusCheck.visibility_timeout_secs() >= 120);
-        assert!(QueueType::StellarStatusCheck.visibility_timeout_secs() <= 900);
+        assert!(QueueType::StatusCheck.visibility_timeout_secs() >= 120);
+        assert!(QueueType::StatusCheck.visibility_timeout_secs() <= 900);
 
-        assert!(QueueType::StellarNotification.visibility_timeout_secs() >= 120);
-        assert!(QueueType::StellarNotification.visibility_timeout_secs() <= 900);
+        assert!(QueueType::Notification.visibility_timeout_secs() >= 120);
+        assert!(QueueType::Notification.visibility_timeout_secs() <= 900);
     }
 
     #[test]
     fn test_queue_type_polling_intervals_appropriate() {
         // Status check should be fastest
-        assert_eq!(QueueType::StellarStatusCheck.polling_interval_secs(), 2);
+        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 2);
 
         // Others should be slower
-        assert!(QueueType::StellarTransactionRequest.polling_interval_secs() >= 10);
-        assert!(QueueType::StellarTransactionSubmission.polling_interval_secs() >= 10);
-        assert!(QueueType::StellarNotification.polling_interval_secs() >= 10);
+        assert!(QueueType::TransactionRequest.polling_interval_secs() >= 10);
+        assert!(QueueType::TransactionSubmission.polling_interval_secs() >= 10);
+        assert!(QueueType::Notification.polling_interval_secs() >= 10);
     }
 
     #[test]

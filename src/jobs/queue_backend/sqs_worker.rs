@@ -15,19 +15,22 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::ServerConfig,
     constants::{
-        DEFAULT_CONCURRENCY_NOTIFICATION, DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
+        DEFAULT_CONCURRENCY_HEALTH_CHECK, DEFAULT_CONCURRENCY_NOTIFICATION,
+        DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR, DEFAULT_CONCURRENCY_TOKEN_SWAP,
         DEFAULT_CONCURRENCY_TRANSACTION_REQUEST, DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
     },
     jobs::{
-        notification_handler, transaction_request_handler_sqs, transaction_status_handler_sqs,
-        transaction_submission_handler, Job, NotificationSend, TransactionRequest, TransactionSend,
-        TransactionStatusCheck,
+        notification_handler, relayer_health_check_handler, token_swap_request_handler,
+        transaction_request_handler_queue, transaction_status_handler_queue,
+        transaction_submission_handler, Job, NotificationSend, RelayerHealthCheck,
+        TokenSwapRequest, TransactionRequest, TransactionSend, TransactionStatusCheck,
     },
-    models::DefaultAppState,
 };
-use apalis::prelude::{Attempt, Data, Error as ApalisError, TaskId};
 
-use super::{QueueBackendError, QueueType, WorkerHandle};
+use super::{
+    QueueBackendError, QueueType, QueueWorkerAttempt, QueueWorkerData, QueueWorkerError,
+    QueueWorkerTaskId, WorkerHandle,
+};
 
 #[derive(Debug)]
 enum ProcessingError {
@@ -52,7 +55,7 @@ pub async fn spawn_worker_for_queue(
     sqs_client: aws_sdk_sqs::Client,
     queue_type: QueueType,
     queue_url: String,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
 ) -> Result<WorkerHandle, QueueBackendError> {
     let concurrency = get_concurrency_for_queue(queue_type);
     let max_retries = queue_type.max_retries();
@@ -107,7 +110,17 @@ pub async fn spawn_worker_for_queue(
 
                             // Process messages concurrently (up to semaphore limit)
                             for message in messages {
-                                let permit = semaphore.clone().acquire_owned().await.unwrap();
+                                let permit = match semaphore.clone().acquire_owned().await {
+                                    Ok(permit) => permit,
+                                    Err(err) => {
+                                        error!(
+                                            queue_type = ?queue_type,
+                                            error = %err,
+                                            "Semaphore closed, stopping SQS worker loop"
+                                        );
+                                        return;
+                                    }
+                                };
                                 let client = sqs_client.clone();
                                 let url = queue_url.clone();
                                 let state = app_state.clone();
@@ -162,7 +175,7 @@ async fn process_message(
     message: Message,
     queue_type: QueueType,
     queue_url: &str,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     max_retries: usize,
 ) -> Result<(), QueueBackendError> {
     let body = message
@@ -231,17 +244,21 @@ async fn process_message(
 
     // Route to appropriate handler
     let result = match queue_type {
-        QueueType::StellarTransactionRequest => {
+        QueueType::TransactionRequest => {
             process_transaction_request(body, app_state, attempt_number).await
         }
-        QueueType::StellarTransactionSubmission => {
+        QueueType::TransactionSubmission => {
             process_transaction_submission(body, app_state, attempt_number).await
         }
-        QueueType::StellarStatusCheck => {
+        QueueType::StatusCheck => {
             process_transaction_status_check(body, app_state, attempt_number).await
         }
-        QueueType::StellarNotification => {
-            process_notification(body, app_state, attempt_number).await
+        QueueType::Notification => process_notification(body, app_state, attempt_number).await,
+        QueueType::TokenSwapRequest => {
+            process_token_swap_request(body, app_state, attempt_number).await
+        }
+        QueueType::RelayerHealthCheck => {
+            process_relayer_health_check(body, app_state, attempt_number).await
         }
     };
 
@@ -324,7 +341,7 @@ async fn process_message(
 /// transaction_request_handler signature: 6 args (includes Worker and RedisContext)
 async fn process_transaction_request(
     body: &str,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
 ) -> Result<(), ProcessingError> {
     let job: Job<TransactionRequest> = serde_json::from_str(body).map_err(|e| {
@@ -332,11 +349,11 @@ async fn process_transaction_request(
         ProcessingError::Retryable(format!("Failed to deserialize TransactionRequest job: {e}"))
     })?;
 
-    transaction_request_handler_sqs(
+    transaction_request_handler_queue(
         job,
-        Data::new((*app_state).clone()),
-        Attempt::new_with_value(attempt),
-        TaskId::new(),
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
     )
     .await
     .map_err(map_apalis_error)
@@ -347,7 +364,7 @@ async fn process_transaction_request(
 /// transaction_submission_handler signature: 4 args (no Worker, no RedisContext)
 async fn process_transaction_submission(
     body: &str,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
 ) -> Result<(), ProcessingError> {
     let job: Job<TransactionSend> = serde_json::from_str(body).map_err(|e| {
@@ -357,9 +374,9 @@ async fn process_transaction_submission(
 
     transaction_submission_handler(
         job,
-        Data::new((*app_state).clone()),
-        Attempt::new_with_value(attempt),
-        TaskId::new(),
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
     )
     .await
     .map_err(map_apalis_error)
@@ -370,7 +387,7 @@ async fn process_transaction_submission(
 /// transaction_status_handler signature: 5 args (no Worker, includes RedisContext)
 async fn process_transaction_status_check(
     body: &str,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
 ) -> Result<(), ProcessingError> {
     let job: Job<TransactionStatusCheck> = serde_json::from_str(body).map_err(|e| {
@@ -380,11 +397,11 @@ async fn process_transaction_status_check(
         ))
     })?;
 
-    transaction_status_handler_sqs(
+    transaction_status_handler_queue(
         job,
-        Data::new((*app_state).clone()),
-        Attempt::new_with_value(attempt),
-        TaskId::new(),
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
     )
     .await
     .map_err(map_apalis_error)
@@ -395,7 +412,7 @@ async fn process_transaction_status_check(
 /// notification_handler signature: 4 args (no Worker, no RedisContext)
 async fn process_notification(
     body: &str,
-    app_state: Arc<ThinData<DefaultAppState>>,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
 ) -> Result<(), ProcessingError> {
     let job: Job<NotificationSend> = serde_json::from_str(body).map_err(|e| {
@@ -405,18 +422,58 @@ async fn process_notification(
 
     notification_handler(
         job,
-        Data::new((*app_state).clone()),
-        Attempt::new_with_value(attempt),
-        TaskId::new(),
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
     )
     .await
     .map_err(map_apalis_error)
 }
 
-fn map_apalis_error(error: ApalisError) -> ProcessingError {
+async fn process_token_swap_request(
+    body: &str,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
+    attempt: usize,
+) -> Result<(), ProcessingError> {
+    let job: Job<TokenSwapRequest> = serde_json::from_str(body).map_err(|e| {
+        error!(error = %e, "Failed to deserialize TokenSwapRequest job");
+        ProcessingError::Retryable(format!("Failed to deserialize TokenSwapRequest job: {e}"))
+    })?;
+
+    token_swap_request_handler(
+        job,
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
+    )
+    .await
+    .map_err(map_apalis_error)
+}
+
+async fn process_relayer_health_check(
+    body: &str,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
+    attempt: usize,
+) -> Result<(), ProcessingError> {
+    let job: Job<RelayerHealthCheck> = serde_json::from_str(body).map_err(|e| {
+        error!(error = %e, "Failed to deserialize RelayerHealthCheck job");
+        ProcessingError::Retryable(format!("Failed to deserialize RelayerHealthCheck job: {e}"))
+    })?;
+
+    relayer_health_check_handler(
+        job,
+        QueueWorkerData::new((*app_state).clone()),
+        QueueWorkerAttempt::new_with_value(attempt),
+        QueueWorkerTaskId::new(),
+    )
+    .await
+    .map_err(map_apalis_error)
+}
+
+fn map_apalis_error(error: QueueWorkerError) -> ProcessingError {
     match error {
-        ApalisError::Abort(err) => ProcessingError::Permanent(err.to_string()),
-        ApalisError::Failed(err) => ProcessingError::Retryable(err.to_string()),
+        QueueWorkerError::Abort(err) => ProcessingError::Permanent(err.to_string()),
+        QueueWorkerError::Failed(err) => ProcessingError::Retryable(err.to_string()),
         other => ProcessingError::Retryable(other.to_string()),
     }
 }
@@ -528,21 +585,29 @@ async fn defer_message(
 /// Gets the concurrency limit for a queue type from environment.
 fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
     match queue_type {
-        QueueType::StellarTransactionRequest => ServerConfig::get_worker_concurrency(
+        QueueType::TransactionRequest => ServerConfig::get_worker_concurrency(
             "transaction_request",
             DEFAULT_CONCURRENCY_TRANSACTION_REQUEST,
         ),
-        QueueType::StellarTransactionSubmission => ServerConfig::get_worker_concurrency(
+        QueueType::TransactionSubmission => ServerConfig::get_worker_concurrency(
             "transaction_sender",
             DEFAULT_CONCURRENCY_TRANSACTION_SENDER,
         ),
-        QueueType::StellarStatusCheck => ServerConfig::get_worker_concurrency(
+        QueueType::StatusCheck => ServerConfig::get_worker_concurrency(
             "transaction_status_checker_stellar",
             DEFAULT_CONCURRENCY_STATUS_CHECKER_STELLAR,
         ),
-        QueueType::StellarNotification => ServerConfig::get_worker_concurrency(
+        QueueType::Notification => ServerConfig::get_worker_concurrency(
             "notification_sender",
             DEFAULT_CONCURRENCY_NOTIFICATION,
+        ),
+        QueueType::TokenSwapRequest => ServerConfig::get_worker_concurrency(
+            "token_swap_request",
+            DEFAULT_CONCURRENCY_TOKEN_SWAP,
+        ),
+        QueueType::RelayerHealthCheck => ServerConfig::get_worker_concurrency(
+            "relayer_health_check",
+            DEFAULT_CONCURRENCY_HEALTH_CHECK,
         ),
     }
 }
@@ -554,10 +619,10 @@ mod tests {
     #[test]
     fn test_get_concurrency_for_queue() {
         // Test that concurrency is retrieved (exact value depends on env)
-        let concurrency = get_concurrency_for_queue(QueueType::StellarTransactionRequest);
+        let concurrency = get_concurrency_for_queue(QueueType::TransactionRequest);
         assert!(concurrency > 0);
 
-        let concurrency = get_concurrency_for_queue(QueueType::StellarStatusCheck);
+        let concurrency = get_concurrency_for_queue(QueueType::StatusCheck);
         assert!(concurrency > 0);
     }
 
@@ -687,7 +752,7 @@ mod tests {
         use std::io;
 
         // Test Abort maps to Permanent
-        let error = ApalisError::Abort(Arc::new(Box::new(io::Error::new(
+        let error = QueueWorkerError::Abort(Arc::new(Box::new(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Validation failed",
         ))));
@@ -695,7 +760,7 @@ mod tests {
         assert!(matches!(result, ProcessingError::Permanent(_)));
 
         // Test Failed maps to Retryable
-        let error = ApalisError::Failed(Arc::new(Box::new(io::Error::new(
+        let error = QueueWorkerError::Failed(Arc::new(Box::new(io::Error::new(
             io::ErrorKind::TimedOut,
             "Network timeout",
         ))));
