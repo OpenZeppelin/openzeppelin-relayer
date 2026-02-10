@@ -18,9 +18,11 @@ use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, JobProducerTrait, StatusCheckContext, TransactionStatusCheck},
+    metrics::{JOB_PROCESSING_DURATION, STATUS_CHECK_ATTEMPTS},
     models::{ApiError, DefaultAppState, TransactionRepoModel},
     observability::request_id::set_request_id,
 };
+use std::time::Instant;
 
 /// Redis key prefix for transaction status check metadata (failure counters).
 /// Stored separately from Apalis job data to persist across retries.
@@ -59,22 +61,32 @@ pub async fn transaction_status_handler(
 
     let redis_pool = queue.redis_connections().primary().clone();
 
+    let start = Instant::now();
     // Execute status check - all logic moved here so errors go through handle_result
     let req_result =
         handle_request(&job.data, &state, &redis_pool, attempt.current(), &task_id).await;
 
     let tx_id = &job.data.transaction_id;
 
-    // Handle result and update counters in Redis
-    handle_result(
+    // Handle result and update counters in Redis (also records STATUS_CHECK_ATTEMPTS)
+    let result = handle_result(
         req_result.result,
         &redis_pool,
         tx_id,
         req_result.consecutive_failures,
         req_result.total_failures,
         req_result.should_retry_on_error,
+        req_result.relayer_id.as_str(),
+        req_result.network_type.as_str(),
     )
-    .await
+    .await;
+
+    let elapsed = start.elapsed().as_secs_f64();
+    JOB_PROCESSING_DURATION
+        .with_label_values(&["transaction_status_check"])
+        .observe(elapsed);
+
+    result
 }
 
 /// Handles status check results with circuit breaker tracking.
@@ -94,9 +106,14 @@ async fn handle_result(
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
     should_retry_on_error: bool,
+    relayer_id: &str,
+    network_type: &str,
 ) -> Result<(), Error> {
-    match result {
+    match &result {
         Ok(tx) if is_final_state(&tx.status) => {
+            STATUS_CHECK_ATTEMPTS
+                .with_label_values(&[relayer_id, network_type, "success"])
+                .inc();
             // Transaction reached final state - job complete, clean up counters
             debug!(
                 tx_id = %tx.id,
@@ -115,6 +132,9 @@ async fn handle_result(
             Ok(())
         }
         Ok(tx) => {
+            STATUS_CHECK_ATTEMPTS
+                .with_label_values(&[relayer_id, network_type, "success"])
+                .inc();
             // Success but not final - RESET consecutive counter, keep total unchanged
             debug!(
                 tx_id = %tx.id,
@@ -146,8 +166,10 @@ async fn handle_result(
             )))
         }
         Err(e) => {
-            // Check if this is a permanent failure that shouldn't retry
             if !should_retry_on_error {
+                STATUS_CHECK_ATTEMPTS
+                    .with_label_values(&[relayer_id, network_type, "permanent_failure"])
+                    .inc();
                 info!(
                     error = %e,
                     tx_id = %tx_id,
@@ -156,6 +178,9 @@ async fn handle_result(
                 return Ok(());
             }
 
+            STATUS_CHECK_ATTEMPTS
+                .with_label_values(&[relayer_id, network_type, "retriable_failure"])
+                .inc();
             // Transient error - INCREMENT both counters (only if we have values)
             match (consecutive_failures, total_failures) {
                 (Some(consecutive), Some(total)) => {
@@ -314,6 +339,8 @@ struct HandleRequestResult {
     total_failures: Option<u32>,
     /// If false, errors should not trigger retry (e.g., transaction not found)
     should_retry_on_error: bool,
+    relayer_id: String,
+    network_type: String,
 }
 
 /// Executes the status check logic and returns the result with counter values.
@@ -344,6 +371,8 @@ async fn handle_request(
                 consecutive_failures: None,
                 total_failures: None,
                 should_retry_on_error: false,
+                relayer_id: status_request.relayer_id.clone(),
+                network_type: "unknown".to_string(),
             };
         }
         Err(e) => {
@@ -353,6 +382,8 @@ async fn handle_request(
                 consecutive_failures: None,
                 total_failures: None,
                 should_retry_on_error: true,
+                relayer_id: status_request.relayer_id.clone(),
+                network_type: "unknown".to_string(),
             };
         }
     };
@@ -363,6 +394,7 @@ async fn handle_request(
 
     // Get network type from transaction (authoritative source)
     let network_type = transaction.network_type;
+    let network_type_str = format!("{:?}", network_type).to_lowercase();
     let max_consecutive = get_max_consecutive_status_failures(network_type);
     let max_total = get_max_total_status_failures(network_type);
 
@@ -403,6 +435,8 @@ async fn handle_request(
                     consecutive_failures: Some(consecutive_failures),
                     total_failures: Some(total_failures),
                     should_retry_on_error: false,
+                    relayer_id: status_request.relayer_id.clone(),
+                    network_type: network_type_str.clone(),
                 };
             }
             Err(e) => {
@@ -412,6 +446,8 @@ async fn handle_request(
                     consecutive_failures: Some(consecutive_failures),
                     total_failures: Some(total_failures),
                     should_retry_on_error: true,
+                    relayer_id: status_request.relayer_id.clone(),
+                    network_type: network_type_str.clone(),
                 };
             }
         };
@@ -435,6 +471,8 @@ async fn handle_request(
         consecutive_failures: Some(consecutive_failures),
         total_failures: Some(total_failures),
         should_retry_on_error: true,
+        relayer_id: status_request.relayer_id.clone(),
+        network_type: network_type_str,
     }
 }
 
@@ -659,6 +697,8 @@ mod tests {
                 consecutive_failures: Some(5),
                 total_failures: Some(10),
                 should_retry_on_error: true,
+                relayer_id: "relayer-1".to_string(),
+                network_type: "evm".to_string(),
             };
 
             assert!(result.result.is_ok());
@@ -675,6 +715,8 @@ mod tests {
                 consecutive_failures: None,
                 total_failures: None,
                 should_retry_on_error: false,
+                relayer_id: "relayer-1".to_string(),
+                network_type: "unknown".to_string(),
             };
 
             assert!(result.result.is_err());
@@ -691,6 +733,8 @@ mod tests {
                 consecutive_failures: None,
                 total_failures: None,
                 should_retry_on_error: false,
+                relayer_id: "relayer-1".to_string(),
+                network_type: "unknown".to_string(),
             };
 
             // Permanent errors have should_retry_on_error = false
@@ -705,6 +749,8 @@ mod tests {
                 consecutive_failures: Some(3),
                 total_failures: Some(7),
                 should_retry_on_error: true,
+                relayer_id: "relayer-1".to_string(),
+                network_type: "evm".to_string(),
             };
 
             // Transient errors have should_retry_on_error = true

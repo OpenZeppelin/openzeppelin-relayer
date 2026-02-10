@@ -9,12 +9,13 @@
 //! - Relayer health checks
 use std::{env, sync::Arc};
 
+use apalis::prelude::Storage;
 use apalis_redis::{Config, RedisStorage};
 use color_eyre::{eyre, Result};
 use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{config::ServerConfig, utils::RedisConnections};
 
@@ -249,6 +250,48 @@ impl Queue {
     /// that need Redis pool-based access (e.g., for metadata storage, distributed locking).
     pub fn redis_connections(&self) -> Arc<RedisConnections> {
         self.redis_connections.clone()
+    }
+
+    /// Updates Prometheus job queue depth gauges for each queue.
+    /// Call periodically (e.g. from a background task) to expose pending job counts.
+    pub async fn update_queue_depth_metrics(&mut self) {
+        use crate::metrics::JOB_QUEUE_DEPTH;
+
+        let update = |name: &str, len: Result<i64, redis::RedisError>| {
+            match len {
+                Ok(n) => JOB_QUEUE_DEPTH.with_label_values(&[name]).set(n as f64),
+                Err(e) => {
+                    warn!(queue = %name, error = %e, "failed to get queue length for metrics");
+                }
+            }
+        };
+
+        update("transaction_request", self.transaction_request_queue.len().await);
+        update(
+            "transaction_submission",
+            self.transaction_submission_queue.len().await,
+        );
+        update(
+            "transaction_status",
+            self.transaction_status_queue.len().await,
+        );
+        update(
+            "transaction_status_evm",
+            self.transaction_status_queue_evm.len().await,
+        );
+        update(
+            "transaction_status_stellar",
+            self.transaction_status_queue_stellar.len().await,
+        );
+        update("notification", self.notification_queue.len().await);
+        update(
+            "token_swap_request",
+            self.token_swap_request_queue.len().await,
+        );
+        update(
+            "relayer_health_check",
+            self.relayer_health_check_queue.len().await,
+        );
     }
 }
 

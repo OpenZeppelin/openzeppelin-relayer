@@ -93,6 +93,18 @@ where
 {
     let queue = app_state.job_producer.get_queue().await?;
 
+    // Spawn background task to update job queue depth metrics periodically.
+    let job_producer = app_state.job_producer.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Ok(mut q) = job_producer.get_queue().await {
+                q.update_queue_depth_metrics().await;
+            }
+        }
+    });
+
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
         .retry(

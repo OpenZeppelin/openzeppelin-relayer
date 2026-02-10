@@ -11,11 +11,13 @@ use tracing::{debug, instrument};
 use crate::{
     constants::WORKER_NOTIFICATION_SENDER_RETRIES,
     jobs::{handle_result, Job, NotificationSend},
+    metrics::{JOB_PROCESSING_DURATION, NOTIFICATION_DELIVERY},
     models::DefaultAppState,
     observability::request_id::set_request_id,
     repositories::Repository,
     services::WebhookNotificationService,
 };
+use std::time::Instant;
 
 /// Handles incoming notification jobs from the queue.
 ///
@@ -52,7 +54,23 @@ pub async fn notification_handler(
         "handling notification"
     );
 
+    let start = Instant::now();
     let result = handle_request(job.data, context).await;
+
+    if result.is_ok() {
+        NOTIFICATION_DELIVERY
+            .with_label_values(&["success"])
+            .inc();
+    } else {
+        NOTIFICATION_DELIVERY
+            .with_label_values(&["failure"])
+            .inc();
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    JOB_PROCESSING_DURATION
+        .with_label_values(&["notification_send"])
+        .observe(elapsed);
 
     handle_result(
         result,

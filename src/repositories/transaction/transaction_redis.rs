@@ -3,7 +3,7 @@
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
     TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
-    TRANSACTIONS_SUCCESS, TRANSACTION_PROCESSING_TIME,
+    TRANSACTIONS_SUCCESS, TRANSACTION_FEE, TRANSACTION_PROCESSING_TIME,
 };
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
@@ -1450,6 +1450,15 @@ impl TransactionRepository for RedisTransactionRepository {
                         let is_final = is_final_state(new_status);
 
                         if !was_final && is_final {
+                            // Record transaction fee for final states when available (e.g. Stellar stroops)
+                            if let Ok(stellar_data) = updated_tx.get_stellar_transaction_data() {
+                                if let Some(fee) = stellar_data.fee {
+                                    TRANSACTION_FEE
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .observe(fee as f64);
+                                }
+                            }
+
                             match new_status {
                                 TransactionStatus::Confirmed => {
                                     TRANSACTIONS_SUCCESS

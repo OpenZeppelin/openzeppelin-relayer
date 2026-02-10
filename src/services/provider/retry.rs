@@ -28,7 +28,7 @@ use std::time::Duration;
 use super::rpc_selector::RpcSelector;
 use crate::config::ServerConfig;
 use crate::constants::RETRY_JITTER_PERCENT;
-use crate::metrics::RPC_CALL_LATENCY;
+use crate::metrics::{PROVIDER_FAILOVER_EVENTS, RPC_CALL_LATENCY, RPC_CALLS_BY_OUTCOME};
 use std::time::Instant;
 
 /// Calculate the retry delay using exponential backoff with jitter
@@ -236,6 +236,9 @@ where
                 Err(e) => {
                     last_error = Some(e);
                     failover_count += 1;
+                    PROVIDER_FAILOVER_EVENTS
+                        .with_label_values(&["unknown", "unknown", operation_name])
+                        .inc();
 
                     // If we've exhausted all providers or reached max failovers, stop
                     if failover_count > max_failovers || selector.provider_count() == 0 {
@@ -306,6 +309,9 @@ where
                         );
                         selector.mark_current_as_failed();
                         failover_count += 1;
+                        PROVIDER_FAILOVER_EVENTS
+                            .with_label_values(&["unknown", "unknown", operation_name])
+                            .inc();
                     }
                 }
             }
@@ -403,12 +409,19 @@ where
             .await
             .map_err(InternalRetryError::NonRetriable);
 
-        // Record RPC latency even for single attempts
+        // Record RPC latency and outcome even for single attempts
         if result.is_ok() {
             let latency_seconds = start_time.elapsed().as_secs_f64();
             RPC_CALL_LATENCY
                 .with_label_values(&["unknown", "unknown", operation_name])
                 .observe(latency_seconds);
+            RPC_CALLS_BY_OUTCOME
+                .with_label_values(&["unknown", "unknown", operation_name, "success"])
+                .inc();
+        } else {
+            RPC_CALLS_BY_OUTCOME
+                .with_label_values(&["unknown", "unknown", operation_name, "permanent_failure"])
+                .inc();
         }
 
         return result;
@@ -427,6 +440,9 @@ where
                 RPC_CALL_LATENCY
                     .with_label_values(&["unknown", "unknown", operation_name])
                     .observe(latency_seconds);
+                RPC_CALLS_BY_OUTCOME
+                    .with_label_values(&["unknown", "unknown", operation_name, "success"])
+                    .inc();
 
                 tracing::debug!(
                     operation_name = %operation_name,
@@ -454,10 +470,16 @@ where
                 );
 
                 if !is_retriable {
+                    RPC_CALLS_BY_OUTCOME
+                        .with_label_values(&["unknown", "unknown", operation_name, "permanent_failure"])
+                        .inc();
                     return Err(InternalRetryError::NonRetriable(e));
                 }
 
                 if is_last_attempt {
+                    RPC_CALLS_BY_OUTCOME
+                        .with_label_values(&["unknown", "unknown", operation_name, "retriable_failure"])
+                        .inc();
                     tracing::warn!(
                         max_retries = %config.max_retries,
                         operation_name = %operation_name,

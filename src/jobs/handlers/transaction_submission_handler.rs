@@ -17,9 +17,11 @@ use crate::{
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    metrics::JOB_PROCESSING_DURATION,
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };
+use std::time::Instant;
 
 #[instrument(
     level = "info",
@@ -45,6 +47,23 @@ pub async fn transaction_submission_handler(
         set_request_id(request_id);
     }
 
+    let start = Instant::now();
+    if attempt.current() > 1 {
+        let command_str = match &job.data.command {
+            TransactionCommand::Submit => "submit",
+            TransactionCommand::Resubmit => "resubmit",
+            TransactionCommand::Cancel { .. } => "cancel",
+            TransactionCommand::Resend => "resend",
+        };
+        crate::metrics::TRANSACTION_SUBMISSION_RETRIES
+            .with_label_values(&[
+                job.data.relayer_id.as_str(),
+                "unknown",
+                command_str,
+            ])
+            .inc();
+    }
+
     debug!(
         tx_id = %job.data.transaction_id,
         relayer_id = %job.data.relayer_id,
@@ -53,6 +72,11 @@ pub async fn transaction_submission_handler(
 
     let command = job.data.command.clone();
     let result = handle_request(job.data, state.clone()).await;
+
+    let elapsed = start.elapsed().as_secs_f64();
+    JOB_PROCESSING_DURATION
+        .with_label_values(&["transaction_submission"])
+        .observe(elapsed);
 
     // Handle result with command-specific retry logic
     handle_result(

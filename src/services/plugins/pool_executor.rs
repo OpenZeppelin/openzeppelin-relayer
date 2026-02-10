@@ -870,11 +870,18 @@ impl PoolManager {
             None
         };
 
+        let state = self.circuit_breaker.state();
+        let state_gauge = match state {
+            CircuitState::Closed => 0.0,
+            CircuitState::HalfOpen => 1.0,
+            CircuitState::Open => 2.0,
+        };
+        crate::metrics::PLUGIN_CIRCUIT_BREAKER_STATE.set(state_gauge);
+
         if !self
             .circuit_breaker
             .should_allow_request(recovery_allowance)
         {
-            let state = self.circuit_breaker.state();
             tracing::warn!(
                 plugin_id = %plugin_id,
                 circuit_state = ?state,

@@ -206,6 +206,124 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Gauge: Job queue depth (pending jobs per queue).
+    pub static ref JOB_QUEUE_DEPTH: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("job_queue_depth", "Number of pending jobs in the queue"),
+            &["queue_name"],
+        )
+        .unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Counter: Transaction submission handler retries (attempt > 1).
+    pub static ref TRANSACTION_SUBMISSION_RETRIES: CounterVec = {
+        let opts = Opts::new(
+            "transaction_submission_retries_total",
+            "Total number of transaction submission retries",
+        );
+        let counter_vec =
+            CounterVec::new(opts, &["relayer_id", "network_type", "command"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter: Status check attempts by outcome (success, retriable_failure, permanent_failure).
+    pub static ref STATUS_CHECK_ATTEMPTS: CounterVec = {
+        let opts = Opts::new(
+            "status_check_attempts_total",
+            "Total status check attempts by outcome",
+        );
+        let counter_vec =
+            CounterVec::new(opts, &["relayer_id", "network_type", "outcome"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter: Provider failover events (when RPC switches to another provider).
+    pub static ref PROVIDER_FAILOVER_EVENTS: CounterVec = {
+        let opts = Opts::new(
+            "provider_failover_events_total",
+            "Total number of RPC provider failover events",
+        );
+        let counter_vec =
+            CounterVec::new(opts, &["relayer_id", "network_type", "operation_name"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter: Notification delivery success/failure.
+    pub static ref NOTIFICATION_DELIVERY: CounterVec = {
+        let opts = Opts::new(
+            "notification_delivery_total",
+            "Total notification deliveries by outcome",
+        );
+        let counter_vec = CounterVec::new(opts, &["outcome"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Gauge: Plugin pool circuit breaker state (0=closed, 1=half_open, 2=open).
+    pub static ref PLUGIN_CIRCUIT_BREAKER_STATE: Gauge = {
+        let gauge = Gauge::new(
+            "plugin_circuit_breaker_state",
+            "Circuit breaker state: 0=closed, 1=half_open, 2=open",
+        )
+        .unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
+
+    // Histogram: Job processing duration in seconds by job type.
+    pub static ref JOB_PROCESSING_DURATION: HistogramVec = {
+        let histogram_opts = HistogramOpts::new(
+            "job_processing_duration_seconds",
+            "Time to process a job in seconds",
+        )
+        .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]);
+        let histogram_vec =
+            HistogramVec::new(histogram_opts, &["job_type"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Gauge: Redis connection pool size (idle + in_use per pool).
+    pub static ref REDIS_POOL_CONNECTIONS: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("redis_pool_connections", "Redis pool connection count"),
+            &["pool", "state"],
+        )
+        .unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Histogram: Transaction fee (network-specific units) per transaction.
+    pub static ref TRANSACTION_FEE: HistogramVec = {
+        let histogram_opts = HistogramOpts::new(
+            "transaction_fee",
+            "Transaction fee in network smallest unit (e.g. stroops, wei)",
+        )
+        .buckets(vec![100.0, 500.0, 1000.0, 5000.0, 10000.0, 50000.0, 100000.0, 500000.0, 1e6]);
+        let histogram_vec =
+            HistogramVec::new(histogram_opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Counter: RPC calls by outcome (success, retriable_failure, permanent_failure).
+    pub static ref RPC_CALLS_BY_OUTCOME: CounterVec = {
+        let opts = Opts::new("rpc_calls_by_outcome_total", "Total RPC calls by outcome");
+        let counter_vec = CounterVec::new(
+            opts,
+            &["relayer_id", "network_type", "operation_name", "outcome"],
+        )
+        .unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.

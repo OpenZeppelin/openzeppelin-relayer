@@ -11,9 +11,11 @@ use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionRequest},
+    metrics::JOB_PROCESSING_DURATION,
     models::DefaultAppState,
     observability::request_id::set_request_id,
 };
+use std::time::Instant;
 
 #[instrument(
     level = "debug",
@@ -46,7 +48,13 @@ pub async fn transaction_request_handler(
         "handling transaction request"
     );
 
+    let start = Instant::now();
     let result = handle_request(job.data, state.clone()).await;
+
+    let elapsed = start.elapsed().as_secs_f64();
+    JOB_PROCESSING_DURATION
+        .with_label_values(&["transaction_request"])
+        .observe(elapsed);
 
     handle_result(
         result,
