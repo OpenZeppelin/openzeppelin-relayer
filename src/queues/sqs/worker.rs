@@ -462,6 +462,37 @@ async fn process_message(
             // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
             if queue_type.is_status_check() {
                 let delay = compute_status_retry_delay(body, logical_retry_attempt);
+
+                // FIFO queues do not support per-message DelaySeconds. Use visibility
+                // timeout on the in-flight message to schedule the retry.
+                if is_fifo_queue_url(queue_url) {
+                    if let Err(err) = sqs_client
+                        .change_message_visibility()
+                        .queue_url(queue_url)
+                        .receipt_handle(receipt_handle)
+                        .visibility_timeout(delay.clamp(1, 900))
+                        .send()
+                        .await
+                    {
+                        error!(
+                            queue_type = ?queue_type,
+                            error = %err,
+                            "Failed to set visibility timeout for status check retry; falling back to existing visibility timeout"
+                        );
+                        return Ok(());
+                    }
+
+                    debug!(
+                        queue_type = ?queue_type,
+                        attempt = logical_retry_attempt,
+                        delay_seconds = delay,
+                        error = %e,
+                        "Status check retry scheduled via visibility timeout"
+                    );
+
+                    return Ok(());
+                }
+
                 let requeue_dedup_id = generate_requeue_dedup_id(
                     body,
                     receive_count,

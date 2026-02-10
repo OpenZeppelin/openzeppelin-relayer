@@ -85,6 +85,10 @@ impl std::fmt::Debug for SqsBackend {
 }
 
 impl SqsBackend {
+    fn is_fifo_queue_url(queue_url: &str) -> bool {
+        queue_url.ends_with(".fifo")
+    }
+
     /// Creates a new SQS backend.
     ///
     /// Loads AWS configuration from environment and builds queue URLs.
@@ -244,7 +248,7 @@ impl SqsBackend {
     /// * `body` - JSON-serialized job
     /// * `message_group_id` - FIFO group ID (for ordering)
     /// * `message_deduplication_id` - Deduplication ID (prevent duplicates)
-    /// * `delay_seconds` - Optional delay (0-900 seconds)
+    /// * `delay_seconds` - Optional delay (0-900 seconds). Applied only for non-FIFO queues.
     ///
     /// # Returns
     /// SQS message ID on success
@@ -289,16 +293,24 @@ impl SqsBackend {
         }
 
         // Add delay if specified (max 900 seconds = 15 minutes).
-        // Per-message DelaySeconds is supported on FIFO queues
+        // FIFO queues do not support per-message DelaySeconds.
         if let Some(delay) = delay_seconds {
             let clamped_delay = delay.clamp(0, 900);
-            request = request.delay_seconds(clamped_delay);
-            if delay != clamped_delay {
-                warn!(
-                    requested = delay,
-                    clamped = clamped_delay,
-                    "Delay seconds clamped to SQS limit (0-900)"
+            if Self::is_fifo_queue_url(queue_url) {
+                debug!(
+                    queue_url = %queue_url,
+                    requested_delay_seconds = delay,
+                    "Skipping per-message DelaySeconds for FIFO queue; worker-side scheduling will enforce target_scheduled_on"
                 );
+            } else {
+                request = request.delay_seconds(clamped_delay);
+                if delay != clamped_delay {
+                    warn!(
+                        requested = delay,
+                        clamped = clamped_delay,
+                        "Delay seconds clamped to SQS limit (0-900)"
+                    );
+                }
             }
         }
 
