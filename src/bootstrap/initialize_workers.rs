@@ -239,8 +239,8 @@ where
         .concurrency(1)
         .data(app_state.clone())
         .backend(CronStream::new(
-            // Runs at the start of every hour
-            apalis_cron::Schedule::from_str("0 0 * * * *")?,
+            // Runs at the start of every 15 minutes
+            apalis_cron::Schedule::from_str("0 */15 * * * *")?,
         ))
         .build_fn(system_cleanup_handler);
 

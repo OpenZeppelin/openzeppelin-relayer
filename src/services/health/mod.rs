@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use apalis::prelude::BackendExpose;
 use deadpool_redis::Pool;
 use tokio::sync::RwLock;
 
@@ -198,23 +197,25 @@ fn redis_status_to_health(status: RedisHealthStatus) -> RedisHealth {
 
 /// Check health of Queue's Redis connection.
 ///
-/// Uses stats() to verify the queue is responsive within the timeout.
+/// Sends a PING command to verify the queue's Redis connection is responsive within the timeout.
 async fn check_queue_health(queue: &Queue) -> QueueHealthStatus {
+    let mut conn = queue.relayer_health_check_queue.get_connection().clone();
+
     let result = tokio::time::timeout(PING_TIMEOUT, async {
-        queue.relayer_health_check_queue.stats().await
+        redis::cmd("PING").query_async::<String>(&mut conn).await
     })
     .await;
 
-    // result is Result<Result<Stats, Error>, Elapsed>
-    // Must check both: timeout didn't expire AND stats() succeeded
+    // result is Result<Result<String, RedisError>, Elapsed>
+    // Must check both: timeout didn't expire AND PING succeeded
     match result {
         Ok(Ok(_)) => QueueHealthStatus {
             healthy: true,
             error: None,
         },
         Ok(Err(e)) => {
-            // Stats call failed (but didn't timeout)
-            tracing::warn!(error = %e, "Queue stats check failed");
+            // PING call failed (but didn't timeout)
+            tracing::warn!(error = %e, "Queue PING check failed");
             QueueHealthStatus {
                 healthy: false,
                 error: Some(format!("Queue connection: {e}")),
@@ -222,10 +223,10 @@ async fn check_queue_health(queue: &Queue) -> QueueHealthStatus {
         }
         Err(_) => {
             // Timeout expired
-            tracing::warn!("Queue stats check timed out");
+            tracing::warn!("Queue PING check timed out");
             QueueHealthStatus {
                 healthy: false,
-                error: Some("Queue connection: Stats check timed out".to_string()),
+                error: Some("Queue connection: PING check timed out".to_string()),
             }
         }
     }
