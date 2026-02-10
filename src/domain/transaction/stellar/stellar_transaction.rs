@@ -18,8 +18,8 @@ use crate::{
     },
     services::{
         provider::{StellarProvider, StellarProviderTrait},
-        signer::{Signer, StellarSigner},
-        stellar_dex::{OrderBookService, StellarDexServiceTrait},
+        signer::{Signer, StellarSignTrait, StellarSigner},
+        stellar_dex::{StellarDexService, StellarDexServiceTrait},
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -35,7 +35,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -56,7 +56,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -295,7 +295,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -366,7 +366,7 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
-    OrderBookService<StellarProvider, StellarSigner>,
+    StellarDexService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]

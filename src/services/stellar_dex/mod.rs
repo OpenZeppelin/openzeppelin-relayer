@@ -1,11 +1,13 @@
 //! Stellar DEX service module
 //! Provides quote conversion services for Stellar tokens to XLM
-//! Supports native Stellar paths API and optional Soroswap integration
+//! Supports native Stellar paths API and Soroswap integration for Soroban tokens
 
 mod order_book_service;
+mod soroswap_service;
 mod stellar_dex_service;
 
 pub use order_book_service::OrderBookService;
+pub use soroswap_service::SoroswapService;
 pub use stellar_dex_service::{DexServiceWrapper, StellarDexService};
 
 use async_trait::async_trait;

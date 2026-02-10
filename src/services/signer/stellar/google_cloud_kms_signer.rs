@@ -90,7 +90,8 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> Signer
                     .await?
             }
             crate::models::TransactionInput::UnsignedXdr(xdr)
-            | crate::models::TransactionInput::SignedXdr { xdr, .. } => {
+            | crate::models::TransactionInput::SignedXdr { xdr, .. }
+            | crate::models::TransactionInput::SorobanGasAbstraction { xdr, .. } => {
                 // Parse the XDR envelope and sign
                 let envelope =
                     TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|e| {

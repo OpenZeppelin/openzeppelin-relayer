@@ -9,14 +9,14 @@
 //! - `{namespace}:failed` - Sorted set of failed jobs
 //! - `{namespace}:dead` - Sorted set of dead-letter jobs
 //!
-//! This worker runs hourly to clean up this metadata and prevent Redis memory from growing
+//! This worker runs every 15 minutes to clean up this metadata and prevent Redis memory from growing
 //! indefinitely.
 //!
 //! ## Distributed Lock
 //!
 //! Since this runs on multiple service instances simultaneously (each with its own
 //! CronStream), a distributed lock is used to ensure only one instance processes
-//! the cleanup at a time. The lock has a 55-minute TTL (the cron runs every hour),
+//! the cleanup at a time. The lock has a 14-minute TTL (the cron runs every 15 minutes),
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
@@ -42,9 +42,9 @@ const SYSTEM_CLEANUP_LOCK_NAME: &str = "system_queue_cleanup";
 
 // Note: SYSTEM_CLEANUP_LOCK_TTL_SECS is defined in crate::constants::worker
 
-/// Age threshold for job metadata cleanup (1 hour).
+/// Age threshold for job metadata cleanup (10 minutes).
 /// Jobs older than this threshold will be cleaned up.
-const JOB_AGE_THRESHOLD_SECS: i64 = 3600;
+const JOB_AGE_THRESHOLD_SECS: i64 = 10 * 60;
 
 /// Batch size for cleanup operations.
 /// Processing in batches prevents memory issues with large datasets.
@@ -361,8 +361,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 55 * 60); // 55 minutes
-        assert_eq!(JOB_AGE_THRESHOLD_SECS, 3600); // 1 hour
+        assert_eq!(SYSTEM_CLEANUP_LOCK_TTL_SECS, 14 * 60); // 14 minutes
+        assert_eq!(JOB_AGE_THRESHOLD_SECS, 10 * 60); // 10 minutes
         assert_eq!(CLEANUP_BATCH_SIZE, 500);
     }
 
