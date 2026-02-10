@@ -74,6 +74,7 @@ pub async fn spawn_worker_for_queue(
     let handle: JoinHandle<()> = tokio::spawn(async move {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
         let mut inflight = JoinSet::new();
+        let mut consecutive_poll_errors: u32 = 0;
 
         loop {
             // Reap completed tasks each iteration (prevents unbounded memory)
@@ -127,6 +128,8 @@ pub async fn spawn_worker_for_queue(
 
             match messages_result {
                 Ok(output) => {
+                    consecutive_poll_errors = 0;
+
                     if let Some(messages) = output.messages {
                         if !messages.is_empty() {
                             debug!(
@@ -196,14 +199,17 @@ pub async fn spawn_worker_for_queue(
                     }
                 }
                 Err(e) => {
+                    consecutive_poll_errors = consecutive_poll_errors.saturating_add(1);
+                    let backoff_secs = poll_error_backoff_secs(consecutive_poll_errors);
                     error!(
                         queue_type = ?queue_type,
                         error = %e,
-                        "Failed to receive messages from SQS"
+                        consecutive_errors = consecutive_poll_errors,
+                        backoff_secs = backoff_secs,
+                        "Failed to receive messages from SQS, backing off"
                     );
-                    // Back off on error, but remain responsive to shutdown
                     tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
                         _ = shutdown_rx.changed() => {
                             info!(queue_type = ?queue_type, "Shutdown signal received during backoff, stopping worker");
                             break;
@@ -320,9 +326,16 @@ async fn process_message(
         .unwrap_or(1);
     // SQS receive count starts at 1; Apalis Attempt starts at 0.
     let attempt_number = receive_count.saturating_sub(1);
+    // Persisted retry attempt for self-reenqueued status checks. Falls back to receive_count-based
+    // attempt when attribute is missing.
+    let logical_retry_attempt = parse_retry_attempt(&message).unwrap_or(attempt_number);
+
+    // Use SQS MessageId as the worker task_id for log correlation.
+    let sqs_message_id = message.message_id().unwrap_or("unknown").to_string();
 
     debug!(
         queue_type = ?queue_type,
+        message_id = %sqs_message_id,
         attempt = attempt_number,
         receive_count = receive_count,
         max_retries = max_retries,
@@ -336,6 +349,7 @@ async fn process_message(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "TransactionRequest",
                 transaction_request_handler,
             )
@@ -346,16 +360,18 @@ async fn process_message(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "TransactionSend",
                 transaction_submission_handler,
             )
             .await
         }
-        QueueType::StatusCheck => {
+        QueueType::StatusCheck | QueueType::StatusCheckEvm | QueueType::StatusCheckStellar => {
             process_job::<TransactionStatusCheck, _, _>(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "TransactionStatusCheck",
                 transaction_status_handler,
             )
@@ -366,6 +382,7 @@ async fn process_message(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "NotificationSend",
                 notification_handler,
             )
@@ -376,6 +393,7 @@ async fn process_message(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "TokenSwapRequest",
                 token_swap_request_handler,
             )
@@ -386,6 +404,7 @@ async fn process_message(
                 body,
                 app_state,
                 attempt_number,
+                sqs_message_id,
                 "RelayerHealthCheck",
                 relayer_health_check_handler,
             )
@@ -441,87 +460,83 @@ async fn process_message(
             // StatusCheck queues use self-re-enqueue with short delay instead of
             // relying on the 300s visibility timeout. This brings retry intervals
             // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
-            if queue_type == QueueType::StatusCheck {
-                let delay = compute_status_retry_delay(body, attempt_number);
-                if is_fifo_queue_url(queue_url) {
-                    // FIFO queues do not support per-message DelaySeconds.
-                    // For FIFO, use visibility timeout on the original message.
-                    if let Err(change_err) = sqs_client
-                        .change_message_visibility()
-                        .queue_url(queue_url)
-                        .receipt_handle(receipt_handle)
-                        .visibility_timeout(delay.clamp(1, 900))
-                        .send()
-                        .await
-                    {
+            if queue_type.is_status_check() {
+                let delay = compute_status_retry_delay(body, logical_retry_attempt);
+                let requeue_dedup_id = generate_requeue_dedup_id(
+                    body,
+                    receive_count,
+                    message.message_id().unwrap_or("unknown"),
+                );
+                let group_id = match extract_group_id(&message) {
+                    Some(id) => id,
+                    None => {
                         error!(
                             queue_type = ?queue_type,
-                            error = %change_err,
-                            "Failed to extend status check visibility timeout on FIFO queue"
+                            attempt = logical_retry_attempt,
+                            "Cannot re-enqueue status check: missing MessageGroupId"
                         );
-                    } else {
-                        debug!(
-                            queue_type = ?queue_type,
-                            attempt = attempt_number,
-                            delay_seconds = delay,
-                            error = %e,
-                            "Status check retry scheduled via visibility timeout on FIFO queue"
-                        );
-                    }
-                    return Ok(());
-                } else {
-                    let requeue_dedup_id = generate_requeue_dedup_id(
-                        body,
-                        receive_count,
-                        message.message_id().unwrap_or("unknown"),
-                    );
-                    let group_id = extract_group_id(&message).unwrap_or_default();
-
-                    // Re-enqueue with short delay
-                    if let Err(send_err) = sqs_client
-                        .send_message()
-                        .queue_url(queue_url)
-                        .message_body(body.to_string())
-                        .message_group_id(group_id)
-                        .message_deduplication_id(requeue_dedup_id)
-                        .delay_seconds(delay)
-                        .send()
-                        .await
-                    {
-                        error!(
-                            queue_type = ?queue_type,
-                            error = %send_err,
-                            "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
-                        );
-                        // Fall through — original message will retry after visibility timeout
+                        // Keep original message for visibility-timeout retry path.
                         return Ok(());
                     }
+                };
+                let next_retry_attempt = logical_retry_attempt.saturating_add(1);
 
-                    // Delete the original message now that the re-enqueue succeeded
-                    sqs_client
-                        .delete_message()
-                        .queue_url(queue_url)
-                        .receipt_handle(receipt_handle)
-                        .send()
-                        .await
-                        .map_err(|err| {
-                            // Not fatal: worst case is a duplicate delivery after
-                            // the visibility timeout expires, which the handler is
-                            // idempotent to handle.
-                            error!(error = %err, "Failed to delete original status check message after re-enqueue");
-                            QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
-                        })?;
-
-                    debug!(
+                // Re-enqueue with short delay
+                if let Err(send_err) = sqs_client
+                    .send_message()
+                    .queue_url(queue_url)
+                    .message_body(body.to_string())
+                    .message_group_id(group_id)
+                    .message_deduplication_id(requeue_dedup_id)
+                    .delay_seconds(delay)
+                    .message_attributes(
+                        "retry_attempt",
+                        MessageAttributeValue::builder()
+                            .data_type("Number")
+                            .string_value(next_retry_attempt.to_string())
+                            .build()
+                            .map_err(|err| {
+                                QueueBackendError::SqsError(format!(
+                                    "Failed to build retry_attempt attribute: {err}"
+                                ))
+                            })?,
+                    )
+                    .send()
+                    .await
+                {
+                    error!(
                         queue_type = ?queue_type,
-                        attempt = attempt_number,
-                        delay_seconds = delay,
-                        error = %e,
-                        "Status check re-enqueued with short delay"
+                        error = %send_err,
+                        "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
                     );
-
+                    // Fall through — original message will retry after visibility timeout
                     return Ok(());
                 }
+
+                // Delete the original message now that the re-enqueue succeeded
+                sqs_client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(receipt_handle)
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        // Not fatal: worst case is a duplicate delivery after
+                        // the visibility timeout expires, which the handler is
+                        // idempotent to handle.
+                        error!(error = %err, "Failed to delete original status check message after re-enqueue");
+                        QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
+                    })?;
+
+                debug!(
+                    queue_type = ?queue_type,
+                    attempt = logical_retry_attempt,
+                    delay_seconds = delay,
+                    error = %e,
+                    "Status check re-enqueued with short delay"
+                );
+
+                return Ok(());
             }
 
             // Non-StatusCheck queues: let message return via visibility timeout
@@ -559,6 +574,7 @@ async fn process_job<T, F, Fut>(
     body: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     attempt: usize,
+    task_id: String,
     type_name: &str,
     handler: F,
 ) -> Result<(), ProcessingError>
@@ -573,7 +589,7 @@ where
         ProcessingError::Permanent(format!("Failed to deserialize {type_name} job: {e}"))
     })?;
 
-    let ctx = WorkerContext::new(attempt, uuid::Uuid::new_v4().to_string());
+    let ctx = WorkerContext::new(attempt, task_id);
     handler(job, (*app_state).clone(), ctx)
         .await
         .map_err(map_handler_error)
@@ -592,6 +608,14 @@ fn parse_target_scheduled_on(message: &Message) -> Option<i64> {
         .and_then(|attrs| attrs.get("target_scheduled_on"))
         .and_then(|value| value.string_value())
         .and_then(|value| value.parse::<i64>().ok())
+}
+
+fn parse_retry_attempt(message: &Message) -> Option<usize> {
+    message
+        .message_attributes()
+        .and_then(|attrs| attrs.get("retry_attempt"))
+        .and_then(|value| value.string_value())
+        .and_then(|value| value.parse::<usize>().ok())
 }
 
 fn extract_group_id(message: &Message) -> Option<String> {
@@ -717,6 +741,24 @@ async fn defer_message(
     Ok(true)
 }
 
+/// Partial struct for deserializing only the `network_type` field from a status check job.
+///
+/// Used to avoid deserializing the entire `Job<TransactionStatusCheck>` when we only
+/// need the network type to determine retry delay.
+#[derive(serde::Deserialize)]
+struct StatusCheckData {
+    network_type: Option<crate::models::NetworkType>,
+}
+
+/// Partial struct matching `Job<TransactionStatusCheck>` structure.
+///
+/// Used for efficient partial deserialization to extract only the `network_type`
+/// field without parsing the entire job payload.
+#[derive(serde::Deserialize)]
+struct PartialStatusCheckJob {
+    data: StatusCheckData,
+}
+
 /// Extracts `network_type` from a status check payload and computes retry delay.
 ///
 /// This uses hardcoded network-specific backoff windows aligned with Redis/Apalis:
@@ -724,17 +766,7 @@ async fn defer_message(
 /// - Stellar: 2s -> 3s cap
 /// - Solana/default: 5s -> 8s cap
 fn compute_status_retry_delay(body: &str, attempt: usize) -> i32 {
-    // Partial struct matching Job<TransactionStatusCheck>.data.network_type
-    #[derive(serde::Deserialize)]
-    struct StatusCheckData {
-        network_type: Option<crate::models::NetworkType>,
-    }
-    #[derive(serde::Deserialize)]
-    struct PartialJob {
-        data: StatusCheckData,
-    }
-
-    let network_type = serde_json::from_str::<PartialJob>(body)
+    let network_type = serde_json::from_str::<PartialStatusCheckJob>(body)
         .ok()
         .and_then(|j| j.data.network_type);
 
@@ -757,10 +789,32 @@ fn generate_requeue_dedup_id(body: &str, receive_count: usize, message_id: &str)
 
 /// Gets the concurrency limit for a queue type from environment.
 fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
-    ServerConfig::get_worker_concurrency(
+    let configured = ServerConfig::get_worker_concurrency(
         queue_type.concurrency_env_key(),
         queue_type.default_concurrency(),
-    )
+    );
+    if configured == 0 {
+        warn!(
+            queue_type = ?queue_type,
+            "Configured concurrency is 0; clamping to 1"
+        );
+        1
+    } else {
+        configured
+    }
+}
+
+/// Maximum backoff duration for poll errors (5 minutes).
+const MAX_POLL_BACKOFF_SECS: u64 = 300;
+
+/// Computes exponential backoff for consecutive poll errors.
+///
+/// Returns: 5, 10, 20, 40, 80, 160, 300, 300, ... seconds
+fn poll_error_backoff_secs(consecutive_errors: u32) -> u64 {
+    let base: u64 = 5;
+    let exponent = consecutive_errors.saturating_sub(1).min(16);
+    base.saturating_mul(2_u64.saturating_pow(exponent))
+        .min(MAX_POLL_BACKOFF_SECS)
 }
 
 #[cfg(test)]
@@ -886,6 +940,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_retry_attempt() {
+        let message = Message::builder().build();
+        assert_eq!(parse_retry_attempt(&message), None);
+
+        let message = Message::builder()
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("7")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_retry_attempt(&message), Some(7));
+    }
+
+    #[test]
     fn test_extract_group_id() {
         // Test extracting MessageGroupId from message attributes
         let message = Message::builder().build();
@@ -1004,5 +1076,31 @@ mod tests {
         let _p = tokio::time::timeout(Duration::from_millis(100), sem.acquire())
             .await
             .expect("permit should be available after panic");
+    }
+
+    #[test]
+    fn test_poll_error_backoff_secs() {
+        // First error: 5s
+        assert_eq!(poll_error_backoff_secs(1), 5);
+        // Second: 10s
+        assert_eq!(poll_error_backoff_secs(2), 10);
+        // Third: 20s
+        assert_eq!(poll_error_backoff_secs(3), 20);
+        // Fourth: 40s
+        assert_eq!(poll_error_backoff_secs(4), 40);
+        // Fifth: 80s
+        assert_eq!(poll_error_backoff_secs(5), 80);
+        // Sixth: 160s
+        assert_eq!(poll_error_backoff_secs(6), 160);
+        // Seventh: capped at 300s
+        assert_eq!(poll_error_backoff_secs(7), 300);
+        // Many errors: still capped at 300s
+        assert_eq!(poll_error_backoff_secs(100), 300);
+    }
+
+    #[test]
+    fn test_poll_error_backoff_zero_errors() {
+        // Zero consecutive errors should still produce a reasonable value
+        assert_eq!(poll_error_backoff_secs(0), 5);
     }
 }

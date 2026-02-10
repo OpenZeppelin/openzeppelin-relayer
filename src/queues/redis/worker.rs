@@ -9,12 +9,9 @@ use actix_web::web::ThinData;
 use crate::{
     config::ServerConfig,
     constants::{
-        DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
         SYSTEM_CLEANUP_CRON_SCHEDULE, TRANSACTION_CLEANUP_CRON_SCHEDULE,
-        WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
         WORKER_SYSTEM_CLEANUP_RETRIES, WORKER_TOKEN_SWAP_REQUEST_RETRIES,
-        WORKER_TRANSACTION_CLEANUP_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
-        WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
+        WORKER_TRANSACTION_CLEANUP_RETRIES,
     },
     jobs::{
         notification_handler, relayer_health_check_handler, system_cleanup_handler,
@@ -235,7 +232,7 @@ where
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
         .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_REQUEST_RETRIES)
+            RetryPolicy::retries(QueueType::TransactionRequest.max_retries())
                 .with_backoff(create_backoff_from_config(TX_REQUEST_BACKOFF)?.make_backoff()),
         )
         .enable_tracing()
@@ -253,7 +250,7 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_SUBMIT_RETRIES)
+            RetryPolicy::retries(QueueType::TransactionSubmission.max_retries())
                 .with_backoff(create_backoff_from_config(TX_SUBMISSION_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
@@ -271,12 +268,12 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+            RetryPolicy::retries(QueueType::StatusCheck.max_retries())
                 .with_backoff(create_backoff_from_config(STATUS_GENERIC_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_STATUS_CHECKER,
-            DEFAULT_CONCURRENCY_STATUS_CHECKER,
+            QueueType::StatusCheck.concurrency_env_key(),
+            QueueType::StatusCheck.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue.clone())
@@ -289,12 +286,12 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES)
+            RetryPolicy::retries(QueueType::StatusCheck.max_retries())
                 .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
-            TRANSACTION_STATUS_CHECKER_EVM,
-            DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
+            QueueType::StatusCheckEvm.concurrency_env_key(),
+            QueueType::StatusCheckEvm.default_concurrency(),
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue_evm.clone())
@@ -308,13 +305,13 @@ where
             .enable_tracing()
             .catch_panic()
             .retry(
-                RetryPolicy::retries(WORKER_TRANSACTION_STATUS_CHECKER_RETRIES).with_backoff(
+                RetryPolicy::retries(QueueType::StatusCheckStellar.max_retries()).with_backoff(
                     create_backoff_from_config(STATUS_STELLAR_BACKOFF)?.make_backoff(),
                 ),
             )
             .concurrency(ServerConfig::get_worker_concurrency(
-                QueueType::StatusCheck.concurrency_env_key(),
-                QueueType::StatusCheck.default_concurrency(),
+                QueueType::StatusCheckStellar.concurrency_env_key(),
+                QueueType::StatusCheckStellar.default_concurrency(),
             ))
             .data(app_state.clone())
             .backend(queue.transaction_status_queue_stellar.clone())
@@ -325,7 +322,7 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_NOTIFICATION_SENDER_RETRIES)
+            RetryPolicy::retries(QueueType::Notification.max_retries())
                 .with_backoff(create_backoff_from_config(NOTIFICATION_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
@@ -341,7 +338,7 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_TOKEN_SWAP_REQUEST_RETRIES).with_backoff(
+            RetryPolicy::retries(QueueType::TokenSwapRequest.max_retries()).with_backoff(
                 create_backoff_from_config(TOKEN_SWAP_REQUEST_BACKOFF)?.make_backoff(),
             ),
         )
@@ -388,7 +385,7 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(WORKER_RELAYER_HEALTH_CHECK_RETRIES)
+            RetryPolicy::retries(QueueType::RelayerHealthCheck.max_retries())
                 .with_backoff(create_backoff_from_config(RELAYER_HEALTH_BACKOFF)?.make_backoff()),
         )
         .concurrency(ServerConfig::get_worker_concurrency(

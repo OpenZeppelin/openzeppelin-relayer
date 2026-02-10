@@ -328,6 +328,8 @@ mod tests {
             QueueType::TransactionRequest,
             QueueType::TransactionSubmission,
             QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
             QueueType::Notification,
             QueueType::TokenSwapRequest,
             QueueType::RelayerHealthCheck,
@@ -342,24 +344,31 @@ mod tests {
 
     #[test]
     fn test_queue_type_visibility_timeouts_in_range() {
-        // All visibility timeouts should be reasonable (2-15 minutes)
-        assert!(QueueType::TransactionRequest.visibility_timeout_secs() >= 120);
-        assert!(QueueType::TransactionRequest.visibility_timeout_secs() <= 900);
-
-        assert!(QueueType::TransactionSubmission.visibility_timeout_secs() >= 120);
-        assert!(QueueType::TransactionSubmission.visibility_timeout_secs() <= 900);
-
-        assert!(QueueType::StatusCheck.visibility_timeout_secs() >= 120);
-        assert!(QueueType::StatusCheck.visibility_timeout_secs() <= 900);
-
-        assert!(QueueType::Notification.visibility_timeout_secs() >= 120);
-        assert!(QueueType::Notification.visibility_timeout_secs() <= 900);
+        // All visibility timeouts should be within SQS limits (0-43200).
+        let all_types = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all_types {
+            let vt = qt.visibility_timeout_secs();
+            assert!(vt > 0, "{qt}: visibility timeout must be > 0");
+            assert!(
+                vt <= 43200,
+                "{qt}: visibility timeout {vt}s exceeds SQS max (43200s)"
+            );
+        }
     }
 
     #[test]
     fn test_queue_type_polling_intervals_appropriate() {
-        // Status check should be fastest
-        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 2);
+        // Status check should poll most frequently
+        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 5);
 
         // Others should be slower
         assert!(QueueType::TransactionRequest.polling_interval_secs() >= 5);

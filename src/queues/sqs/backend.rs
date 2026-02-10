@@ -17,11 +17,31 @@ use crate::{
         Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
     },
-    models::DefaultAppState,
+    models::{DefaultAppState, NetworkType},
 };
 use actix_web::web::ThinData;
 
 use super::{QueueBackend, QueueBackendError, QueueHealth, QueueType, WorkerHandle};
+
+/// SQS maximum message body size (256 KB).
+const SQS_MAX_MESSAGE_SIZE_BYTES: usize = 256 * 1024;
+
+/// Chooses the FIFO message group ID based on network type.
+///
+/// EVM requires per-relayer ordering (nonce management), so uses `relayer_id`.
+/// Non-EVM networks (Stellar, Solana) can safely parallelize per transaction,
+/// so uses `transaction_id` for better throughput.
+/// Falls back to `relayer_id` when network type is unknown (conservative/safe).
+fn transaction_message_group_id(
+    network_type: Option<&NetworkType>,
+    relayer_id: &str,
+    transaction_id: &str,
+) -> String {
+    match network_type {
+        Some(NetworkType::Evm) | None => relayer_id.to_string(),
+        Some(_) => transaction_id.to_string(),
+    }
+}
 
 /// AWS SQS backend for job queue operations.
 ///
@@ -98,7 +118,10 @@ impl SqsBackend {
             "Resolved SQS queue URL prefix"
         );
 
-        // Build queue URL mapping
+        // Build queue URL mapping.
+        // Status checks use per-network queues (EVM, Stellar, generic/Solana)
+        // to match the Redis backend's separate worker setup with independent
+        // concurrency pools and network-tuned polling intervals.
         let queue_urls = HashMap::from([
             (
                 QueueType::TransactionRequest,
@@ -109,6 +132,14 @@ impl SqsBackend {
                 format!("{prefix}transaction-submission.fifo"),
             ),
             (QueueType::StatusCheck, format!("{prefix}status-check.fifo")),
+            (
+                QueueType::StatusCheckEvm,
+                format!("{prefix}status-check-evm.fifo"),
+            ),
+            (
+                QueueType::StatusCheckStellar,
+                format!("{prefix}status-check-stellar.fifo"),
+            ),
             (
                 QueueType::Notification,
                 format!("{prefix}notification.fifo"),
@@ -136,16 +167,30 @@ impl SqsBackend {
                 .get_queue_attributes()
                 .queue_url(queue_url)
                 .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
+                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
                 .send()
                 .await;
 
             match probe {
-                Ok(_) => {
-                    debug!(
-                        queue_type = %queue_type,
-                        queue_url = %queue_url,
-                        "SQS queue probe succeeded"
-                    );
+                Ok(output) => {
+                    let is_fifo = output
+                        .attributes()
+                        .and_then(|attrs| {
+                            attrs.get(&aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
+                        })
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    if is_fifo {
+                        debug!(
+                            queue_type = %queue_type,
+                            queue_url = %queue_url,
+                            "SQS queue probe succeeded"
+                        );
+                    } else {
+                        missing_queues.push(format!(
+                            "{queue_type} ({queue_url}): queue is not FIFO (FifoQueue != true)"
+                        ));
+                    }
                 }
                 Err(err) => {
                     // Include debug details because Display often collapses to "service error".
@@ -203,6 +248,14 @@ impl SqsBackend {
         delay_seconds: Option<i32>,
         target_scheduled_on: Option<i64>,
     ) -> Result<String, QueueBackendError> {
+        if body.len() > SQS_MAX_MESSAGE_SIZE_BYTES {
+            return Err(QueueBackendError::SqsError(format!(
+                "Message body size ({} bytes) exceeds SQS limit ({} bytes)",
+                body.len(),
+                SQS_MAX_MESSAGE_SIZE_BYTES
+            )));
+        }
+
         let mut request = self
             .sqs_client
             .send_message()
@@ -383,7 +436,11 @@ impl QueueBackend for SqsBackend {
             QueueBackendError::SerializationError(e.to_string())
         })?;
 
-        let message_group_id = job.data.relayer_id.clone();
+        let message_group_id = transaction_message_group_id(
+            job.data.network_type.as_ref(),
+            &job.data.relayer_id,
+            &job.data.transaction_id,
+        );
         let message_deduplication_id = job.message_id.clone();
         let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
 
@@ -413,7 +470,11 @@ impl QueueBackend for SqsBackend {
             QueueBackendError::SerializationError(e.to_string())
         })?;
 
-        let message_group_id = job.data.relayer_id.clone();
+        let message_group_id = transaction_message_group_id(
+            job.data.network_type.as_ref(),
+            &job.data.relayer_id,
+            &job.data.transaction_id,
+        );
         let message_deduplication_id = job.message_id.clone();
         let delay_seconds = Self::calculate_delay_seconds(scheduled_on);
 
@@ -433,10 +494,18 @@ impl QueueBackend for SqsBackend {
         job: Job<TransactionStatusCheck>,
         scheduled_on: Option<i64>,
     ) -> Result<String, QueueBackendError> {
+        // Route to network-specific queue based on network type.
+        // EVM and Stellar get dedicated queues with tuned concurrency/polling;
+        // Solana and unknown network types use the generic StatusCheck queue.
+        let queue_type = match job.data.network_type {
+            Some(NetworkType::Evm) => QueueType::StatusCheckEvm,
+            Some(NetworkType::Stellar) => QueueType::StatusCheckStellar,
+            _ => QueueType::StatusCheck,
+        };
         let queue_url = self
             .queue_urls
-            .get(&QueueType::StatusCheck)
-            .ok_or_else(|| QueueBackendError::QueueNotFound("StatusCheck".to_string()))?;
+            .get(&queue_type)
+            .ok_or_else(|| QueueBackendError::QueueNotFound(format!("{queue_type}")))?;
 
         let body = serde_json::to_string(&job).map_err(|e| {
             error!(error = %e, "Failed to serialize TransactionStatusCheck job");
@@ -859,6 +928,39 @@ mod tests {
         assert!(!SqsBackend::is_fifo_queue_url(
             "https://sqs.us-east-1.amazonaws.com/123/queue"
         ));
+    }
+
+    #[test]
+    fn test_transaction_message_group_id_evm_uses_relayer() {
+        let group = transaction_message_group_id(Some(&NetworkType::Evm), "relayer-1", "tx-123");
+        assert_eq!(group, "relayer-1");
+    }
+
+    #[test]
+    fn test_transaction_message_group_id_stellar_uses_transaction() {
+        let group =
+            transaction_message_group_id(Some(&NetworkType::Stellar), "relayer-1", "tx-123");
+        assert_eq!(group, "tx-123");
+    }
+
+    #[test]
+    fn test_transaction_message_group_id_solana_uses_transaction() {
+        let group = transaction_message_group_id(Some(&NetworkType::Solana), "relayer-1", "tx-123");
+        assert_eq!(group, "tx-123");
+    }
+
+    #[test]
+    fn test_transaction_message_group_id_none_defaults_to_relayer() {
+        let group = transaction_message_group_id(None, "relayer-1", "tx-123");
+        assert_eq!(
+            group, "relayer-1",
+            "Unknown network should default to relayer_id (safe/conservative)"
+        );
+    }
+
+    #[test]
+    fn test_sqs_max_message_size_constant() {
+        assert_eq!(SQS_MAX_MESSAGE_SIZE_BYTES, 256 * 1024);
     }
 
     #[tokio::test]
