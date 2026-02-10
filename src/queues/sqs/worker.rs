@@ -279,7 +279,7 @@ async fn process_message(
             .as_secs() as i64;
         let remaining = target_scheduled_on - now;
         if remaining > 0 {
-            defer_message(
+            let should_delete_original = defer_message(
                 &sqs_client,
                 queue_url,
                 body.to_string(),
@@ -289,17 +289,19 @@ async fn process_message(
             )
             .await?;
 
-            sqs_client
-                .delete_message()
-                .queue_url(queue_url)
-                .receipt_handle(receipt_handle)
-                .send()
-                .await
-                .map_err(|e| {
-                    QueueBackendError::SqsError(format!(
-                        "Deferred message but failed to delete original: {e}"
-                    ))
-                })?;
+            if should_delete_original {
+                sqs_client
+                    .delete_message()
+                    .queue_url(queue_url)
+                    .receipt_handle(receipt_handle)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        QueueBackendError::SqsError(format!(
+                            "Deferred message but failed to delete original: {e}"
+                        ))
+                    })?;
+            }
 
             debug!(
                 queue_type = ?queue_type,
@@ -441,57 +443,85 @@ async fn process_message(
             // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
             if queue_type == QueueType::StatusCheck {
                 let delay = compute_status_retry_delay(body, attempt_number);
-                let requeue_dedup_id = generate_requeue_dedup_id(
-                    body,
-                    receive_count,
-                    message.message_id().unwrap_or("unknown"),
-                );
-                let group_id = extract_group_id(&message).unwrap_or_default();
-
-                // Re-enqueue with short delay
-                if let Err(send_err) = sqs_client
-                    .send_message()
-                    .queue_url(queue_url)
-                    .message_body(body.to_string())
-                    .message_group_id(group_id)
-                    .message_deduplication_id(requeue_dedup_id)
-                    .delay_seconds(delay)
-                    .send()
-                    .await
-                {
-                    error!(
-                        queue_type = ?queue_type,
-                        error = %send_err,
-                        "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
+                if is_fifo_queue_url(queue_url) {
+                    // FIFO queues do not support per-message DelaySeconds.
+                    // For FIFO, use visibility timeout on the original message.
+                    if let Err(change_err) = sqs_client
+                        .change_message_visibility()
+                        .queue_url(queue_url)
+                        .receipt_handle(receipt_handle)
+                        .visibility_timeout(delay.clamp(1, 900))
+                        .send()
+                        .await
+                    {
+                        error!(
+                            queue_type = ?queue_type,
+                            error = %change_err,
+                            "Failed to extend status check visibility timeout on FIFO queue"
+                        );
+                    } else {
+                        debug!(
+                            queue_type = ?queue_type,
+                            attempt = attempt_number,
+                            delay_seconds = delay,
+                            error = %e,
+                            "Status check retry scheduled via visibility timeout on FIFO queue"
+                        );
+                    }
+                    return Ok(());
+                } else {
+                    let requeue_dedup_id = generate_requeue_dedup_id(
+                        body,
+                        receive_count,
+                        message.message_id().unwrap_or("unknown"),
                     );
-                    // Fall through — original message will retry after visibility timeout
+                    let group_id = extract_group_id(&message).unwrap_or_default();
+
+                    // Re-enqueue with short delay
+                    if let Err(send_err) = sqs_client
+                        .send_message()
+                        .queue_url(queue_url)
+                        .message_body(body.to_string())
+                        .message_group_id(group_id)
+                        .message_deduplication_id(requeue_dedup_id)
+                        .delay_seconds(delay)
+                        .send()
+                        .await
+                    {
+                        error!(
+                            queue_type = ?queue_type,
+                            error = %send_err,
+                            "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
+                        );
+                        // Fall through — original message will retry after visibility timeout
+                        return Ok(());
+                    }
+
+                    // Delete the original message now that the re-enqueue succeeded
+                    sqs_client
+                        .delete_message()
+                        .queue_url(queue_url)
+                        .receipt_handle(receipt_handle)
+                        .send()
+                        .await
+                        .map_err(|err| {
+                            // Not fatal: worst case is a duplicate delivery after
+                            // the visibility timeout expires, which the handler is
+                            // idempotent to handle.
+                            error!(error = %err, "Failed to delete original status check message after re-enqueue");
+                            QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
+                        })?;
+
+                    debug!(
+                        queue_type = ?queue_type,
+                        attempt = attempt_number,
+                        delay_seconds = delay,
+                        error = %e,
+                        "Status check re-enqueued with short delay"
+                    );
+
                     return Ok(());
                 }
-
-                // Delete the original message now that the re-enqueue succeeded
-                sqs_client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(receipt_handle)
-                    .send()
-                    .await
-                    .map_err(|err| {
-                        // Not fatal: worst case is a duplicate delivery after
-                        // the visibility timeout expires, which the handler is
-                        // idempotent to handle.
-                        error!(error = %err, "Failed to delete original status check message after re-enqueue");
-                        QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
-                    })?;
-
-                debug!(
-                    queue_type = ?queue_type,
-                    attempt = attempt_number,
-                    delay_seconds = delay,
-                    error = %e,
-                    "Status check re-enqueued with short delay"
-                );
-
-                return Ok(());
             }
 
             // Non-StatusCheck queues: let message return via visibility timeout
@@ -592,6 +622,10 @@ fn generate_dedup_id(
     hash[..64.min(hash.len())].to_string()
 }
 
+fn is_fifo_queue_url(queue_url: &str) -> bool {
+    queue_url.ends_with(".fifo")
+}
+
 async fn defer_message(
     sqs_client: &aws_sdk_sqs::Client,
     queue_url: &str,
@@ -599,7 +633,30 @@ async fn defer_message(
     message: &Message,
     target_scheduled_on: i64,
     delay_seconds: i32,
-) -> Result<(), QueueBackendError> {
+) -> Result<bool, QueueBackendError> {
+    if is_fifo_queue_url(queue_url) {
+        let receipt_handle = message.receipt_handle().ok_or_else(|| {
+            QueueBackendError::QueueError(
+                "Cannot defer FIFO message: missing receipt handle".to_string(),
+            )
+        })?;
+
+        sqs_client
+            .change_message_visibility()
+            .queue_url(queue_url)
+            .receipt_handle(receipt_handle)
+            .visibility_timeout(delay_seconds.clamp(1, 900))
+            .send()
+            .await
+            .map_err(|e| {
+                QueueBackendError::SqsError(format!(
+                    "Failed to defer FIFO message via visibility timeout: {e}"
+                ))
+            })?;
+
+        return Ok(false);
+    }
+
     // CRITICAL: Preserve original MessageGroupId to maintain FIFO ordering.
     // If we create a new group ID, messages from the same transaction will
     // be processed out of order, breaking transaction semantics.
@@ -657,7 +714,7 @@ async fn defer_message(
             QueueBackendError::SqsError(format!("Failed to defer scheduled message: {e}"))
         })?;
 
-    Ok(())
+    Ok(true)
 }
 
 /// Extracts `network_type` from a status check payload and computes retry delay.
@@ -851,6 +908,16 @@ mod tests {
         let error = HandlerError::Retry("Network timeout".to_string());
         let result = map_handler_error(error);
         assert!(matches!(result, ProcessingError::Retryable(_)));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url() {
+        assert!(is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.fifo"
+        ));
+        assert!(!is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue"
+        ));
     }
 
     #[test]

@@ -52,6 +52,10 @@ impl std::fmt::Debug for SqsBackend {
 }
 
 impl SqsBackend {
+    fn is_fifo_queue_url(queue_url: &str) -> bool {
+        queue_url.ends_with(".fifo")
+    }
+
     /// Creates a new SQS backend.
     ///
     /// Loads AWS configuration from environment and builds queue URLs.
@@ -222,17 +226,25 @@ impl SqsBackend {
             );
         }
 
-        // Add delay if specified (max 900 seconds = 15 minutes)
+        // Add delay if specified (max 900 seconds = 15 minutes).
+        // FIFO queues do not support per-message DelaySeconds.
         if let Some(delay) = delay_seconds {
             let clamped_delay = delay.clamp(0, 900);
-            request = request.delay_seconds(clamped_delay);
-
-            if delay != clamped_delay {
-                warn!(
-                    requested = delay,
-                    clamped = clamped_delay,
-                    "Delay seconds clamped to SQS limit (0-900)"
+            if Self::is_fifo_queue_url(queue_url) {
+                debug!(
+                    queue_url = %queue_url,
+                    requested_delay = delay,
+                    "Skipping per-message DelaySeconds for FIFO queue"
                 );
+            } else {
+                request = request.delay_seconds(clamped_delay);
+                if delay != clamped_delay {
+                    warn!(
+                        requested = delay,
+                        clamped = clamped_delay,
+                        "Delay seconds clamped to SQS limit (0-900)"
+                    );
+                }
             }
         }
 
@@ -675,6 +687,8 @@ impl QueueBackend for SqsBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jobs::{Job, JobType, TransactionStatusCheck};
+    use crate::models::NetworkType;
 
     #[test]
     fn test_calculate_delay_seconds() {
@@ -835,5 +849,44 @@ mod tests {
         let cloned = backend.clone();
         assert_eq!(cloned.region, backend.region);
         assert_eq!(cloned.queue_urls.len(), backend.queue_urls.len());
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url() {
+        assert!(SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.fifo"
+        ));
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn smoke_push_status_check_to_sqs() {
+        // Requires real AWS credentials and queue env config.
+        // Expected env:
+        // - AWS_REGION
+        // - SQS_QUEUE_URL_PREFIX
+        // - optional AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN
+        let backend = SqsBackend::new()
+            .await
+            .expect("SQS backend initialization failed");
+        let job = Job::new(
+            JobType::TransactionStatusCheck,
+            TransactionStatusCheck::new("smoke-tx-id", "smoke-relayer", NetworkType::Stellar),
+        );
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_secs() as i64;
+        let scheduled_on = Some(now + 2);
+        let result = backend
+            .produce_transaction_status_check(job, scheduled_on)
+            .await;
+        assert!(
+            result.is_ok(),
+            "Expected SendMessage via SQS backend to succeed, got: {result:?}"
+        );
     }
 }
