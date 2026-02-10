@@ -49,6 +49,28 @@ pub use retry_config::status_check_retry_delay_secs;
 pub use swap_filter::filter_relayers_for_swap;
 pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 
+/// Supported queue backend implementations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueueBackendType {
+    Redis,
+    Sqs,
+}
+
+impl QueueBackendType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Redis => "redis",
+            Self::Sqs => "sqs",
+        }
+    }
+}
+
+impl std::fmt::Display for QueueBackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Queue backend abstraction trait.
 ///
 /// This trait defines the interface for job queue operations that can be
@@ -128,8 +150,8 @@ pub trait QueueBackend: Send + Sync {
     /// and backend-specific health indicators.
     async fn health_check(&self) -> Result<Vec<QueueHealth>, QueueBackendError>;
 
-    /// Returns the backend type identifier ("redis" or "sqs").
-    fn backend_type(&self) -> &'static str;
+    /// Returns the backend type identifier.
+    fn backend_type(&self) -> QueueBackendType;
 
     /// Signals all workers to shut down gracefully.
     ///
@@ -263,7 +285,7 @@ impl QueueBackend for QueueBackendStorage {
         }
     }
 
-    fn backend_type(&self) -> &'static str {
+    fn backend_type(&self) -> QueueBackendType {
         match self {
             Self::Redis(b) => b.backend_type(),
             Self::Sqs(b) => b.backend_type(),

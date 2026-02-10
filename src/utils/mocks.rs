@@ -266,6 +266,14 @@ pub mod mockutils {
             .expect_produce_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
+        mock_job_producer
+            .expect_backend_type()
+            .return_const(crate::queues::QueueBackendType::Redis);
+
+        mock_job_producer
+            .expect_get_queue_backend()
+            .return_const(None);
+
         AppState {
             relayer_repository,
             transaction_repository,

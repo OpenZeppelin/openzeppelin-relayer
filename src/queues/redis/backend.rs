@@ -13,7 +13,7 @@ use crate::{
         TransactionSend, TransactionStatusCheck,
     },
     models::{DefaultAppState, NetworkType},
-    queues::Queue,
+    queues::{Queue, QueueBackendType},
     utils::RedisConnections,
 };
 use actix_web::web::ThinData;
@@ -305,8 +305,8 @@ impl QueueBackend for RedisBackend {
         Ok(health_statuses)
     }
 
-    fn backend_type(&self) -> &'static str {
-        "redis"
+    fn backend_type(&self) -> QueueBackendType {
+        QueueBackendType::Redis
     }
 }
 

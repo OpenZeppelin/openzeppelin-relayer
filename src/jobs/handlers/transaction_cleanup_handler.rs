@@ -113,7 +113,8 @@ async fn handle_request(
     // In distributed mode, acquire a lock to prevent multiple instances from
     // running cleanup simultaneously. In single-instance mode, skip locking.
     let lock_guard = if ServerConfig::get_distributed_mode() {
-        if let Some((conn, prefix)) = transaction_repo.connection_info() {
+        if let Some((connections, prefix)) = transaction_repo.connection_info() {
+            let conn = connections.primary().clone();
             let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
             let lock = DistributedLock::new(
                 conn,

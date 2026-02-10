@@ -227,7 +227,14 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let queue = app_state.job_producer.get_queue().await?;
+    let queue_backend = app_state
+        .job_producer
+        .get_queue_backend()
+        .ok_or_else(|| eyre::eyre!("Queue backend is not available"))?;
+    let queue = queue_backend
+        .queue()
+        .cloned()
+        .ok_or_else(|| eyre::eyre!("Redis queue is not available for active backend"))?;
 
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())

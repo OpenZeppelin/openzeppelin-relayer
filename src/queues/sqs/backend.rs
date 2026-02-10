@@ -18,6 +18,7 @@ use crate::{
         TransactionSend, TransactionStatusCheck,
     },
     models::{DefaultAppState, NetworkType},
+    queues::QueueBackendType,
 };
 use actix_web::web::ThinData;
 
@@ -743,8 +744,8 @@ impl QueueBackend for SqsBackend {
         Ok(health_statuses)
     }
 
-    fn backend_type(&self) -> &'static str {
-        "sqs"
+    fn backend_type(&self) -> QueueBackendType {
+        QueueBackendType::Sqs
     }
 
     fn shutdown(&self) {
@@ -854,7 +855,7 @@ mod tests {
             shutdown_tx: Arc::new(watch::channel(false).0),
         };
 
-        assert_eq!(backend.backend_type(), "sqs");
+        assert_eq!(backend.backend_type(), QueueBackendType::Sqs);
     }
 
     #[test]

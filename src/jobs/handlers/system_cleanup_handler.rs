@@ -30,9 +30,9 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     config::ServerConfig,
     constants::{SYSTEM_CLEANUP_LOCK_TTL_SECS, WORKER_SYSTEM_CLEANUP_RETRIES},
-    jobs::handle_result,
+    jobs::{handle_result, JobProducerTrait},
     models::DefaultAppState,
-    queues::{HandlerError, WorkerContext},
+    queues::{HandlerError, QueueBackendType, WorkerContext},
     utils::DistributedLock,
 };
 
@@ -110,19 +110,33 @@ pub async fn system_cleanup_handler(
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
 ///
-/// Note: Queue metadata cleanup only runs when using Redis storage.
-/// In-memory mode skips cleanup since distributed locking is not needed.
+/// Note: Queue metadata cleanup only runs when using Redis queue backend.
+/// SQS backend and in-memory mode skip cleanup since they don't use Redis queues.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
     data: &ThinData<DefaultAppState>,
 ) -> Result<()> {
-    let (pool, key_prefix) = match data.transaction_repository().connection_info() {
-        Some((pool, prefix)) => (pool, prefix.to_string()),
-        None => {
-            debug!("in-memory repository detected, skipping system cleanup");
-            return Ok(());
-        }
-    };
+    // Skip cleanup if not using Redis queue backend
+    let backend_type = data.job_producer().backend_type();
+    if backend_type != QueueBackendType::Redis {
+        debug!(
+            backend = %backend_type,
+            "Skipping queue metadata cleanup - not using Redis queue backend"
+        );
+        return Ok(());
+    }
+
+    let transaction_repo = data.transaction_repository();
+    let (redis_connections, key_prefix) =
+        match crate::repositories::TransactionRepository::connection_info(transaction_repo.as_ref())
+        {
+            Some((connections, prefix)) => (connections, prefix),
+            None => {
+                debug!("in-memory repository detected, skipping system cleanup");
+                return Ok(());
+            }
+        };
+    let pool = redis_connections.primary().clone();
 
     // In distributed mode, acquire a lock to prevent multiple instances from
     // running cleanup simultaneously. In single-instance mode, skip locking.

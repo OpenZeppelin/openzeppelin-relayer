@@ -6,13 +6,12 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use apalis::prelude::BackendExpose;
 use deadpool_redis::Pool;
 use tokio::sync::RwLock;
 
 use crate::models::health::{
-    ComponentStatus, Components, PluginHealth, PoolStatus, QueueHealth, QueueHealthStatus,
-    ReadinessResponse, RedisHealth, RedisHealthStatus, SystemHealth,
+    ComponentStatus, Components, PluginHealth, PoolStatus, QueueHealth, ReadinessResponse,
+    RedisHealth, RedisHealthStatus, SystemHealth,
 };
 use crate::models::{
     NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
@@ -24,7 +23,7 @@ use crate::repositories::{
 };
 use crate::services::plugins::get_pool_manager;
 use crate::utils::RedisConnections;
-use crate::{jobs::JobProducerTrait, queues::Queue};
+use crate::{jobs::JobProducerTrait, queues::QueueBackend};
 
 // ============================================================================
 // Constants
@@ -192,57 +191,6 @@ fn redis_status_to_health(status: RedisHealthStatus) -> RedisHealth {
     }
 }
 
-// ============================================================================
-// Queue Health Checks
-// ============================================================================
-
-/// Check health of Queue's Redis connection.
-///
-/// Uses stats() to verify the queue is responsive within the timeout.
-async fn check_queue_health(queue: &Queue) -> QueueHealthStatus {
-    let result = tokio::time::timeout(PING_TIMEOUT, async {
-        queue.relayer_health_check_queue.stats().await
-    })
-    .await;
-
-    // result is Result<Result<Stats, Error>, Elapsed>
-    // Must check both: timeout didn't expire AND stats() succeeded
-    match result {
-        Ok(Ok(_)) => QueueHealthStatus {
-            healthy: true,
-            error: None,
-        },
-        Ok(Err(e)) => {
-            // Stats call failed (but didn't timeout)
-            tracing::warn!(error = %e, "Queue stats check failed");
-            QueueHealthStatus {
-                healthy: false,
-                error: Some(format!("Queue connection: {e}")),
-            }
-        }
-        Err(_) => {
-            // Timeout expired
-            tracing::warn!("Queue stats check timed out");
-            QueueHealthStatus {
-                healthy: false,
-                error: Some("Queue connection: Stats check timed out".to_string()),
-            }
-        }
-    }
-}
-
-/// Convert QueueHealthStatus to QueueHealth.
-fn queue_status_to_health(status: QueueHealthStatus) -> QueueHealth {
-    QueueHealth {
-        status: if status.healthy {
-            ComponentStatus::Healthy
-        } else {
-            ComponentStatus::Unhealthy
-        },
-        error: status.error,
-    }
-}
-
 /// Create unhealthy Redis and Queue health when queue is unavailable.
 fn create_unavailable_health() -> (RedisHealth, QueueHealth) {
     let error_msg = "Queue unavailable - cannot check Redis or Queue health";
@@ -266,6 +214,45 @@ fn create_unavailable_health() -> (RedisHealth, QueueHealth) {
     };
 
     (redis, queue)
+}
+
+/// Check health of the active queue backend.
+async fn check_queue_backend_health(
+    queue_backend: Option<Arc<crate::queues::QueueBackendStorage>>,
+) -> QueueHealth {
+    match queue_backend {
+        Some(backend) => match backend.health_check().await {
+            Ok(backend_healths) => {
+                let all_healthy = backend_healths.iter().all(|h| h.is_healthy);
+                let error = if all_healthy {
+                    None
+                } else {
+                    let unhealthy_queues: Vec<_> = backend_healths
+                        .iter()
+                        .filter(|h| !h.is_healthy)
+                        .map(|h| h.queue_type.to_string())
+                        .collect();
+                    Some(format!("Unhealthy queues: {}", unhealthy_queues.join(", ")))
+                };
+                QueueHealth {
+                    status: if all_healthy {
+                        ComponentStatus::Healthy
+                    } else {
+                        ComponentStatus::Unhealthy
+                    },
+                    error,
+                }
+            }
+            Err(_) => {
+                let (_, unavailable_queue) = create_unavailable_health();
+                unavailable_queue
+            }
+        },
+        None => {
+            let (_, unavailable_queue) = create_unavailable_health();
+            unavailable_queue
+        }
+    }
 }
 
 // ============================================================================
@@ -624,39 +611,39 @@ where
         return cached;
     }
 
-    // Try to get queue for Redis and Queue health checks
-    let queue = match data.job_producer.get_queue().await {
-        Ok(queue) => Some(queue),
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to get queue from job producer");
-            None
-        }
-    };
-
     // Perform health checks
     let system = check_system_health();
     let plugins = check_plugin_health().await;
 
-    let (redis, queue_health) = if let Some(ref q) = queue {
-        let redis_connections = q.redis_connections();
+    // Redis storage health is derived from repository storage, independent of queue backend.
+    let redis = if let Some((redis_connections, _key_prefix)) =
+        data.transaction_repository.connection_info()
+    {
         let redis_status = check_redis_health(&redis_connections).await;
-        let queue_status = check_queue_health(q).await;
-
-        (
-            redis_status_to_health(redis_status),
-            queue_status_to_health(queue_status),
-        )
+        redis_status_to_health(redis_status)
     } else {
-        create_unavailable_health()
+        let not_applicable_pool = PoolStatus {
+            connected: false,
+            available: 0,
+            max_size: 0,
+            error: Some("Redis storage not used by active repository backend".to_string()),
+        };
+        RedisHealth {
+            status: ComponentStatus::Degraded,
+            primary_pool: not_applicable_pool.clone(),
+            reader_pool: not_applicable_pool,
+            error: Some("Redis storage not applicable for active repository backend".to_string()),
+        }
     };
+
+    // Queue health is derived from the active queue backend.
+    let queue_health = check_queue_backend_health(data.job_producer.get_queue_backend()).await;
 
     // Build response
     let response = build_response(system, redis, queue_health, plugins);
 
-    // Cache only if we have a working queue (cache is less useful in degraded state)
-    if queue.is_some() {
-        cache_response(&response).await;
-    }
+    // Cache the response
+    cache_response(&response).await;
 
     response
 }
@@ -1106,30 +1093,6 @@ mod tests {
 
         let health = redis_status_to_health(status);
         assert_eq!(health.status, ComponentStatus::Unhealthy);
-    }
-
-    #[test]
-    fn test_queue_status_to_health_healthy() {
-        let status = QueueHealthStatus {
-            healthy: true,
-            error: None,
-        };
-
-        let health = queue_status_to_health(status);
-        assert_eq!(health.status, ComponentStatus::Healthy);
-        assert!(health.error.is_none());
-    }
-
-    #[test]
-    fn test_queue_status_to_health_unhealthy() {
-        let status = QueueHealthStatus {
-            healthy: false,
-            error: Some("Stats timeout".to_string()),
-        };
-
-        let health = queue_status_to_health(status);
-        assert_eq!(health.status, ComponentStatus::Unhealthy);
-        assert!(health.error.is_some());
     }
 
     #[test]

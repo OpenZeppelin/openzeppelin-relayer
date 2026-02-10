@@ -257,14 +257,18 @@ fn spawn_cron_task(
                 continue;
             }
 
-            let (pool, key_prefix) = match app_state.transaction_repository().connection_info() {
-                Some((pool, key_prefix)) => (pool, key_prefix.to_string()),
-                None => {
-                    debug!(name = %task_name, "In-memory mode, running cron without lock");
-                    handler(app_state.clone()).await;
-                    continue;
-                }
-            };
+            let transaction_repo = app_state.transaction_repository();
+            let (pool, key_prefix) =
+                match crate::repositories::TransactionRepository::connection_info(
+                    transaction_repo.as_ref(),
+                ) {
+                    Some((connections, key_prefix)) => (connections.primary().clone(), key_prefix),
+                    None => {
+                        debug!(name = %task_name, "In-memory mode, running cron without lock");
+                        handler(app_state.clone()).await;
+                        continue;
+                    }
+                };
 
             let lock_key = format!("{key_prefix}:lock:{task_name}");
             let lock = DistributedLock::new(pool, &lock_key, lock_ttl);

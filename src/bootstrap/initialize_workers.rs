@@ -35,7 +35,7 @@ pub async fn initialize_queue_workers(
     let handles = backend.initialize_workers(Arc::new(app_state)).await?;
 
     info!(
-        backend = backend.backend_type(),
+        backend = %backend.backend_type(),
         worker_count = handles.len(),
         "Initialized queue backend workers"
     );

@@ -21,7 +21,6 @@
 mod transaction_in_memory;
 mod transaction_redis;
 
-use deadpool_redis::Pool;
 pub use transaction_in_memory::*;
 pub use transaction_redis::*;
 
@@ -39,6 +38,13 @@ use std::sync::Arc;
 /// A trait defining transaction repository operations
 #[async_trait]
 pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
+    /// Returns underlying storage Redis connections when available.
+    ///
+    /// In-memory implementations return `None`.
+    fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)> {
+        None
+    }
+
     /// Find transactions by relayer ID with pagination
     async fn find_by_relayer_id(
         &self,
@@ -177,6 +183,7 @@ mockall::mock! {
 
   #[async_trait]
   impl TransactionRepository for TransactionRepository {
+      fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)>;
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
@@ -213,27 +220,39 @@ impl TransactionRepositoryStorage {
         )?))
     }
 
-    /// Returns the underlying primary connection pool and key prefix if this is a persistent storage backend.
+    /// Returns underlying Redis connections if this is a persistent storage backend.
     ///
     /// This is useful for operations that need direct storage access, such as
-    /// distributed locking. The key prefix is used to namespace keys for multi-tenant
-    /// deployments. Currently supports Redis, but the design allows for future backends.
+    /// distributed locking and health checks.
     ///
     /// # Returns
-    /// * `Some((pool, prefix))` - If using persistent storage (e.g., Redis) - returns primary pool
+    /// * `Some((connections, key_prefix))` - If using persistent Redis storage
     /// * `None` - If using in-memory storage
-    pub fn connection_info(&self) -> Option<(Arc<Pool>, &str)> {
+    pub fn connection_info(&self) -> Option<(Arc<RedisConnections>, &str)> {
         match self {
             TransactionRepositoryStorage::InMemory(_) => None,
             TransactionRepositoryStorage::Redis(repo) => {
-                Some((repo.connections.primary().clone(), &repo.key_prefix))
+                Some((repo.connections.clone(), &repo.key_prefix))
             }
+        }
+    }
+
+    /// Returns key prefix used by persistent storage backends.
+    pub fn key_prefix(&self) -> Option<&str> {
+        match self {
+            TransactionRepositoryStorage::InMemory(_) => None,
+            TransactionRepositoryStorage::Redis(repo) => Some(&repo.key_prefix),
         }
     }
 }
 
 #[async_trait]
 impl TransactionRepository for TransactionRepositoryStorage {
+    fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)> {
+        TransactionRepositoryStorage::connection_info(self)
+            .map(|(connections, key_prefix)| (connections, key_prefix.to_string()))
+    }
+
     async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
@@ -575,7 +594,7 @@ mod tests {
             .connection_info()
             .expect("Expected Redis connection info");
 
-        assert!(Arc::ptr_eq(&pool, &returned_connection));
+        assert!(Arc::ptr_eq(&pool, returned_connection.primary()));
         assert_eq!(returned_prefix, key_prefix);
 
         Ok(())

@@ -13,7 +13,7 @@ use crate::{
     },
     models::RelayerError,
     observability::request_id::get_request_id,
-    queues::{Queue, QueueBackend, QueueBackendStorage},
+    queues::{QueueBackend, QueueBackendStorage, QueueBackendType},
 };
 use async_trait::async_trait;
 use serde::Serialize;
@@ -83,7 +83,15 @@ pub trait JobProducerTrait: Send + Sync {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 
-    async fn get_queue(&self) -> Result<Queue, JobProducerError>;
+    /// Returns active queue backend storage when available.
+    fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+        None
+    }
+
+    /// Returns active queue backend type.
+    fn backend_type(&self) -> QueueBackendType {
+        QueueBackendType::Redis
+    }
 }
 
 impl JobProducer {
@@ -98,12 +106,12 @@ impl JobProducer {
 
 #[async_trait]
 impl JobProducerTrait for JobProducer {
-    async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-        self.queue_backend.queue().cloned().ok_or_else(|| {
-            JobProducerError::QueueError(
-                "Queue is not available for the active backend".to_string(),
-            )
-        })
+    fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+        Some(self.queue_backend())
+    }
+
+    fn backend_type(&self) -> QueueBackendType {
+        self.queue_backend.backend_type()
     }
 
     async fn produce_transaction_request_job(
@@ -129,7 +137,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::TransactionRequest,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -161,7 +169,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::TransactionSend,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -196,7 +204,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::TransactionStatusCheck,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -226,7 +234,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::NotificationSend,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             notification_id = %notification_id,
@@ -253,7 +261,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::TokenSwapRequest,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             relayer_id = %relayer_id,
@@ -283,7 +291,7 @@ impl JobProducerTrait for JobProducer {
 
         debug!(
             job_type = %JobType::RelayerHealthCheck,
-            backend = backend.backend_type(),
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             relayer_id = %relayer_id,
@@ -392,8 +400,8 @@ mod tests {
 
     #[async_trait]
     impl JobProducerTrait for TestJobProducer {
-        async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-            unimplemented!("get_queue not used in tests")
+        fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+            None
         }
 
         async fn produce_transaction_request_job(

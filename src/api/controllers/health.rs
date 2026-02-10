@@ -56,7 +56,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::JobProducerError;
     use crate::models::health::ComponentStatus;
     use crate::utils::mocks::mockutils::create_mock_app_state;
     use actix_web::body::to_bytes;
@@ -106,14 +105,8 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async {
-                    Err(JobProducerError::QueueError(
-                        "Queue not available".to_string(),
-                    ))
-                })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
 
@@ -128,14 +121,8 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async {
-                    Err(JobProducerError::QueueError(
-                        "Queue not available".to_string(),
-                    ))
-                })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
@@ -155,14 +142,8 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async {
-                    Err(JobProducerError::QueueError(
-                        "Queue not available".to_string(),
-                    ))
-                })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
@@ -181,25 +162,21 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async {
-                    Err(JobProducerError::QueueError(
-                        "Queue not available".to_string(),
-                    ))
-                })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
         let body = to_bytes(response.into_body()).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-        // Redis and Queue should show unhealthy when queue is unavailable
+        // Queue should be unhealthy when queue backend is unavailable.
+        // Redis storage health is independent from queue backend and is degraded
+        // for in-memory repository-backed tests.
         let redis_status = json["components"]["redis"]["status"].as_str().unwrap();
         let queue_status = json["components"]["queue"]["status"].as_str().unwrap();
 
-        assert_eq!(redis_status, "unhealthy");
+        assert_eq!(redis_status, "degraded");
         assert_eq!(queue_status, "unhealthy");
     }
 
@@ -209,14 +186,8 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async {
-                    Err(JobProducerError::QueueError(
-                        "Queue not available".to_string(),
-                    ))
-                })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
@@ -251,10 +222,8 @@ mod tests {
         // Test unhealthy path
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async { Err(JobProducerError::QueueError("Unavailable".to_string())) })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
@@ -275,10 +244,8 @@ mod tests {
 
         Arc::get_mut(&mut app_state.job_producer)
             .unwrap()
-            .expect_get_queue()
-            .returning(|| {
-                Box::pin(async { Err(JobProducerError::QueueError("Unavailable".to_string())) })
-            });
+            .expect_get_queue_backend()
+            .return_const(None);
 
         let result = readiness(ThinData(app_state)).await;
         let response = result.unwrap();
