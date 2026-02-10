@@ -110,7 +110,8 @@ impl TryFrom<StellarTransactionData> for Transaction {
                 })
             }
             crate::models::TransactionInput::UnsignedXdr(_)
-            | crate::models::TransactionInput::SignedXdr { .. } => {
+            | crate::models::TransactionInput::SignedXdr { .. }
+            | crate::models::TransactionInput::SorobanGasAbstraction { .. } => {
                 // XDR inputs should not be converted to Transaction
                 // The signer handles TransactionEnvelope XDR directly
                 Err(SignerError::ConversionError(
