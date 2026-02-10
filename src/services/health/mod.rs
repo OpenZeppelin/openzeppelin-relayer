@@ -191,6 +191,26 @@ fn redis_status_to_health(status: RedisHealthStatus) -> RedisHealth {
     }
 }
 
+/// Create a neutral Redis health snapshot when Redis storage is not used.
+///
+/// In this mode Redis should not degrade readiness because it is not a required
+/// dependency of the active repository backend.
+fn create_not_applicable_redis_health() -> RedisHealth {
+    let neutral_pool = PoolStatus {
+        connected: true,
+        available: 0,
+        max_size: 0,
+        error: None,
+    };
+
+    RedisHealth {
+        status: ComponentStatus::Healthy,
+        primary_pool: neutral_pool.clone(),
+        reader_pool: neutral_pool,
+        error: None,
+    }
+}
+
 /// Create unhealthy Redis and Queue health when queue is unavailable.
 fn create_unavailable_health() -> (RedisHealth, QueueHealth) {
     let error_msg = "Queue unavailable - cannot check Redis or Queue health";
@@ -622,18 +642,7 @@ where
         let redis_status = check_redis_health(&redis_connections).await;
         redis_status_to_health(redis_status)
     } else {
-        let not_applicable_pool = PoolStatus {
-            connected: false,
-            available: 0,
-            max_size: 0,
-            error: Some("Redis storage not used by active repository backend".to_string()),
-        };
-        RedisHealth {
-            status: ComponentStatus::Degraded,
-            primary_pool: not_applicable_pool.clone(),
-            reader_pool: not_applicable_pool,
-            error: Some("Redis storage not applicable for active repository backend".to_string()),
-        }
+        create_not_applicable_redis_health()
     };
 
     // Queue health is derived from the active queue backend.

@@ -171,12 +171,11 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         // Queue should be unhealthy when queue backend is unavailable.
-        // Redis storage health is independent from queue backend and is degraded
-        // for in-memory repository-backed tests.
+        // Redis is neutral in in-memory repository-backed tests.
         let redis_status = json["components"]["redis"]["status"].as_str().unwrap();
         let queue_status = json["components"]["queue"]["status"].as_str().unwrap();
 
-        assert_eq!(redis_status, "degraded");
+        assert_eq!(redis_status, "healthy");
         assert_eq!(queue_status, "unhealthy");
     }
 
