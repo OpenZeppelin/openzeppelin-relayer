@@ -111,6 +111,7 @@ pub struct TransactionSend {
 }
 
 impl TransactionSend {
+    // Submit a transaction to the relayer
     pub fn submit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
@@ -121,6 +122,7 @@ impl TransactionSend {
         }
     }
 
+    // Cancel a transaction
     pub fn cancel(
         transaction_id: impl Into<String>,
         relayer_id: impl Into<String>,
@@ -137,6 +139,7 @@ impl TransactionSend {
         }
     }
 
+    // Resubmit a transaction
     pub fn resubmit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
@@ -147,6 +150,7 @@ impl TransactionSend {
         }
     }
 
+    // Resend a transaction
     pub fn resend(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
@@ -157,11 +161,13 @@ impl TransactionSend {
         }
     }
 
+    // Set the network type for this transaction submission
     pub fn with_network_type(mut self, network_type: NetworkType) -> Self {
         self.network_type = Some(network_type);
         self
     }
 
+    // Set the metadata for this transaction submission
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = Some(metadata);
         self
@@ -181,6 +187,7 @@ pub struct TransactionStatusCheck {
 }
 
 impl TransactionStatusCheck {
+    // Create a new transaction status check
     pub fn new(
         transaction_id: impl Into<String>,
         relayer_id: impl Into<String>,
@@ -194,6 +201,7 @@ impl TransactionStatusCheck {
         }
     }
 
+    // Set the metadata for this transaction status check
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = Some(metadata);
         self

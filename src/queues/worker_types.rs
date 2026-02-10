@@ -1,3 +1,4 @@
+//! Worker types for the queue abstraction.
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;

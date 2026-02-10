@@ -1,11 +1,13 @@
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
 use crate::constants::{
     DEFAULT_CONCURRENCY_STATUS_CHECKER, DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM,
     WORKER_NOTIFICATION_SENDER_RETRIES, WORKER_RELAYER_HEALTH_CHECK_RETRIES,
     WORKER_TOKEN_SWAP_REQUEST_RETRIES, WORKER_TRANSACTION_REQUEST_RETRIES,
     WORKER_TRANSACTION_STATUS_CHECKER_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
 };
-use serde::{Deserialize, Serialize};
-use std::fmt;
 
 /// Queue types for relayer operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -106,6 +108,7 @@ impl QueueType {
     }
 
     /// Returns the SQS long-poll wait time in seconds.
+    /// Note: SQS `WaitTimeSeconds` maximum is 20 seconds.
     pub fn polling_interval_secs(&self) -> u64 {
         match self {
             Self::TransactionRequest => 15,
@@ -113,8 +116,8 @@ impl QueueType {
             Self::StatusCheck | Self::StatusCheckEvm => 5,
             Self::StatusCheckStellar => 3,
             Self::Notification => 20,
-            Self::TokenSwapRequest => 60,
-            Self::RelayerHealthCheck => 50,
+            Self::TokenSwapRequest => 20,
+            Self::RelayerHealthCheck => 20,
         }
     }
 

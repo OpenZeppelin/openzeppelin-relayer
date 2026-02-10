@@ -1,3 +1,4 @@
+//! AWS SQS queue backend façade and re-exports for the queue abstraction.
 pub use crate::queues::{
     filter_relayers_for_swap, status_check_retry_delay_secs, HandlerError, QueueBackend,
     QueueBackendError, QueueHealth, QueueType, WorkerContext, WorkerHandle,

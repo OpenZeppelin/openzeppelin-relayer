@@ -115,7 +115,7 @@ pub async fn spawn_worker_for_queue(
                     .receive_message()
                     .queue_url(&queue_url)
                     .max_number_of_messages(batch_size) // SQS max is 10
-                    .wait_time_seconds(polling_interval as i32) // Long polling
+                    .wait_time_seconds(polling_interval as i32)
                     .visibility_timeout(visibility_timeout as i32)
                     .message_system_attribute_names(MessageSystemAttributeName::All)
                     .message_attribute_names("All")

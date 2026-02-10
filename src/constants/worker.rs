@@ -47,12 +47,19 @@ pub const TRANSACTION_CLEANUP_CRON_SCHEDULE: &str = "0 */10 * * * *";
 /// 2. Less than the cron interval (10 minutes) to ensure availability for the next run
 pub const TRANSACTION_CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
 
-/// Cron expression for system cleanup: runs at the start of every hour
-pub const SYSTEM_CLEANUP_CRON_SCHEDULE: &str = "0 0 * * * *";
+/// Cron expression for system cleanup: runs every 15 minutes
+pub const SYSTEM_CLEANUP_CRON_SCHEDULE: &str = "0 */15 * * * *";
 
 /// TTL for the system cleanup distributed lock (14 minutes).
 ///
 /// This value should be:
 /// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (1 hour) to ensure availability for the next run
+/// 2. Less than the cron interval (15 minutes) to ensure availability for the next run
 pub const SYSTEM_CLEANUP_LOCK_TTL_SECS: u64 = 14 * 60;
+
+/// Fallback TTL for token-swap cron distributed locks (4 minutes).
+///
+/// This fallback is used when the cron interval cannot be derived from the
+/// schedule expression (for example, parse failures). In normal operation,
+/// token-swap lock TTL is derived from the cron interval in SQS cron scheduler.
+pub const TOKEN_SWAP_CRON_LOCK_TTL_SECS: u64 = 4 * 60;

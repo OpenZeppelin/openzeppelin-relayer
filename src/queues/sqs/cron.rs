@@ -4,19 +4,21 @@
 //! are not available. This module provides a lightweight tokio-based replacement
 //! that uses `DistributedLock` to prevent duplicate execution across ECS tasks.
 
+use std::panic::AssertUnwindSafe;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
 use chrono::Utc;
+use futures::FutureExt;
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     config::ServerConfig,
     constants::{
-        SYSTEM_CLEANUP_CRON_SCHEDULE, SYSTEM_CLEANUP_LOCK_TTL_SECS,
+        SYSTEM_CLEANUP_CRON_SCHEDULE, SYSTEM_CLEANUP_LOCK_TTL_SECS, TOKEN_SWAP_CRON_LOCK_TTL_SECS,
         TRANSACTION_CLEANUP_CRON_SCHEDULE, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
     },
     jobs::{
@@ -32,6 +34,11 @@ use crate::{
 use super::filter_relayers_for_swap;
 
 use super::WorkerHandle;
+
+/// Safety margin subtracted from cron interval when deriving lock TTL.
+const CRON_LOCK_TTL_MARGIN_SECS: u64 = 5;
+/// Minimum derived lock TTL to avoid excessive lock churn on short intervals.
+const CRON_LOCK_TTL_MIN_SECS: u64 = 30;
 
 /// Cron scheduler that runs periodic tasks in SQS mode using tokio timers
 /// and distributed locks for cross-instance coordination.
@@ -78,7 +85,7 @@ impl SqsCronScheduler {
             },
         )?);
 
-        // System cleanup: every hour, lock TTL 55 min
+        // System cleanup: every hour, lock TTL 14 min
         handles.push(spawn_cron_task(
             "sqs-cron-system-cleanup",
             SYSTEM_CLEANUP_CRON_SCHEDULE,
@@ -143,9 +150,10 @@ impl SqsCronScheduler {
 
             let relayer_id = relayer.id.clone();
             let task_name = format!("sqs-cron-token-swap-{relayer_id}");
-            // Lock TTL: use a reasonable default shorter than the likely cron interval.
-            // Most swap crons run every few minutes; 4 min TTL avoids overlap.
-            let lock_ttl = Duration::from_secs(4 * 60);
+            let lock_ttl = derive_cron_lock_ttl(
+                &cron_expr,
+                Duration::from_secs(TOKEN_SWAP_CRON_LOCK_TTL_SECS),
+            );
 
             let state = self.app_state.clone();
             let handle = spawn_cron_task(
@@ -178,6 +186,39 @@ impl SqsCronScheduler {
 
         Ok(handles)
     }
+}
+
+/// Derives distributed lock TTL from cron schedule interval with a fallback.
+///
+/// TTL is set slightly below the schedule interval (`interval - margin`) to
+/// avoid overlap while allowing the next run to acquire the lock. If interval
+/// derivation fails, `fallback_ttl` is used.
+fn derive_cron_lock_ttl(cron_expr: &str, fallback_ttl: Duration) -> Duration {
+    let schedule = match cron::Schedule::from_str(cron_expr) {
+        Ok(s) => s,
+        Err(_) => return fallback_ttl,
+    };
+
+    let now = Utc::now();
+    let mut upcoming = schedule.after(&now);
+    let (Some(first), Some(second)) = (upcoming.next(), upcoming.next()) else {
+        return fallback_ttl;
+    };
+
+    let Ok(interval) = (second - first).to_std() else {
+        return fallback_ttl;
+    };
+
+    let interval_secs = interval.as_secs();
+    if interval_secs <= 1 {
+        return Duration::from_secs(1);
+    }
+
+    let capped_secs = interval_secs.saturating_sub(CRON_LOCK_TTL_MARGIN_SECS);
+    let derived_secs = capped_secs
+        .max(CRON_LOCK_TTL_MIN_SECS)
+        .min(interval_secs - 1);
+    Duration::from_secs(derived_secs)
 }
 
 /// Spawns a single cron task that:
@@ -251,44 +292,83 @@ fn spawn_cron_task(
 
             // In distributed mode, acquire a lock to prevent duplicate execution.
             // In single-instance mode, run the handler directly without locking.
-            if !ServerConfig::get_distributed_mode() {
+            let _guard = if !ServerConfig::get_distributed_mode() {
                 debug!(name = %task_name, "Distributed mode disabled, running cron without lock");
-                handler(app_state.clone()).await;
-                continue;
-            }
-
-            let transaction_repo = app_state.transaction_repository();
-            let (pool, key_prefix) =
+                None
+            } else {
+                let transaction_repo = app_state.transaction_repository();
                 match crate::repositories::TransactionRepository::connection_info(
                     transaction_repo.as_ref(),
                 ) {
-                    Some((connections, key_prefix)) => (connections.primary().clone(), key_prefix),
                     None => {
                         debug!(name = %task_name, "In-memory mode, running cron without lock");
-                        handler(app_state.clone()).await;
-                        continue;
+                        None
                     }
-                };
+                    Some((connections, key_prefix)) => {
+                        let pool = connections.primary().clone();
+                        let lock_key = format!("{key_prefix}:lock:{task_name}");
+                        let lock = DistributedLock::new(pool, &lock_key, lock_ttl);
+                        match lock.try_acquire().await {
+                            Ok(Some(guard)) => {
+                                info!(name = %task_name, "Distributed lock acquired, running cron handler");
+                                Some(guard)
+                            }
+                            Ok(None) => {
+                                debug!(name = %task_name, "Distributed lock held by another instance, skipping");
+                                continue;
+                            }
+                            Err(e) => {
+                                warn!(name = %task_name, error = %e, "Failed to acquire distributed lock, skipping");
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
 
-            let lock_key = format!("{key_prefix}:lock:{task_name}");
-            let lock = DistributedLock::new(pool, &lock_key, lock_ttl);
-            match lock.try_acquire().await {
-                Ok(Some(guard)) => {
-                    info!(name = %task_name, "Distributed lock acquired, running cron handler");
-                    handler(app_state.clone()).await;
-                    drop(guard);
-                }
-                Ok(None) => {
-                    debug!(name = %task_name, "Distributed lock held by another instance, skipping");
-                }
-                Err(e) => {
-                    warn!(name = %task_name, error = %e, "Failed to acquire distributed lock, skipping");
-                }
+            if let Err(panic_info) = AssertUnwindSafe(handler(app_state.clone()))
+                .catch_unwind()
+                .await
+            {
+                let msg = panic_info
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_info.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown panic");
+                error!(name = %task_name, panic = %msg, "Cron handler panicked");
             }
+
+            drop(_guard);
         }
 
         info!(name = %task_name, "SQS cron task stopped");
     });
 
     Ok(WorkerHandle::Tokio(handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derive_cron_lock_ttl_for_five_minute_schedule() {
+        let ttl = derive_cron_lock_ttl("0 */5 * * * *", Duration::from_secs(240));
+        // 5m interval minus 5s margin
+        assert_eq!(ttl, Duration::from_secs(295));
+    }
+
+    #[test]
+    fn test_derive_cron_lock_ttl_for_minute_schedule() {
+        let ttl = derive_cron_lock_ttl("0 * * * * *", Duration::from_secs(240));
+        // 60s interval minus 5s margin
+        assert_eq!(ttl, Duration::from_secs(55));
+    }
+
+    #[test]
+    fn test_derive_cron_lock_ttl_fallback_on_invalid_cron() {
+        let fallback = Duration::from_secs(240);
+        let ttl = derive_cron_lock_ttl("not-a-cron", fallback);
+        assert_eq!(ttl, fallback);
+    }
 }

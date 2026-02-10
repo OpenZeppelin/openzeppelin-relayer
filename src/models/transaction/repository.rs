@@ -56,7 +56,9 @@ pub enum TransactionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+/// Metadata for a transaction
 pub struct TransactionMetadata {
+    /// Number of consecutive failures
     #[serde(default)]
     pub consecutive_failures: u32,
     #[serde(default)]

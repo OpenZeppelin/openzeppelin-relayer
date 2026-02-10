@@ -1,3 +1,4 @@
+//! Redis queue backend façade and re-exports for the queue abstraction.
 pub use crate::queues::{
     filter_relayers_for_swap, QueueBackend, QueueBackendError, QueueHealth, QueueType,
     WorkerContext, WorkerHandle,

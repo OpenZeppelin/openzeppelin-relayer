@@ -213,6 +213,10 @@ fn create_backoff_from_config(cfg: RetryBackoffConfig) -> Result<ExponentialBack
     create_backoff(cfg.initial_ms, cfg.max_ms, cfg.jitter)
 }
 
+/// Initializes Redis/Apalis workers and starts the lifecycle monitor.
+///
+/// # Arguments
+/// * `app_state` - Application state containing the job producer and configuration
 pub async fn initialize_redis_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<()>
@@ -419,9 +423,9 @@ where
 
     let monitor_future = monitor.run_with_signal(async {
         let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
-            .expect("Failed to create SIGINT signal");
+            .map_err(|e| std::io::Error::other(format!("Failed to create SIGINT signal: {e}")))?;
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
-            .expect("Failed to create SIGTERM signal");
+            .map_err(|e| std::io::Error::other(format!("Failed to create SIGTERM signal: {e}")))?;
 
         debug!("Workers monitor started");
 
@@ -558,9 +562,9 @@ where
 
     let monitor_future = monitor.run_with_signal(async {
         let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
-            .expect("Failed to create SIGINT signal");
+            .map_err(|e| std::io::Error::other(format!("Failed to create SIGINT signal: {e}")))?;
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
-            .expect("Failed to create SIGTERM signal");
+            .map_err(|e| std::io::Error::other(format!("Failed to create SIGTERM signal: {e}")))?;
 
         debug!("Swap Monitor started");
 
