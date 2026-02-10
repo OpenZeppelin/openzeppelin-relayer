@@ -12,11 +12,9 @@ create_pair() {
   dlq_name="${queue_name}-dlq.fifo"
   main_name="${queue_name}.fifo"
 
-  # Note: For production AWS, add DeduplicationScope=messageGroup,FifoThroughputLimit=perMessageGroupId
-  # to enable high-throughput FIFO (70k msg/s). Omitted here for LocalStack compatibility.
   aws --endpoint-url "$endpoint" sqs create-queue \
     --queue-name "$dlq_name" \
-    --attributes FifoQueue=true,ContentBasedDeduplication=false >/dev/null
+    --attributes FifoQueue=true,ContentBasedDeduplication=true,DeduplicationScope=messageGroup,FifoThroughputLimit=perMessageGroupId >/dev/null
 
   dlq_url="${endpoint}/${account}/${dlq_name}"
   dlq_arn="$(aws --endpoint-url "$endpoint" sqs get-queue-attributes \
@@ -27,7 +25,7 @@ create_pair() {
 
   aws --endpoint-url "$endpoint" sqs create-queue \
     --queue-name "$main_name" \
-    --attributes "FifoQueue=true,ContentBasedDeduplication=false,VisibilityTimeout=${visibility}" >/dev/null
+    --attributes "FifoQueue=true,ContentBasedDeduplication=true,DeduplicationScope=messageGroup,FifoThroughputLimit=perMessageGroupId,VisibilityTimeout=${visibility}" >/dev/null
 
   main_url="${endpoint}/${account}/${main_name}"
   # --attributes uses JSON format (outer braces) because the RedrivePolicy value
