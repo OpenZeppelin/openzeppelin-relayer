@@ -64,6 +64,11 @@ This table lists the environment variables and their default values.
 | `REDIS_READER_POOL_MAX_SIZE`                                       | `1000`                   | `<number>`                                                                  | Maximum number of connections in the reader Redis connection pool. Only used when `REDIS_READER_URL` is set. Useful for read-heavy workloads. See [Storage Configuration](./configuration/storage) for pool sizing recommendations.                                                  |
 | `REDIS_POOL_TIMEOUT_MS`                                            | `10000`                  | `<timeout in milliseconds>`                                                 | Maximum time to wait for a connection from the pool. See [Storage Configuration](./configuration/storage) for performance tuning.                                                                                                                                                     |
 | `REDIS_KEY_PREFIX`                                                 | `oz-relayer`             | `string`                                                                    | Redis key prefix for namespacing. See [Storage Configuration](./configuration/storage) for more information.                                                                                                                                                                         |
+| `QUEUE_BACKEND`                                                    | `redis`                  | `redis, sqs`                                                                | Queue backend implementation. `redis` uses Apalis + Redis queues. `sqs` uses AWS SQS workers and queue backend abstraction.                                                                                                                                                          |
+| `AWS_REGION`                                                       | (none)                   | `<aws region>`                                                              | Required when `QUEUE_BACKEND=sqs`. Used to build/resolve SQS queue endpoints.                                                                                                                                                                                                       |
+| `AWS_ACCOUNT_ID`                                                   | (none)                   | `<aws account id>`                                                          | Required when `QUEUE_BACKEND=sqs` and `SQS_QUEUE_URL_PREFIX` is not set. Used to construct default SQS queue URLs.                                                                                                                                                                  |
+| `SQS_QUEUE_URL_PREFIX`                                             | (none)                   | `<sqs queue url prefix>`                                                    | Optional override for SQS queue URL prefix (example: `https://sqs.us-east-1.amazonaws.com/123456789012/relayer-`). When set, `AWS_ACCOUNT_ID` is not required.                                                                                                                     |
+| `DISTRIBUTED_MODE`                                                 | `false`                  | `bool` (`true/false`, `1/0`)                                                | Enables Redis-based distributed locks for cron/cleanup tasks in multi-instance deployments, preventing duplicate scheduled execution across nodes.                                                                                                                                    |
 | `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
 | `RPC_TIMEOUT_MS`                                                   | `10000`                  | `<timeout in milliseconds>`                                                 | Sets the maximum time to wait for RPC connections before timing out.                                                                                                                                                                                                                 |
 | `PROVIDER_MAX_RETRIES`                                             | `3`                      | `<number of retries>`                                                       | Maximum number of retry attempts for provider operations.                                                                                                                                                                                                                            |
@@ -128,6 +133,94 @@ STORAGE_ENCRYPTION_KEY=X67aXacJB+krEldv9i2w7NCSFwwOzVV/1ELM2KJJjQw=
 REPOSITORY_STORAGE_TYPE=redis
 RESET_STORAGE_ON_START=false
 TRANSACTION_EXPIRATION_HOURS=8
+```
+
+### Queue backend configuration
+
+Set `QUEUE_BACKEND` to choose the queue system:
+
+- `redis` (default): Redis queue backend via Apalis workers
+- `sqs`: AWS SQS queue backend (FIFO queues expected)
+
+Example for SQS:
+
+```bash
+QUEUE_BACKEND=sqs
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=123456789012
+# Optional:
+# SQS_QUEUE_URL_PREFIX=https://sqs.us-east-1.amazonaws.com/123456789012/relayer-
+```
+
+For distributed deployments (multiple relayer instances), set:
+
+```bash
+DISTRIBUTED_MODE=true
+```
+
+This enables distributed locking for cron/cleanup tasks so only one instance executes each scheduled job at a time.
+
+### SQS queue provisioning guide
+
+When `QUEUE_BACKEND=sqs`, create **FIFO** queues with the `relayer-` prefix (or your custom `SQS_QUEUE_URL_PREFIX`).
+
+Required queue names:
+
+- `relayer-transaction-request.fifo`
+- `relayer-transaction-submission.fifo`
+- `relayer-status-check.fifo`
+- `relayer-status-check-evm.fifo`
+- `relayer-status-check-stellar.fifo`
+- `relayer-notification.fifo`
+- `relayer-token-swap-request.fifo`
+- `relayer-relayer-health-check.fifo`
+
+Recommended queue settings:
+
+| Queue | Queue type | Visibility timeout (seconds) | Suggested maxReceiveCount (DLQ redrive) |
+| --- | --- | --- | --- |
+| `transaction-request` | FIFO | `30` | `6` |
+| `transaction-submission` | FIFO | `30` | `2` |
+| `status-check` | FIFO | `30` | `1000` (or a high value) |
+| `status-check-evm` | FIFO | `30` | `1000` (or a high value) |
+| `status-check-stellar` | FIFO | `20` | `1000` (or a high value) |
+| `notification` | FIFO | `60` | `6` |
+| `token-swap-request` | FIFO | `60` | `3` |
+| `relayer-health-check` | FIFO | `60` | `3` |
+
+Notes:
+
+- `FifoQueue` must be `true`. Startup validation fails if a queue is not FIFO.
+- The relayer sets `MessageGroupId` and `MessageDeduplicationId` on send.
+- Status-check queues use short-delay re-enqueue for retries; use a high `maxReceiveCount` to avoid premature DLQ movement.
+- Configure a DLQ per queue in production (FIFO queue -> FIFO DLQ).
+
+#### High-throughput FIFO mode
+
+For production workloads, enable **high-throughput FIFO** on the transaction-request, transaction-submission, and all status-check queues. This raises the per-queue throughput limit from 300 messages/second to 70,000 messages/second by partitioning throughput across message groups.
+
+Set these additional attributes when creating the queue:
+
+- `DeduplicationScope=messageGroup`
+- `FifoThroughputLimit=perMessageGroupId`
+
+The relayer already uses per-transaction `MessageGroupId` values for status checks and per-relayer groups for EVM transactions, so high-throughput mode benefits these queues directly. Low-volume queues (`notification`, `token-swap-request`, `relayer-health-check`) do not require this setting.
+
+AWS CLI example (replace `<ACCOUNT_ID>`):
+
+```bash
+aws sqs create-queue \
+  --queue-name relayer-transaction-request.fifo \
+  --attributes \
+FifoQueue=true,ContentBasedDeduplication=false,VisibilityTimeout=30,DeduplicationScope=messageGroup,FifoThroughputLimit=perMessageGroupId
+```
+
+Then set redrive policy to attach a DLQ:
+
+```bash
+aws sqs set-queue-attributes \
+  --queue-url "https://sqs.us-east-1.amazonaws.com/<ACCOUNT_ID>/relayer-transaction-request.fifo" \
+  --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"<DLQ_ARN>\",\"maxReceiveCount\":\"6\"}"}'
 ```
 
 ## Main configuration file (config.json)

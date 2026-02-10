@@ -73,10 +73,6 @@ impl std::fmt::Debug for SqsBackend {
 }
 
 impl SqsBackend {
-    fn is_fifo_queue_url(queue_url: &str) -> bool {
-        queue_url.ends_with(".fifo")
-    }
-
     /// Creates a new SQS backend.
     ///
     /// Loads AWS configuration from environment and builds queue URLs.
@@ -281,24 +277,16 @@ impl SqsBackend {
         }
 
         // Add delay if specified (max 900 seconds = 15 minutes).
-        // FIFO queues do not support per-message DelaySeconds.
+        // Per-message DelaySeconds is supported on FIFO queues
         if let Some(delay) = delay_seconds {
             let clamped_delay = delay.clamp(0, 900);
-            if Self::is_fifo_queue_url(queue_url) {
-                debug!(
-                    queue_url = %queue_url,
-                    requested_delay = delay,
-                    "Skipping per-message DelaySeconds for FIFO queue"
+            request = request.delay_seconds(clamped_delay);
+            if delay != clamped_delay {
+                warn!(
+                    requested = delay,
+                    clamped = clamped_delay,
+                    "Delay seconds clamped to SQS limit (0-900)"
                 );
-            } else {
-                request = request.delay_seconds(clamped_delay);
-                if delay != clamped_delay {
-                    warn!(
-                        requested = delay,
-                        clamped = clamped_delay,
-                        "Delay seconds clamped to SQS limit (0-900)"
-                    );
-                }
             }
         }
 
@@ -919,16 +907,6 @@ mod tests {
         let cloned = backend.clone();
         assert_eq!(cloned.region, backend.region);
         assert_eq!(cloned.queue_urls.len(), backend.queue_urls.len());
-    }
-
-    #[test]
-    fn test_is_fifo_queue_url() {
-        assert!(SqsBackend::is_fifo_queue_url(
-            "https://sqs.us-east-1.amazonaws.com/123/queue.fifo"
-        ));
-        assert!(!SqsBackend::is_fifo_queue_url(
-            "https://sqs.us-east-1.amazonaws.com/123/queue"
-        ));
     }
 
     #[test]
