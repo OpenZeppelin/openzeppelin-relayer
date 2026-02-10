@@ -58,13 +58,9 @@ pub async fn notification_handler(
     let result = handle_request(job.data, context).await;
 
     if result.is_ok() {
-        NOTIFICATION_DELIVERY
-            .with_label_values(&["success"])
-            .inc();
+        NOTIFICATION_DELIVERY.with_label_values(&["success"]).inc();
     } else {
-        NOTIFICATION_DELIVERY
-            .with_label_values(&["failure"])
-            .inc();
+        NOTIFICATION_DELIVERY.with_label_values(&["failure"]).inc();
     }
 
     let elapsed = start.elapsed().as_secs_f64();

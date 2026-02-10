@@ -28,7 +28,7 @@ use std::time::Duration;
 use super::rpc_selector::RpcSelector;
 use crate::config::ServerConfig;
 use crate::constants::RETRY_JITTER_PERCENT;
-use crate::metrics::{PROVIDER_FAILOVER_EVENTS, RPC_CALL_LATENCY, RPC_CALLS_BY_OUTCOME};
+use crate::metrics::{PROVIDER_FAILOVER_EVENTS, RPC_CALLS_BY_OUTCOME, RPC_CALL_LATENCY};
 use std::time::Instant;
 
 /// Calculate the retry delay using exponential backoff with jitter
@@ -471,14 +471,24 @@ where
 
                 if !is_retriable {
                     RPC_CALLS_BY_OUTCOME
-                        .with_label_values(&["unknown", "unknown", operation_name, "permanent_failure"])
+                        .with_label_values(&[
+                            "unknown",
+                            "unknown",
+                            operation_name,
+                            "permanent_failure",
+                        ])
                         .inc();
                     return Err(InternalRetryError::NonRetriable(e));
                 }
 
                 if is_last_attempt {
                     RPC_CALLS_BY_OUTCOME
-                        .with_label_values(&["unknown", "unknown", operation_name, "retriable_failure"])
+                        .with_label_values(&[
+                            "unknown",
+                            "unknown",
+                            operation_name,
+                            "retriable_failure",
+                        ])
                         .inc();
                     tracing::warn!(
                         max_retries = %config.max_retries,

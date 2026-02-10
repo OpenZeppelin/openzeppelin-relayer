@@ -257,16 +257,17 @@ impl Queue {
     pub async fn update_queue_depth_metrics(&mut self) {
         use crate::metrics::JOB_QUEUE_DEPTH;
 
-        let update = |name: &str, len: Result<i64, redis::RedisError>| {
-            match len {
-                Ok(n) => JOB_QUEUE_DEPTH.with_label_values(&[name]).set(n as f64),
-                Err(e) => {
-                    warn!(queue = %name, error = %e, "failed to get queue length for metrics");
-                }
+        let update = |name: &str, len: Result<i64, redis::RedisError>| match len {
+            Ok(n) => JOB_QUEUE_DEPTH.with_label_values(&[name]).set(n as f64),
+            Err(e) => {
+                warn!(queue = %name, error = %e, "failed to get queue length for metrics");
             }
         };
 
-        update("transaction_request", self.transaction_request_queue.len().await);
+        update(
+            "transaction_request",
+            self.transaction_request_queue.len().await,
+        );
         update(
             "transaction_submission",
             self.transaction_submission_queue.len().await,

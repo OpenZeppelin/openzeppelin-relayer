@@ -56,11 +56,7 @@ pub async fn transaction_submission_handler(
             TransactionCommand::Resend => "resend",
         };
         crate::metrics::TRANSACTION_SUBMISSION_RETRIES
-            .with_label_values(&[
-                job.data.relayer_id.as_str(),
-                "unknown",
-                command_str,
-            ])
+            .with_label_values(&[job.data.relayer_id.as_str(), "unknown", command_str])
             .inc();
     }
 
