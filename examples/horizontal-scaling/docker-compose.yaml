@@ -64,6 +64,7 @@ services:
       LOG_MODE: file
       LOG_DATA_DIR: logs1/
       LOG_MAX_SIZE: 1073741824
+      DISTRIBUTED_MODE: ${DISTRIBUTED_MODE}
     security_opt:
       - no-new-privileges
     networks:
@@ -107,6 +108,7 @@ services:
       - keystore_passphrase
       - storage_encryption_key
     environment:
+      DISTRIBUTED_MODE: ${DISTRIBUTED_MODE}
       APP_PORT: 8080
       REDIS_URL: redis://redis:6379
       RATE_LIMIT_REQUESTS_PER_SECOND: 1500

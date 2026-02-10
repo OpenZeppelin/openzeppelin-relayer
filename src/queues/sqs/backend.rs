@@ -44,6 +44,18 @@ fn transaction_message_group_id(
     }
 }
 
+/// Selects the status-check queue for a given network type.
+///
+/// EVM and Stellar use dedicated queues; all other/unknown network types use
+/// the generic status-check queue.
+fn status_check_queue_type(network_type: Option<&NetworkType>) -> QueueType {
+    match network_type {
+        Some(NetworkType::Evm) => QueueType::StatusCheckEvm,
+        Some(NetworkType::Stellar) => QueueType::StatusCheckStellar,
+        _ => QueueType::StatusCheck,
+    }
+}
+
 /// AWS SQS backend for job queue operations.
 ///
 /// Uses FIFO queues to ensure:
@@ -486,11 +498,7 @@ impl QueueBackend for SqsBackend {
         // Route to network-specific queue based on network type.
         // EVM and Stellar get dedicated queues with tuned concurrency/polling;
         // Solana and unknown network types use the generic StatusCheck queue.
-        let queue_type = match job.data.network_type {
-            Some(NetworkType::Evm) => QueueType::StatusCheckEvm,
-            Some(NetworkType::Stellar) => QueueType::StatusCheckStellar,
-            _ => QueueType::StatusCheck,
-        };
+        let queue_type = status_check_queue_type(job.data.network_type.as_ref());
         let queue_url = self
             .queue_urls
             .get(&queue_type)
@@ -935,6 +943,35 @@ mod tests {
             group, "relayer-1",
             "Unknown network should default to relayer_id (safe/conservative)"
         );
+    }
+
+    #[test]
+    fn test_status_check_queue_type_evm() {
+        assert_eq!(
+            status_check_queue_type(Some(&NetworkType::Evm)),
+            QueueType::StatusCheckEvm
+        );
+    }
+
+    #[test]
+    fn test_status_check_queue_type_stellar() {
+        assert_eq!(
+            status_check_queue_type(Some(&NetworkType::Stellar)),
+            QueueType::StatusCheckStellar
+        );
+    }
+
+    #[test]
+    fn test_status_check_queue_type_solana_defaults_to_generic() {
+        assert_eq!(
+            status_check_queue_type(Some(&NetworkType::Solana)),
+            QueueType::StatusCheck
+        );
+    }
+
+    #[test]
+    fn test_status_check_queue_type_none_defaults_to_generic() {
+        assert_eq!(status_check_queue_type(None), QueueType::StatusCheck);
     }
 
     #[test]
