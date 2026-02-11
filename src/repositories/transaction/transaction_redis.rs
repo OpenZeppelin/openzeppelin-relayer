@@ -1451,13 +1451,11 @@ impl TransactionRepository for RedisTransactionRepository {
 
                         if !was_final && is_final {
                             // Record transaction fee for final states when available (e.g. Stellar stroops)
-                            if let Some(ref net) = updated_tx.network_data {
-                                if let Ok(stellar_data) = net.get_stellar_transaction_data() {
-                                    if let Some(fee) = stellar_data.fee {
-                                        TRANSACTION_FEE
-                                            .with_label_values(&[relayer_id, &network_type])
-                                            .observe(fee as f64);
-                                    }
+                            if let Ok(stellar_data) = updated_tx.network_data.get_stellar_transaction_data() {
+                                if let Some(fee) = stellar_data.fee {
+                                    TRANSACTION_FEE
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .observe(fee as f64);
                                 }
                             }
 
