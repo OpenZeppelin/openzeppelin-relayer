@@ -4,8 +4,8 @@
 
 use chrono::{DateTime, Utc};
 use soroban_rs::xdr::{
-    Error, Hash, InnerTransactionResultResult, Limits, OperationResult, OperationResultTr,
-    TransactionEnvelope, TransactionResultResult, WriteXdr,
+    Error, Hash, InnerTransactionResultResult, InvokeHostFunctionResult, Limits, OperationResult,
+    OperationResultTr, TransactionEnvelope, TransactionResultResult, WriteXdr,
 };
 use tracing::{debug, info, warn};
 
@@ -607,10 +607,42 @@ fn screaming_with_prefix(prefix: &str, rust_name: &str) -> String {
     out
 }
 
-/// Extracts the first operation-level XDR spec name from a list of operation results.
+/// Returns true if an operation result indicates failure.
+fn is_op_failure(op: &OperationResult) -> bool {
+    match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => {
+                !matches!(r, InvokeHostFunctionResult::Success(_))
+            }
+            // ExtendFootprintTtl and RestoreFootprint only have Success/Malformed variants,
+            // so any non-"Success" name is a failure.
+            OperationResultTr::ExtendFootprintTtl(r) => r.name() != "Success",
+            OperationResultTr::RestoreFootprint(r) => r.name() != "Success",
+            // For non-Soroban ops we don't extract details from, skip — the op_result_to_xdr_name
+            // fallback will still report the type name if this is the only operation.
+            _ => false,
+        },
+        // OpBadAuth, OpNoAccount, etc. are always failures
+        _ => true,
+    }
+}
+
+/// Extracts the XDR spec name from the first failing operation in the results.
+///
+/// Scans left-to-right for the first operation with a failure code, since earlier
+/// operations may show success while a later one carries the actual failure.
+/// Falls back to the first operation if no clear failure is found.
 fn extract_op_detail(ops: &[OperationResult]) -> Option<String> {
-    let first = ops.first()?;
-    match first {
+    let op = ops
+        .iter()
+        .find(|op| is_op_failure(op))
+        .or_else(|| ops.first())?;
+    op_result_to_xdr_name(op)
+}
+
+/// Converts an `OperationResult` to its canonical XDR spec name.
+fn op_result_to_xdr_name(op: &OperationResult) -> Option<String> {
+    match op {
         OperationResult::OpInner(tr) => match tr {
             OperationResultTr::InvokeHostFunction(r) => {
                 Some(screaming_with_prefix("INVOKE_HOST_FUNCTION_", r.name()))
