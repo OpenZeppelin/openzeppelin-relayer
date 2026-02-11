@@ -3,7 +3,10 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::{DateTime, Utc};
-use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
+use soroban_rs::xdr::{
+    Error, Hash, InnerTransactionResultResult, Limits, OperationResult, OperationResultTr,
+    TransactionEnvelope, TransactionResultResult, WriteXdr,
+};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
@@ -353,17 +356,32 @@ where
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let base_reason = "Transaction failed on-chain. Provider status: FAILED.".to_string();
-        let detailed_reason = if let Some(ref tx_result_xdr) = provider_response.result {
+
+        let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
+
+        let detailed_reason = if let Some(ref tx_result) = provider_response.result {
+            let failure = describe_transaction_failure(&tx_result.result);
+
+            warn!(
+                failure_class = %failure.failure_class,
+                failure_summary = %failure.failure_summary,
+                inner_result_code = failure.inner_result_code.as_deref().unwrap_or("n/a"),
+                op_result_code = failure.op_result_code.as_deref().unwrap_or("n/a"),
+                inner_tx_hash = failure.inner_tx_hash.as_deref().unwrap_or("n/a"),
+                inner_fee_charged = failure.inner_fee_charged,
+                fee_charged = tx_result.fee_charged,
+                fee_bid = fee_bid.unwrap_or(0),
+                "stellar transaction failed"
+            );
+
             format!(
-                "{} Specific XDR reason: {}.",
-                base_reason,
-                tx_result_xdr.result.name()
+                "{base_reason} Specific XDR reason: {}",
+                failure.failure_summary
             )
         } else {
+            warn!("stellar transaction failed, no detailed XDR result available");
             format!("{base_reason} No detailed XDR result available.")
         };
-
-        warn!(reason = %detailed_reason, "stellar transaction failed");
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -536,6 +554,183 @@ where
         }
 
         Ok(tx)
+    }
+}
+
+/// Extracts the fee bid from a transaction envelope.
+///
+/// For fee-bump transactions, returns the outer bump fee (the max the submitter was
+/// willing to pay). For regular V1 transactions, returns the `fee` field.
+fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
+    match envelope {
+        TransactionEnvelope::TxFeeBump(fb) => fb.tx.fee,
+        TransactionEnvelope::Tx(v1) => v1.tx.fee as i64,
+        TransactionEnvelope::TxV0(v0) => v0.tx.fee as i64,
+    }
+}
+
+/// Structured details from a failed Stellar transaction result.
+struct TransactionFailureDetails {
+    failure_summary: String,
+    failure_class: String,
+    inner_result_code: Option<String>,
+    op_result_code: Option<String>,
+    inner_tx_hash: Option<String>,
+    inner_fee_charged: i64,
+}
+
+/// Maps a Rust XDR enum variant name to the canonical Stellar XDR spec name.
+fn xdr_spec_name(rust_name: &str) -> String {
+    // InnerTransactionResultResult / TransactionResultResult variants
+    // e.g. TxBadSeq → txBAD_SEQ, TxFailed → txFAILED
+    if let Some(rest) = rust_name.strip_prefix("Tx") {
+        let mut out = String::with_capacity(rest.len() + 4);
+        out.push_str("tx");
+        for (i, ch) in rest.chars().enumerate() {
+            if ch.is_uppercase() && i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_uppercase());
+        }
+        return out;
+    }
+
+    // InvokeHostFunctionResult variants
+    // e.g. Trapped → INVOKE_HOST_FUNCTION_TRAPPED
+    let mut screaming = String::with_capacity(rust_name.len() + 8);
+    for (i, ch) in rust_name.chars().enumerate() {
+        if ch.is_uppercase() && i > 0 {
+            screaming.push('_');
+        }
+        screaming.push(ch.to_ascii_uppercase());
+    }
+    format!("INVOKE_HOST_FUNCTION_{screaming}")
+}
+
+/// Extracts the first operation-level XDR spec name from a list of operation results.
+fn extract_op_detail(ops: &[OperationResult]) -> Option<String> {
+    let first = ops.first()?;
+    match first {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => Some(xdr_spec_name(r.name())),
+            OperationResultTr::ExtendFootprintTtl(r) => Some(format!(
+                "EXTEND_FOOTPRINT_TTL_{}",
+                r.name().to_ascii_uppercase()
+            )),
+            OperationResultTr::RestoreFootprint(r) => Some(format!(
+                "RESTORE_FOOTPRINT_{}",
+                r.name().to_ascii_uppercase()
+            )),
+            other => Some(other.name().to_string()),
+        },
+        other => Some(other.name().to_string()),
+    }
+}
+
+/// Classifies a failure for low-cardinality alerting.
+fn classify_failure(
+    inner: Option<&InnerTransactionResultResult>,
+    op_detail: Option<&str>,
+) -> String {
+    // Check inner result first for tx-level failures
+    if let Some(inner_result) = inner {
+        match inner_result {
+            InnerTransactionResultResult::TxBadSeq => return "bad_seq_race".to_string(),
+            InnerTransactionResultResult::TxInsufficientFee => {
+                return "insufficient_fee".to_string()
+            }
+            _ => {}
+        }
+    }
+
+    // Then check op-level detail
+    if let Some(op) = op_detail {
+        if op.contains("TRAPPED") {
+            return "contract_trap".to_string();
+        }
+        if op.contains("RESOURCE_LIMIT_EXCEEDED") {
+            return "resource_exhausted".to_string();
+        }
+        if op.contains("INSUFFICIENT_REFUNDABLE_FEE") {
+            return "insufficient_refundable_fee".to_string();
+        }
+    }
+
+    "other".to_string()
+}
+
+/// Extracts structured failure details from a `TransactionResultResult`.
+///
+/// Drills into fee-bump inner results and operation-level results to produce
+/// human-readable summaries using canonical Stellar XDR spec names.
+fn describe_transaction_failure(result: &TransactionResultResult) -> TransactionFailureDetails {
+    match result {
+        TransactionResultResult::TxFeeBumpInnerFailed(pair) => {
+            let inner_result = &pair.result.result;
+            let inner_code = xdr_spec_name(inner_result.name());
+            let inner_tx_hash = hex::encode(pair.transaction_hash.0);
+            let inner_fee_charged = pair.result.fee_charged;
+
+            let (op_detail, failure_summary) = match inner_result {
+                InnerTransactionResultResult::TxFailed(ops) => {
+                    let op = extract_op_detail(ops.as_slice());
+                    let summary = match &op {
+                        Some(op_name) => {
+                            format!("txFEE_BUMP_INNER_FAILED({inner_code} > {op_name})")
+                        }
+                        None => format!("txFEE_BUMP_INNER_FAILED({inner_code})"),
+                    };
+                    (op, summary)
+                }
+                _ => (None, format!("txFEE_BUMP_INNER_FAILED({inner_code})")),
+            };
+
+            let failure_class = classify_failure(Some(inner_result), op_detail.as_deref());
+
+            TransactionFailureDetails {
+                failure_summary,
+                failure_class,
+                inner_result_code: Some(inner_code),
+                op_result_code: op_detail,
+                inner_tx_hash: Some(inner_tx_hash),
+                inner_fee_charged,
+            }
+        }
+        TransactionResultResult::TxFailed(ops) => {
+            let op_detail = extract_op_detail(ops.as_slice());
+            let failure_summary = match &op_detail {
+                Some(op_name) => format!("txFAILED({op_name})"),
+                None => "txFAILED".to_string(),
+            };
+            let failure_class = classify_failure(None, op_detail.as_deref());
+
+            TransactionFailureDetails {
+                failure_summary,
+                failure_class,
+                inner_result_code: None,
+                op_result_code: op_detail,
+                inner_tx_hash: None,
+                inner_fee_charged: 0,
+            }
+        }
+        other => {
+            let name = xdr_spec_name(other.name());
+            let failure_class = match other {
+                TransactionResultResult::TxBadSeq => "bad_seq_race",
+                TransactionResultResult::TxInsufficientFee => "insufficient_fee",
+                _ => "other",
+            }
+            .to_string();
+
+            TransactionFailureDetails {
+                failure_summary: name,
+                failure_class,
+                inner_result_code: None,
+                op_result_code: None,
+                inner_tx_hash: None,
+                inner_fee_charged: 0,
+            }
+        }
     }
 }
 
