@@ -395,8 +395,8 @@ where
             op_result_code = op_result_code.unwrap_or("n/a"),
             inner_tx_hash = inner_tx_hash.as_deref().unwrap_or("n/a"),
             inner_fee_charged,
-            fee_charged = fee_charged.unwrap_or(0),
-            fee_bid = fee_bid.unwrap_or(0),
+            fee_charged = ?fee_charged,
+            fee_bid = ?fee_bid,
             "stellar transaction failed"
         );
 
@@ -2475,6 +2475,62 @@ mod tests {
             assert!(result.is_ok());
             let tx = result.unwrap();
             assert_eq!(tx.status, TransactionStatus::Confirmed);
+        }
+    }
+
+    mod failure_detail_helper_tests {
+        use super::*;
+        use soroban_rs::xdr::{InvokeHostFunctionResult, OperationResult, OperationResultTr, VecM};
+
+        #[test]
+        fn first_failing_op_finds_trapped() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Trapped),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("Trapped"));
+        }
+
+        #[test]
+        fn first_failing_op_skips_success() {
+            let ops: VecM<OperationResult> = vec![
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::Success(soroban_rs::xdr::Hash([0u8; 32])),
+                )),
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::ResourceLimitExceeded,
+                )),
+            ]
+            .try_into()
+            .unwrap();
+            assert_eq!(
+                first_failing_op(ops.as_slice()),
+                Some("ResourceLimitExceeded")
+            );
+        }
+
+        #[test]
+        fn first_failing_op_all_success_returns_none() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(
+                    soroban_rs::xdr::Hash([0u8; 32]),
+                )),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), None);
+        }
+
+        #[test]
+        fn first_failing_op_empty_returns_none() {
+            assert_eq!(first_failing_op(&[]), None);
+        }
+
+        #[test]
+        fn first_failing_op_op_bad_auth() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpBadAuth].try_into().unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("OpBadAuth"));
         }
     }
 }
