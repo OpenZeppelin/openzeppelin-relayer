@@ -339,11 +339,13 @@ When using SQS:
 QUEUE_BACKEND=sqs
 AWS_REGION=us-east-1
 AWS_ACCOUNT_ID=123456789012
-# Optional: "standard" (default) or "fifo"
-# SQS_QUEUE_TYPE=standard
+# Optional: "auto" (default), "standard", or "fifo"
+# SQS_QUEUE_TYPE=auto
 # Optional alternative to AWS_ACCOUNT_ID:
 # SQS_QUEUE_URL_PREFIX=https://sqs.us-east-1.amazonaws.com/123456789012/relayer-
 ```
+
+By default (`SQS_QUEUE_TYPE=auto`), the relayer auto-detects whether queues are standard or FIFO at startup.
 
 Use distributed mode for multi-instance deployments so scheduled workers use Redis-based distributed locks and avoid duplicate execution:
 

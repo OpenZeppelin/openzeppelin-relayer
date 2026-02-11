@@ -68,7 +68,7 @@ This table lists the environment variables and their default values.
 | `AWS_REGION`                                                       | (none)                   | `<aws region>`                                                              | Required when `QUEUE_BACKEND=sqs`. Used to build/resolve SQS queue endpoints.                                                                                                                                                                                                       |
 | `AWS_ACCOUNT_ID`                                                   | (none)                   | `<aws account id>`                                                          | Required when `QUEUE_BACKEND=sqs` and `SQS_QUEUE_URL_PREFIX` is not set. Used to construct default SQS queue URLs.                                                                                                                                                                  |
 | `SQS_QUEUE_URL_PREFIX`                                             | (none)                   | `<sqs queue url prefix>`                                                    | Optional override for SQS queue URL prefix (example: `https://sqs.us-east-1.amazonaws.com/123456789012/relayer-`). When set, `AWS_ACCOUNT_ID` is not required.                                                                                                                     |
-| `SQS_QUEUE_TYPE`                                                   | `standard`               | `standard, fifo`                                                            | SQS queue type. `standard` offers higher throughput and native per-message delays. `fifo` provides message ordering and exactly-once delivery. Must match the actual queue type in AWS.                                                                                              |
+| `SQS_QUEUE_TYPE`                                                   | `auto`                   | `auto, standard, fifo`                                                      | SQS queue type. `auto` (default) probes the `transaction-request` queue at startup to detect the type. `standard` and `fifo` skip probing and use the specified type directly.                                                                                                       |
 | `DISTRIBUTED_MODE`                                                 | `false`                  | `bool` (`true/false`, `1/0`)                                                | Enables Redis-based distributed locks for cron/cleanup tasks in multi-instance deployments, preventing duplicate scheduled execution across nodes.                                                                                                                                    |
 | `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
 | `RPC_TIMEOUT_MS`                                                   | `10000`                  | `<timeout in milliseconds>`                                                 | Sets the maximum time to wait for RPC connections before timing out.                                                                                                                                                                                                                 |
@@ -149,11 +149,13 @@ Example for SQS:
 QUEUE_BACKEND=sqs
 AWS_REGION=us-east-1
 AWS_ACCOUNT_ID=123456789012
-# Optional: "standard" (default) or "fifo"
-# SQS_QUEUE_TYPE=standard
-# Optional:
+# Optional: "auto" (default), "standard", or "fifo"
+# SQS_QUEUE_TYPE=auto
+# Optional alternative to AWS_ACCOUNT_ID:
 # SQS_QUEUE_URL_PREFIX=https://sqs.us-east-1.amazonaws.com/123456789012/relayer-
 ```
+
+By default (`SQS_QUEUE_TYPE=auto`), the relayer **auto-detects** whether your queues are standard or FIFO at startup by probing the `transaction-request` queue. Set `SQS_QUEUE_TYPE=standard` or `SQS_QUEUE_TYPE=fifo` to skip probing and use the specified type directly.
 
 For distributed deployments (multiple relayer instances), set:
 
@@ -165,9 +167,9 @@ This enables distributed locking for cron/cleanup tasks so only one instance exe
 
 ### SQS queue provisioning guide
 
-When `QUEUE_BACKEND=sqs`, create queues with the `relayer-` prefix (or your custom `SQS_QUEUE_URL_PREFIX`). The queue type (standard or FIFO) is controlled by `SQS_QUEUE_TYPE` and must match the actual queues in AWS — startup validation will fail on a mismatch.
+When `QUEUE_BACKEND=sqs`, create queues with the `relayer-` prefix (or your custom `SQS_QUEUE_URL_PREFIX`). By default (`SQS_QUEUE_TYPE=auto`), the relayer auto-detects the queue type at startup by probing a reference queue. You can also set `SQS_QUEUE_TYPE=standard` or `SQS_QUEUE_TYPE=fifo` to skip probing.
 
-#### Standard queues (default, `SQS_QUEUE_TYPE=standard`)
+#### Standard queues
 
 Standard queues offer higher throughput, native per-message `DelaySeconds`, and simpler setup. Duplicate deliveries are possible but harmless since all handlers are idempotent.
 
@@ -190,7 +192,7 @@ aws sqs create-queue \
   --attributes VisibilityTimeout=30
 ```
 
-#### FIFO queues (`SQS_QUEUE_TYPE=fifo`)
+#### FIFO queues
 
 FIFO queues provide message ordering per group and exactly-once delivery via deduplication. The relayer sets `MessageGroupId` and `MessageDeduplicationId` on send.
 

@@ -56,7 +56,7 @@ Set `notifications[0].url` to your webhook endpoint (for example from [Webhook.s
 
 ### Step 4: Start services
 
-By default the example creates **standard** queues. To use FIFO queues instead, set `SQS_QUEUE_TYPE=fifo` in your `.env` file.
+By default the example creates **standard** queues. To use FIFO queues instead, set `INIT_SQS_QUEUE_TYPE=fifo` in your `.env` file. The relayer auto-detects the queue type at startup.
 
 ```bash
 docker compose -f examples/aws-sqs-queue-storage/docker-compose.yaml up
@@ -79,10 +79,12 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 
 ## Queue types
 
-The `SQS_QUEUE_TYPE` env var controls whether standard or FIFO queues are used:
+The `INIT_SQS_QUEUE_TYPE` env var controls which queue type the init script creates:
 
 - `standard` (default) — higher throughput, native per-message delays, simpler setup
 - `fifo` — message ordering per group, exactly-once delivery via deduplication
+
+The relayer **auto-detects** the queue type at startup by probing a reference queue. No queue type configuration is needed on the relayer itself.
 
 ## Queues created by this example
 
@@ -110,7 +112,7 @@ DLQs:
 - `relayer-token-swap-request-dlq`
 - `relayer-relayer-health-check-dlq`
 
-### FIFO mode (`SQS_QUEUE_TYPE=fifo`)
+### FIFO mode (`INIT_SQS_QUEUE_TYPE=fifo`)
 
 Main queues:
 

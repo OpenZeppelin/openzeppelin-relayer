@@ -3,7 +3,7 @@ set -eu
 
 endpoint="http://localstack:4566"
 account="000000000000"
-queue_type="${SQS_QUEUE_TYPE:-standard}"
+queue_type="${INIT_SQS_QUEUE_TYPE:-standard}"
 
 create_pair() {
   queue_name="$1"
@@ -65,4 +65,4 @@ create_pair "relayer-notification" 60 6
 create_pair "relayer-token-swap-request" 60 3
 create_pair "relayer-relayer-health-check" 60 3
 
-echo "SQS queues initialized (type: ${queue_type})"
+echo "SQS queues initialized (type: ${queue_type}). The relayer will auto-detect this at startup."

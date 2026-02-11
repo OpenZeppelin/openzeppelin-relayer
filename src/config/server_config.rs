@@ -271,10 +271,11 @@ impl ServerConfig {
 
     /// Gets the SQS queue type from environment variable or default.
     ///
-    /// Supported values: "standard", "fifo"
-    /// Defaults to "standard" when not set.
+    /// Supported values: "auto" (default), "standard", "fifo"
+    /// - `auto`: auto-detect by probing queues at startup
+    /// - `standard` / `fifo`: skip probing, use the specified type directly
     pub fn get_sqs_queue_type() -> String {
-        env::var("SQS_QUEUE_TYPE").unwrap_or_else(|_| "standard".to_string())
+        env::var("SQS_QUEUE_TYPE").unwrap_or_else(|_| "auto".to_string())
     }
 
     /// Gets the AWS region from environment variable.
@@ -1902,10 +1903,10 @@ mod tests {
 
         #[test]
         #[serial]
-        fn test_returns_default_when_env_not_set() {
+        fn test_returns_auto_when_env_not_set() {
             env::remove_var("SQS_QUEUE_TYPE");
             let result = ServerConfig::get_sqs_queue_type();
-            assert_eq!(result, "standard", "Should default to 'standard'");
+            assert_eq!(result, "auto", "Should default to 'auto'");
         }
 
         #[test]

@@ -1,7 +1,9 @@
 //! AWS SQS backend implementation.
 //!
 //! This module provides an AWS SQS-backed implementation of the QueueBackend trait.
-//! Supports both Standard and FIFO queues, controlled by the `SQS_QUEUE_TYPE` env var.
+//! Supports both Standard and FIFO queues. By default (`SQS_QUEUE_TYPE=auto`),
+//! the queue type is auto-detected at startup by probing a reference queue.
+//! Can also be set explicitly to `standard` or `fifo`.
 
 use async_trait::async_trait;
 use aws_sdk_sqs::types::MessageAttributeValue;
@@ -57,7 +59,7 @@ fn status_check_queue_type(network_type: Option<&NetworkType>) -> QueueType {
 
 /// AWS SQS backend for job queue operations.
 ///
-/// Supports both Standard and FIFO queues (controlled by `SQS_QUEUE_TYPE`).
+/// Supports both Standard and FIFO queues (auto-detected at startup, or set via `SQS_QUEUE_TYPE`).
 /// FIFO mode provides message ordering and exactly-once delivery;
 /// Standard mode offers higher throughput and native per-message delays.
 #[derive(Clone)]
@@ -85,6 +87,60 @@ impl std::fmt::Debug for SqsBackend {
     }
 }
 
+/// Resolves the queue type from the configured `SQS_QUEUE_TYPE` value and
+/// probe results.
+///
+/// - `"standard"` / `"fifo"` → returns immediately (probes ignored).
+/// - `"auto"` → decides based on which probe succeeded.
+/// - anything else → error.
+///
+/// `probe_results` is `Option<(bool, bool)>`: `Some((standard_ok, fifo_ok))`
+/// when `sqs_queue_type == "auto"`, `None` otherwise.
+fn resolve_queue_type(
+    sqs_queue_type: &str,
+    probe_results: Option<(bool, bool)>,
+    ref_standard_url: &str,
+    ref_fifo_url: &str,
+) -> Result<bool, QueueBackendError> {
+    match sqs_queue_type {
+        "standard" => {
+            info!("Using explicit SQS queue type: standard");
+            Ok(false)
+        }
+        "fifo" => {
+            info!("Using explicit SQS queue type: fifo");
+            Ok(true)
+        }
+        "auto" => {
+            let (standard_exists, fifo_exists) = probe_results.unwrap_or((false, false));
+            match (standard_exists, fifo_exists) {
+                (true, false) => {
+                    info!("Detected SQS queue type: standard");
+                    Ok(false)
+                }
+                (false, true) => {
+                    info!("Detected SQS queue type: fifo");
+                    Ok(true)
+                }
+                (true, true) => Err(QueueBackendError::ConfigError(
+                    "Ambiguous SQS queue type: both standard and FIFO \
+                     'transaction-request' queues exist. Remove one set or set \
+                     SQS_QUEUE_TYPE explicitly."
+                        .to_string(),
+                )),
+                (false, false) => Err(QueueBackendError::ConfigError(format!(
+                    "No SQS queues found. Neither '{ref_standard_url}' nor \
+                     '{ref_fifo_url}' is accessible. Create queues before starting \
+                     the relayer, or set SQS_QUEUE_TYPE explicitly."
+                ))),
+            }
+        }
+        other => Err(QueueBackendError::ConfigError(format!(
+            "Unsupported SQS_QUEUE_TYPE: '{other}'. Must be 'auto', 'standard', or 'fifo'."
+        ))),
+    }
+}
+
 impl SqsBackend {
     fn is_fifo_queue_url(queue_url: &str) -> bool {
         queue_url.ends_with(".fifo")
@@ -93,14 +149,19 @@ impl SqsBackend {
     /// Creates a new SQS backend.
     ///
     /// Loads AWS configuration from environment and builds queue URLs.
+    /// Queue type is determined by `SQS_QUEUE_TYPE`:
+    /// - `auto` (default): probes a reference queue at startup to detect the type
+    /// - `standard` / `fifo`: uses the specified type directly, skipping probing
     ///
     /// # Environment Variables
     /// - `AWS_REGION` - AWS region (required)
     /// - `SQS_QUEUE_URL_PREFIX` - Optional custom prefix
     /// - `AWS_ACCOUNT_ID` - Required only when `SQS_QUEUE_URL_PREFIX` is not set
+    /// - `SQS_QUEUE_TYPE` - Queue type: `auto` (default), `standard`, or `fifo`
     ///
     /// # Errors
-    /// Returns ConfigError if required environment variables are missing
+    /// Returns ConfigError if required environment variables are missing or
+    /// if queue type cannot be determined (no queues found, or both types exist).
     pub async fn new() -> Result<Self, QueueBackendError> {
         info!("Initializing SQS queue backend");
 
@@ -116,20 +177,7 @@ impl SqsBackend {
             })?
             .to_string();
 
-        // Determine queue type (standard vs FIFO) from configuration.
-        let sqs_queue_type = ServerConfig::get_sqs_queue_type().to_lowercase();
-        let is_fifo = match sqs_queue_type.as_str() {
-            "fifo" => true,
-            "standard" => false,
-            other => {
-                return Err(QueueBackendError::ConfigError(format!(
-                    "Unsupported SQS_QUEUE_TYPE: '{other}'. Must be 'standard' or 'fifo'."
-                )))
-            }
-        };
-        let suffix = if is_fifo { ".fifo" } else { "" };
-
-        // Build queue URLs.
+        // Build queue URL prefix.
         // If an explicit prefix is provided, avoid forcing AWS_ACCOUNT_ID.
         let prefix = match std::env::var("SQS_QUEUE_URL_PREFIX") {
             Ok(prefix) => prefix,
@@ -142,9 +190,52 @@ impl SqsBackend {
         info!(
             region = %region,
             queue_url_prefix = %prefix,
-            queue_type = %sqs_queue_type,
             "Resolved SQS queue URL prefix"
         );
+
+        // Determine queue type: explicit override or auto-detect by probing.
+        let sqs_queue_type = ServerConfig::get_sqs_queue_type().to_lowercase();
+        let ref_standard_url = format!("{prefix}transaction-request");
+        let ref_fifo_url = format!("{prefix}transaction-request.fifo");
+
+        // Only probe when auto-detecting; explicit values skip the network call.
+        let probe_results = if sqs_queue_type == "auto" {
+            let (standard_probe, fifo_probe) = {
+                let client_s = sqs_client.clone();
+                let client_f = sqs_client.clone();
+                let url_s = ref_standard_url.clone();
+                let url_f = ref_fifo_url.clone();
+                tokio::join!(
+                    async move {
+                        client_s
+                            .get_queue_attributes()
+                            .queue_url(&url_s)
+                            .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
+                            .send()
+                            .await
+                    },
+                    async move {
+                        client_f
+                            .get_queue_attributes()
+                            .queue_url(&url_f)
+                            .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
+                            .send()
+                            .await
+                    }
+                )
+            };
+            Some((standard_probe.is_ok(), fifo_probe.is_ok()))
+        } else {
+            None
+        };
+
+        let is_fifo = resolve_queue_type(
+            &sqs_queue_type,
+            probe_results,
+            &ref_standard_url,
+            &ref_fifo_url,
+        )?;
+        let suffix = if is_fifo { ".fifo" } else { "" };
 
         // Build queue URL mapping.
         // Status checks use per-network queues (EVM, Stellar, generic/Solana)
@@ -205,7 +296,6 @@ impl SqsBackend {
                         .get_queue_attributes()
                         .queue_url(&url)
                         .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
-                        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
                         .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
                         .send()
                         .await;
@@ -222,31 +312,12 @@ impl SqsBackend {
         for (queue_type, queue_url, probe) in probe_results {
             match probe {
                 Ok(output) => {
-                    let queue_is_fifo = output
-                        .attributes()
-                        .and_then(|attrs| {
-                            attrs.get(&aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
-                        })
-                        .map(|v| v == "true")
-                        .unwrap_or(false);
-
-                    // Cross-validate: configured queue type must match actual queue type
-                    if is_fifo && !queue_is_fifo {
-                        missing_queues.push(format!(
-                            "{queue_type} ({queue_url}): SQS_QUEUE_TYPE is 'fifo' but queue is not FIFO"
-                        ));
-                    } else if !is_fifo && queue_is_fifo {
-                        missing_queues.push(format!(
-                            "{queue_type} ({queue_url}): SQS_QUEUE_TYPE is 'standard' but queue is FIFO"
-                        ));
-                    } else {
-                        debug!(
-                            queue_type = %queue_type,
-                            queue_url = %queue_url,
-                            is_fifo = is_fifo,
-                            "SQS queue probe succeeded"
-                        );
-                    }
+                    debug!(
+                        queue_type = %queue_type,
+                        queue_url = %queue_url,
+                        is_fifo = is_fifo,
+                        "SQS queue probe succeeded"
+                    );
 
                     // Resolve and cache DLQ URL from the redrive policy while we
                     // already have the attributes, avoiding per-health-check lookups.
@@ -1050,6 +1121,82 @@ mod tests {
         assert!(!SqsBackend::is_fifo_queue_url(
             "https://sqs.us-east-1.amazonaws.com/123/queue"
         ));
+    }
+
+    // --- resolve_queue_type tests ---
+
+    const REF_STD: &str = "http://localhost:4566/000000000000/relayer-transaction-request";
+    const REF_FIFO: &str = "http://localhost:4566/000000000000/relayer-transaction-request.fifo";
+
+    #[test]
+    fn test_resolve_queue_type_explicit_standard() {
+        let result = resolve_queue_type("standard", None, REF_STD, REF_FIFO);
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[test]
+    fn test_resolve_queue_type_explicit_fifo() {
+        let result = resolve_queue_type("fifo", None, REF_STD, REF_FIFO);
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_resolve_queue_type_explicit_ignores_probes() {
+        // Even if probes say FIFO exists, explicit "standard" wins
+        let result = resolve_queue_type("standard", Some((false, true)), REF_STD, REF_FIFO);
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[test]
+    fn test_resolve_queue_type_auto_standard_only() {
+        let result = resolve_queue_type("auto", Some((true, false)), REF_STD, REF_FIFO);
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[test]
+    fn test_resolve_queue_type_auto_fifo_only() {
+        let result = resolve_queue_type("auto", Some((false, true)), REF_STD, REF_FIFO);
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_resolve_queue_type_auto_both_exist_errors() {
+        let result = resolve_queue_type("auto", Some((true, true)), REF_STD, REF_FIFO);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Ambiguous"),
+            "Expected 'Ambiguous' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_queue_type_auto_neither_exists_errors() {
+        let result = resolve_queue_type("auto", Some((false, false)), REF_STD, REF_FIFO);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No SQS queues found"),
+            "Expected 'No SQS queues found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_queue_type_auto_no_probes_defaults_to_neither() {
+        // None probe results (shouldn't happen in practice) treated as (false, false)
+        let result = resolve_queue_type("auto", None, REF_STD, REF_FIFO);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_queue_type_unknown_value_errors() {
+        let result = resolve_queue_type("invalid", None, REF_STD, REF_FIFO);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Unsupported SQS_QUEUE_TYPE"),
+            "Expected unsupported error, got: {err}"
+        );
     }
 
     #[tokio::test]
