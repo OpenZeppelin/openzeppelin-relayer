@@ -56,6 +56,8 @@ Set `notifications[0].url` to your webhook endpoint (for example from [Webhook.s
 
 ### Step 4: Start services
 
+By default the example creates **standard** queues. To use FIFO queues instead, set `SQS_QUEUE_TYPE=fifo` in your `.env` file.
+
 ```bash
 docker compose -f examples/aws-sqs-queue-storage/docker-compose.yaml up
 ```
@@ -65,7 +67,7 @@ Services started:
 - `relayer`
 - `redis` (repository/locks)
 - `localstack` (SQS emulator)
-- `sqs-init` (creates required FIFO queues + DLQs and redrive policies)
+- `sqs-init` (creates required queues + DLQs and redrive policies)
 
 ### Step 5: Verify relayer
 
@@ -75,7 +77,40 @@ curl -X GET http://localhost:8080/api/v1/relayers \
   -H "AUTHORIZATION: Bearer YOUR_API_KEY"
 ```
 
+## Queue types
+
+The `SQS_QUEUE_TYPE` env var controls whether standard or FIFO queues are used:
+
+- `standard` (default) — higher throughput, native per-message delays, simpler setup
+- `fifo` — message ordering per group, exactly-once delivery via deduplication
+
 ## Queues created by this example
+
+### Standard mode (default)
+
+Main queues:
+
+- `relayer-transaction-request`
+- `relayer-transaction-submission`
+- `relayer-status-check`
+- `relayer-status-check-evm`
+- `relayer-status-check-stellar`
+- `relayer-notification`
+- `relayer-token-swap-request`
+- `relayer-relayer-health-check`
+
+DLQs:
+
+- `relayer-transaction-request-dlq`
+- `relayer-transaction-submission-dlq`
+- `relayer-status-check-dlq`
+- `relayer-status-check-evm-dlq`
+- `relayer-status-check-stellar-dlq`
+- `relayer-notification-dlq`
+- `relayer-token-swap-request-dlq`
+- `relayer-relayer-health-check-dlq`
+
+### FIFO mode (`SQS_QUEUE_TYPE=fifo`)
 
 Main queues:
 
@@ -99,6 +134,8 @@ DLQs:
 - `relayer-token-swap-request-dlq.fifo`
 - `relayer-relayer-health-check-dlq.fifo`
 
+FIFO queues are created with high-throughput mode (`DeduplicationScope=messageGroup`, `FifoThroughputLimit=perMessageGroupId`).
+
 Redrive policy is configured automatically by `sqs-init`.
 
-All queues are created with high-throughput FIFO mode (`DeduplicationScope=messageGroup`, `FifoThroughputLimit=perMessageGroupId`). For production AWS deployments, enable these attributes on the transaction-request, transaction-submission, and status-check queues to raise throughput from 300 to 70,000 messages/second per queue. See the [configuration docs](../../docs/configuration/index.mdx) for details.
+See the [configuration docs](../../docs/configuration/index.mdx) for production provisioning details.

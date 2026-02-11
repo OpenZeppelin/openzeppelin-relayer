@@ -15,7 +15,6 @@ use aws_sdk_sqs::types::{
 };
 use futures::FutureExt;
 use serde::de::DeserializeOwned;
-use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
@@ -540,32 +539,15 @@ async fn process_message(
                     return Ok(MessageOutcome::Retain);
                 }
 
-                let requeue_dedup_id = generate_requeue_dedup_id(
-                    body,
-                    receive_count,
-                    message.message_id().unwrap_or("unknown"),
-                );
-                let group_id = match extract_group_id(&message) {
-                    Some(id) => id,
-                    None => {
-                        error!(
-                            queue_type = ?queue_type,
-                            attempt = logical_retry_attempt,
-                            "Cannot re-enqueue status check: missing MessageGroupId"
-                        );
-                        // Keep original message for visibility-timeout retry path.
-                        return Ok(MessageOutcome::Retain);
-                    }
-                };
                 let next_retry_attempt = logical_retry_attempt.saturating_add(1);
 
-                // Re-enqueue with short delay
+                // Standard queues: re-enqueue with native DelaySeconds,
+                // no group_id or dedup_id needed. Duplicate deliveries are
+                // harmless because handlers are idempotent.
                 if let Err(send_err) = sqs_client
                     .send_message()
                     .queue_url(queue_url)
                     .message_body(body.to_string())
-                    .message_group_id(group_id)
-                    .message_deduplication_id(requeue_dedup_id)
                     .delay_seconds(delay)
                     .message_attributes(
                         "retry_attempt",
@@ -684,34 +666,6 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|value| value.parse::<usize>().ok())
 }
 
-fn extract_group_id(message: &Message) -> Option<String> {
-    message
-        .attributes()
-        .and_then(|attrs| attrs.get(&MessageSystemAttributeName::MessageGroupId))
-        .cloned()
-}
-
-/// Generates a deterministic deduplication ID for deferred messages.
-///
-/// The dedup ID is deterministic for a single receive-attempt (idempotent retry of
-/// the same defer send) but changes across receive attempts so defer hops are not
-/// accidentally dropped by FIFO deduplication windows.
-fn generate_dedup_id(
-    body: &str,
-    target_scheduled_on: i64,
-    source_message_id: &str,
-    source_receive_count: usize,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(body.as_bytes());
-    hasher.update(target_scheduled_on.to_le_bytes());
-    hasher.update(source_message_id.as_bytes());
-    hasher.update(source_receive_count.to_le_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    // SQS deduplication ID max length is 128 chars, use first 64 for safety
-    hash[..64.min(hash.len())].to_string()
-}
-
 fn is_fifo_queue_url(queue_url: &str) -> bool {
     queue_url.ends_with(".fifo")
 }
@@ -747,44 +701,12 @@ async fn defer_message(
         return Ok(false);
     }
 
-    // CRITICAL: Preserve original MessageGroupId to maintain FIFO ordering.
-    // If we create a new group ID, messages from the same transaction will
-    // be processed out of order, breaking transaction semantics.
-    let message_group_id = extract_group_id(message).ok_or_else(|| {
-        QueueBackendError::QueueError(
-            "Cannot defer message: missing MessageGroupId for FIFO queue".to_string(),
-        )
-    })?;
-
-    let source_message_id = message
-        .message_id()
-        .ok_or_else(|| {
-            QueueBackendError::QueueError(
-                "Cannot defer message: missing MessageId from SQS message".to_string(),
-            )
-        })?
-        .to_string();
-    let source_receive_count = message
-        .attributes()
-        .and_then(|attrs| attrs.get(&MessageSystemAttributeName::ApproximateReceiveCount))
-        .and_then(|count| count.parse::<usize>().ok())
-        .unwrap_or(1);
-
-    // Deterministic per receive-attempt for idempotent retries of send_message,
-    // but unique across defer hops (receive_count changes).
-    let dedup_id = generate_dedup_id(
-        &body,
-        target_scheduled_on,
-        &source_message_id,
-        source_receive_count,
-    );
-
-    sqs_client
+    // Standard queues support native per-message DelaySeconds — no need for
+    // group_id or dedup_id. Just re-send with the delay and scheduling attribute.
+    let request = sqs_client
         .send_message()
         .queue_url(queue_url)
         .message_body(body)
-        .message_group_id(message_group_id)
-        .message_deduplication_id(dedup_id)
         .delay_seconds(delay_seconds.clamp(1, 900))
         .message_attributes(
             "target_scheduled_on",
@@ -797,12 +719,11 @@ async fn defer_message(
                         "Failed to build deferred scheduled attribute: {e}"
                     ))
                 })?,
-        )
-        .send()
-        .await
-        .map_err(|e| {
-            QueueBackendError::SqsError(format!("Failed to defer scheduled message: {e}"))
-        })?;
+        );
+
+    request.send().await.map_err(|e| {
+        QueueBackendError::SqsError(format!("Failed to defer scheduled message: {e}"))
+    })?;
 
     Ok(true)
 }
@@ -837,20 +758,6 @@ fn compute_status_retry_delay(body: &str, attempt: usize) -> i32 {
         .and_then(|j| j.data.network_type);
 
     crate::queues::retry_config::status_check_retry_delay_secs(network_type, attempt)
-}
-
-/// Generates a unique deduplication ID for re-enqueued status check messages.
-///
-/// Must be unique per retry hop to avoid the 5-minute FIFO dedup window
-/// silently dropping the re-enqueued message.
-fn generate_requeue_dedup_id(body: &str, receive_count: usize, message_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"status-requeue:");
-    hasher.update(body.as_bytes());
-    hasher.update(message_id.as_bytes());
-    hasher.update(receive_count.to_le_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-    hash[..64.min(hash.len())].to_string()
 }
 
 /// Gets the concurrency limit for a queue type from environment.
@@ -1010,91 +917,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_dedup_id_deterministic() {
-        // Same inputs should always produce same dedup ID
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let timestamp = 1234567890i64;
-        let message_id = "msg-123";
-        let receive_count = 2usize;
-
-        let dedup_id_1 = generate_dedup_id(body, timestamp, message_id, receive_count);
-        let dedup_id_2 = generate_dedup_id(body, timestamp, message_id, receive_count);
-
-        assert_eq!(dedup_id_1, dedup_id_2, "Dedup ID should be deterministic");
-    }
-
-    #[test]
-    fn test_generate_dedup_id_different_inputs() {
-        // Different inputs should produce different dedup IDs
-        let body1 = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let body2 = r#"{"data":{"transaction_id":"tx-456"}}"#;
-        let timestamp = 1234567890i64;
-        let message_id = "msg-123";
-        let receive_count = 2usize;
-
-        let dedup_id_1 = generate_dedup_id(body1, timestamp, message_id, receive_count);
-        let dedup_id_2 = generate_dedup_id(body2, timestamp, message_id, receive_count);
-
-        assert_ne!(
-            dedup_id_1, dedup_id_2,
-            "Different bodies should produce different dedup IDs"
-        );
-
-        // Same body, different timestamp
-        let dedup_id_3 = generate_dedup_id(body1, timestamp + 1000, message_id, receive_count);
-        assert_ne!(
-            dedup_id_1, dedup_id_3,
-            "Different timestamps should produce different dedup IDs"
-        );
-
-        // Same body/timestamp, different source receive_count (new defer hop)
-        // should produce a different dedup ID to avoid accidental hop drops.
-        let dedup_id_4 = generate_dedup_id(body1, timestamp, message_id, receive_count + 1);
-        assert_ne!(
-            dedup_id_1, dedup_id_4,
-            "Different receive counts should produce different dedup IDs"
-        );
-    }
-
-    #[test]
-    fn test_generate_dedup_id_length() {
-        // Dedup ID should be valid length for SQS (max 128 chars)
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let timestamp = 1234567890i64;
-        let message_id = "msg-123";
-        let receive_count = 2usize;
-
-        let dedup_id = generate_dedup_id(body, timestamp, message_id, receive_count);
-
-        assert!(
-            dedup_id.len() <= 128,
-            "Dedup ID length {} exceeds SQS limit of 128",
-            dedup_id.len()
-        );
-        assert!(
-            dedup_id.len() >= 32,
-            "Dedup ID length {} is too short",
-            dedup_id.len()
-        );
-    }
-
-    #[test]
-    fn test_generate_dedup_id_valid_chars() {
-        // Dedup ID should only contain valid hex chars
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let timestamp = 1234567890i64;
-        let message_id = "msg-123";
-        let receive_count = 2usize;
-
-        let dedup_id = generate_dedup_id(body, timestamp, message_id, receive_count);
-
-        assert!(
-            dedup_id.chars().all(|c| c.is_ascii_hexdigit()),
-            "Dedup ID should only contain hex digits"
-        );
-    }
-
-    #[test]
     fn test_parse_target_scheduled_on() {
         // Test parsing target_scheduled_on from message attributes
         let message = Message::builder().build();
@@ -1133,18 +955,6 @@ mod tests {
             )
             .build();
         assert_eq!(parse_retry_attempt(&message), Some(7));
-    }
-
-    #[test]
-    fn test_extract_group_id() {
-        // Test extracting MessageGroupId from message attributes
-        let message = Message::builder().build();
-
-        // Message without group ID should return None
-        assert_eq!(extract_group_id(&message), None);
-
-        // Note: Setting MessageGroupId via attributes requires the actual SQS response format
-        // This is more of an integration test, so we just verify the None case
     }
 
     #[test]
@@ -1208,33 +1018,6 @@ mod tests {
         assert_eq!(compute_status_retry_delay("not json", 0), 5);
         assert_eq!(compute_status_retry_delay("not json", 1), 8);
         assert_eq!(compute_status_retry_delay("not json", 8), 8);
-    }
-
-    #[test]
-    fn test_generate_requeue_dedup_id_deterministic() {
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let id1 = generate_requeue_dedup_id(body, 1, "msg-1");
-        let id2 = generate_requeue_dedup_id(body, 1, "msg-1");
-        assert_eq!(id1, id2);
-    }
-
-    #[test]
-    fn test_generate_requeue_dedup_id_varies_with_receive_count() {
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let id1 = generate_requeue_dedup_id(body, 1, "msg-1");
-        let id2 = generate_requeue_dedup_id(body, 2, "msg-1");
-        assert_ne!(
-            id1, id2,
-            "Different receive counts must produce different dedup IDs"
-        );
-    }
-
-    #[test]
-    fn test_generate_requeue_dedup_id_length() {
-        let body = r#"{"data":{"transaction_id":"tx-123"}}"#;
-        let id = generate_requeue_dedup_id(body, 1, "msg-1");
-        assert!(id.len() <= 128, "Dedup ID must fit SQS 128-char limit");
-        assert!(id.len() >= 32);
     }
 
     #[tokio::test]

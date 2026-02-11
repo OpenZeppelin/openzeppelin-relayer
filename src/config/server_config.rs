@@ -269,6 +269,14 @@ impl ServerConfig {
         env::var("QUEUE_BACKEND").unwrap_or_else(|_| "redis".to_string())
     }
 
+    /// Gets the SQS queue type from environment variable or default.
+    ///
+    /// Supported values: "standard", "fifo"
+    /// Defaults to "standard" when not set.
+    pub fn get_sqs_queue_type() -> String {
+        env::var("SQS_QUEUE_TYPE").unwrap_or_else(|_| "standard".to_string())
+    }
+
     /// Gets the AWS region from environment variable.
     ///
     /// Required when using SQS queue backend.
@@ -1885,6 +1893,46 @@ mod tests {
 
             env::remove_var("REDIS_URL");
             env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_sqs_queue_type_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("SQS_QUEUE_TYPE");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "standard", "Should default to 'standard'");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_fifo_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "fifo");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "fifo");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_standard_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "standard");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "standard");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_raw_value_for_unknown() {
+            env::set_var("SQS_QUEUE_TYPE", "unknown");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "unknown");
+            env::remove_var("SQS_QUEUE_TYPE");
         }
     }
 

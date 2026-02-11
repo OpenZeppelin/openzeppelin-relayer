@@ -339,6 +339,8 @@ When using SQS:
 QUEUE_BACKEND=sqs
 AWS_REGION=us-east-1
 AWS_ACCOUNT_ID=123456789012
+# Optional: "standard" (default) or "fifo"
+# SQS_QUEUE_TYPE=standard
 # Optional alternative to AWS_ACCOUNT_ID:
 # SQS_QUEUE_URL_PREFIX=https://sqs.us-east-1.amazonaws.com/123456789012/relayer-
 ```

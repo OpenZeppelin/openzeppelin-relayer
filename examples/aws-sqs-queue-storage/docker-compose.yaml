@@ -9,6 +9,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       QUEUE_BACKEND: sqs
+      SQS_QUEUE_TYPE: ${SQS_QUEUE_TYPE:-standard}
       DISTRIBUTED_MODE: 'false'
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: '000000000000'
@@ -80,6 +81,7 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
+      SQS_QUEUE_TYPE: ${SQS_QUEUE_TYPE:-standard}
     depends_on:
       localstack:
         condition: service_healthy

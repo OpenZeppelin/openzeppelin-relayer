@@ -1,7 +1,7 @@
 //! AWS SQS backend implementation.
 //!
 //! This module provides an AWS SQS-backed implementation of the QueueBackend trait.
-//! It uses FIFO queues to maintain message ordering and prevent duplicates.
+//! Supports both Standard and FIFO queues, controlled by the `SQS_QUEUE_TYPE` env var.
 
 use async_trait::async_trait;
 use aws_sdk_sqs::types::MessageAttributeValue;
@@ -57,10 +57,9 @@ fn status_check_queue_type(network_type: Option<&NetworkType>) -> QueueType {
 
 /// AWS SQS backend for job queue operations.
 ///
-/// Uses FIFO queues to ensure:
-/// - Message ordering per transaction (via MessageGroupId)
-/// - Exactly-once delivery (via MessageDeduplicationId)
-/// - Automatic retry via visibility timeout
+/// Supports both Standard and FIFO queues (controlled by `SQS_QUEUE_TYPE`).
+/// FIFO mode provides message ordering and exactly-once delivery;
+/// Standard mode offers higher throughput and native per-message delays.
 #[derive(Clone)]
 pub struct SqsBackend {
     /// AWS SQS client for all operations (send, delete, poll, change visibility)
@@ -117,6 +116,19 @@ impl SqsBackend {
             })?
             .to_string();
 
+        // Determine queue type (standard vs FIFO) from configuration.
+        let sqs_queue_type = ServerConfig::get_sqs_queue_type().to_lowercase();
+        let is_fifo = match sqs_queue_type.as_str() {
+            "fifo" => true,
+            "standard" => false,
+            other => {
+                return Err(QueueBackendError::ConfigError(format!(
+                    "Unsupported SQS_QUEUE_TYPE: '{other}'. Must be 'standard' or 'fifo'."
+                )))
+            }
+        };
+        let suffix = if is_fifo { ".fifo" } else { "" };
+
         // Build queue URLs.
         // If an explicit prefix is provided, avoid forcing AWS_ACCOUNT_ID.
         let prefix = match std::env::var("SQS_QUEUE_URL_PREFIX") {
@@ -130,6 +142,7 @@ impl SqsBackend {
         info!(
             region = %region,
             queue_url_prefix = %prefix,
+            queue_type = %sqs_queue_type,
             "Resolved SQS queue URL prefix"
         );
 
@@ -140,32 +153,35 @@ impl SqsBackend {
         let queue_urls = HashMap::from([
             (
                 QueueType::TransactionRequest,
-                format!("{prefix}transaction-request.fifo"),
+                format!("{prefix}transaction-request{suffix}"),
             ),
             (
                 QueueType::TransactionSubmission,
-                format!("{prefix}transaction-submission.fifo"),
+                format!("{prefix}transaction-submission{suffix}"),
             ),
-            (QueueType::StatusCheck, format!("{prefix}status-check.fifo")),
+            (
+                QueueType::StatusCheck,
+                format!("{prefix}status-check{suffix}"),
+            ),
             (
                 QueueType::StatusCheckEvm,
-                format!("{prefix}status-check-evm.fifo"),
+                format!("{prefix}status-check-evm{suffix}"),
             ),
             (
                 QueueType::StatusCheckStellar,
-                format!("{prefix}status-check-stellar.fifo"),
+                format!("{prefix}status-check-stellar{suffix}"),
             ),
             (
                 QueueType::Notification,
-                format!("{prefix}notification.fifo"),
+                format!("{prefix}notification{suffix}"),
             ),
             (
                 QueueType::TokenSwapRequest,
-                format!("{prefix}token-swap-request.fifo"),
+                format!("{prefix}token-swap-request{suffix}"),
             ),
             (
                 QueueType::RelayerHealthCheck,
-                format!("{prefix}relayer-health-check.fifo"),
+                format!("{prefix}relayer-health-check{suffix}"),
             ),
         ]);
 
@@ -206,23 +222,30 @@ impl SqsBackend {
         for (queue_type, queue_url, probe) in probe_results {
             match probe {
                 Ok(output) => {
-                    let is_fifo = output
+                    let queue_is_fifo = output
                         .attributes()
                         .and_then(|attrs| {
                             attrs.get(&aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
                         })
                         .map(|v| v == "true")
                         .unwrap_or(false);
-                    if is_fifo {
+
+                    // Cross-validate: configured queue type must match actual queue type
+                    if is_fifo && !queue_is_fifo {
+                        missing_queues.push(format!(
+                            "{queue_type} ({queue_url}): SQS_QUEUE_TYPE is 'fifo' but queue is not FIFO"
+                        ));
+                    } else if !is_fifo && queue_is_fifo {
+                        missing_queues.push(format!(
+                            "{queue_type} ({queue_url}): SQS_QUEUE_TYPE is 'standard' but queue is FIFO"
+                        ));
+                    } else {
                         debug!(
                             queue_type = %queue_type,
                             queue_url = %queue_url,
+                            is_fifo = is_fifo,
                             "SQS queue probe succeeded"
                         );
-                    } else {
-                        missing_queues.push(format!(
-                            "{queue_type} ({queue_url}): queue is not FIFO (FifoQueue != true)"
-                        ));
                     }
 
                     // Resolve and cache DLQ URL from the redrive policy while we
@@ -302,9 +325,15 @@ impl SqsBackend {
             .sqs_client
             .send_message()
             .queue_url(queue_url)
-            .message_body(body)
-            .message_group_id(message_group_id)
-            .message_deduplication_id(message_deduplication_id);
+            .message_body(body);
+
+        // FIFO queues require MessageGroupId and MessageDeduplicationId;
+        // standard queues reject these parameters.
+        if Self::is_fifo_queue_url(queue_url) {
+            request = request
+                .message_group_id(message_group_id)
+                .message_deduplication_id(message_deduplication_id);
+        }
 
         if let Some(timestamp) = target_scheduled_on {
             request = request.message_attributes(
@@ -892,6 +921,63 @@ mod tests {
             .get(&QueueType::StatusCheckStellar)
             .unwrap()
             .contains("status-check-stellar"));
+    }
+
+    #[test]
+    fn test_queue_url_construction_standard() {
+        // Test that standard queue URLs do not have .fifo suffix
+        let mut queue_urls = HashMap::new();
+        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-";
+
+        queue_urls.insert(
+            QueueType::TransactionRequest,
+            format!("{prefix}transaction-request"),
+        );
+        queue_urls.insert(
+            QueueType::TransactionSubmission,
+            format!("{prefix}transaction-submission"),
+        );
+        queue_urls.insert(QueueType::StatusCheck, format!("{prefix}status-check"));
+        queue_urls.insert(QueueType::Notification, format!("{prefix}notification"));
+        queue_urls.insert(
+            QueueType::TokenSwapRequest,
+            format!("{prefix}token-swap-request"),
+        );
+        queue_urls.insert(
+            QueueType::RelayerHealthCheck,
+            format!("{prefix}relayer-health-check"),
+        );
+        queue_urls.insert(
+            QueueType::StatusCheckEvm,
+            format!("{prefix}status-check-evm"),
+        );
+        queue_urls.insert(
+            QueueType::StatusCheckStellar,
+            format!("{prefix}status-check-stellar"),
+        );
+
+        assert_eq!(queue_urls.len(), 8);
+        // Standard queue URLs should NOT end with .fifo
+        for (_, url) in &queue_urls {
+            assert!(
+                !url.ends_with(".fifo"),
+                "Standard queue URL should not end with .fifo: {url}"
+            );
+        }
+        assert!(queue_urls
+            .get(&QueueType::TransactionRequest)
+            .unwrap()
+            .contains("transaction-request"));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_standard() {
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/relayer-transaction-request"
+        ));
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "http://localstack:4566/000000000000/relayer-status-check"
+        ));
     }
 
     #[test]
