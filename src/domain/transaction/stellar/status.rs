@@ -355,36 +355,58 @@ where
         tx: TransactionRepoModel,
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let base_reason = "Transaction failed on-chain. Provider status: FAILED.".to_string();
+        let result_code = provider_response
+            .result
+            .as_ref()
+            .map(|r| r.result.name())
+            .unwrap_or("unknown");
 
+        // Extract inner failure fields for fee-bump and op-level detail
+        let (inner_result_code, op_result_code, inner_tx_hash, inner_fee_charged) =
+            match provider_response.result.as_ref().map(|r| &r.result) {
+                Some(TransactionResultResult::TxFeeBumpInnerFailed(pair)) => {
+                    let inner = &pair.result.result;
+                    let op = match inner {
+                        InnerTransactionResultResult::TxFailed(ops) => {
+                            first_failing_op(ops.as_slice())
+                        }
+                        _ => None,
+                    };
+                    (
+                        Some(inner.name()),
+                        op,
+                        Some(hex::encode(pair.transaction_hash.0)),
+                        pair.result.fee_charged,
+                    )
+                }
+                Some(TransactionResultResult::TxFailed(ops)) => {
+                    (None, first_failing_op(ops.as_slice()), None, 0)
+                }
+                _ => (None, None, None, 0),
+            };
+
+        let fee_charged = provider_response.result.as_ref().map(|r| r.fee_charged);
         let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
 
-        let detailed_reason = if let Some(ref tx_result) = provider_response.result {
-            let failure = describe_transaction_failure(&tx_result.result);
+        warn!(
+            tx_id = %tx.id,
+            result_code,
+            inner_result_code = inner_result_code.unwrap_or("n/a"),
+            op_result_code = op_result_code.unwrap_or("n/a"),
+            inner_tx_hash = inner_tx_hash.as_deref().unwrap_or("n/a"),
+            inner_fee_charged,
+            fee_charged = fee_charged.unwrap_or(0),
+            fee_bid = fee_bid.unwrap_or(0),
+            "stellar transaction failed"
+        );
 
-            warn!(
-                failure_summary = %failure.failure_summary,
-                inner_result_code = failure.inner_result_code.unwrap_or("n/a"),
-                op_result_code = failure.op_result_code.unwrap_or("n/a"),
-                inner_tx_hash = failure.inner_tx_hash.as_deref().unwrap_or("n/a"),
-                inner_fee_charged = failure.inner_fee_charged,
-                fee_charged = tx_result.fee_charged,
-                fee_bid = fee_bid.unwrap_or(0),
-                "stellar transaction failed"
-            );
-
-            format!(
-                "{base_reason} Specific XDR reason: {}",
-                failure.failure_summary
-            )
-        } else {
-            warn!("stellar transaction failed, no detailed XDR result available");
-            format!("{base_reason} No detailed XDR result available.")
-        };
+        let status_reason = format!(
+            "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: {result_code}."
+        );
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
-            status_reason: Some(detailed_reason),
+            status_reason: Some(status_reason),
             ..Default::default()
         };
 
@@ -568,18 +590,12 @@ fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
     }
 }
 
-/// Structured details from a failed Stellar transaction result.
-struct TransactionFailureDetails {
-    failure_summary: String,
-    inner_result_code: Option<&'static str>,
-    op_result_code: Option<&'static str>,
-    inner_tx_hash: Option<String>,
-    inner_fee_charged: i64,
-}
-
-/// Returns true if an operation result indicates failure.
-fn is_op_failure(op: &OperationResult) -> bool {
-    match op {
+/// Returns the `.name()` of the first failing operation in the results.
+///
+/// Scans left-to-right since earlier operations may show success while a later
+/// one carries the actual failure code. Returns `None` if no failure is found.
+fn first_failing_op(ops: &[OperationResult]) -> Option<&'static str> {
+    let op = ops.iter().find(|op| match op {
         OperationResult::OpInner(tr) => match tr {
             OperationResultTr::InvokeHostFunction(r) => {
                 !matches!(r, InvokeHostFunctionResult::Success(_))
@@ -589,16 +605,7 @@ fn is_op_failure(op: &OperationResult) -> bool {
             _ => false,
         },
         _ => true,
-    }
-}
-
-/// Returns the `.name()` of the first failing operation's inner result.
-///
-/// Scans left-to-right for the first operation with a failure code, since earlier
-/// operations may show success while a later one carries the actual failure.
-/// Falls back to the first operation if no clear failure is found.
-fn extract_op_detail(ops: &[OperationResult]) -> Option<&'static str> {
-    let op = ops.iter().find(|op| is_op_failure(op)).or(ops.first())?;
+    })?;
     match op {
         OperationResult::OpInner(tr) => match tr {
             OperationResultTr::InvokeHostFunction(r) => Some(r.name()),
@@ -607,65 +614,6 @@ fn extract_op_detail(ops: &[OperationResult]) -> Option<&'static str> {
             _ => Some(tr.name()),
         },
         _ => Some(op.name()),
-    }
-}
-
-/// Extracts structured failure details from a `TransactionResultResult`.
-///
-/// Drills into fee-bump inner results and operation-level results to produce
-/// summaries using the XDR enum variant names from `stellar-xdr`.
-fn describe_transaction_failure(result: &TransactionResultResult) -> TransactionFailureDetails {
-    match result {
-        TransactionResultResult::TxFeeBumpInnerFailed(pair) => {
-            let inner_result = &pair.result.result;
-            let inner_code = inner_result.name();
-            let inner_tx_hash = hex::encode(pair.transaction_hash.0);
-            let inner_fee_charged = pair.result.fee_charged;
-
-            let (op_detail, failure_summary) = match inner_result {
-                InnerTransactionResultResult::TxFailed(ops) => {
-                    let op = extract_op_detail(ops.as_slice());
-                    let summary = match op {
-                        Some(op_name) => {
-                            format!("TxFeeBumpInnerFailed({inner_code} > {op_name})")
-                        }
-                        None => format!("TxFeeBumpInnerFailed({inner_code})"),
-                    };
-                    (op, summary)
-                }
-                _ => (None, format!("TxFeeBumpInnerFailed({inner_code})")),
-            };
-
-            TransactionFailureDetails {
-                failure_summary,
-                inner_result_code: Some(inner_code),
-                op_result_code: op_detail,
-                inner_tx_hash: Some(inner_tx_hash),
-                inner_fee_charged,
-            }
-        }
-        TransactionResultResult::TxFailed(ops) => {
-            let op_detail = extract_op_detail(ops.as_slice());
-            let failure_summary = match op_detail {
-                Some(op_name) => format!("TxFailed({op_name})"),
-                None => "TxFailed".to_string(),
-            };
-
-            TransactionFailureDetails {
-                failure_summary,
-                inner_result_code: None,
-                op_result_code: op_detail,
-                inner_tx_hash: None,
-                inner_fee_charged: 0,
-            }
-        }
-        other => TransactionFailureDetails {
-            failure_summary: other.name().to_string(),
-            inner_result_code: None,
-            op_result_code: None,
-            inner_tx_hash: None,
-            inner_fee_charged: 0,
-        },
     }
 }
 
@@ -1013,7 +961,7 @@ mod tests {
             assert!(handled_tx.status_reason.is_some());
             assert_eq!(
                 handled_tx.status_reason.unwrap(),
-                "Transaction failed on-chain. Provider status: FAILED. No detailed XDR result available."
+                "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: unknown."
             );
         }
 
