@@ -363,10 +363,9 @@ where
             let failure = describe_transaction_failure(&tx_result.result);
 
             warn!(
-                failure_class = %failure.failure_class,
                 failure_summary = %failure.failure_summary,
-                inner_result_code = failure.inner_result_code.as_deref().unwrap_or("n/a"),
-                op_result_code = failure.op_result_code.as_deref().unwrap_or("n/a"),
+                inner_result_code = failure.inner_result_code.unwrap_or("n/a"),
+                op_result_code = failure.op_result_code.unwrap_or("n/a"),
                 inner_tx_hash = failure.inner_tx_hash.as_deref().unwrap_or("n/a"),
                 inner_fee_charged = failure.inner_fee_charged,
                 fee_charged = tx_result.fee_charged,
@@ -572,39 +571,10 @@ fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
 /// Structured details from a failed Stellar transaction result.
 struct TransactionFailureDetails {
     failure_summary: String,
-    failure_class: &'static str,
-    inner_result_code: Option<String>,
-    op_result_code: Option<String>,
+    inner_result_code: Option<&'static str>,
+    op_result_code: Option<&'static str>,
     inner_tx_hash: Option<String>,
     inner_fee_charged: i64,
-}
-
-/// Converts a Tx-prefixed Rust variant name to XDR spec form.
-/// e.g. `TxBadSeq` → `txBAD_SEQ`, `TxFailed` → `txFAILED`
-fn tx_xdr_name(rust_name: &str) -> String {
-    let rest = rust_name.strip_prefix("Tx").unwrap_or(rust_name);
-    let mut out = String::with_capacity(rest.len() + 4);
-    out.push_str("tx");
-    for (i, ch) in rest.chars().enumerate() {
-        if ch.is_uppercase() && i > 0 {
-            out.push('_');
-        }
-        out.push(ch.to_ascii_uppercase());
-    }
-    out
-}
-
-/// Converts a CamelCase Rust variant name to SCREAMING_SNAKE with a prefix.
-/// e.g. `("INVOKE_HOST_FUNCTION_", "Trapped")` → `"INVOKE_HOST_FUNCTION_TRAPPED"`
-fn screaming_with_prefix(prefix: &str, rust_name: &str) -> String {
-    let mut out = String::from(prefix);
-    for (i, ch) in rust_name.chars().enumerate() {
-        if ch.is_uppercase() && i > 0 {
-            out.push('_');
-        }
-        out.push(ch.to_ascii_uppercase());
-    }
-    out
 }
 
 /// Returns true if an operation result indicates failure.
@@ -614,120 +584,60 @@ fn is_op_failure(op: &OperationResult) -> bool {
             OperationResultTr::InvokeHostFunction(r) => {
                 !matches!(r, InvokeHostFunctionResult::Success(_))
             }
-            // ExtendFootprintTtl and RestoreFootprint only have Success/Malformed variants,
-            // so any non-"Success" name is a failure.
             OperationResultTr::ExtendFootprintTtl(r) => r.name() != "Success",
             OperationResultTr::RestoreFootprint(r) => r.name() != "Success",
-            // For non-Soroban ops we don't extract details from, skip — the op_result_to_xdr_name
-            // fallback will still report the type name if this is the only operation.
             _ => false,
         },
-        // OpBadAuth, OpNoAccount, etc. are always failures
         _ => true,
     }
 }
 
-/// Extracts the XDR spec name from the first failing operation in the results.
+/// Returns the `.name()` of the first failing operation's inner result.
 ///
 /// Scans left-to-right for the first operation with a failure code, since earlier
 /// operations may show success while a later one carries the actual failure.
 /// Falls back to the first operation if no clear failure is found.
-fn extract_op_detail(ops: &[OperationResult]) -> Option<String> {
-    let op = ops
-        .iter()
-        .find(|op| is_op_failure(op))
-        .or_else(|| ops.first())?;
-    op_result_to_xdr_name(op)
-}
-
-/// Converts an `OperationResult` to its canonical XDR spec name.
-fn op_result_to_xdr_name(op: &OperationResult) -> Option<String> {
+fn extract_op_detail(ops: &[OperationResult]) -> Option<&'static str> {
+    let op = ops.iter().find(|op| is_op_failure(op)).or(ops.first())?;
     match op {
         OperationResult::OpInner(tr) => match tr {
-            OperationResultTr::InvokeHostFunction(r) => {
-                Some(screaming_with_prefix("INVOKE_HOST_FUNCTION_", r.name()))
-            }
-            OperationResultTr::ExtendFootprintTtl(r) => {
-                Some(screaming_with_prefix("EXTEND_FOOTPRINT_TTL_", r.name()))
-            }
-            OperationResultTr::RestoreFootprint(r) => {
-                Some(screaming_with_prefix("RESTORE_FOOTPRINT_", r.name()))
-            }
-            other => Some(other.name().to_string()),
+            OperationResultTr::InvokeHostFunction(r) => Some(r.name()),
+            OperationResultTr::ExtendFootprintTtl(r) => Some(r.name()),
+            OperationResultTr::RestoreFootprint(r) => Some(r.name()),
+            _ => Some(tr.name()),
         },
-        other => Some(other.name().to_string()),
+        _ => Some(op.name()),
     }
-}
-
-/// Classifies a failure for low-cardinality alerting.
-fn classify_failure(
-    inner: Option<&InnerTransactionResultResult>,
-    op_detail: Option<&str>,
-    summary: &str,
-) -> &'static str {
-    if let Some(inner_result) = inner {
-        match inner_result {
-            InnerTransactionResultResult::TxBadSeq => return "bad_seq_race",
-            InnerTransactionResultResult::TxInsufficientFee => return "insufficient_fee",
-            _ => {}
-        }
-    }
-
-    if let Some(op) = op_detail {
-        if op.contains("TRAPPED") {
-            return "contract_trap";
-        }
-        if op.contains("RESOURCE_LIMIT_EXCEEDED") {
-            return "resource_exhausted";
-        }
-        if op.contains("INSUFFICIENT_REFUNDABLE_FEE") {
-            return "insufficient_refundable_fee";
-        }
-    }
-
-    // Fallback: check summary for top-level result codes
-    if summary.contains("BAD_SEQ") {
-        return "bad_seq_race";
-    }
-    if summary.contains("INSUFFICIENT_FEE") {
-        return "insufficient_fee";
-    }
-
-    "other"
 }
 
 /// Extracts structured failure details from a `TransactionResultResult`.
 ///
 /// Drills into fee-bump inner results and operation-level results to produce
-/// human-readable summaries using canonical Stellar XDR spec names.
+/// summaries using the XDR enum variant names from `stellar-xdr`.
 fn describe_transaction_failure(result: &TransactionResultResult) -> TransactionFailureDetails {
     match result {
         TransactionResultResult::TxFeeBumpInnerFailed(pair) => {
             let inner_result = &pair.result.result;
-            let inner_code = tx_xdr_name(inner_result.name());
+            let inner_code = inner_result.name();
             let inner_tx_hash = hex::encode(pair.transaction_hash.0);
             let inner_fee_charged = pair.result.fee_charged;
 
             let (op_detail, failure_summary) = match inner_result {
                 InnerTransactionResultResult::TxFailed(ops) => {
                     let op = extract_op_detail(ops.as_slice());
-                    let summary = match &op {
+                    let summary = match op {
                         Some(op_name) => {
-                            format!("txFEE_BUMP_INNER_FAILED({inner_code} > {op_name})")
+                            format!("TxFeeBumpInnerFailed({inner_code} > {op_name})")
                         }
-                        None => format!("txFEE_BUMP_INNER_FAILED({inner_code})"),
+                        None => format!("TxFeeBumpInnerFailed({inner_code})"),
                     };
                     (op, summary)
                 }
-                _ => (None, format!("txFEE_BUMP_INNER_FAILED({inner_code})")),
+                _ => (None, format!("TxFeeBumpInnerFailed({inner_code})")),
             };
-
-            let failure_class =
-                classify_failure(Some(inner_result), op_detail.as_deref(), &failure_summary);
 
             TransactionFailureDetails {
                 failure_summary,
-                failure_class,
                 inner_result_code: Some(inner_code),
                 op_result_code: op_detail,
                 inner_tx_hash: Some(inner_tx_hash),
@@ -736,34 +646,26 @@ fn describe_transaction_failure(result: &TransactionResultResult) -> Transaction
         }
         TransactionResultResult::TxFailed(ops) => {
             let op_detail = extract_op_detail(ops.as_slice());
-            let failure_summary = match &op_detail {
-                Some(op_name) => format!("txFAILED({op_name})"),
-                None => "txFAILED".to_string(),
+            let failure_summary = match op_detail {
+                Some(op_name) => format!("TxFailed({op_name})"),
+                None => "TxFailed".to_string(),
             };
-            let failure_class = classify_failure(None, op_detail.as_deref(), &failure_summary);
 
             TransactionFailureDetails {
                 failure_summary,
-                failure_class,
                 inner_result_code: None,
                 op_result_code: op_detail,
                 inner_tx_hash: None,
                 inner_fee_charged: 0,
             }
         }
-        other => {
-            let failure_summary = tx_xdr_name(other.name());
-            let failure_class = classify_failure(None, None, &failure_summary);
-
-            TransactionFailureDetails {
-                failure_summary,
-                failure_class,
-                inner_result_code: None,
-                op_result_code: None,
-                inner_tx_hash: None,
-                inner_fee_charged: 0,
-            }
-        }
+        other => TransactionFailureDetails {
+            failure_summary: other.name().to_string(),
+            inner_result_code: None,
+            op_result_code: None,
+            inner_tx_hash: None,
+            inner_fee_charged: 0,
+        },
     }
 }
 
