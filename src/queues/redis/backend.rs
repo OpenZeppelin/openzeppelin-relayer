@@ -348,31 +348,6 @@ mod tests {
     use crate::models::NetworkType;
     use crate::queues::QueueType;
 
-    /// Helper function to create a test RedisBackend.
-    /// Note: This requires a Redis connection, so tests using this should be marked with
-    /// `#[ignore = "Requires active Redis instance"]` unless running integration tests.
-    async fn create_test_backend() -> Result<RedisBackend, QueueBackendError> {
-        use crate::utils::RedisConnections;
-        use deadpool_redis::{Config, Runtime};
-        use std::sync::Arc;
-
-        let redis_url = std::env::var("REDIS_TEST_URL")
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-
-        let cfg = Config::from_url(&redis_url);
-        let pool = Arc::new(
-            cfg.builder()
-                .expect("Failed to create pool builder")
-                .max_size(1)
-                .runtime(Runtime::Tokio1)
-                .build()
-                .expect("Failed to build Redis pool"),
-        );
-
-        let connections = Arc::new(RedisConnections::new_single_pool(pool));
-        RedisBackend::new(connections).await
-    }
-
     #[test]
     fn test_backend_type_logic() {
         // Test that backend_type returns Redis without requiring a Queue instance
@@ -471,5 +446,16 @@ mod tests {
         }
         assert!(statuses.iter().all(|h| h.backend == "redis"));
         assert!(statuses.iter().all(|h| h.is_healthy));
+    }
+
+    #[test]
+    fn test_static_redis_health_statuses_have_zero_counts() {
+        let statuses = static_redis_health_statuses();
+        assert!(!statuses.is_empty());
+        for status in statuses {
+            assert_eq!(status.messages_visible, 0);
+            assert_eq!(status.messages_in_flight, 0);
+            assert_eq!(status.messages_dlq, 0);
+        }
     }
 }

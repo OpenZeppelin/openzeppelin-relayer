@@ -14,7 +14,7 @@
 //! let backend = create_queue_backend(redis_connections).await?;
 //!
 //! // Produce a job
-//! backend.produce(job, QueueType::TransactionRequest, None).await?;
+//! backend.produce_transaction_request(job, None).await?;
 //!
 //! // Initialize workers
 //! let workers = backend.initialize_workers(app_state).await?;
@@ -414,5 +414,13 @@ mod tests {
             let error_str = error.to_string();
             assert!(!error_str.is_empty());
         }
+    }
+
+    #[test]
+    fn test_queue_backend_type_string_representations() {
+        assert_eq!(QueueBackendType::Redis.as_str(), "redis");
+        assert_eq!(QueueBackendType::Sqs.as_str(), "sqs");
+        assert_eq!(QueueBackendType::Redis.to_string(), "redis");
+        assert_eq!(QueueBackendType::Sqs.to_string(), "sqs");
     }
 }

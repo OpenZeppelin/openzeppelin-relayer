@@ -371,4 +371,24 @@ mod tests {
         let ttl = derive_cron_lock_ttl("not-a-cron", fallback);
         assert_eq!(ttl, fallback);
     }
+
+    #[test]
+    fn test_derive_cron_lock_ttl_one_second_schedule_caps_to_one_second() {
+        let ttl = derive_cron_lock_ttl("*/1 * * * * *", Duration::from_secs(240));
+        assert_eq!(ttl, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_derive_cron_lock_ttl_hourly_schedule() {
+        let ttl = derive_cron_lock_ttl("0 0 * * * *", Duration::from_secs(240));
+        // 3600s - 5s margin = 3595s
+        assert_eq!(ttl, Duration::from_secs(3595));
+    }
+
+    #[test]
+    fn test_derive_cron_lock_ttl_short_interval_floors_at_minimum() {
+        // 10-second cron: interval=10, capped=5, max(5, 30)=30, min(30, 9)=9
+        let ttl = derive_cron_lock_ttl("*/10 * * * * *", Duration::from_secs(240));
+        assert_eq!(ttl, Duration::from_secs(9));
+    }
 }

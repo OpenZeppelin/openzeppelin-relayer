@@ -143,4 +143,42 @@ mod tests {
             8
         );
     }
+
+    #[test]
+    fn test_status_backoff_config_selects_correct_profile() {
+        let evm = status_backoff_config(Some(NetworkType::Evm));
+        assert_eq!(evm.initial_ms, STATUS_EVM_BACKOFF.initial_ms);
+        assert_eq!(evm.max_ms, STATUS_EVM_BACKOFF.max_ms);
+
+        let stellar = status_backoff_config(Some(NetworkType::Stellar));
+        assert_eq!(stellar.initial_ms, STATUS_STELLAR_BACKOFF.initial_ms);
+
+        let solana = status_backoff_config(Some(NetworkType::Solana));
+        assert_eq!(solana.initial_ms, STATUS_GENERIC_BACKOFF.initial_ms);
+    }
+
+    #[test]
+    fn test_status_backoff_config_none_uses_generic() {
+        let none_cfg = status_backoff_config(None);
+        let solana_cfg = status_backoff_config(Some(NetworkType::Solana));
+        assert_eq!(none_cfg.initial_ms, solana_cfg.initial_ms);
+        assert_eq!(none_cfg.max_ms, solana_cfg.max_ms);
+    }
+
+    #[test]
+    fn test_status_check_retry_delay_never_exceeds_max() {
+        for attempt in 0..20 {
+            let evm_delay = status_check_retry_delay_secs(Some(NetworkType::Evm), attempt);
+            assert!(
+                evm_delay <= STATUS_EVM_BACKOFF.max_ms.div_ceil(1000) as i32,
+                "EVM attempt {attempt} delay {evm_delay}s exceeds max"
+            );
+
+            let stellar_delay = status_check_retry_delay_secs(Some(NetworkType::Stellar), attempt);
+            assert!(
+                stellar_delay <= STATUS_STELLAR_BACKOFF.max_ms.div_ceil(1000) as i32,
+                "Stellar attempt {attempt} delay {stellar_delay}s exceeds max"
+            );
+        }
+    }
 }

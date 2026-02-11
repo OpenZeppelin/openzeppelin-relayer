@@ -164,4 +164,125 @@ mod tests {
             DEFAULT_CONCURRENCY_STATUS_CHECKER_EVM
         );
     }
+
+    #[test]
+    fn test_all_variants_have_nonempty_queue_name() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            assert!(!qt.queue_name().is_empty(), "{qt:?} has empty queue_name");
+            assert!(
+                !qt.redis_namespace().is_empty(),
+                "{qt:?} has empty redis_namespace"
+            );
+            assert!(
+                !qt.concurrency_env_key().is_empty(),
+                "{qt:?} has empty concurrency_env_key"
+            );
+        }
+    }
+
+    #[test]
+    fn test_display_matches_queue_name() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            assert_eq!(qt.to_string(), qt.queue_name());
+        }
+    }
+
+    #[test]
+    fn test_max_retries_status_checkers_use_infinite() {
+        // Status checkers retry until tx reaches final state
+        assert_eq!(QueueType::StatusCheck.max_retries(), usize::MAX);
+        assert_eq!(QueueType::StatusCheckEvm.max_retries(), usize::MAX);
+        assert_eq!(QueueType::StatusCheckStellar.max_retries(), usize::MAX);
+    }
+
+    #[test]
+    fn test_max_retries_bounded_queues() {
+        // Non-status queues should have finite retries
+        assert!(QueueType::TransactionRequest.max_retries() < usize::MAX);
+        assert!(QueueType::TransactionSubmission.max_retries() < usize::MAX);
+        assert!(QueueType::Notification.max_retries() < usize::MAX);
+        assert!(QueueType::TokenSwapRequest.max_retries() < usize::MAX);
+        assert!(QueueType::RelayerHealthCheck.max_retries() < usize::MAX);
+    }
+
+    #[test]
+    fn test_polling_intervals_within_sqs_limit() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            assert!(
+                qt.polling_interval_secs() <= 20,
+                "{qt:?} polling interval {} exceeds SQS max of 20s",
+                qt.polling_interval_secs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_visibility_timeout_within_sqs_range() {
+        // SQS allows 0..=43200 (12 hours)
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            let vt = qt.visibility_timeout_secs();
+            assert!(
+                vt <= 43200,
+                "{qt:?} visibility timeout {vt} exceeds SQS max"
+            );
+            assert!(vt > 0, "{qt:?} visibility timeout should be positive");
+        }
+    }
+
+    #[test]
+    fn test_default_concurrency_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            assert!(qt.default_concurrency() > 0, "{qt:?} has zero concurrency");
+        }
+    }
 }

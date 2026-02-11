@@ -62,3 +62,47 @@ impl From<HandlerError> for apalis::prelude::Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_worker_context_new() {
+        let ctx = WorkerContext::new(3, "task-abc".to_string());
+        assert_eq!(ctx.attempt, 3);
+        assert_eq!(ctx.task_id, "task-abc");
+    }
+
+    #[test]
+    fn test_handler_error_retry_display() {
+        let err = HandlerError::Retry("connection timeout".to_string());
+        assert_eq!(err.to_string(), "Retry: connection timeout");
+    }
+
+    #[test]
+    fn test_handler_error_abort_display() {
+        let err = HandlerError::Abort("invalid payload".to_string());
+        assert_eq!(err.to_string(), "Abort: invalid payload");
+    }
+
+    #[test]
+    fn test_handler_error_retry_into_apalis_failed() {
+        let err = HandlerError::Retry("temp failure".to_string());
+        let apalis_err: apalis::prelude::Error = err.into();
+        assert!(
+            matches!(apalis_err, apalis::prelude::Error::Failed(_)),
+            "Retry should map to Failed"
+        );
+    }
+
+    #[test]
+    fn test_handler_error_abort_into_apalis_abort() {
+        let err = HandlerError::Abort("permanent failure".to_string());
+        let apalis_err: apalis::prelude::Error = err.into();
+        assert!(
+            matches!(apalis_err, apalis::prelude::Error::Abort(_)),
+            "Abort should map to Abort"
+        );
+    }
+}

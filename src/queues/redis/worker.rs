@@ -613,6 +613,11 @@ fn monitor_handle_event(e: Worker<Event>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::queues::retry_config::{
+        NOTIFICATION_BACKOFF, RELAYER_HEALTH_BACKOFF, STATUS_EVM_BACKOFF, STATUS_GENERIC_BACKOFF,
+        STATUS_STELLAR_BACKOFF, SYSTEM_CLEANUP_BACKOFF, TOKEN_SWAP_CRON_BACKOFF,
+        TOKEN_SWAP_REQUEST_BACKOFF, TX_CLEANUP_BACKOFF, TX_REQUEST_BACKOFF, TX_SUBMISSION_BACKOFF,
+    };
 
     #[test]
     fn test_create_backoff_with_valid_parameters() {
@@ -660,5 +665,31 @@ mod tests {
     fn test_create_backoff_with_large_values() {
         let result = create_backoff(10000, 60000, 0.99);
         assert!(result.is_ok(), "Should handle large delay values");
+    }
+
+    #[test]
+    fn test_create_backoff_from_config_profiles() {
+        let profiles = [
+            TX_REQUEST_BACKOFF,
+            TX_SUBMISSION_BACKOFF,
+            STATUS_GENERIC_BACKOFF,
+            STATUS_EVM_BACKOFF,
+            STATUS_STELLAR_BACKOFF,
+            NOTIFICATION_BACKOFF,
+            TOKEN_SWAP_REQUEST_BACKOFF,
+            TX_CLEANUP_BACKOFF,
+            SYSTEM_CLEANUP_BACKOFF,
+            RELAYER_HEALTH_BACKOFF,
+            TOKEN_SWAP_CRON_BACKOFF,
+        ];
+
+        for cfg in profiles {
+            let result = create_backoff_from_config(cfg);
+            assert!(
+                result.is_ok(),
+                "backoff profile should be constructible: {:?}",
+                cfg
+            );
+        }
     }
 }

@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
-use aws_sdk_sqs::types::{Message, MessageAttributeValue, MessageSystemAttributeName};
+use aws_sdk_sqs::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_sqs::types::{
+    DeleteMessageBatchRequestEntry, Message, MessageAttributeValue, MessageSystemAttributeName,
+};
 use futures::FutureExt;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
@@ -36,13 +39,24 @@ enum ProcessingError {
     Permanent(String),
 }
 
+/// Outcome of processing a single SQS message, used to decide whether the
+/// message should be batch-deleted or left in the queue.
+#[derive(Debug)]
+enum MessageOutcome {
+    /// Message processed successfully — should be deleted from queue.
+    Delete { receipt_handle: String },
+    /// Message should remain in queue (e.g. status-check retry via visibility
+    /// change, or retryable error awaiting visibility timeout).
+    Retain,
+}
+
 /// Spawns a worker task for a specific SQS queue.
 ///
 /// The worker continuously polls the queue, processes messages, and handles
 /// retries via SQS visibility timeout.
 ///
 /// # Arguments
-/// * `sqs_client` - AWS SQS client
+/// * `sqs_client` - AWS SQS client for all operations (poll, send, delete, change visibility)
 /// * `queue_type` - Type of queue (determines handler and concurrency)
 /// * `queue_url` - SQS queue URL
 /// * `app_state` - Application state with repositories and services
@@ -60,6 +74,8 @@ pub async fn spawn_worker_for_queue(
     let max_retries = queue_type.max_retries();
     let polling_interval = queue_type.polling_interval_secs();
     let visibility_timeout = queue_type.visibility_timeout_secs();
+    let handler_timeout_secs = handler_timeout_secs(queue_type);
+    let handler_timeout = Duration::from_secs(handler_timeout_secs);
 
     info!(
         queue_type = ?queue_type,
@@ -68,24 +84,36 @@ pub async fn spawn_worker_for_queue(
         max_retries = max_retries,
         polling_interval_secs = polling_interval,
         visibility_timeout_secs = visibility_timeout,
+        handler_timeout_secs = handler_timeout_secs,
         "Spawning SQS worker"
     );
 
     let handle: JoinHandle<()> = tokio::spawn(async move {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-        let mut inflight = JoinSet::new();
+        let mut inflight: JoinSet<Option<String>> = JoinSet::new();
         let mut consecutive_poll_errors: u32 = 0;
+        let mut pending_deletes: Vec<String> = Vec::new();
 
         loop {
-            // Reap completed tasks each iteration (prevents unbounded memory)
+            // Reap completed tasks and collect receipt handles for batch delete
             while let Some(result) = inflight.try_join_next() {
-                if let Err(e) = result {
-                    warn!(
-                        queue_type = ?queue_type,
-                        error = %e,
-                        "In-flight task failed"
-                    );
+                match result {
+                    Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
+                    Ok(None) => {} // Retained message, no delete needed
+                    Err(e) => {
+                        warn!(
+                            queue_type = ?queue_type,
+                            error = %e,
+                            "In-flight task failed"
+                        );
+                    }
                 }
+            }
+
+            // Flush any accumulated deletes as a batch
+            if !pending_deletes.is_empty() {
+                flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
+                pending_deletes.clear();
             }
 
             // Check shutdown before each iteration
@@ -117,8 +145,10 @@ pub async fn spawn_worker_for_queue(
                     .max_number_of_messages(batch_size) // SQS max is 10
                     .wait_time_seconds(polling_interval as i32)
                     .visibility_timeout(visibility_timeout as i32)
-                    .message_system_attribute_names(MessageSystemAttributeName::All)
-                    .message_attribute_names("All")
+                    .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
+                    .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+                    .message_attribute_names("target_scheduled_on")
+                    .message_attribute_names("retry_attempt")
                     .send() => result,
                 _ = shutdown_rx.changed() => {
                     info!(queue_type = ?queue_type, "Shutdown signal received during SQS poll, stopping worker");
@@ -128,6 +158,13 @@ pub async fn spawn_worker_for_queue(
 
             match messages_result {
                 Ok(output) => {
+                    if consecutive_poll_errors > 0 {
+                        info!(
+                            queue_type = ?queue_type,
+                            previous_errors = consecutive_poll_errors,
+                            "SQS polling recovered after consecutive errors"
+                        );
+                    }
                     consecutive_poll_errors = 0;
 
                     if let Some(messages) = output.messages {
@@ -158,27 +195,34 @@ pub async fn spawn_worker_for_queue(
                                 inflight.spawn(async move {
                                     let _permit = permit; // always dropped, even on panic
 
-                                    let result = AssertUnwindSafe(process_message(
-                                        client.clone(),
-                                        message,
-                                        queue_type,
-                                        &url,
-                                        state,
-                                        max_retries,
-                                    ))
-                                    .catch_unwind()
+                                    let result = tokio::time::timeout(
+                                        handler_timeout,
+                                        AssertUnwindSafe(process_message(
+                                            client.clone(),
+                                            message,
+                                            queue_type,
+                                            &url,
+                                            state,
+                                            max_retries,
+                                        ))
+                                        .catch_unwind(),
+                                    )
                                     .await;
 
                                     match result {
-                                        Ok(Ok(())) => {}
-                                        Ok(Err(e)) => {
+                                        Ok(Ok(Ok(MessageOutcome::Delete { receipt_handle }))) => {
+                                            Some(receipt_handle)
+                                        }
+                                        Ok(Ok(Ok(MessageOutcome::Retain))) => None,
+                                        Ok(Ok(Err(e))) => {
                                             error!(
                                                 queue_type = ?queue_type,
                                                 error = %e,
                                                 "Failed to process message"
                                             );
+                                            None
                                         }
-                                        Err(panic_info) => {
+                                        Ok(Err(panic_info)) => {
                                             let msg = panic_info
                                                 .downcast_ref::<String>()
                                                 .map(|s| s.as_str())
@@ -191,6 +235,15 @@ pub async fn spawn_worker_for_queue(
                                                 panic = %msg,
                                                 "Message handler panicked"
                                             );
+                                            None
+                                        }
+                                        Err(_) => {
+                                            error!(
+                                                queue_type = ?queue_type,
+                                                timeout_secs = handler_timeout.as_secs(),
+                                                "Message handler timed out; message will be retried after visibility timeout"
+                                            );
+                                            None
                                         }
                                     }
                                 });
@@ -201,9 +254,22 @@ pub async fn spawn_worker_for_queue(
                 Err(e) => {
                     consecutive_poll_errors = consecutive_poll_errors.saturating_add(1);
                     let backoff_secs = poll_error_backoff_secs(consecutive_poll_errors);
+                    let (error_kind, error_code, error_message) = match &e {
+                        SdkError::ServiceError(ctx) => {
+                            ("service", ctx.err().code(), ctx.err().message())
+                        }
+                        SdkError::DispatchFailure(_) => ("dispatch", None, None),
+                        SdkError::ResponseError(_) => ("response", None, None),
+                        SdkError::TimeoutError(_) => ("timeout", None, None),
+                        _ => ("other", None, None),
+                    };
                     error!(
                         queue_type = ?queue_type,
+                        error_kind = error_kind,
+                        error_code = error_code.unwrap_or("unknown"),
+                        error_message = error_message.unwrap_or("n/a"),
                         error = %e,
+                        error_debug = ?e,
                         consecutive_errors = consecutive_poll_errors,
                         backoff_secs = backoff_secs,
                         "Failed to receive messages from SQS, backing off"
@@ -219,7 +285,7 @@ pub async fn spawn_worker_for_queue(
             }
         }
 
-        // Drain in-flight tasks before shutdown
+        // Drain in-flight tasks before shutdown, collecting final deletes
         if !inflight.is_empty() {
             info!(
                 queue_type = ?queue_type,
@@ -228,12 +294,16 @@ pub async fn spawn_worker_for_queue(
             );
             match tokio::time::timeout(Duration::from_secs(30), async {
                 while let Some(result) = inflight.join_next().await {
-                    if let Err(e) = result {
-                        warn!(
-                            queue_type = ?queue_type,
-                            error = %e,
-                            "In-flight task failed during drain"
-                        );
+                    match result {
+                        Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(
+                                queue_type = ?queue_type,
+                                error = %e,
+                                "In-flight task failed during drain"
+                            );
+                        }
                     }
                 }
             })
@@ -249,6 +319,11 @@ pub async fn spawn_worker_for_queue(
                     inflight.abort_all();
                 }
             }
+        }
+
+        // Flush any remaining deletes accumulated during drain
+        if !pending_deletes.is_empty() {
+            flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
         }
 
         info!(queue_type = ?queue_type, "SQS worker stopped");
@@ -268,7 +343,7 @@ async fn process_message(
     queue_url: &str,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     max_retries: usize,
-) -> Result<(), QueueBackendError> {
+) -> Result<MessageOutcome, QueueBackendError> {
     let body = message
         .body()
         .ok_or_else(|| QueueBackendError::QueueError("Empty message body".to_string()))?;
@@ -295,26 +370,18 @@ async fn process_message(
             )
             .await?;
 
-            if should_delete_original {
-                sqs_client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(receipt_handle)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        QueueBackendError::SqsError(format!(
-                            "Deferred message but failed to delete original: {e}"
-                        ))
-                    })?;
-            }
-
             debug!(
                 queue_type = ?queue_type,
                 remaining_seconds = remaining,
                 "Deferred scheduled SQS message for next delay hop"
             );
-            return Ok(());
+            return if should_delete_original {
+                Ok(MessageOutcome::Delete {
+                    receipt_handle: receipt_handle.to_string(),
+                })
+            } else {
+                Ok(MessageOutcome::Retain)
+            };
         }
     }
 
@@ -414,47 +481,27 @@ async fn process_message(
 
     match result {
         Ok(()) => {
-            // Success: Delete message from queue
-            sqs_client
-                .delete_message()
-                .queue_url(queue_url)
-                .receipt_handle(receipt_handle)
-                .send()
-                .await
-                .map_err(|e| {
-                    error!(error = %e, "Failed to delete message from SQS");
-                    QueueBackendError::SqsError(format!("DeleteMessage failed: {e}"))
-                })?;
-
             debug!(
                 queue_type = ?queue_type,
                 attempt = attempt_number,
-                "Message processed successfully and deleted"
+                "Message processed successfully"
             );
 
-            Ok(())
+            Ok(MessageOutcome::Delete {
+                receipt_handle: receipt_handle.to_string(),
+            })
         }
         Err(ProcessingError::Permanent(e)) => {
-            // Permanent failure: delete immediately (do not retry).
-            sqs_client
-                .delete_message()
-                .queue_url(queue_url)
-                .receipt_handle(receipt_handle)
-                .send()
-                .await
-                .map_err(|err| {
-                    error!(error = %err, "Failed to delete permanently failed message from SQS");
-                    QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
-                })?;
-
             error!(
                 queue_type = ?queue_type,
                 attempt = attempt_number,
                 error = %e,
-                "Permanent handler failure, message deleted"
+                "Permanent handler failure, message will be deleted"
             );
 
-            Ok(())
+            Ok(MessageOutcome::Delete {
+                receipt_handle: receipt_handle.to_string(),
+            })
         }
         Err(ProcessingError::Retryable(e)) => {
             // StatusCheck queues use self-re-enqueue with short delay instead of
@@ -479,7 +526,7 @@ async fn process_message(
                             error = %err,
                             "Failed to set visibility timeout for status check retry; falling back to existing visibility timeout"
                         );
-                        return Ok(());
+                        return Ok(MessageOutcome::Retain);
                     }
 
                     debug!(
@@ -490,7 +537,7 @@ async fn process_message(
                         "Status check retry scheduled via visibility timeout"
                     );
 
-                    return Ok(());
+                    return Ok(MessageOutcome::Retain);
                 }
 
                 let requeue_dedup_id = generate_requeue_dedup_id(
@@ -507,7 +554,7 @@ async fn process_message(
                             "Cannot re-enqueue status check: missing MessageGroupId"
                         );
                         // Keep original message for visibility-timeout retry path.
-                        return Ok(());
+                        return Ok(MessageOutcome::Retain);
                     }
                 };
                 let next_retry_attempt = logical_retry_attempt.saturating_add(1);
@@ -541,23 +588,8 @@ async fn process_message(
                         "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
                     );
                     // Fall through — original message will retry after visibility timeout
-                    return Ok(());
+                    return Ok(MessageOutcome::Retain);
                 }
-
-                // Delete the original message now that the re-enqueue succeeded
-                sqs_client
-                    .delete_message()
-                    .queue_url(queue_url)
-                    .receipt_handle(receipt_handle)
-                    .send()
-                    .await
-                    .map_err(|err| {
-                        // Not fatal: worst case is a duplicate delivery after
-                        // the visibility timeout expires, which the handler is
-                        // idempotent to handle.
-                        error!(error = %err, "Failed to delete original status check message after re-enqueue");
-                        QueueBackendError::SqsError(format!("DeleteMessage failed: {err}"))
-                    })?;
 
                 debug!(
                     queue_type = ?queue_type,
@@ -567,7 +599,10 @@ async fn process_message(
                     "Status check re-enqueued with short delay"
                 );
 
-                return Ok(());
+                // Delete the original message now that the re-enqueue succeeded
+                return Ok(MessageOutcome::Delete {
+                    receipt_handle: receipt_handle.to_string(),
+                });
             }
 
             // Non-StatusCheck queues: let message return via visibility timeout
@@ -594,7 +629,7 @@ async fn process_message(
             // Don't delete message - it will automatically return to queue
             // after visibility timeout expires. SQS will move to DLQ after
             // exceeding maxReceiveCount configured in redrive policy.
-            Ok(())
+            Ok(MessageOutcome::Retain)
         }
     }
 }
@@ -835,17 +870,100 @@ fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
     }
 }
 
-/// Maximum backoff duration for poll errors (5 minutes).
-const MAX_POLL_BACKOFF_SECS: u64 = 300;
-
-/// Computes exponential backoff for consecutive poll errors.
+/// Maximum allowed wall-clock processing time per message before the handler task is canceled.
 ///
-/// Returns: 5, 10, 20, 40, 80, 160, 300, 300, ... seconds
+/// Keep this bounded so permits cannot be held forever by hung handlers.
+fn handler_timeout_secs(queue_type: QueueType) -> u64 {
+    u64::from(queue_type.visibility_timeout_secs().max(1))
+}
+
+/// Maximum backoff duration for poll errors (1 minute).
+const MAX_POLL_BACKOFF_SECS: u64 = 60;
+
+/// Number of consecutive errors between recovery probes at the backoff ceiling.
+/// Once the backoff reaches `MAX_POLL_BACKOFF_SECS`, every Nth error cycle uses
+/// the base interval (5s) to quickly detect when the SQS endpoint recovers.
+const RECOVERY_PROBE_EVERY: u32 = 4;
+
+/// Computes exponential backoff for consecutive poll errors with recovery probes.
+///
+/// Returns: 5, 10, 20, 40, 60, 60, 60, **5** (probe), 60, 60, 60, **5**, ...
 fn poll_error_backoff_secs(consecutive_errors: u32) -> u64 {
     let base: u64 = 5;
+
+    // Once well past the ceiling, periodically try the base interval
+    // to quickly detect when the SQS endpoint recovers.
+    if consecutive_errors >= 7 && consecutive_errors % RECOVERY_PROBE_EVERY == 0 {
+        return base;
+    }
+
     let exponent = consecutive_errors.saturating_sub(1).min(16);
     base.saturating_mul(2_u64.saturating_pow(exponent))
         .min(MAX_POLL_BACKOFF_SECS)
+}
+
+/// Deletes messages from SQS in batches of up to 10 (the SQS maximum per call).
+///
+/// Returns the total number of successfully deleted messages. Any per-entry
+/// failures are logged as warnings — SQS will redeliver those messages after
+/// the visibility timeout expires.
+async fn flush_delete_batch(
+    sqs_client: &aws_sdk_sqs::Client,
+    queue_url: &str,
+    batch: &[String],
+    queue_type: QueueType,
+) -> usize {
+    if batch.is_empty() {
+        return 0;
+    }
+
+    let mut deleted = 0;
+
+    for chunk in batch.chunks(10) {
+        let entries: Vec<DeleteMessageBatchRequestEntry> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, handle)| {
+                DeleteMessageBatchRequestEntry::builder()
+                    .id(i.to_string())
+                    .receipt_handle(handle)
+                    .build()
+                    .expect("id and receipt_handle are always set")
+            })
+            .collect();
+
+        match sqs_client
+            .delete_message_batch()
+            .queue_url(queue_url)
+            .set_entries(Some(entries))
+            .send()
+            .await
+        {
+            Ok(output) => {
+                deleted += output.successful().len();
+
+                for f in output.failed() {
+                    warn!(
+                        queue_type = ?queue_type,
+                        id = %f.id(),
+                        code = %f.code(),
+                        message = f.message().unwrap_or("unknown"),
+                        "Batch delete entry failed (message will be redelivered)"
+                    );
+                }
+            }
+            Err(e) => {
+                error!(
+                    queue_type = ?queue_type,
+                    error = %e,
+                    batch_size = chunk.len(),
+                    "Batch delete API call failed (messages will be redelivered)"
+                );
+            }
+        }
+    }
+
+    deleted
 }
 
 #[cfg(test)]
@@ -860,6 +978,35 @@ mod tests {
 
         let concurrency = get_concurrency_for_queue(QueueType::StatusCheck);
         assert!(concurrency > 0);
+    }
+
+    #[test]
+    fn test_handler_timeout_secs_is_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for queue_type in all {
+            assert!(handler_timeout_secs(queue_type) > 0);
+        }
+    }
+
+    #[test]
+    fn test_handler_timeout_secs_uses_visibility_timeout() {
+        assert_eq!(
+            handler_timeout_secs(QueueType::StatusCheckEvm),
+            QueueType::StatusCheckEvm.visibility_timeout_secs() as u64
+        );
+        assert_eq!(
+            handler_timeout_secs(QueueType::Notification),
+            QueueType::Notification.visibility_timeout_secs() as u64
+        );
     }
 
     #[test]
@@ -1119,19 +1266,112 @@ mod tests {
         assert_eq!(poll_error_backoff_secs(3), 20);
         // Fourth: 40s
         assert_eq!(poll_error_backoff_secs(4), 40);
-        // Fifth: 80s
-        assert_eq!(poll_error_backoff_secs(5), 80);
-        // Sixth: 160s
-        assert_eq!(poll_error_backoff_secs(6), 160);
-        // Seventh: capped at 300s
-        assert_eq!(poll_error_backoff_secs(7), 300);
-        // Many errors: still capped at 300s
-        assert_eq!(poll_error_backoff_secs(100), 300);
+        // Capped at MAX_POLL_BACKOFF_SECS (60)
+        assert_eq!(poll_error_backoff_secs(5), 60);
+        assert_eq!(poll_error_backoff_secs(6), 60);
+        assert_eq!(poll_error_backoff_secs(7), 60);
+        // Recovery probe: base interval at multiples of RECOVERY_PROBE_EVERY (>= 7)
+        assert_eq!(poll_error_backoff_secs(8), 5);
+        assert_eq!(poll_error_backoff_secs(9), 60);
+        assert_eq!(poll_error_backoff_secs(12), 5); // next probe
     }
 
     #[test]
     fn test_poll_error_backoff_zero_errors() {
         // Zero consecutive errors should still produce a reasonable value
         assert_eq!(poll_error_backoff_secs(0), 5);
+    }
+
+    #[test]
+    fn test_poll_error_backoff_recovery_probes() {
+        // Verify probes repeat at regular intervals once past threshold
+        for i in (8..=100).step_by(RECOVERY_PROBE_EVERY as usize) {
+            assert_eq!(
+                poll_error_backoff_secs(i as u32),
+                5,
+                "Expected recovery probe at error {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_message_outcome_delete_carries_receipt_handle() {
+        let handle = "test-receipt-handle-123".to_string();
+        let outcome = MessageOutcome::Delete {
+            receipt_handle: handle.clone(),
+        };
+        match outcome {
+            MessageOutcome::Delete { receipt_handle } => {
+                assert_eq!(receipt_handle, handle);
+            }
+            MessageOutcome::Retain => panic!("Expected Delete variant"),
+        }
+    }
+
+    #[test]
+    fn test_message_outcome_retain() {
+        let outcome = MessageOutcome::Retain;
+        assert!(matches!(outcome, MessageOutcome::Retain));
+    }
+
+    #[test]
+    fn test_batch_delete_entry_builder() {
+        // Verify DeleteMessageBatchRequestEntry builds correctly with sequential IDs,
+        // matching the pattern used in flush_delete_batch.
+        let handles = vec![
+            "receipt-0".to_string(),
+            "receipt-1".to_string(),
+            "receipt-2".to_string(),
+        ];
+        let entries: Vec<DeleteMessageBatchRequestEntry> = handles
+            .iter()
+            .enumerate()
+            .map(|(i, handle)| {
+                DeleteMessageBatchRequestEntry::builder()
+                    .id(i.to_string())
+                    .receipt_handle(handle)
+                    .build()
+                    .expect("id and receipt_handle are set")
+            })
+            .collect();
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].id(), "0");
+        assert_eq!(entries[0].receipt_handle(), "receipt-0");
+        assert_eq!(entries[2].id(), "2");
+        assert_eq!(entries[2].receipt_handle(), "receipt-2");
+    }
+
+    #[test]
+    fn test_batch_chunking_logic() {
+        // Verify that chunks(10) correctly splits receipt handles,
+        // matching the pattern used in flush_delete_batch.
+        let handles: Vec<String> = (0..25).map(|i| format!("receipt-{i}")).collect();
+        let chunks: Vec<&[String]> = handles.chunks(10).collect();
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), 10);
+        assert_eq!(chunks[1].len(), 10);
+        assert_eq!(chunks[2].len(), 5);
+    }
+
+    #[test]
+    fn test_outcome_collection_pattern() {
+        // Verify the pattern used in the main loop to collect receipt handles
+        // from a mix of Delete and Retain outcomes.
+        let outcomes = vec![
+            Some("receipt-1".to_string()), // Delete
+            None,                          // Retain
+            Some("receipt-2".to_string()), // Delete
+            None,                          // Retain
+            Some("receipt-3".to_string()), // Delete
+        ];
+
+        let pending_deletes: Vec<String> = outcomes.into_iter().flatten().collect();
+
+        assert_eq!(pending_deletes.len(), 3);
+        assert_eq!(pending_deletes[0], "receipt-1");
+        assert_eq!(pending_deletes[1], "receipt-2");
+        assert_eq!(pending_deletes[2], "receipt-3");
     }
 }

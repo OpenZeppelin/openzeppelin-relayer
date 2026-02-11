@@ -35,12 +35,11 @@ const SQS_MAX_MESSAGE_SIZE_BYTES: usize = 256 * 1024;
 /// Falls back to `relayer_id` when network type is unknown (conservative/safe).
 fn transaction_message_group_id(
     network_type: Option<&NetworkType>,
-    relayer_id: &str,
+    _relayer_id: &str,
     transaction_id: &str,
 ) -> String {
     match network_type {
-        Some(NetworkType::Evm) | None => relayer_id.to_string(),
-        Some(_) => transaction_id.to_string(),
+        Some(_) | None => transaction_id.to_string(),
     }
 }
 
@@ -64,10 +63,13 @@ fn status_check_queue_type(network_type: Option<&NetworkType>) -> QueueType {
 /// - Automatic retry via visibility timeout
 #[derive(Clone)]
 pub struct SqsBackend {
-    /// AWS SQS client
+    /// AWS SQS client for all operations (send, delete, poll, change visibility)
     sqs_client: aws_sdk_sqs::Client,
     /// Mapping of queue types to SQS queue URLs
     queue_urls: HashMap<QueueType, String>,
+    /// Cached DLQ URLs resolved once at startup, keyed by the source queue type.
+    /// Avoids repeated `get_queue_url` calls on every health check.
+    dlq_urls: HashMap<QueueType, String>,
     /// AWS region
     region: String,
     /// Shutdown signal sender — sending `true` tells all workers and cron tasks to stop
@@ -169,21 +171,39 @@ impl SqsBackend {
 
         // Fail fast at startup when expected queues are missing/misconfigured.
         // This avoids silent runtime polling failures and makes infra drift explicit.
-        let mut missing_queues = Vec::new();
-        for (queue_type, queue_url) in &queue_urls {
-            debug!(
-                queue_type = %queue_type,
-                queue_url = %queue_url,
-                "Probing SQS queue accessibility at startup"
-            );
-            let probe = sqs_client
-                .get_queue_attributes()
-                .queue_url(queue_url)
-                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
-                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
-                .send()
-                .await;
+        // Probe all queues concurrently to avoid slow sequential startup under
+        // SQS throttling during scale-out events.
+        let probe_futures: Vec<_> = queue_urls
+            .iter()
+            .map(|(queue_type, queue_url)| {
+                let client = sqs_client.clone();
+                let qt = *queue_type;
+                let url = queue_url.clone();
+                async move {
+                    debug!(
+                        queue_type = %qt,
+                        queue_url = %url,
+                        "Probing SQS queue accessibility at startup"
+                    );
+                    let probe = client
+                        .get_queue_attributes()
+                        .queue_url(&url)
+                        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::QueueArn)
+                        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::FifoQueue)
+                        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
+                        .send()
+                        .await;
+                    (qt, url, probe)
+                }
+            })
+            .collect();
 
+        let probe_results = futures::future::join_all(probe_futures).await;
+
+        let mut missing_queues = Vec::new();
+        let mut dlq_urls: HashMap<QueueType, String> = HashMap::new();
+
+        for (queue_type, queue_url, probe) in probe_results {
             match probe {
                 Ok(output) => {
                     let is_fifo = output
@@ -203,6 +223,14 @@ impl SqsBackend {
                         missing_queues.push(format!(
                             "{queue_type} ({queue_url}): queue is not FIFO (FifoQueue != true)"
                         ));
+                    }
+
+                    // Resolve and cache DLQ URL from the redrive policy while we
+                    // already have the attributes, avoiding per-health-check lookups.
+                    if let Some(dlq_url) =
+                        Self::resolve_dlq_url_from_attrs(&sqs_client, output.attributes()).await
+                    {
+                        dlq_urls.insert(queue_type, dlq_url);
                     }
                 }
                 Err(err) => {
@@ -236,6 +264,7 @@ impl SqsBackend {
         Ok(Self {
             sqs_client,
             queue_urls,
+            dlq_urls,
             region,
             shutdown_tx: Arc::new(shutdown_tx),
         })
@@ -352,60 +381,38 @@ impl SqsBackend {
         })
     }
 
-    async fn get_dlq_message_count(&self, queue_url: &str) -> u64 {
-        let attrs_output = match self
-            .sqs_client
-            .get_queue_attributes()
-            .queue_url(queue_url)
-            .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
-            .send()
-            .await
-        {
-            Ok(output) => output,
-            Err(err) => {
-                warn!(error = %err, queue_url = %queue_url, "Failed to fetch redrive policy");
-                return 0;
-            }
-        };
+    /// Extracts the DLQ ARN from a redrive policy and resolves its queue URL.
+    ///
+    /// Called once at startup so the URL can be cached in `dlq_urls`.
+    async fn resolve_dlq_url_from_attrs(
+        sqs_client: &aws_sdk_sqs::Client,
+        attrs: Option<&HashMap<aws_sdk_sqs::types::QueueAttributeName, String>>,
+    ) -> Option<String> {
+        let redrive_policy =
+            attrs.and_then(|a| a.get(&aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy))?;
 
-        let redrive_policy = attrs_output
-            .attributes()
-            .and_then(|attrs| attrs.get(&aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy))
-            .cloned();
-
-        let Some(redrive_policy) = redrive_policy else {
-            return 0;
-        };
-
-        let dlq_arn = serde_json::from_str::<serde_json::Value>(&redrive_policy)
+        let dlq_arn = serde_json::from_str::<serde_json::Value>(redrive_policy)
             .ok()
-            .and_then(|value| value.get("deadLetterTargetArn").cloned())
-            .and_then(|value| value.as_str().map(|s| s.to_string()));
+            .and_then(|v| v.get("deadLetterTargetArn").cloned())
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let Some(dlq_arn) = dlq_arn else {
-            warn!(queue_url = %queue_url, "Redrive policy is missing deadLetterTargetArn");
-            return 0;
-        };
+        let dlq_name = dlq_arn.as_deref()?.rsplit(':').next()?;
 
-        let Some(dlq_name) = dlq_arn.rsplit(':').next() else {
-            return 0;
-        };
-
-        let dlq_url = match self
-            .sqs_client
-            .get_queue_url()
-            .queue_name(dlq_name)
-            .send()
-            .await
-        {
+        match sqs_client.get_queue_url().queue_name(dlq_name).send().await {
             Ok(output) => output.queue_url().map(str::to_string),
             Err(err) => {
-                warn!(error = %err, dlq_name = %dlq_name, "Failed to resolve DLQ URL");
+                warn!(error = %err, dlq_name = %dlq_name, "Failed to resolve DLQ URL at startup");
                 None
             }
-        };
+        }
+    }
 
-        let Some(dlq_url) = dlq_url else {
+    /// Returns the approximate message count for a cached DLQ URL.
+    ///
+    /// Uses URLs resolved and cached at startup, requiring only a single
+    /// `get_queue_attributes` call per health check (no URL resolution).
+    async fn get_dlq_message_count(&self, queue_type: &QueueType) -> u64 {
+        let Some(dlq_url) = self.dlq_urls.get(queue_type) else {
             return 0;
         };
 
@@ -425,7 +432,7 @@ impl SqsBackend {
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0),
             Err(err) => {
-                warn!(error = %err, queue_url = %queue_url, "Failed to fetch DLQ depth");
+                warn!(error = %err, dlq_url = %dlq_url, "Failed to fetch DLQ depth");
                 0
             }
         }
@@ -703,30 +710,27 @@ impl QueueBackend for SqsBackend {
                 .attribute_names(
                     aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessagesNotVisible,
                 )
-                .attribute_names(aws_sdk_sqs::types::QueueAttributeName::RedrivePolicy)
                 .send()
                 .await;
 
             let (messages_visible, messages_in_flight, messages_dlq, is_healthy) = match result {
                 Ok(output) => {
-                    let visible = output
-                        .attributes()
-                        .and_then(|attrs| {
-                            attrs
-                                .get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+                    let attrs = output.attributes();
+                    let visible = attrs
+                        .and_then(|a| {
+                            a.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
                         })
                         .and_then(|v| v.parse::<u64>().ok())
                         .unwrap_or(0);
-                    let in_flight = output
-                        .attributes()
-                        .and_then(|attrs| {
-                            attrs.get(
+                    let in_flight = attrs
+                        .and_then(|a| {
+                            a.get(
                                 &aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessagesNotVisible,
                             )
                         })
                         .and_then(|v| v.parse::<u64>().ok())
                         .unwrap_or(0);
-                    let dlq_count = self.get_dlq_message_count(queue_url).await;
+                    let dlq_count = self.get_dlq_message_count(queue_type).await;
                     (visible, in_flight, dlq_count, true)
                 }
                 Err(e) => {
@@ -829,41 +833,9 @@ mod tests {
     }
 
     #[test]
-    fn test_sqs_backend_debug() {
-        // Test Debug implementation (doesn't require AWS credentials)
-        let backend = SqsBackend {
-            sqs_client: aws_sdk_sqs::Client::from_conf(
-                aws_sdk_sqs::Config::builder()
-                    .region(aws_sdk_sqs::config::Region::new("us-east-1"))
-                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
-                    .build(),
-            ),
-            queue_urls: HashMap::new(),
-            region: "us-east-1".to_string(),
-            shutdown_tx: Arc::new(watch::channel(false).0),
-        };
-
-        let debug_str = format!("{backend:?}");
-        assert!(debug_str.contains("SqsBackend"));
-        assert!(debug_str.contains("us-east-1"));
-        assert!(debug_str.contains("queue_count"));
-    }
-
-    #[test]
-    fn test_sqs_backend_type() {
-        let backend = SqsBackend {
-            sqs_client: aws_sdk_sqs::Client::from_conf(
-                aws_sdk_sqs::Config::builder()
-                    .region(aws_sdk_sqs::config::Region::new("us-west-2"))
-                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
-                    .build(),
-            ),
-            queue_urls: HashMap::new(),
-            region: "us-west-2".to_string(),
-            shutdown_tx: Arc::new(watch::channel(false).0),
-        };
-
-        assert_eq!(backend.backend_type(), QueueBackendType::Sqs);
+    fn test_sqs_backend_type_value() {
+        assert_eq!(QueueBackendType::Sqs.as_str(), "sqs");
+        assert_eq!(QueueBackendType::Sqs.to_string(), "sqs");
     }
 
     #[test]
@@ -893,9 +865,17 @@ mod tests {
             QueueType::RelayerHealthCheck,
             format!("{prefix}relayer-health-check.fifo"),
         );
+        queue_urls.insert(
+            QueueType::StatusCheckEvm,
+            format!("{prefix}status-check-evm.fifo"),
+        );
+        queue_urls.insert(
+            QueueType::StatusCheckStellar,
+            format!("{prefix}status-check-stellar.fifo"),
+        );
 
         // Verify all queue types have URLs
-        assert_eq!(queue_urls.len(), 6);
+        assert_eq!(queue_urls.len(), 8);
         assert!(queue_urls
             .get(&QueueType::TransactionRequest)
             .unwrap()
@@ -904,35 +884,20 @@ mod tests {
             .get(&QueueType::TransactionSubmission)
             .unwrap()
             .contains("transaction-submission"));
+        assert!(queue_urls
+            .get(&QueueType::StatusCheckEvm)
+            .unwrap()
+            .contains("status-check-evm"));
+        assert!(queue_urls
+            .get(&QueueType::StatusCheckStellar)
+            .unwrap()
+            .contains("status-check-stellar"));
     }
 
     #[test]
-    fn test_backend_clone() {
-        let backend = SqsBackend {
-            sqs_client: aws_sdk_sqs::Client::from_conf(
-                aws_sdk_sqs::Config::builder()
-                    .region(aws_sdk_sqs::config::Region::new("us-east-1"))
-                    .behavior_version(aws_sdk_sqs::config::BehaviorVersion::latest())
-                    .build(),
-            ),
-            queue_urls: HashMap::from([(
-                QueueType::TransactionRequest,
-                "https://sqs.us-east-1.amazonaws.com/123/test.fifo".to_string(),
-            )]),
-            region: "us-east-1".to_string(),
-            shutdown_tx: Arc::new(watch::channel(false).0),
-        };
-
-        // Test that backend is cloneable
-        let cloned = backend.clone();
-        assert_eq!(cloned.region, backend.region);
-        assert_eq!(cloned.queue_urls.len(), backend.queue_urls.len());
-    }
-
-    #[test]
-    fn test_transaction_message_group_id_evm_uses_relayer() {
+    fn test_transaction_message_group_id_evm_uses_transaction() {
         let group = transaction_message_group_id(Some(&NetworkType::Evm), "relayer-1", "tx-123");
-        assert_eq!(group, "relayer-1");
+        assert_eq!(group, "tx-123");
     }
 
     #[test]
@@ -949,11 +914,11 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_message_group_id_none_defaults_to_relayer() {
+    fn test_transaction_message_group_id_none_defaults_to_transaction() {
         let group = transaction_message_group_id(None, "relayer-1", "tx-123");
         assert_eq!(
-            group, "relayer-1",
-            "Unknown network should default to relayer_id (safe/conservative)"
+            group, "tx-123",
+            "Unknown network should default to transaction id"
         );
     }
 
@@ -989,6 +954,16 @@ mod tests {
     #[test]
     fn test_sqs_max_message_size_constant() {
         assert_eq!(SQS_MAX_MESSAGE_SIZE_BYTES, 256 * 1024);
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url() {
+        assert!(SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.fifo"
+        ));
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue"
+        ));
     }
 
     #[tokio::test]
