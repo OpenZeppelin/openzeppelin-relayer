@@ -619,6 +619,8 @@ mod tests {
         TOKEN_SWAP_REQUEST_BACKOFF, TX_CLEANUP_BACKOFF, TX_REQUEST_BACKOFF, TX_SUBMISSION_BACKOFF,
     };
 
+    // ── create_backoff tests ───────────────────────────────────────────
+
     #[test]
     fn test_create_backoff_with_valid_parameters() {
         let result = create_backoff(200, 5000, 0.99);
@@ -691,5 +693,248 @@ mod tests {
                 cfg
             );
         }
+    }
+
+    #[test]
+    fn test_create_backoff_from_config_produces_usable_backoff() {
+        let profiles = [
+            TX_REQUEST_BACKOFF,
+            TX_SUBMISSION_BACKOFF,
+            STATUS_GENERIC_BACKOFF,
+            STATUS_EVM_BACKOFF,
+            STATUS_STELLAR_BACKOFF,
+            NOTIFICATION_BACKOFF,
+            TOKEN_SWAP_REQUEST_BACKOFF,
+            TX_CLEANUP_BACKOFF,
+            SYSTEM_CLEANUP_BACKOFF,
+            RELAYER_HEALTH_BACKOFF,
+            TOKEN_SWAP_CRON_BACKOFF,
+        ];
+
+        for cfg in profiles {
+            let mut maker = create_backoff_from_config(cfg).unwrap();
+            // Calling make_backoff() should not panic
+            let _backoff = maker.make_backoff();
+        }
+    }
+
+    #[test]
+    fn test_create_backoff_with_initial_greater_than_max_errors() {
+        let result = create_backoff(10000, 100, 0.5);
+        assert!(
+            result.is_err(),
+            "initial > max should be rejected by ExponentialBackoffMaker"
+        );
+    }
+
+    // ── Backoff config invariant tests ─────────────────────────────────
+
+    #[test]
+    fn test_all_backoff_configs_have_valid_initial_le_max() {
+        let profiles: &[(&str, RetryBackoffConfig)] = &[
+            ("TX_REQUEST", TX_REQUEST_BACKOFF),
+            ("TX_SUBMISSION", TX_SUBMISSION_BACKOFF),
+            ("STATUS_GENERIC", STATUS_GENERIC_BACKOFF),
+            ("STATUS_EVM", STATUS_EVM_BACKOFF),
+            ("STATUS_STELLAR", STATUS_STELLAR_BACKOFF),
+            ("NOTIFICATION", NOTIFICATION_BACKOFF),
+            ("TOKEN_SWAP_REQUEST", TOKEN_SWAP_REQUEST_BACKOFF),
+            ("TX_CLEANUP", TX_CLEANUP_BACKOFF),
+            ("SYSTEM_CLEANUP", SYSTEM_CLEANUP_BACKOFF),
+            ("RELAYER_HEALTH", RELAYER_HEALTH_BACKOFF),
+            ("TOKEN_SWAP_CRON", TOKEN_SWAP_CRON_BACKOFF),
+        ];
+
+        for (name, cfg) in profiles {
+            assert!(
+                cfg.initial_ms <= cfg.max_ms,
+                "{name}: initial_ms ({}) must be <= max_ms ({})",
+                cfg.initial_ms,
+                cfg.max_ms
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_backoff_configs_have_valid_jitter_range() {
+        let profiles: &[(&str, RetryBackoffConfig)] = &[
+            ("TX_REQUEST", TX_REQUEST_BACKOFF),
+            ("TX_SUBMISSION", TX_SUBMISSION_BACKOFF),
+            ("STATUS_GENERIC", STATUS_GENERIC_BACKOFF),
+            ("STATUS_EVM", STATUS_EVM_BACKOFF),
+            ("STATUS_STELLAR", STATUS_STELLAR_BACKOFF),
+            ("NOTIFICATION", NOTIFICATION_BACKOFF),
+            ("TOKEN_SWAP_REQUEST", TOKEN_SWAP_REQUEST_BACKOFF),
+            ("TX_CLEANUP", TX_CLEANUP_BACKOFF),
+            ("SYSTEM_CLEANUP", SYSTEM_CLEANUP_BACKOFF),
+            ("RELAYER_HEALTH", RELAYER_HEALTH_BACKOFF),
+            ("TOKEN_SWAP_CRON", TOKEN_SWAP_CRON_BACKOFF),
+        ];
+
+        for (name, cfg) in profiles {
+            assert!(
+                (0.0..=1.0).contains(&cfg.jitter),
+                "{name}: jitter ({}) must be in [0.0, 1.0]",
+                cfg.jitter
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_backoff_configs_have_positive_initial_ms() {
+        let profiles: &[(&str, RetryBackoffConfig)] = &[
+            ("TX_REQUEST", TX_REQUEST_BACKOFF),
+            ("TX_SUBMISSION", TX_SUBMISSION_BACKOFF),
+            ("STATUS_GENERIC", STATUS_GENERIC_BACKOFF),
+            ("STATUS_EVM", STATUS_EVM_BACKOFF),
+            ("STATUS_STELLAR", STATUS_STELLAR_BACKOFF),
+            ("NOTIFICATION", NOTIFICATION_BACKOFF),
+            ("TOKEN_SWAP_REQUEST", TOKEN_SWAP_REQUEST_BACKOFF),
+            ("TX_CLEANUP", TX_CLEANUP_BACKOFF),
+            ("SYSTEM_CLEANUP", SYSTEM_CLEANUP_BACKOFF),
+            ("RELAYER_HEALTH", RELAYER_HEALTH_BACKOFF),
+            ("TOKEN_SWAP_CRON", TOKEN_SWAP_CRON_BACKOFF),
+        ];
+
+        for (name, cfg) in profiles {
+            assert!(
+                cfg.initial_ms > 0,
+                "{name}: initial_ms must be positive, got {}",
+                cfg.initial_ms
+            );
+        }
+    }
+
+    // ── Worker name constant tests ─────────────────────────────────────
+
+    #[test]
+    fn test_worker_name_constants_are_nonempty() {
+        let names = [
+            TRANSACTION_REQUEST,
+            TRANSACTION_SENDER,
+            TRANSACTION_STATUS_CHECKER,
+            TRANSACTION_STATUS_CHECKER_EVM,
+            TRANSACTION_STATUS_CHECKER_STELLAR,
+            NOTIFICATION_SENDER,
+            TOKEN_SWAP_REQUEST,
+            TRANSACTION_CLEANUP,
+            RELAYER_HEALTH_CHECK,
+            SYSTEM_CLEANUP,
+        ];
+
+        for name in &names {
+            assert!(!name.is_empty(), "Worker name constant must not be empty");
+        }
+    }
+
+    #[test]
+    fn test_worker_name_constants_are_unique() {
+        let names = [
+            TRANSACTION_REQUEST,
+            TRANSACTION_SENDER,
+            TRANSACTION_STATUS_CHECKER,
+            TRANSACTION_STATUS_CHECKER_EVM,
+            TRANSACTION_STATUS_CHECKER_STELLAR,
+            NOTIFICATION_SENDER,
+            TOKEN_SWAP_REQUEST,
+            TRANSACTION_CLEANUP,
+            RELAYER_HEALTH_CHECK,
+            SYSTEM_CLEANUP,
+        ];
+
+        for (i, a) in names.iter().enumerate() {
+            for (j, b) in names.iter().enumerate() {
+                if i != j {
+                    assert_ne!(
+                        a, b,
+                        "Worker names must be unique: '{}' at index {} and {}",
+                        a, i, j
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_worker_names_match_concurrency_env_keys() {
+        // The WorkerBuilder name for each queue-type-backed worker should match
+        // the concurrency_env_key used with ServerConfig::get_worker_concurrency,
+        // so that concurrency configuration picks up the correct env var.
+        assert_eq!(
+            TRANSACTION_REQUEST,
+            QueueType::TransactionRequest.concurrency_env_key()
+        );
+        assert_eq!(
+            TRANSACTION_SENDER,
+            QueueType::TransactionSubmission.concurrency_env_key()
+        );
+        assert_eq!(
+            TRANSACTION_STATUS_CHECKER,
+            QueueType::StatusCheck.concurrency_env_key()
+        );
+        assert_eq!(
+            TRANSACTION_STATUS_CHECKER_EVM,
+            QueueType::StatusCheckEvm.concurrency_env_key()
+        );
+        assert_eq!(
+            TRANSACTION_STATUS_CHECKER_STELLAR,
+            QueueType::StatusCheckStellar.concurrency_env_key()
+        );
+        assert_eq!(
+            NOTIFICATION_SENDER,
+            QueueType::Notification.concurrency_env_key()
+        );
+        assert_eq!(
+            TOKEN_SWAP_REQUEST,
+            QueueType::TokenSwapRequest.concurrency_env_key()
+        );
+        assert_eq!(
+            RELAYER_HEALTH_CHECK,
+            QueueType::RelayerHealthCheck.concurrency_env_key()
+        );
+    }
+
+    // ── monitor_handle_event tests ─────────────────────────────────────
+
+    fn make_worker_event(event: Event) -> Worker<Event> {
+        let worker_id = WorkerId::from_str("test-worker").unwrap();
+        Worker::new(worker_id, event)
+    }
+
+    #[test]
+    fn test_monitor_handle_event_start_does_not_panic() {
+        monitor_handle_event(make_worker_event(Event::Start));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_engage_does_not_panic() {
+        let task_id = TaskId::new();
+        monitor_handle_event(make_worker_event(Event::Engage(task_id)));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_idle_does_not_panic() {
+        monitor_handle_event(make_worker_event(Event::Idle));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_error_does_not_panic() {
+        let error: Box<dyn std::error::Error + Send + Sync> = "test error".to_string().into();
+        monitor_handle_event(make_worker_event(Event::Error(error)));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_stop_does_not_panic() {
+        monitor_handle_event(make_worker_event(Event::Stop));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_exit_does_not_panic() {
+        monitor_handle_event(make_worker_event(Event::Exit));
+    }
+
+    #[test]
+    fn test_monitor_handle_event_custom_does_not_panic() {
+        monitor_handle_event(make_worker_event(Event::Custom("test-custom".to_string())));
     }
 }

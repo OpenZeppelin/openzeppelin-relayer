@@ -1199,6 +1199,309 @@ mod tests {
         );
     }
 
+    // ── resolve_queue_type: error variant and message checks ──────────
+
+    #[test]
+    fn test_resolve_queue_type_auto_neither_error_includes_urls() {
+        let std_url = "https://sqs.us-east-1.amazonaws.com/123/relayer-transaction-request";
+        let fifo_url = "https://sqs.us-east-1.amazonaws.com/123/relayer-transaction-request.fifo";
+        let result = resolve_queue_type("auto", Some((false, false)), std_url, fifo_url);
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(std_url),
+            "Error should include standard URL: {msg}"
+        );
+        assert!(
+            msg.contains(fifo_url),
+            "Error should include FIFO URL: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_queue_type_returns_config_error_variant() {
+        let result = resolve_queue_type("invalid", None, REF_STD, REF_FIFO);
+        assert!(
+            matches!(result, Err(QueueBackendError::ConfigError(_))),
+            "Expected ConfigError variant"
+        );
+
+        let result = resolve_queue_type("auto", Some((true, true)), REF_STD, REF_FIFO);
+        assert!(
+            matches!(result, Err(QueueBackendError::ConfigError(_))),
+            "Ambiguous case should be ConfigError"
+        );
+
+        let result = resolve_queue_type("auto", Some((false, false)), REF_STD, REF_FIFO);
+        assert!(
+            matches!(result, Err(QueueBackendError::ConfigError(_))),
+            "No queues case should be ConfigError"
+        );
+    }
+
+    #[test]
+    fn test_resolve_queue_type_unknown_includes_value_in_error() {
+        let result = resolve_queue_type("redis", None, REF_STD, REF_FIFO);
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("redis"),
+            "Error should echo the invalid value: {msg}"
+        );
+
+        let result = resolve_queue_type("", None, REF_STD, REF_FIFO);
+        assert!(result.is_err(), "Empty string should be rejected");
+    }
+
+    #[test]
+    fn test_resolve_queue_type_case_sensitive() {
+        // The function matches exact lowercase strings; mixed case is unsupported
+        assert!(resolve_queue_type("Standard", None, REF_STD, REF_FIFO).is_err());
+        assert!(resolve_queue_type("FIFO", None, REF_STD, REF_FIFO).is_err());
+        assert!(resolve_queue_type("Auto", None, REF_STD, REF_FIFO).is_err());
+    }
+
+    // ── calculate_delay_seconds: additional edge cases ────────────────
+
+    #[test]
+    fn test_calculate_delay_seconds_one_second_future() {
+        let future_1s = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 2; // +2 to avoid race with timing
+        let result = SqsBackend::calculate_delay_seconds(Some(future_1s));
+        assert!(result.is_some(), "1-2s in future should yield Some");
+        assert!(result.unwrap() > 0, "Delay should be positive");
+        assert!(result.unwrap() <= 2, "Delay should be at most 2s");
+    }
+
+    #[test]
+    fn test_calculate_delay_seconds_far_past() {
+        // Unix epoch itself
+        assert_eq!(SqsBackend::calculate_delay_seconds(Some(0)), None);
+        // Negative timestamp (before epoch)
+        assert_eq!(SqsBackend::calculate_delay_seconds(Some(-1000)), None);
+    }
+
+    #[test]
+    fn test_calculate_delay_seconds_very_far_future() {
+        // Year ~2100 — should still clamp to 900
+        let far_future = 4_102_444_800_i64; // 2100-01-01T00:00:00Z
+        assert_eq!(
+            SqsBackend::calculate_delay_seconds(Some(far_future)),
+            Some(900)
+        );
+    }
+
+    #[test]
+    fn test_calculate_delay_seconds_exactly_900_boundary() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // 899s future → should return 899 (under the cap)
+        let result = SqsBackend::calculate_delay_seconds(Some(now + 899));
+        assert!(result.is_some());
+        // Allow ±1 for timing
+        let val = result.unwrap();
+        assert!((898..=899).contains(&val), "Expected ~899, got {val}");
+    }
+
+    // ── is_fifo_queue_url: edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_is_fifo_queue_url_empty() {
+        assert!(!SqsBackend::is_fifo_queue_url(""));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_case_sensitive() {
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.FIFO"
+        ));
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.Fifo"
+        ));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_fifo_in_middle() {
+        assert!(!SqsBackend::is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/.fifo/queue"
+        ));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_just_suffix() {
+        assert!(SqsBackend::is_fifo_queue_url(".fifo"));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_localstack() {
+        assert!(SqsBackend::is_fifo_queue_url(
+            "http://localhost:4566/000000000000/relayer-tx.fifo"
+        ));
+    }
+
+    // ── transaction_message_group_id: consistency ─────────────────────
+
+    #[test]
+    fn test_transaction_message_group_id_always_returns_transaction_id() {
+        // Current implementation returns transaction_id for all network types.
+        // This test documents that behavior and catches accidental changes.
+        let networks: &[Option<NetworkType>] = &[
+            Some(NetworkType::Evm),
+            Some(NetworkType::Stellar),
+            Some(NetworkType::Solana),
+            None,
+        ];
+
+        for network in networks {
+            let group = transaction_message_group_id(network.as_ref(), "relayer-99", "tx-abc");
+            assert_eq!(
+                group, "tx-abc",
+                "Expected transaction_id for network {network:?}"
+            );
+        }
+    }
+
+    // ── status_check_queue_type: returned queue names ──────────────────
+
+    #[test]
+    fn test_status_check_queue_type_returns_distinct_queue_names() {
+        let evm = status_check_queue_type(Some(&NetworkType::Evm));
+        let stellar = status_check_queue_type(Some(&NetworkType::Stellar));
+        let generic = status_check_queue_type(None);
+
+        assert_ne!(evm.queue_name(), stellar.queue_name());
+        assert_ne!(evm.queue_name(), generic.queue_name());
+        assert_ne!(stellar.queue_name(), generic.queue_name());
+    }
+
+    #[test]
+    fn test_status_check_queue_type_all_are_status_checks() {
+        let networks: &[Option<&NetworkType>] = &[
+            Some(&NetworkType::Evm),
+            Some(&NetworkType::Stellar),
+            Some(&NetworkType::Solana),
+            None,
+        ];
+
+        for network in networks {
+            let qt = status_check_queue_type(*network);
+            assert!(
+                qt.is_status_check(),
+                "{qt:?} should be a status check variant"
+            );
+        }
+    }
+
+    // ── Queue URL construction algorithm ──────────────────────────────
+
+    #[test]
+    fn test_queue_url_construction_algorithm_fifo() {
+        // Replicate the algorithm from SqsBackend::new()
+        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-";
+        let suffix = ".fifo";
+
+        let expected_urls = [
+            (
+                QueueType::TransactionRequest,
+                format!("{prefix}transaction-request{suffix}"),
+            ),
+            (
+                QueueType::TransactionSubmission,
+                format!("{prefix}transaction-submission{suffix}"),
+            ),
+            (
+                QueueType::StatusCheck,
+                format!("{prefix}status-check{suffix}"),
+            ),
+            (
+                QueueType::StatusCheckEvm,
+                format!("{prefix}status-check-evm{suffix}"),
+            ),
+            (
+                QueueType::StatusCheckStellar,
+                format!("{prefix}status-check-stellar{suffix}"),
+            ),
+            (
+                QueueType::Notification,
+                format!("{prefix}notification{suffix}"),
+            ),
+            (
+                QueueType::TokenSwapRequest,
+                format!("{prefix}token-swap-request{suffix}"),
+            ),
+            (
+                QueueType::RelayerHealthCheck,
+                format!("{prefix}relayer-health-check{suffix}"),
+            ),
+        ];
+
+        for (qt, expected) in &expected_urls {
+            assert!(
+                SqsBackend::is_fifo_queue_url(expected),
+                "{qt:?}: URL should be FIFO: {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_queue_url_construction_algorithm_standard() {
+        let prefix = "https://sqs.us-east-1.amazonaws.com/123456789/relayer-";
+        let suffix = "";
+
+        let urls = [
+            format!("{prefix}transaction-request{suffix}"),
+            format!("{prefix}transaction-submission{suffix}"),
+            format!("{prefix}status-check{suffix}"),
+            format!("{prefix}notification{suffix}"),
+        ];
+
+        for url in &urls {
+            assert!(
+                !SqsBackend::is_fifo_queue_url(url),
+                "Standard URL should not be FIFO: {url}"
+            );
+        }
+    }
+
+    // ── SQS_MAX_MESSAGE_SIZE_BYTES ────────────────────────────────────
+
+    #[test]
+    fn test_sqs_max_message_size_matches_aws_limit() {
+        // AWS SQS maximum message body size is exactly 256 KiB
+        assert_eq!(SQS_MAX_MESSAGE_SIZE_BYTES, 262_144);
+    }
+
+    // ── resolve_queue_type: all branches produce expected is_fifo ─────
+
+    #[test]
+    fn test_resolve_queue_type_suffix_logic() {
+        // Verify the suffix derived from resolve_queue_type produces correct URLs
+        let test_cases = [
+            ("standard", None, false),
+            ("fifo", None, true),
+            ("auto", Some((true, false)), false),
+            ("auto", Some((false, true)), true),
+        ];
+
+        for (sqs_type, probes, expected_fifo) in test_cases {
+            let is_fifo = resolve_queue_type(sqs_type, probes, REF_STD, REF_FIFO).unwrap();
+            assert_eq!(is_fifo, expected_fifo, "sqs_type={sqs_type}");
+
+            let suffix = if is_fifo { ".fifo" } else { "" };
+            let url = format!("https://sqs.us-east-1.amazonaws.com/123/relayer-tx{suffix}");
+            assert_eq!(
+                SqsBackend::is_fifo_queue_url(&url),
+                expected_fifo,
+                "URL FIFO detection mismatch for sqs_type={sqs_type}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore]
     async fn smoke_push_status_check_to_sqs() {

@@ -1157,4 +1157,427 @@ mod tests {
         assert_eq!(pending_deletes[1], "receipt-2");
         assert_eq!(pending_deletes[2], "receipt-3");
     }
+
+    // ── parse_target_scheduled_on: edge cases ─────────────────────────
+
+    #[test]
+    fn test_parse_target_scheduled_on_non_numeric_string() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value("not-a-number")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_target_scheduled_on(&message), None);
+    }
+
+    #[test]
+    fn test_parse_target_scheduled_on_empty_string() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_target_scheduled_on(&message), None);
+    }
+
+    #[test]
+    fn test_parse_target_scheduled_on_negative_value() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("-1000")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        // Negative values parse fine as i64
+        assert_eq!(parse_target_scheduled_on(&message), Some(-1000));
+    }
+
+    #[test]
+    fn test_parse_target_scheduled_on_float_string() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("1234567890.5")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        // Floats can't parse as i64
+        assert_eq!(parse_target_scheduled_on(&message), None);
+    }
+
+    #[test]
+    fn test_parse_target_scheduled_on_zero() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("0")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_target_scheduled_on(&message), Some(0));
+    }
+
+    #[test]
+    fn test_parse_target_scheduled_on_wrong_attribute_name() {
+        // Attribute exists but under a different key
+        let message = Message::builder()
+            .message_attributes(
+                "wrong_key",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("1234567890")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_target_scheduled_on(&message), None);
+    }
+
+    // ── parse_retry_attempt: edge cases ───────────────────────────────
+
+    #[test]
+    fn test_parse_retry_attempt_non_numeric_string() {
+        let message = Message::builder()
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("String")
+                    .string_value("abc")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_retry_attempt(&message), None);
+    }
+
+    #[test]
+    fn test_parse_retry_attempt_negative_value() {
+        let message = Message::builder()
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("-1")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        // Negative values can't parse as usize
+        assert_eq!(parse_retry_attempt(&message), None);
+    }
+
+    #[test]
+    fn test_parse_retry_attempt_zero() {
+        let message = Message::builder()
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("0")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_retry_attempt(&message), Some(0));
+    }
+
+    #[test]
+    fn test_parse_retry_attempt_large_value() {
+        let message = Message::builder()
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("999999")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        assert_eq!(parse_retry_attempt(&message), Some(999999));
+    }
+
+    // ── is_fifo_queue_url: comprehensive cases ────────────────────────
+
+    #[test]
+    fn test_is_fifo_queue_url_empty_string() {
+        assert!(!is_fifo_queue_url(""));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_just_fifo_suffix() {
+        assert!(is_fifo_queue_url("my-queue.fifo"));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_fifo_in_middle() {
+        // .fifo appearing in the path but not as suffix
+        assert!(!is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/.fifo/queue"
+        ));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_case_sensitive() {
+        assert!(!is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.FIFO"
+        ));
+        assert!(!is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123/queue.Fifo"
+        ));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_standard_queue_variations() {
+        assert!(!is_fifo_queue_url(
+            "https://sqs.us-east-1.amazonaws.com/123456789/my-queue"
+        ));
+        assert!(!is_fifo_queue_url(
+            "https://sqs.eu-west-1.amazonaws.com/123456789/relayer-tx-request"
+        ));
+        assert!(!is_fifo_queue_url(
+            "http://localhost:4566/000000000000/test-queue"
+        ));
+    }
+
+    #[test]
+    fn test_is_fifo_queue_url_localstack() {
+        // LocalStack FIFO queue URL format
+        assert!(is_fifo_queue_url(
+            "http://localhost:4566/000000000000/test-queue.fifo"
+        ));
+    }
+
+    // ── map_handler_error: message preservation ───────────────────────
+
+    #[test]
+    fn test_map_handler_error_preserves_abort_message() {
+        let msg = "Validation failed: invalid nonce";
+        let error = HandlerError::Abort(msg.to_string());
+        match map_handler_error(error) {
+            ProcessingError::Permanent(s) => assert_eq!(s, msg),
+            ProcessingError::Retryable(_) => panic!("Expected Permanent"),
+        }
+    }
+
+    #[test]
+    fn test_map_handler_error_preserves_retry_message() {
+        let msg = "RPC timeout after 30s";
+        let error = HandlerError::Retry(msg.to_string());
+        match map_handler_error(error) {
+            ProcessingError::Retryable(s) => assert_eq!(s, msg),
+            ProcessingError::Permanent(_) => panic!("Expected Retryable"),
+        }
+    }
+
+    #[test]
+    fn test_map_handler_error_empty_message() {
+        let error = HandlerError::Abort(String::new());
+        match map_handler_error(error) {
+            ProcessingError::Permanent(s) => assert!(s.is_empty()),
+            ProcessingError::Retryable(_) => panic!("Expected Permanent"),
+        }
+    }
+
+    // ── handler_timeout_secs: all queue types ─────────────────────────
+
+    #[test]
+    fn test_handler_timeout_secs_matches_visibility_timeout_for_all_queues() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            assert_eq!(
+                handler_timeout_secs(qt),
+                qt.visibility_timeout_secs().max(1) as u64,
+                "{qt:?}: handler timeout should equal max(visibility_timeout, 1)"
+            );
+        }
+    }
+
+    // ── get_concurrency_for_queue: all queue types ────────────────────
+
+    #[test]
+    fn test_get_concurrency_for_queue_all_types_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            assert!(
+                get_concurrency_for_queue(qt) > 0,
+                "{qt:?}: concurrency must be positive (clamped to at least 1)"
+            );
+        }
+    }
+
+    // ── poll_error_backoff_secs: overflow and invariants ───────────────
+
+    #[test]
+    fn test_poll_error_backoff_never_exceeds_max() {
+        for i in 0..200 {
+            let backoff = poll_error_backoff_secs(i);
+            assert!(
+                backoff <= MAX_POLL_BACKOFF_SECS,
+                "Error count {i}: backoff {backoff}s exceeds MAX {MAX_POLL_BACKOFF_SECS}s"
+            );
+        }
+    }
+
+    #[test]
+    fn test_poll_error_backoff_u32_max_does_not_overflow() {
+        let backoff = poll_error_backoff_secs(u32::MAX);
+        assert!(backoff <= MAX_POLL_BACKOFF_SECS);
+        assert!(backoff > 0);
+    }
+
+    #[test]
+    fn test_poll_error_backoff_always_positive() {
+        for i in 0..200 {
+            assert!(
+                poll_error_backoff_secs(i) > 0,
+                "Error count {i}: backoff must be positive"
+            );
+        }
+    }
+
+    #[test]
+    fn test_poll_error_backoff_monotonic_before_cap() {
+        // Before hitting the cap, backoff should be non-decreasing
+        let mut prev = poll_error_backoff_secs(0);
+        for i in 1..=4 {
+            let curr = poll_error_backoff_secs(i);
+            assert!(
+                curr >= prev,
+                "Backoff should be non-decreasing before cap: {prev} -> {curr} at error {i}"
+            );
+            prev = curr;
+        }
+    }
+
+    // ── Constants validation ──────────────────────────────────────────
+
+    #[test]
+    fn test_max_poll_backoff_is_reasonable() {
+        assert!(
+            MAX_POLL_BACKOFF_SECS >= 10,
+            "Max backoff should be at least 10s to avoid tight error loops"
+        );
+        assert!(
+            MAX_POLL_BACKOFF_SECS <= 300,
+            "Max backoff should be at most 5 minutes to detect recovery promptly"
+        );
+    }
+
+    #[test]
+    fn test_recovery_probe_every_is_valid() {
+        assert!(
+            RECOVERY_PROBE_EVERY >= 2,
+            "Recovery probe interval must be at least 2 to avoid probing every attempt"
+        );
+        assert!(
+            RECOVERY_PROBE_EVERY <= 10,
+            "Recovery probe interval should not be too large or recovery detection is slow"
+        );
+    }
+
+    // ── compute_status_retry_delay: edge cases ────────────────────────
+
+    #[test]
+    fn test_compute_status_retry_delay_very_high_attempt() {
+        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"evm"}}"#;
+        // Very high attempts should stay capped at the max (12s for EVM)
+        assert_eq!(compute_status_retry_delay(body, 1000), 12);
+        assert_eq!(compute_status_retry_delay(body, usize::MAX), 12);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_empty_body() {
+        // Empty JSON body should fall back to generic/Solana defaults
+        assert_eq!(compute_status_retry_delay("", 0), 5);
+        assert_eq!(compute_status_retry_delay("{}", 0), 5);
+    }
+
+    #[test]
+    fn test_compute_status_retry_delay_partial_json() {
+        // JSON with missing inner structure
+        assert_eq!(compute_status_retry_delay(r#"{"data":{}}"#, 0), 5);
+        assert_eq!(
+            compute_status_retry_delay(r#"{"data":{"network_type":"evm"}}"#, 0),
+            8
+        );
+    }
+
+    // ── PartialStatusCheckJob deserialization ──────────────────────────
+
+    #[test]
+    fn test_partial_status_check_job_deserializes_network_type() {
+        let body = r#"{"data":{"network_type":"evm","extra_field":"ignored"}}"#;
+        let parsed: PartialStatusCheckJob = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            parsed.data.network_type,
+            Some(crate::models::NetworkType::Evm)
+        );
+    }
+
+    #[test]
+    fn test_partial_status_check_job_handles_missing_network_type() {
+        let body = r#"{"data":{"transaction_id":"tx1"}}"#;
+        let parsed: PartialStatusCheckJob = serde_json::from_str(body).unwrap();
+        assert_eq!(parsed.data.network_type, None);
+    }
+
+    #[test]
+    fn test_partial_status_check_job_rejects_missing_data() {
+        let body = r#"{"not_data":{}}"#;
+        let result = serde_json::from_str::<PartialStatusCheckJob>(body);
+        assert!(result.is_err());
+    }
+
+    // ── is_fifo_queue_url used consistently ───────────────────────────
+
+    #[test]
+    fn test_fifo_detection_consistent_with_defer_and_retry_logic() {
+        // Both defer_message and the retry path in process_message use
+        // is_fifo_queue_url to decide between visibility-timeout vs re-enqueue.
+        // Verify our standard and FIFO URLs are classified identically by both
+        // call sites (they both call the same function).
+        let standard = "https://sqs.us-east-1.amazonaws.com/123/relayer-status-check";
+        let fifo = "https://sqs.us-east-1.amazonaws.com/123/relayer-status-check.fifo";
+
+        assert!(!is_fifo_queue_url(standard));
+        assert!(is_fifo_queue_url(fifo));
+    }
 }
