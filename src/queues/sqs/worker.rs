@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
+use crate::queues::{backoff_config_for_queue, retry_delay_secs};
 use crate::{
     config::ServerConfig,
     jobs::{
@@ -503,91 +504,7 @@ async fn process_message(
             })
         }
         Err(ProcessingError::Retryable(e)) => {
-            // StatusCheck queues use self-re-enqueue with short delay instead of
-            // relying on the 300s visibility timeout. This brings retry intervals
-            // from ~5 minutes down to 3-10 seconds, matching Apalis backoff behavior.
-            if queue_type.is_status_check() {
-                let delay = compute_status_retry_delay(body, logical_retry_attempt);
-
-                // FIFO queues do not support per-message DelaySeconds. Use visibility
-                // timeout on the in-flight message to schedule the retry.
-                if is_fifo_queue_url(queue_url) {
-                    if let Err(err) = sqs_client
-                        .change_message_visibility()
-                        .queue_url(queue_url)
-                        .receipt_handle(receipt_handle)
-                        .visibility_timeout(delay.clamp(1, 900))
-                        .send()
-                        .await
-                    {
-                        error!(
-                            queue_type = ?queue_type,
-                            error = %err,
-                            "Failed to set visibility timeout for status check retry; falling back to existing visibility timeout"
-                        );
-                        return Ok(MessageOutcome::Retain);
-                    }
-
-                    debug!(
-                        queue_type = ?queue_type,
-                        attempt = logical_retry_attempt,
-                        delay_seconds = delay,
-                        error = %e,
-                        "Status check retry scheduled via visibility timeout"
-                    );
-
-                    return Ok(MessageOutcome::Retain);
-                }
-
-                let next_retry_attempt = logical_retry_attempt.saturating_add(1);
-
-                // Standard queues: re-enqueue with native DelaySeconds,
-                // no group_id or dedup_id needed. Duplicate deliveries are
-                // harmless because handlers are idempotent.
-                if let Err(send_err) = sqs_client
-                    .send_message()
-                    .queue_url(queue_url)
-                    .message_body(body.to_string())
-                    .delay_seconds(delay)
-                    .message_attributes(
-                        "retry_attempt",
-                        MessageAttributeValue::builder()
-                            .data_type("Number")
-                            .string_value(next_retry_attempt.to_string())
-                            .build()
-                            .map_err(|err| {
-                                QueueBackendError::SqsError(format!(
-                                    "Failed to build retry_attempt attribute: {err}"
-                                ))
-                            })?,
-                    )
-                    .send()
-                    .await
-                {
-                    error!(
-                        queue_type = ?queue_type,
-                        error = %send_err,
-                        "Failed to re-enqueue status check message; leaving original for visibility timeout retry"
-                    );
-                    // Fall through — original message will retry after visibility timeout
-                    return Ok(MessageOutcome::Retain);
-                }
-
-                debug!(
-                    queue_type = ?queue_type,
-                    attempt = logical_retry_attempt,
-                    delay_seconds = delay,
-                    error = %e,
-                    "Status check re-enqueued with short delay"
-                );
-
-                // Delete the original message now that the re-enqueue succeeded
-                return Ok(MessageOutcome::Delete {
-                    receipt_handle: receipt_handle.to_string(),
-                });
-            }
-
-            // Non-StatusCheck queues: let message return via visibility timeout
+            // Check max retries for non-infinite queues (status checks use usize::MAX)
             if max_retries != usize::MAX && receive_count > max_retries {
                 error!(
                     queue_type = ?queue_type,
@@ -597,21 +514,94 @@ async fn process_message(
                     error = %e,
                     "Max retries exceeded; message will be automatically moved to DLQ by SQS redrive policy"
                 );
-            } else {
-                warn!(
-                    queue_type = ?queue_type,
-                    attempt = attempt_number,
-                    receive_count = receive_count,
-                    max_retries = max_retries,
-                    error = %e,
-                    "Message processing failed, will retry after visibility timeout"
-                );
+                return Ok(MessageOutcome::Retain);
             }
 
-            // Don't delete message - it will automatically return to queue
-            // after visibility timeout expires. SQS will move to DLQ after
-            // exceeding maxReceiveCount configured in redrive policy.
-            Ok(MessageOutcome::Retain)
+            // Compute retry delay based on queue type:
+            // - Status checks use network-type-aware backoff from the message body
+            // - All other queues use their configured backoff profile from retry_config
+            let delay = if queue_type.is_status_check() {
+                compute_status_retry_delay(body, logical_retry_attempt)
+            } else {
+                retry_delay_secs(backoff_config_for_queue(queue_type), logical_retry_attempt)
+            };
+
+            // FIFO queues do not support per-message DelaySeconds. Use visibility
+            // timeout on the in-flight message to schedule the retry.
+            if is_fifo_queue_url(queue_url) {
+                if let Err(err) = sqs_client
+                    .change_message_visibility()
+                    .queue_url(queue_url)
+                    .receipt_handle(receipt_handle)
+                    .visibility_timeout(delay.clamp(1, 900))
+                    .send()
+                    .await
+                {
+                    error!(
+                        queue_type = ?queue_type,
+                        error = %err,
+                        "Failed to set visibility timeout for retry; falling back to existing visibility timeout"
+                    );
+                    return Ok(MessageOutcome::Retain);
+                }
+
+                debug!(
+                    queue_type = ?queue_type,
+                    attempt = logical_retry_attempt,
+                    delay_seconds = delay,
+                    error = %e,
+                    "Retry scheduled via visibility timeout"
+                );
+
+                return Ok(MessageOutcome::Retain);
+            }
+
+            let next_retry_attempt = logical_retry_attempt.saturating_add(1);
+
+            // Standard queues: re-enqueue with native DelaySeconds,
+            // no group_id or dedup_id needed. Duplicate deliveries are
+            // harmless because handlers are idempotent.
+            if let Err(send_err) = sqs_client
+                .send_message()
+                .queue_url(queue_url)
+                .message_body(body.to_string())
+                .delay_seconds(delay)
+                .message_attributes(
+                    "retry_attempt",
+                    MessageAttributeValue::builder()
+                        .data_type("Number")
+                        .string_value(next_retry_attempt.to_string())
+                        .build()
+                        .map_err(|err| {
+                            QueueBackendError::SqsError(format!(
+                                "Failed to build retry_attempt attribute: {err}"
+                            ))
+                        })?,
+                )
+                .send()
+                .await
+            {
+                error!(
+                    queue_type = ?queue_type,
+                    error = %send_err,
+                    "Failed to re-enqueue message; leaving original for visibility timeout retry"
+                );
+                // Fall through — original message will retry after visibility timeout
+                return Ok(MessageOutcome::Retain);
+            }
+
+            debug!(
+                queue_type = ?queue_type,
+                attempt = logical_retry_attempt,
+                delay_seconds = delay,
+                error = %e,
+                "Message re-enqueued with backoff delay"
+            );
+
+            // Delete the original message now that the re-enqueue succeeded
+            Ok(MessageOutcome::Delete {
+                receipt_handle: receipt_handle.to_string(),
+            })
         }
     }
 }

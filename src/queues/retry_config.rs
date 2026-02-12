@@ -1,5 +1,7 @@
 use crate::models::NetworkType;
 
+use super::QueueType;
+
 /// Exponential backoff configuration values in milliseconds.
 #[derive(Debug, Clone, Copy)]
 pub struct RetryBackoffConfig {
@@ -91,17 +93,39 @@ pub fn status_backoff_config(network_type: Option<NetworkType>) -> RetryBackoffC
     }
 }
 
+/// Computes retry delay in seconds from any backoff config + attempt.
+///
+/// Uses capped exponential backoff: `initial_ms * 2^attempt`, capped at `max_ms`.
+/// The exponent is clamped at `16` to avoid overflow, and the result is rounded
+/// up to whole seconds via `div_ceil(1000)`.
+pub fn retry_delay_secs(config: RetryBackoffConfig, attempt: usize) -> i32 {
+    let factor = 2_u64.saturating_pow(attempt.min(16) as u32);
+    let delay_ms = config.initial_ms.saturating_mul(factor).min(config.max_ms);
+    delay_ms.div_ceil(1000) as i32
+}
+
 /// Computes status-check retry delay in seconds using capped exponential backoff.
 ///
-/// `network_type` picks the base profile and `attempt` controls exponential growth.
-/// The exponent is capped at `16` to avoid overflow (`attempt.min(16)`), delay is
-/// capped at the profile `max_ms`, and the returned value is rounded up to whole
-/// seconds via `div_ceil(1000)`.
+/// Delegates to [`retry_delay_secs`] with the network-specific backoff profile.
 pub fn status_check_retry_delay_secs(network_type: Option<NetworkType>, attempt: usize) -> i32 {
-    let cfg = status_backoff_config(network_type);
-    let factor = 2_u64.saturating_pow(attempt.min(16) as u32);
-    let delay_ms = cfg.initial_ms.saturating_mul(factor).min(cfg.max_ms);
-    delay_ms.div_ceil(1000) as i32
+    retry_delay_secs(status_backoff_config(network_type), attempt)
+}
+
+/// Returns the backoff config for a given queue type.
+///
+/// Status-check queues return [`STATUS_GENERIC_BACKOFF`] here; for network-specific
+/// status timing use [`status_backoff_config`] instead.
+pub fn backoff_config_for_queue(queue_type: QueueType) -> RetryBackoffConfig {
+    match queue_type {
+        QueueType::TransactionRequest => TX_REQUEST_BACKOFF,
+        QueueType::TransactionSubmission => TX_SUBMISSION_BACKOFF,
+        QueueType::Notification => NOTIFICATION_BACKOFF,
+        QueueType::TokenSwapRequest => TOKEN_SWAP_REQUEST_BACKOFF,
+        QueueType::RelayerHealthCheck => RELAYER_HEALTH_BACKOFF,
+        QueueType::StatusCheck | QueueType::StatusCheckEvm | QueueType::StatusCheckStellar => {
+            STATUS_GENERIC_BACKOFF
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +187,85 @@ mod tests {
         let solana_cfg = status_backoff_config(Some(NetworkType::Solana));
         assert_eq!(none_cfg.initial_ms, solana_cfg.initial_ms);
         assert_eq!(none_cfg.max_ms, solana_cfg.max_ms);
+    }
+
+    #[test]
+    fn test_retry_delay_secs_basic() {
+        // TX_REQUEST_BACKOFF: initial_ms=500, max_ms=5000
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 0), 1); // 500ms -> 1s
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 1), 1); // 1000ms -> 1s
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 2), 2); // 2000ms -> 2s
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 3), 4); // 4000ms -> 4s
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 4), 5); // capped at 5000ms -> 5s
+        assert_eq!(retry_delay_secs(TX_REQUEST_BACKOFF, 10), 5); // stays capped
+    }
+
+    #[test]
+    fn test_retry_delay_secs_never_exceeds_max() {
+        let configs = [
+            TX_REQUEST_BACKOFF,
+            TX_SUBMISSION_BACKOFF,
+            NOTIFICATION_BACKOFF,
+            TOKEN_SWAP_REQUEST_BACKOFF,
+            RELAYER_HEALTH_BACKOFF,
+        ];
+        for config in configs {
+            for attempt in 0..20 {
+                let delay = retry_delay_secs(config, attempt);
+                assert!(
+                    delay <= config.max_ms.div_ceil(1000) as i32,
+                    "attempt {attempt} delay {delay}s exceeds max {}ms",
+                    config.max_ms
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_retry_delay_secs_delegates_correctly() {
+        // Verify status_check_retry_delay_secs matches retry_delay_secs with same config
+        for attempt in 0..10 {
+            assert_eq!(
+                status_check_retry_delay_secs(Some(NetworkType::Evm), attempt),
+                retry_delay_secs(STATUS_EVM_BACKOFF, attempt),
+            );
+        }
+    }
+
+    #[test]
+    fn test_backoff_config_for_queue_maps_correctly() {
+        assert_eq!(
+            backoff_config_for_queue(QueueType::TransactionRequest).initial_ms,
+            TX_REQUEST_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::TransactionSubmission).initial_ms,
+            TX_SUBMISSION_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::Notification).initial_ms,
+            NOTIFICATION_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::TokenSwapRequest).initial_ms,
+            TOKEN_SWAP_REQUEST_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::RelayerHealthCheck).initial_ms,
+            RELAYER_HEALTH_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::StatusCheck).initial_ms,
+            STATUS_GENERIC_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::StatusCheckEvm).initial_ms,
+            STATUS_GENERIC_BACKOFF.initial_ms
+        );
+        assert_eq!(
+            backoff_config_for_queue(QueueType::StatusCheckStellar).initial_ms,
+            STATUS_GENERIC_BACKOFF.initial_ms
+        );
     }
 
     #[test]
