@@ -19,6 +19,13 @@ use chrono::Duration;
 // =============================================================================
 
 pub const STELLAR_DEFAULT_TRANSACTION_FEE: u32 = 100;
+
+/// Maximum number of retries when a transaction fails with TxInsufficientFee
+pub const STELLAR_MAX_INSUFFICIENT_FEE_RETRIES: u32 = 3;
+/// Inclusion fee escalation factor per retry (10x per retry: 100 → 1,000 → 10,000 → 100,000 stroops)
+pub const STELLAR_INCLUSION_FEE_ESCALATION_FACTOR: u32 = 10;
+/// Delay between fee escalation retries in seconds (~1 ledger close time)
+pub const STELLAR_FEE_RETRY_DELAY_SECONDS: u64 = 6;
 /// Default maximum fee for fee-bump transactions (0.1 XLM = 1,000,000 stroops)
 pub const STELLAR_DEFAULT_MAX_FEE: i64 = 1_000_000;
 /// Maximum number of operations allowed in a Stellar transaction

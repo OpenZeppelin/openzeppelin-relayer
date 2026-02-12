@@ -5,8 +5,16 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{
+    is_final_state,
+    utils::{
+        compute_escalated_inclusion_fee, decode_transaction_result_code, is_bad_sequence_error,
+        is_insufficient_fee_error,
+    },
+    StellarRelayerTransaction,
+};
 use crate::{
+    constants::{STELLAR_FEE_RETRY_DELAY_SECONDS, STELLAR_MAX_INSUFFICIENT_FEE_RETRIES},
     jobs::JobProducerTrait,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
@@ -89,6 +97,7 @@ where
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let stellar_data = tx.network_data.get_stellar_transaction_data()?;
+
         let tx_envelope = stellar_data
             .get_envelope_for_submission()
             .map_err(TransactionError::from)?;
@@ -146,12 +155,14 @@ where
                 ))
             }
             "ERROR" => {
-                // Transaction validation failed
-                let error_detail = response
+                // Transaction validation failed - decode XDR to get human-readable result code
+                let error_xdr = response
                     .error_result_xdr
                     .unwrap_or_else(|| "No error details provided".to_string());
+                let result_code = decode_transaction_result_code(&error_xdr)
+                    .unwrap_or_else(|| "Unknown".to_string());
                 Err(TransactionError::UnexpectedError(format!(
-                    "Transaction submission error: {error_detail}"
+                    "Transaction submission error: {result_code} (xdr: {error_xdr})"
                 )))
             }
             unknown => {
@@ -247,7 +258,92 @@ where
             }
         }
 
-        // For non-bad-sequence errors or if reset failed, mark as failed
+        if is_insufficient_fee_error(&error_reason) {
+            if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
+                if stellar_data.insufficient_fee_retries < STELLAR_MAX_INSUFFICIENT_FEE_RETRIES {
+                    let next_retry = stellar_data.insufficient_fee_retries + 1;
+                    let next_inclusion_fee = compute_escalated_inclusion_fee(next_retry);
+
+                    info!(
+                        tx_id = %tx_id,
+                        relayer_id = %relayer_id,
+                        retry_count = next_retry,
+                        max_retries = STELLAR_MAX_INSUFFICIENT_FEE_RETRIES,
+                        next_inclusion_fee = next_inclusion_fee,
+                        "insufficient fee error, resetting for retry with escalated inclusion fee"
+                    );
+
+                    // Sync sequence from chain since the network did not consume the sequence
+                    // number for a rejected insufficient fee transaction
+                    info!(
+                        tx_id = %tx_id,
+                        relayer_id = %relayer_id,
+                        "syncing sequence from chain after insufficient fee error"
+                    );
+                    match self
+                        .sync_sequence_from_chain(&stellar_data.source_account)
+                        .await
+                    {
+                        Ok(()) => {
+                            info!(
+                                tx_id = %tx_id,
+                                relayer_id = %relayer_id,
+                                "successfully synced sequence from chain"
+                            );
+                        }
+                        Err(sync_error) => {
+                            warn!(
+                                tx_id = %tx_id,
+                                relayer_id = %relayer_id,
+                                error = %sync_error,
+                                "failed to sync sequence from chain"
+                            );
+                        }
+                    }
+
+                    // Wait ~1 ledger close time before retrying to avoid overlay spam
+                    info!(
+                        tx_id = %tx_id,
+                        delay_seconds = STELLAR_FEE_RETRY_DELAY_SECONDS,
+                        "waiting before fee escalation retry"
+                    );
+
+                    // Alternative consideration: Instead of sleeping in the handler, you could reset the transaction immediately and schedule the recovery job with a delay (there's already send_submit_transaction_job with a delay_seconds parameter
+                    //  in common.rs). This would be more resilient to process crashes during the sleep. But the current approach is simpler and matches the plan's intent.
+
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        STELLAR_FEE_RETRY_DELAY_SECONDS,
+                    ))
+                    .await;
+
+                    // Increment retry counter before reset (preserved across reset_to_pre_prepare_state)
+                    let mut updated_data = stellar_data.clone();
+                    updated_data.insufficient_fee_retries = next_retry;
+                    let mut tx_for_reset = tx.clone();
+                    tx_for_reset.network_data = NetworkTransactionData::Stellar(updated_data);
+
+                    match self.reset_transaction_for_retry(tx_for_reset).await {
+                        Ok(reset_tx) => return Ok(reset_tx),
+                        Err(reset_error) => {
+                            warn!(
+                                tx_id = %tx_id,
+                                error = %reset_error,
+                                "failed to reset transaction for insufficient fee retry"
+                            );
+                            // Fall through to generic failure
+                        }
+                    }
+                } else {
+                    warn!(
+                        tx_id = %tx_id,
+                        retry_count = stellar_data.insufficient_fee_retries,
+                        "max insufficient fee retries reached, failing transaction"
+                    );
+                }
+            }
+        }
+
+        // For non-retriable errors or if reset failed, mark as failed
         // Step 1: Mark transaction as Failed with detailed reason
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -988,6 +1084,168 @@ mod tests {
                 err,
                 TransactionError::UnexpectedError(ref msg) if msg.contains("AAAAAAAAAGT")
             ));
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn test_submit_insufficient_fee_resets_and_retries() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns TxInsufficientFee error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxInsufficientFee".to_string(),
+                        ))
+                    })
+                });
+
+            // Mock get_account for sync_sequence_from_chain
+            mocks.provider.expect_get_account().times(1).returning(|_| {
+                Box::pin(async {
+                    use soroban_rs::xdr::{
+                        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                        String32, Thresholds, Uint256,
+                    };
+                    use stellar_strkey::ed25519;
+
+                    let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                    Ok(AccountEntry {
+                        account_id,
+                        balance: 1000000,
+                        seq_num: SequenceNumber(100),
+                        num_sub_entries: 0,
+                        inflation_dest: None,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        thresholds: Thresholds([1, 1, 1, 1]),
+                        signers: Default::default(),
+                        ext: AccountEntryExt::V0,
+                    })
+                })
+            });
+
+            // Mock counter set for sync_sequence_from_chain
+            mocks
+                .counter
+                .expect_set()
+                .times(1)
+                .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    if let Some(network_data) = upd.network_data {
+                        tx.network_data = network_data;
+                    }
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+                data.insufficient_fee_retries = 0; // First attempt
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // Should return Ok since we're handling the retry
+            assert!(result.is_ok());
+            let reset_tx = result.unwrap();
+            assert_eq!(reset_tx.status, TransactionStatus::Pending);
+
+            // Verify insufficient_fee_retries was incremented
+            if let NetworkTransactionData::Stellar(data) = &reset_tx.network_data {
+                assert_eq!(data.insufficient_fee_retries, 1);
+                // Verify stellar data was reset
+                assert!(data.sequence_number.is_none());
+                assert!(data.signatures.is_empty());
+                assert!(data.hash.is_none());
+                assert!(data.signed_envelope_xdr.is_none());
+            } else {
+                panic!("Expected Stellar transaction data");
+            }
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn test_submit_insufficient_fee_max_retries_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns TxInsufficientFee error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxInsufficientFee".to_string(),
+                        ))
+                    })
+                });
+
+            // Mock finalize_transaction_state for failure handling
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Mock notification for failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some("test-xdr".to_string());
+                data.insufficient_fee_retries = 3; // At max retries
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            // Should fail since max retries reached
+            assert!(res.is_err());
         }
     }
 }
