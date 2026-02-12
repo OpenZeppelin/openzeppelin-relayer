@@ -3,7 +3,10 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::{DateTime, Utc};
-use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
+use soroban_rs::xdr::{
+    Error, Hash, InnerTransactionResultResult, InvokeHostFunctionResult, Limits, OperationResult,
+    OperationResultTr, TransactionEnvelope, TransactionResultResult, WriteXdr,
+};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
@@ -352,22 +355,58 @@ where
         tx: TransactionRepoModel,
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let base_reason = "Transaction failed on-chain. Provider status: FAILED.".to_string();
-        let detailed_reason = if let Some(ref tx_result_xdr) = provider_response.result {
-            format!(
-                "{} Specific XDR reason: {}.",
-                base_reason,
-                tx_result_xdr.result.name()
-            )
-        } else {
-            format!("{base_reason} No detailed XDR result available.")
-        };
+        let result_code = provider_response
+            .result
+            .as_ref()
+            .map(|r| r.result.name())
+            .unwrap_or("unknown");
 
-        warn!(reason = %detailed_reason, "stellar transaction failed");
+        // Extract inner failure fields for fee-bump and op-level detail
+        let (inner_result_code, op_result_code, inner_tx_hash, inner_fee_charged) =
+            match provider_response.result.as_ref().map(|r| &r.result) {
+                Some(TransactionResultResult::TxFeeBumpInnerFailed(pair)) => {
+                    let inner = &pair.result.result;
+                    let op = match inner {
+                        InnerTransactionResultResult::TxFailed(ops) => {
+                            first_failing_op(ops.as_slice())
+                        }
+                        _ => None,
+                    };
+                    (
+                        Some(inner.name()),
+                        op,
+                        Some(hex::encode(pair.transaction_hash.0)),
+                        pair.result.fee_charged,
+                    )
+                }
+                Some(TransactionResultResult::TxFailed(ops)) => {
+                    (None, first_failing_op(ops.as_slice()), None, 0)
+                }
+                _ => (None, None, None, 0),
+            };
+
+        let fee_charged = provider_response.result.as_ref().map(|r| r.fee_charged);
+        let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
+
+        warn!(
+            tx_id = %tx.id,
+            result_code,
+            inner_result_code = inner_result_code.unwrap_or("n/a"),
+            op_result_code = op_result_code.unwrap_or("n/a"),
+            inner_tx_hash = inner_tx_hash.as_deref().unwrap_or("n/a"),
+            inner_fee_charged,
+            fee_charged = ?fee_charged,
+            fee_bid = ?fee_bid,
+            "stellar transaction failed"
+        );
+
+        let status_reason = format!(
+            "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: {result_code}."
+        );
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
-            status_reason: Some(detailed_reason),
+            status_reason: Some(status_reason),
             ..Default::default()
         };
 
@@ -536,6 +575,45 @@ where
         }
 
         Ok(tx)
+    }
+}
+
+/// Extracts the fee bid from a transaction envelope.
+///
+/// For fee-bump transactions, returns the outer bump fee (the max the submitter was
+/// willing to pay). For regular V1 transactions, returns the `fee` field.
+fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
+    match envelope {
+        TransactionEnvelope::TxFeeBump(fb) => fb.tx.fee,
+        TransactionEnvelope::Tx(v1) => v1.tx.fee as i64,
+        TransactionEnvelope::TxV0(v0) => v0.tx.fee as i64,
+    }
+}
+
+/// Returns the `.name()` of the first failing operation in the results.
+///
+/// Scans left-to-right since earlier operations may show success while a later
+/// one carries the actual failure code. Returns `None` if no failure is found.
+fn first_failing_op(ops: &[OperationResult]) -> Option<&'static str> {
+    let op = ops.iter().find(|op| match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => {
+                !matches!(r, InvokeHostFunctionResult::Success(_))
+            }
+            OperationResultTr::ExtendFootprintTtl(r) => r.name() != "Success",
+            OperationResultTr::RestoreFootprint(r) => r.name() != "Success",
+            _ => false,
+        },
+        _ => true,
+    })?;
+    match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => Some(r.name()),
+            OperationResultTr::ExtendFootprintTtl(r) => Some(r.name()),
+            OperationResultTr::RestoreFootprint(r) => Some(r.name()),
+            _ => Some(tr.name()),
+        },
+        _ => Some(op.name()),
     }
 }
 
@@ -883,7 +961,7 @@ mod tests {
             assert!(handled_tx.status_reason.is_some());
             assert_eq!(
                 handled_tx.status_reason.unwrap(),
-                "Transaction failed on-chain. Provider status: FAILED. No detailed XDR result available."
+                "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: unknown."
             );
         }
 
@@ -2397,6 +2475,62 @@ mod tests {
             assert!(result.is_ok());
             let tx = result.unwrap();
             assert_eq!(tx.status, TransactionStatus::Confirmed);
+        }
+    }
+
+    mod failure_detail_helper_tests {
+        use super::*;
+        use soroban_rs::xdr::{InvokeHostFunctionResult, OperationResult, OperationResultTr, VecM};
+
+        #[test]
+        fn first_failing_op_finds_trapped() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Trapped),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("Trapped"));
+        }
+
+        #[test]
+        fn first_failing_op_skips_success() {
+            let ops: VecM<OperationResult> = vec![
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::Success(soroban_rs::xdr::Hash([0u8; 32])),
+                )),
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::ResourceLimitExceeded,
+                )),
+            ]
+            .try_into()
+            .unwrap();
+            assert_eq!(
+                first_failing_op(ops.as_slice()),
+                Some("ResourceLimitExceeded")
+            );
+        }
+
+        #[test]
+        fn first_failing_op_all_success_returns_none() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(
+                    soroban_rs::xdr::Hash([0u8; 32]),
+                )),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), None);
+        }
+
+        #[test]
+        fn first_failing_op_empty_returns_none() {
+            assert_eq!(first_failing_op(&[]), None);
+        }
+
+        #[test]
+        fn first_failing_op_op_bad_auth() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpBadAuth].try_into().unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("OpBadAuth"));
         }
     }
 }
