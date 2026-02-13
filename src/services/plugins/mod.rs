@@ -195,22 +195,20 @@ fn build_metadata(
 }
 
 fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry]) {
-    // Note: request_id is NOT explicitly logged here because TracingLogger's
-    // root span already provides it as a span field. Any event emitted within
-    // the HTTP request span automatically inherits the request_id.
+    let rid = get_request_id().unwrap_or_default();
     for entry in logs {
         match entry.level {
             LogLevel::Error => {
-                tracing::error!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
+                tracing::error!(target: "plugin", plugin_id = %plugin_id, request_id = %rid, "{}", entry.message)
             }
             LogLevel::Warn => {
-                tracing::warn!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = %rid, "{}", entry.message)
             }
             LogLevel::Info | LogLevel::Log => {
-                tracing::info!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
+                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = %rid, "{}", entry.message)
             }
             LogLevel::Debug => {
-                tracing::debug!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
+                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = %rid, "{}", entry.message)
             }
             LogLevel::Result => {}
         }
