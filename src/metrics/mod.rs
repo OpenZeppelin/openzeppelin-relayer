@@ -209,7 +209,7 @@ lazy_static! {
 
     // Gauge: Total number of sequence accounts (relayers).
     pub static ref RELAYER_COUNT: Gauge = {
-        let gauge = Gauge::new("relayer_count", "Total number of relayers (seq accounts)")
+        let gauge = Gauge::new("relayer_count", "Total number of relayers")
             .unwrap();
         REGISTRY.register(Box::new(gauge.clone())).unwrap();
         gauge
