@@ -93,6 +93,17 @@ where
 {
     let queue = app_state.job_producer.get_queue().await?;
 
+    let relayer_repository = app_state.relayer_repository.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Ok(count) = relayer_repository.count().await {
+                crate::metrics::RELAYER_COUNT.set(count as f64);
+            }
+        }
+    });
+
     let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
         .layer(ErrorHandlingLayer::new())
         .retry(

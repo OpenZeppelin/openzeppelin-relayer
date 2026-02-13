@@ -206,6 +206,14 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Gauge: Total number of sequence accounts (relayers).
+    pub static ref RELAYER_COUNT: Gauge = {
+        let gauge = Gauge::new("relayer_count", "Total number of relayers (seq accounts)")
+            .unwrap();
+        REGISTRY.register(Box::new(gauge.clone())).unwrap();
+        gauge
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
