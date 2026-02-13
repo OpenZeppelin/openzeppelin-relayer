@@ -194,20 +194,23 @@ fn build_metadata(
     }
 }
 
-fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry], request_id: Option<String>) {
+fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry]) {
+    // Note: request_id is NOT explicitly logged here because TracingLogger's
+    // root span already provides it as a span field. Any event emitted within
+    // the HTTP request span automatically inherits the request_id.
     for entry in logs {
         match entry.level {
             LogLevel::Error => {
-                tracing::error!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::error!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
             }
             LogLevel::Warn => {
-                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
             }
             LogLevel::Info | LogLevel::Log => {
-                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::info!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
             }
             LogLevel::Debug => {
-                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::debug!(target: "plugin", plugin_id = %plugin_id, "{}", entry.message)
             }
             LogLevel::Result => {}
         }
@@ -277,7 +280,6 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .map(|q| serde_json::to_string(&q).unwrap_or_default());
 
         let request_id = get_request_id();
-        let request_id_for_logs = request_id.clone();
         let result = self
             .runner
             .run(
@@ -300,11 +302,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         match result {
             Ok(script_result) => {
                 if plugin.forward_logs {
-                    forward_logs_to_tracing(
-                        &plugin.id,
-                        &script_result.logs,
-                        request_id_for_logs.clone(),
-                    );
+                    forward_logs_to_tracing(&plugin.id, &script_result.logs);
                 }
                 // Include logs/traces only if enabled via plugin config
                 let logs = if plugin.emit_logs {
@@ -333,7 +331,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 PluginError::HandlerError(payload) => {
                     if plugin.forward_logs {
                         if let Some(logs) = payload.logs.as_deref() {
-                            forward_logs_to_tracing(&plugin.id, logs, request_id_for_logs.clone());
+                            forward_logs_to_tracing(&plugin.id, logs);
                         }
                     }
                     let failure = payload.into_response(plugin.emit_logs, plugin.emit_traces);
