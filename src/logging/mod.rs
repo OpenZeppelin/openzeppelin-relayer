@@ -95,13 +95,18 @@ impl<S> Layer<S> for SpanKeepaliveLayer
 where
     S: tracing::Subscriber,
 {
-    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
-        // Keep all callsites available so downstream filtered layers can decide
-        // what to emit, while span context remains constructible.
-        Interest::always()
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        if metadata.is_span() {
+            // Force-enable spans so context can be constructed even when event output is filtered.
+            Interest::always()
+        } else {
+            // Let event filtering be handled by output layers/filters.
+            Interest::sometimes()
+        }
     }
 
     fn enabled(&self, _metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+        // Do not suppress events here; output layers still decide via their own filters.
         true
     }
 }
