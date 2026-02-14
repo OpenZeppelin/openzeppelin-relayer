@@ -277,7 +277,11 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .map(|q| serde_json::to_string(&q).unwrap_or_default());
 
         let request_id = get_request_id();
-        let request_id_for_logs: String = request_id.as_deref().unwrap_or_default().to_string();
+        let request_id_for_logs: String = request_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let result = self
             .runner
             .run(
@@ -1045,6 +1049,32 @@ mod tests {
         assert!(captured.contains("plugin_id=test-plugin-levels"));
         assert!(captured.contains("ERROR"));
         assert!(captured.contains("WARN"));
+        let request_id_values: Vec<&str> = captured
+            .match_indices("request_id=")
+            .filter_map(|(idx, _)| {
+                let tail = &captured[idx + "request_id=".len()..];
+                tail.split_whitespace()
+                    .next()
+                    .map(|value| value.trim_matches(|c: char| c == ',' || c == '"' || c == '}'))
+            })
+            .collect();
+        assert!(
+            !request_id_values.is_empty(),
+            "expected forwarded plugin logs to include request_id field, captured: {}",
+            captured
+        );
+        assert!(
+            request_id_values.iter().all(|value| !value.is_empty()),
+            "expected non-empty request_id values, captured: {}",
+            captured
+        );
+        assert!(
+            request_id_values
+                .iter()
+                .all(|value| uuid::Uuid::parse_str(value).is_ok()),
+            "expected request_id fallback to be UUID when no span request id is set, captured: {}",
+            captured
+        );
     }
 
     #[tokio::test]

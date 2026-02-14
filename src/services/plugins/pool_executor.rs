@@ -859,7 +859,8 @@ impl PoolManager {
         query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
         let rid = http_request_id.as_deref().unwrap_or("unknown");
-        let effective_timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
+        let effective_timeout =
+            timeout_secs.unwrap_or_else(|| get_config().pool_request_timeout_secs);
         tracing::debug!(
             plugin_id = %plugin_id,
             http_request_id = %rid,
