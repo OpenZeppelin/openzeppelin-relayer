@@ -858,10 +858,13 @@ impl PoolManager {
         method: Option<String>,
         query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
+        let rid = http_request_id.as_deref().unwrap_or("unknown");
+        let effective_timeout =
+            timeout_secs.unwrap_or_else(|| get_config().pool_request_timeout_secs);
         tracing::debug!(
             plugin_id = %plugin_id,
-            http_request_id = ?http_request_id,
-            timeout_secs = ?timeout_secs,
+            http_request_id = %rid,
+            timeout_secs = effective_timeout,
             "Pool execute request received"
         );
         let recovery_allowance = if self.recovery_mode.load(Ordering::Relaxed) {
@@ -892,7 +895,7 @@ impl PoolManager {
         self.ensure_started_and_healthy().await?;
         tracing::debug!(
             plugin_id = %plugin_id,
-            http_request_id = ?http_request_id,
+            http_request_id = %rid,
             "Pool execute start (healthy/started)"
         );
 
@@ -901,7 +904,7 @@ impl PoolManager {
             Ok(permit) => {
                 tracing::debug!(
                     plugin_id = %plugin_id,
-                    http_request_id = ?http_request_id,
+                    http_request_id = %rid,
                     "Pool execute acquired connection permit (fast path)"
                 );
                 let result = Self::execute_with_permit(
@@ -952,7 +955,7 @@ impl PoolManager {
             Err(_) => {
                 tracing::debug!(
                     plugin_id = %plugin_id,
-                    http_request_id = ?http_request_id,
+                    http_request_id = %rid,
                     "Pool execute queueing (no permits)"
                 );
                 let (response_tx, response_rx) = oneshot::channel();
