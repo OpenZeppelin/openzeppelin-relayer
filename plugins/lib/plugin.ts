@@ -164,9 +164,15 @@ export type Relayer = {
 
   /**
    * Gets the relayer status (balance, nonce/sequence number, etc).
+   * @param options - Optional parameters.
+   * @param options.includeBalance - Whether to include balance (default: true).
    * @returns The relayer status information.
    */
-  getRelayerStatus: () => Promise<ApiResponseRelayerStatusData>;
+  getRelayerStatus: (options?: {
+    includeBalance?: boolean;
+    includePendingCount?: boolean;
+    includeLastConfirmedTx?: boolean;
+  }) => Promise<ApiResponseRelayerStatusData>;
   /**
    * Gets the relayer info including address.
    * @returns The relayer information.
@@ -561,7 +567,8 @@ export class DefaultPluginAPI implements PluginAPI {
       },
       getTransaction: (payload: GetTransactionRequest) =>
         this._send<TransactionResponse>(relayerId, 'getTransaction', payload),
-      getRelayerStatus: () => this._send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', {}),
+      getRelayerStatus: (options?: { includeBalance?: boolean }) =>
+        this._send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', options ?? {}),
       signTransaction: (payload: SignTransactionRequest) =>
         this._send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
       getRelayer: () => this._send<ApiResponseRelayerResponseData>(relayerId, 'getRelayer', {}),

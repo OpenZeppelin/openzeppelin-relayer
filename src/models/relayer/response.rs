@@ -115,14 +115,35 @@ impl Default for RelayerResponse {
     }
 }
 
+/// Options controlling which fields are fetched for relayer status.
+#[derive(Debug, Clone, Copy)]
+pub struct GetStatusOptions {
+    pub include_balance: bool,
+    pub include_pending_count: bool,
+    pub include_last_confirmed_tx: bool,
+}
+
+impl Default for GetStatusOptions {
+    fn default() -> Self {
+        Self {
+            include_balance: true,
+            include_pending_count: true,
+            include_last_confirmed_tx: true,
+        }
+    }
+}
+
 /// Relayer status with runtime information
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 #[serde(tag = "network_type")]
 pub enum RelayerStatus {
     #[serde(rename = "evm")]
     Evm {
-        balance: String,
-        pending_transactions_count: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        balance: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_transactions_count: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_confirmed_transaction_timestamp: Option<String>,
         system_disabled: bool,
         paused: bool,
@@ -130,8 +151,11 @@ pub enum RelayerStatus {
     },
     #[serde(rename = "stellar")]
     Stellar {
-        balance: String,
-        pending_transactions_count: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        balance: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_transactions_count: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_confirmed_transaction_timestamp: Option<String>,
         system_disabled: bool,
         paused: bool,
@@ -139,8 +163,11 @@ pub enum RelayerStatus {
     },
     #[serde(rename = "solana")]
     Solana {
-        balance: String,
-        pending_transactions_count: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        balance: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending_transactions_count: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         last_confirmed_transaction_timestamp: Option<String>,
         system_disabled: bool,
         paused: bool,
@@ -1324,8 +1351,8 @@ mod tests {
     fn test_relayer_status_serialization() {
         // Test EVM status
         let evm_status = RelayerStatus::Evm {
-            balance: "1000000000000000000".to_string(),
-            pending_transactions_count: 5,
+            balance: Some("1000000000000000000".to_string()),
+            pending_transactions_count: Some(5),
             last_confirmed_transaction_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
             system_disabled: false,
             paused: false,
@@ -1339,8 +1366,8 @@ mod tests {
 
         // Test Solana status
         let solana_status = RelayerStatus::Solana {
-            balance: "5000000000".to_string(),
-            pending_transactions_count: 3,
+            balance: Some("5000000000".to_string()),
+            pending_transactions_count: Some(3),
             last_confirmed_transaction_timestamp: None,
             system_disabled: false,
             paused: true,
@@ -1353,8 +1380,8 @@ mod tests {
 
         // Test Stellar status
         let stellar_status = RelayerStatus::Stellar {
-            balance: "1000000000".to_string(),
-            pending_transactions_count: 2,
+            balance: Some("1000000000".to_string()),
+            pending_transactions_count: Some(2),
             last_confirmed_transaction_timestamp: Some("2024-01-01T12:00:00Z".to_string()),
             system_disabled: true,
             paused: false,
@@ -1365,6 +1392,20 @@ mod tests {
         assert!(serialized.contains(r#""network_type":"stellar""#));
         assert!(serialized.contains(r#""sequence_number":"123456789""#));
         assert!(serialized.contains(r#""system_disabled":true"#));
+
+        // Test optional fields are omitted when None
+        let evm_minimal = RelayerStatus::Evm {
+            balance: None,
+            pending_transactions_count: None,
+            last_confirmed_transaction_timestamp: None,
+            system_disabled: false,
+            paused: false,
+            nonce: "0".to_string(),
+        };
+        let serialized = serde_json::to_string(&evm_minimal).unwrap();
+        assert!(!serialized.contains("balance"));
+        assert!(!serialized.contains("pending_transactions_count"));
+        assert!(!serialized.contains("last_confirmed_transaction_timestamp"));
     }
 
     #[test]
@@ -1383,7 +1424,7 @@ mod tests {
         let status: RelayerStatus = serde_json::from_str(evm_json).unwrap();
         if let RelayerStatus::Evm { nonce, balance, .. } = status {
             assert_eq!(nonce, "42");
-            assert_eq!(balance, "1000000000000000000");
+            assert_eq!(balance, Some("1000000000000000000".to_string()));
         } else {
             panic!("Expected EVM status");
         }
@@ -1403,7 +1444,7 @@ mod tests {
             balance, paused, ..
         } = status
         {
-            assert_eq!(balance, "5000000000");
+            assert_eq!(balance, Some("5000000000".to_string()));
             assert!(paused);
         } else {
             panic!("Expected Solana status");

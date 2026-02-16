@@ -24,8 +24,8 @@ use crate::{
             SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
         },
         AppState, DecoratedSignature, DeletePendingTransactionsResponse,
-        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature, JsonRpcRequest,
-        JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
+        EncodedSerializedTransaction, EvmNetwork, EvmTransactionDataSignature, GetStatusOptions,
+        JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, RelayerError,
         RelayerRepoModel, RelayerStatus, SignerRepoModel, SponsoredTransactionBuildResponse,
         SponsoredTransactionQuoteResponse, TransactionError, TransactionRepoModel,
@@ -143,7 +143,7 @@ pub trait Relayer {
     ///
     /// A `Result` containing `RelayerStatus` on success, or a
     /// `RelayerError` on failure.
-    async fn get_status(&self) -> Result<RelayerStatus, RelayerError>;
+    async fn get_status(&self, options: GetStatusOptions) -> Result<RelayerStatus, RelayerError>;
 
     /// Initializes the relayer.
     ///
@@ -332,11 +332,11 @@ impl<
         }
     }
 
-    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+    async fn get_status(&self, options: GetStatusOptions) -> Result<RelayerStatus, RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.get_status().await,
-            NetworkRelayer::Solana(relayer) => relayer.get_status().await,
-            NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
+            NetworkRelayer::Evm(relayer) => relayer.get_status(options).await,
+            NetworkRelayer::Solana(relayer) => relayer.get_status(options).await,
+            NetworkRelayer::Stellar(relayer) => relayer.get_status(options).await,
         }
     }
 
