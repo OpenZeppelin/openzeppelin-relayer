@@ -251,11 +251,12 @@ where
             })
     }
 
-    /// Updates a transaction's status.
+    /// Updates a transaction's status, optionally including a status reason.
     pub(super) async fn update_transaction_status(
         &self,
         tx: TransactionRepoModel,
         new_status: TransactionStatus,
+        status_reason: Option<String>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let confirmed_at = if new_status == TransactionStatus::Confirmed {
             Some(Utc::now().to_rfc3339())
@@ -266,6 +267,7 @@ where
         let update_request = TransactionUpdateRequest {
             status: Some(new_status),
             confirmed_at,
+            status_reason,
             ..Default::default()
         };
 
@@ -963,11 +965,21 @@ where
         if tx.status == TransactionStatus::Pending {
             debug!("transaction is in pending state, updating status to canceled");
             return self
-                .update_transaction_status(tx, TransactionStatus::Canceled)
+                .update_transaction_status(
+                    tx,
+                    TransactionStatus::Canceled,
+                    Some("Transaction canceled by user".to_string()),
+                )
                 .await;
         }
 
-        let update = self.prepare_noop_update_request(&tx, true, None).await?;
+        let update = self
+            .prepare_noop_update_request(
+                &tx,
+                true,
+                Some("Transaction canceled by user, replacing with NOOP".to_string()),
+            )
+            .await?;
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
