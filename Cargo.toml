@@ -61,7 +61,7 @@ parking_lot = "0.12"
 tower = "0.5"
 oz-keystore = { version = "0.1.4"}
 hex = { version = "0.4"}
-bytes = { version = "1.9" }
+bytes = { version = "1.11" }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 base64 = { version =  "0.22" }
 hmac = { version = "0.12" }
