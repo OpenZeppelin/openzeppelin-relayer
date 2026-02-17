@@ -1095,6 +1095,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 

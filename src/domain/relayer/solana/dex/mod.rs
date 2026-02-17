@@ -194,7 +194,7 @@ mod tests {
         match result {
             Ok(NetworkDex::JupiterSwap { .. }) => {}
             Ok(_) => panic!("Expected JupiterSwap strategy"),
-            Err(e) => panic!("Expected Ok with JupiterSwap, but got error: {:?}", e),
+            Err(e) => panic!("Expected Ok with JupiterSwap, but got error: {e:?}"),
         }
     }
 
@@ -226,7 +226,7 @@ mod tests {
         match result {
             Ok(NetworkDex::JupiterUltra { .. }) => {}
             Ok(_) => panic!("Expected JupiterUltra strategy"),
-            Err(e) => panic!("Expected Ok with JupiterUltra, but got error: {:?}", e),
+            Err(e) => panic!("Expected Ok with JupiterUltra, but got error: {e:?}"),
         }
     }
 
@@ -258,7 +258,7 @@ mod tests {
         match result {
             Ok(NetworkDex::Noop { .. }) => {}
             Ok(_) => panic!("Expected Noop strategy"),
-            Err(e) => panic!("Expected Ok with Noop, but got error: {:?}", e),
+            Err(e) => panic!("Expected Ok with Noop, but got error: {e:?}"),
         }
     }
 
@@ -285,7 +285,7 @@ mod tests {
         match result {
             Ok(NetworkDex::Noop { .. }) => {}
             Ok(_) => panic!("Expected Noop strategy"),
-            Err(e) => panic!("Expected Ok with Noop, but got error: {:?}", e),
+            Err(e) => panic!("Expected Ok with Noop, but got error: {e:?}"),
         }
     }
 }

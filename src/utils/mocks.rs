@@ -152,6 +152,7 @@ pub mod mockutils {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: None,
+            metadata: None,
         }
     }
 
@@ -175,6 +176,7 @@ pub mod mockutils {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         }
     }
 
@@ -263,6 +265,14 @@ pub mod mockutils {
         mock_job_producer
             .expect_produce_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_backend_type()
+            .return_const(crate::queues::QueueBackendType::Redis);
+
+        mock_job_producer
+            .expect_get_queue_backend()
+            .return_const(None);
 
         AppState {
             relayer_repository,

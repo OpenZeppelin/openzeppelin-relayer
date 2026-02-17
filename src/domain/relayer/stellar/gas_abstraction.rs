@@ -1410,16 +1410,13 @@ mod tests {
                 trustline_key.account_id.clone()
             } else {
                 // Fallback: try to parse TEST_PK
-                parse_account_id(TEST_PK).unwrap_or_else(|_| {
-                    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                })
+                parse_account_id(TEST_PK)
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))))
             };
 
             let issuer_id =
                 parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    });
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
 
             // Create a trustline entry with sufficient balance
             let trustline_entry = TrustLineEntry {
@@ -1494,7 +1491,7 @@ mod tests {
 
         let result = relayer.quote_sponsored_transaction(request).await;
         if let Err(e) = &result {
-            eprintln!("Quote error: {:?}", e);
+            eprintln!("Quote error: {e:?}");
         }
         assert!(result.is_ok());
 
@@ -1536,16 +1533,12 @@ mod tests {
             } else {
                 // Fallback: use the source account from the test
                 parse_account_id("GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    })
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))))
             };
 
             let issuer_id =
                 parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    });
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
 
             // Create a trustline entry with sufficient balance
             let trustline_entry = TrustLineEntry {
@@ -1629,7 +1622,7 @@ mod tests {
 
         let result = relayer.quote_sponsored_transaction(request).await;
         if let Err(e) = &result {
-            eprintln!("Quote error: {:?}", e);
+            eprintln!("Quote error: {e:?}");
         }
         assert!(result.is_ok());
     }
@@ -1711,16 +1704,13 @@ mod tests {
                 trustline_key.account_id.clone()
             } else {
                 // Fallback: try to parse TEST_PK
-                parse_account_id(TEST_PK).unwrap_or_else(|_| {
-                    AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                })
+                parse_account_id(TEST_PK)
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))))
             };
 
             let issuer_id =
                 parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    });
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
 
             // Create a trustline entry with sufficient balance (10 USDC = 10000000 with 6 decimals)
             let trustline_entry = TrustLineEntry {
@@ -1840,14 +1830,10 @@ mod tests {
             // Parse account IDs - use the source account from the test
             let account_id =
                 parse_account_id("GCZ54QGQCUZ6U5WJF4AG5JEZCUMYTS2F6JRLUS76XF2PQMEJ2E3JISI2")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    });
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
             let issuer_id =
                 parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
-                    .unwrap_or_else(|_| {
-                        AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32])))
-                    });
+                    .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
 
             // Create a trustline entry with sufficient balance (10 USDC = 10000000 with 6 decimals)
             // The fee is 1500000 (from the quote), so 10 USDC is more than enough

@@ -4,7 +4,6 @@
 //! notification jobs from the queue.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use tracing::{debug, instrument};
 
@@ -13,6 +12,7 @@ use crate::{
     jobs::{handle_result, Job, NotificationSend},
     models::DefaultAppState,
     observability::request_id::set_request_id,
+    queues::{HandlerError, WorkerContext},
     repositories::Repository,
     services::WebhookNotificationService,
 };
@@ -24,7 +24,7 @@ use crate::{
 /// * `context` - Application state containing notification services
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of notification processing
+/// * `Result<(), HandlerError>` - Success or failure of notification processing
 #[instrument(
     level = "debug",
     skip(job, context),
@@ -32,17 +32,16 @@ use crate::{
         request_id = ?job.request_id,
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
-        attempt = %attempt.current(),
-        task_id = %task_id.to_string(),
+        attempt = %ctx.attempt,
+        task_id = %ctx.task_id,
         notification_id = %job.data.notification_id,
     )
 )]
 pub async fn notification_handler(
     job: Job<NotificationSend>,
-    context: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    context: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
@@ -52,11 +51,11 @@ pub async fn notification_handler(
         "handling notification"
     );
 
-    let result = handle_request(job.data, context).await;
+    let result = handle_request(job.data, &context).await;
 
     handle_result(
         result,
-        attempt,
+        &ctx,
         "Notification",
         WORKER_NOTIFICATION_SENDER_RETRIES,
     )
@@ -64,7 +63,7 @@ pub async fn notification_handler(
 
 async fn handle_request(
     request: NotificationSend,
-    context: Data<ThinData<DefaultAppState>>,
+    context: &ThinData<DefaultAppState>,
 ) -> Result<()> {
     debug!(
         notification_id = %request.notification_id,

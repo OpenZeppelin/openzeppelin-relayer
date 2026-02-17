@@ -545,8 +545,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("rpc_urls must be an array"),
-            "Error should mention array requirement: {}",
-            err
+            "Error should mention array requirement: {err}"
         );
     }
 
@@ -559,8 +558,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("rpc_urls must be an array of strings or RpcConfig objects"),
-            "Error should mention valid types: {}",
-            err
+            "Error should mention valid types: {err}"
         );
     }
 
@@ -598,8 +596,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("url") || err.contains("missing field"),
-            "Error should mention missing url field: {}",
-            err
+            "Error should mention missing url field: {err}"
         );
     }
 

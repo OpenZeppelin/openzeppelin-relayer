@@ -572,7 +572,7 @@ mod tests {
     fn create_test_relayer(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Test Relayer {}", id),
+            name: format!("Test Relayer {id}"),
             network: "ethereum".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
@@ -607,7 +607,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = uuid::Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisRelayerRepository::new(connections, key_prefix)
             .expect("Failed to create Redis relayer repository")
@@ -923,7 +923,7 @@ mod tests {
     #[tokio::test]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisRelayerRepository"));
         assert!(debug_str.contains("key_prefix"));
     }

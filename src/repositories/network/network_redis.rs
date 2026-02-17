@@ -740,7 +740,7 @@ mod tests {
     async fn setup_test_repo() -> RedisNetworkRepository {
         let redis_url = "redis://localhost:6379";
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix_{}", random_id);
+        let key_prefix = format!("test_prefix_{random_id}");
 
         let cfg = deadpool_redis::Config::from_url(redis_url);
         let pool = Arc::new(
@@ -821,7 +821,7 @@ mod tests {
         let random_id = Uuid::new_v4().to_string();
         let random_name = Uuid::new_v4().to_string();
         let mut network = create_test_network(&random_name, NetworkType::Evm);
-        network.id = format!("evm:{}", random_id);
+        network.id = format!("evm:{random_id}");
 
         // Create the network first
         repo.create(network.clone()).await.unwrap();
@@ -842,7 +842,7 @@ mod tests {
         let random_id = Uuid::new_v4().to_string();
         let random_name = Uuid::new_v4().to_string();
         let mut network = create_test_network(&random_name, NetworkType::Evm);
-        network.id = format!("evm:{}", random_id);
+        network.id = format!("evm:{random_id}");
 
         // Create the network first
         repo.create(network.clone()).await.unwrap();

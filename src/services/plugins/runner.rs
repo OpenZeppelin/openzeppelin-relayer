@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_plugin_runner_default() {
-        let runner = PluginRunner::default();
+        let runner = PluginRunner;
         // Just verify it can be created
         let _runner = runner;
     }
@@ -814,11 +814,10 @@ mod tests {
         // Should return an error
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let err_str = format!("{:?}", err);
+        let err_str = format!("{err:?}");
         assert!(
             err_str.contains("Intentional test error") || err_str.contains("Error"),
-            "Expected error message, got: {}",
-            err_str
+            "Expected error message, got: {err_str}"
         );
     }
 }

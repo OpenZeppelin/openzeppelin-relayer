@@ -254,7 +254,7 @@ where
             status_reason: Some(error_reason.clone()),
             ..Default::default()
         };
-        let _failed_tx = match self
+        let failed_tx = match self
             .finalize_transaction_state(tx_id.clone(), update_request)
             .await
         {
@@ -266,7 +266,9 @@ where
                     error = %finalize_error,
                     "failed to mark transaction as failed, continuing with lane cleanup"
                 );
-                tx
+                // Finalization failed — propagate error so the queue retries
+                // and the next attempt will either finalize or hit is_final_state
+                return Err(error);
             }
         };
 
@@ -284,10 +286,13 @@ where
             tx_id = %tx_id,
             relayer_id = %relayer_id,
             error = %error_reason,
-            "transaction submission failure handled"
+            "transaction submission failure handled, marked as failed"
         );
 
-        Err(error)
+        // Transaction successfully marked as failed — return Ok to avoid
+        // a pointless queue retry (the defensive is_final_state check at the
+        // top of submit_transaction_impl would short-circuit anyway).
+        Ok(failed_tx)
     }
 
     /// Resubmit transaction - delegates to submit_transaction_impl
@@ -433,9 +438,9 @@ mod tests {
 
             let res = handler.submit_transaction_impl(tx).await;
 
-            // Should return error but transaction should be marked as failed
-            assert!(res.is_err());
-            matches!(res.unwrap_err(), TransactionError::UnexpectedError(_));
+            // Transaction is marked as failed and returned as Ok (no queue retry needed)
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
@@ -506,8 +511,10 @@ mod tests {
 
             let res = handler.submit_transaction_impl(tx).await;
 
-            // Should return error but transaction should be marked as failed
-            assert!(res.is_err());
+            // Even though provider succeeded and repo failed on Submitted update,
+            // the failure handler marks the tx as Failed and returns Ok
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
@@ -665,7 +672,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -696,9 +703,9 @@ mod tests {
 
             let res = handler.submit_transaction_impl(tx).await;
 
-            // Should return error but next transaction should be enqueued
-            assert!(res.is_err());
-            matches!(res.unwrap_err(), TransactionError::UnexpectedError(_));
+            // Transaction marked as failed and next transaction enqueued
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
@@ -914,11 +921,10 @@ mod tests {
             }
 
             let res = handler.submit_transaction_impl(tx).await;
-            assert!(res.is_err());
-            let err = res.unwrap_err();
-            assert!(
-                matches!(err, TransactionError::UnexpectedError(ref msg) if msg.contains("TRY_AGAIN_LATER"))
-            );
+
+            // Transaction marked as failed — no error propagated
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
@@ -981,13 +987,10 @@ mod tests {
             }
 
             let res = handler.submit_transaction_impl(tx).await;
-            assert!(res.is_err());
-            let err = res.unwrap_err();
-            // The error should contain the error XDR
-            assert!(matches!(
-                err,
-                TransactionError::UnexpectedError(ref msg) if msg.contains("AAAAAAAAAGT")
-            ));
+
+            // Transaction marked as failed — no error propagated
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
     }
 }

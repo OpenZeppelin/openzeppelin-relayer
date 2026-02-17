@@ -1133,8 +1133,7 @@ mod tests {
         // (internal framework logs like "Calling plugin" may still appear)
         assert!(
             !captured.contains("should-not-emit"),
-            "plugin logs should not be forwarded when disabled, but found: {}",
-            captured
+            "plugin logs should not be forwarded when disabled, but found: {captured}"
         );
     }
 

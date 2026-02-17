@@ -1259,6 +1259,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -1473,7 +1474,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1577,7 +1578,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1731,7 +1732,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let prepared_tx = result.unwrap();
         // Transaction should proceed normally (not be marked as Failed)
@@ -2125,7 +2126,7 @@ mod tests {
                 .replace_transaction(test_tx.clone(), replacement_request)
                 .await;
             if let Err(ref e) = result {
-                eprintln!("Replace transaction failed with error: {:?}", e);
+                eprintln!("Replace transaction failed with error: {e:?}");
             }
             assert!(result.is_ok());
             let replaced_tx = result.unwrap();
@@ -3246,7 +3247,7 @@ mod tests {
         };
 
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
         let updated_tx = result.unwrap();
         assert_eq!(
             updated_tx.status,

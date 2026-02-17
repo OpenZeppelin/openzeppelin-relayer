@@ -442,57 +442,49 @@ mod actix_tests {
         let cpu_usage = CPU_USAGE.get();
         assert!(
             (0.0..=100.0).contains(&cpu_usage),
-            "CPU usage should be between 0-100%, got {}",
-            cpu_usage
+            "CPU usage should be between 0-100%, got {cpu_usage}"
         );
 
         let memory_usage = MEMORY_USAGE.get();
         assert!(
             memory_usage >= 0.0,
-            "Memory usage should be >= 0, got {}",
-            memory_usage
+            "Memory usage should be >= 0, got {memory_usage}"
         );
 
         let memory_percent = MEMORY_USAGE_PERCENT.get();
         assert!(
             (0.0..=100.0).contains(&memory_percent),
-            "Memory usage percentage should be between 0-100%, got {}",
-            memory_percent
+            "Memory usage percentage should be between 0-100%, got {memory_percent}"
         );
 
         let total_memory = TOTAL_MEMORY.get();
         assert!(
             total_memory > 0.0,
-            "Total memory should be > 0, got {}",
-            total_memory
+            "Total memory should be > 0, got {total_memory}"
         );
 
         let available_memory = AVAILABLE_MEMORY.get();
         assert!(
             available_memory >= 0.0,
-            "Available memory should be >= 0, got {}",
-            available_memory
+            "Available memory should be >= 0, got {available_memory}"
         );
 
         let disk_usage = DISK_USAGE.get();
         assert!(
             disk_usage >= 0.0,
-            "Disk usage should be >= 0, got {}",
-            disk_usage
+            "Disk usage should be >= 0, got {disk_usage}"
         );
 
         let disk_percent = DISK_USAGE_PERCENT.get();
         assert!(
             (0.0..=100.0).contains(&disk_percent),
-            "Disk usage percentage should be between 0-100%, got {}",
-            disk_percent
+            "Disk usage percentage should be between 0-100%, got {disk_percent}"
         );
 
         // Verify that memory usage doesn't exceed total memory
         assert!(
             memory_usage <= total_memory,
-            "Memory usage should be <= total memory, got {}",
-            memory_usage
+            "Memory usage should be <= total memory, got {memory_usage}"
         );
 
         // Verify that available memory plus used memory doesn't exceed total memory

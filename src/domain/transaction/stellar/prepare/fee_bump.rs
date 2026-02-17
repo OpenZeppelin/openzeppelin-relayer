@@ -267,7 +267,7 @@ mod tests {
             TransactionError::ValidationError(msg) => {
                 assert!(msg.contains("max_fee must be greater than 0"));
             }
-            _ => panic!("Expected ValidationError, got {:?}", err),
+            _ => panic!("Expected ValidationError, got {err:?}"),
         }
     }
 
@@ -880,7 +880,7 @@ mod signed_xdr_tests {
                 TransactionError::ValidationError(_) => {
                     // Success - validation failed as expected
                 }
-                other => panic!("Expected ValidationError, got: {:?}", other),
+                other => panic!("Expected ValidationError, got: {other:?}"),
             }
         }
 
@@ -1014,7 +1014,7 @@ mod signed_xdr_tests {
                 TransactionError::ValidationError(_) => {
                     // Success - validation failed as expected
                 }
-                other => panic!("Expected ValidationError, got: {:?}", other),
+                other => panic!("Expected ValidationError, got: {other:?}"),
             }
         }
 
@@ -1254,7 +1254,7 @@ mod signed_xdr_tests {
                 TransactionError::ValidationError(_) => {
                     // Success - validation failed as expected
                 }
-                other => panic!("Expected ValidationError, got: {:?}", other),
+                other => panic!("Expected ValidationError, got: {other:?}"),
             }
         }
     }

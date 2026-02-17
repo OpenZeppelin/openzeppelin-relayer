@@ -117,10 +117,10 @@ mod tests {
         // Check that a valid recovery ID (0 or 1) is returned
         match recovery_result {
             Ok(v) => {
-                assert!(v == 0 || v == 1, "Recovery ID should be 0 or 1, got {}", v);
+                assert!(v == 0 || v == 1, "Recovery ID should be 0 or 1, got {v}");
                 assert_eq!(rec_id.to_byte(), v, "Recovery ID should match")
             }
-            Err(e) => panic!("Failed to recover public key: {:?}", e),
+            Err(e) => panic!("Failed to recover public key: {e:?}"),
         }
     }
 
@@ -147,10 +147,10 @@ mod tests {
         // Check that a valid recovery ID (0 or 1) is returned
         match recovery_result {
             Ok(v) => {
-                assert!(v == 0 || v == 1, "Recovery ID should be 0 or 1, got {}", v);
+                assert!(v == 0 || v == 1, "Recovery ID should be 0 or 1, got {v}");
                 assert_eq!(rec_id.to_byte(), v, "Recovery ID should match")
             }
-            Err(e) => panic!("Failed to recover public key from hash: {:?}", e),
+            Err(e) => panic!("Failed to recover public key from hash: {e:?}"),
         }
     }
 

@@ -616,15 +616,13 @@ mod tests {
 
         assert!(
             err.is_timeout(),
-            "The reqwest error should be a timeout. Actual error: {:?}",
-            err
+            "The reqwest error should be a timeout. Actual error: {err:?}"
         );
 
         let provider_error = ProviderError::from(err);
         assert!(
             matches!(provider_error, ProviderError::Timeout),
-            "ProviderError should be Timeout. Actual: {:?}",
-            provider_error
+            "ProviderError should be Timeout. Actual: {provider_error:?}"
         );
     }
 
@@ -970,8 +968,7 @@ mod tests {
             };
             assert!(
                 is_retriable_error(&error),
-                "Error code {} should be retriable",
-                code
+                "Error code {code} should be retriable"
             );
         }
     }
@@ -1001,9 +998,7 @@ mod tests {
             };
             assert!(
                 !is_retriable_error(&error),
-                "Error code {} with message '{}' should NOT be retriable",
-                code,
-                message
+                "Error code {code} with message '{message}' should NOT be retriable"
             );
         }
     }

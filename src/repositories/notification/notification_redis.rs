@@ -508,7 +508,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = uuid::Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisNotificationRepository::new(connections, key_prefix)
             .expect("Failed to create RedisNotificationRepository")
@@ -559,7 +559,7 @@ mod tests {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
         let notification = create_test_notification(&random_id);
-        let test_key = format!("test_prefix:notification:{}", random_id);
+        let test_key = format!("test_prefix:notification:{random_id}");
 
         let serialized = EncryptionContext::with_aad_sync(test_key.clone(), || {
             repo.serialize_entity(&notification, |n| &n.id, "notification")
@@ -713,7 +713,7 @@ mod tests {
         for i in 1..=10 {
             let random_id = Uuid::new_v4().to_string();
             let notification =
-                create_test_notification_with_url(&random_id, &format!("http://test{}.com", i));
+                create_test_notification_with_url(&random_id, &format!("http://test{i}.com"));
             repo.create(notification).await.unwrap();
         }
 
@@ -741,7 +741,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisNotificationRepository"));
         assert!(debug_str.contains("test_prefix"));
     }

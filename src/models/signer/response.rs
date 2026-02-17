@@ -257,8 +257,7 @@ mod tests {
             let response = SignerResponse::from(repo_model);
             assert_eq!(
                 response.r#type, expected_type,
-                "Type mapping failed for {:?}",
-                expected_type
+                "Type mapping failed for {expected_type:?}"
             );
             assert_eq!(response.config, expected_config);
         }

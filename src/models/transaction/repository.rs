@@ -55,6 +55,16 @@ pub enum TransactionStatus {
     Expired,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+/// Metadata for a transaction
+pub struct TransactionMetadata {
+    /// Number of consecutive failures
+    #[serde(default)]
+    pub consecutive_failures: u32,
+    #[serde(default)]
+    pub total_failures: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransactionUpdateRequest {
     pub status: Option<TransactionStatus>,
@@ -72,6 +82,8 @@ pub struct TransactionUpdateRequest {
     pub is_canceled: Option<bool>,
     /// Timestamp when this transaction should be deleted (for final states)
     pub delete_at: Option<String>,
+    /// Status check metadata (failure counters for circuit breaker)
+    pub metadata: Option<TransactionMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +106,9 @@ pub struct TransactionRepoModel {
     pub network_type: NetworkType,
     pub noop_count: Option<u32>,
     pub is_canceled: Option<bool>,
+    /// Status check metadata (failure counters for circuit breaker)
+    #[serde(default)]
+    pub metadata: Option<TransactionMetadata>,
 }
 
 impl TransactionRepoModel {
@@ -163,6 +178,9 @@ impl TransactionRepoModel {
         if let Some(delete_at) = update.delete_at {
             self.delete_at = Some(delete_at);
         }
+        if let Some(metadata) = update.metadata {
+            self.metadata = Some(metadata);
+        }
     }
 
     /// Creates a TransactionUpdateRequest to reset this transaction to its pre-prepare state.
@@ -197,6 +215,7 @@ impl TransactionRepoModel {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         })
     }
 }
@@ -417,6 +436,7 @@ impl Default for TransactionRepoModel {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 }
@@ -922,6 +942,7 @@ impl
                     hashes: Vec::new(),
                     noop_count: None,
                     is_canceled: Some(false),
+                    metadata: None,
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
@@ -944,6 +965,7 @@ impl
                 hashes: Vec::new(),
                 noop_count: None,
                 is_canceled: Some(false),
+                metadata: None,
             }),
             NetworkTransactionRequest::Stellar(stellar_request) => {
                 // Store the source account before consuming the request
@@ -985,6 +1007,7 @@ impl
                     hashes: Vec::new(),
                     noop_count: None,
                     is_canceled: Some(false),
+                    metadata: None,
                 })
             }
         }
@@ -1271,6 +1294,7 @@ mod tests {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         };
 
         let update_req = tx.create_reset_update_request().unwrap();
@@ -2601,8 +2625,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Soroban operations must be exclusive"),
-                    "Expected error about Soroban operation exclusivity, got: {}",
-                    err_str
+                    "Expected error about Soroban operation exclusivity, got: {err_str}"
                 );
             }
         }
@@ -2646,8 +2669,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Transaction can contain at most one Soroban operation"),
-                    "Expected error about multiple Soroban operations, got: {}",
-                    err_str
+                    "Expected error about multiple Soroban operations, got: {err_str}"
                 );
             }
         }
@@ -2716,8 +2738,7 @@ mod tests {
                 let err_str = err.to_string();
                 assert!(
                     err_str.contains("Soroban operations cannot have a memo"),
-                    "Expected error about memo restriction, got: {}",
-                    err_str
+                    "Expected error about memo restriction, got: {err_str}"
                 );
             }
         }
@@ -2895,8 +2916,7 @@ mod tests {
             // Should set delete_at for final status
             assert!(
                 transaction.delete_at.is_some(),
-                "delete_at should be set for status: {:?}",
-                status
+                "delete_at should be set for status: {status:?}"
             );
 
             // Verify the timestamp is reasonable
@@ -2916,8 +2936,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance &&
                 duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately 3 hours from now for status: {:?}. Duration from start: {:?}, Expected: {:?}, Config hours at runtime: {}",
-                status, duration_from_before, expected_duration, actual_hours_at_runtime
+                "delete_at should be approximately 3 hours from now for status: {status:?}. Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}, Config hours at runtime: {actual_hours_at_runtime}"
             );
         }
 
@@ -2961,8 +2980,7 @@ mod tests {
         assert!(
             duration_from_before >= expected_duration - tolerance &&
             duration_from_before <= expected_duration + tolerance,
-            "delete_at should be approximately 4 hours from now (default). Duration from start: {:?}, Expected: {:?}",
-            duration_from_before, expected_duration
+            "delete_at should be approximately 4 hours from now (default). Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}"
         );
     }
 
@@ -2991,8 +3009,7 @@ mod tests {
 
             assert!(
                 transaction.delete_at.is_some(),
-                "delete_at should be set for {} hours",
-                expiration_hours
+                "delete_at should be set for {expiration_hours} hours"
             );
 
             let delete_at_str = transaction.delete_at.unwrap();
@@ -3007,8 +3024,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance &&
                 duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately {} hours from now. Duration from start: {:?}, Expected: {:?}",
-                expiration_hours, duration_from_before, expected_duration
+                "delete_at should be approximately {expiration_hours} hours from now. Duration from start: {duration_from_before:?}, Expected: {expected_duration:?}"
             );
         }
 
@@ -3029,8 +3045,7 @@ mod tests {
 
             assert!(
                 result.is_some(),
-                "calculate_delete_at should return Some for {} hours",
-                hours
+                "calculate_delete_at should return Some for {hours} hours"
             );
 
             let delete_at_str = result.unwrap();
@@ -3045,8 +3060,7 @@ mod tests {
 
             assert!(
                 delete_at >= expected_min && delete_at <= expected_max,
-                "Calculated delete_at should be approximately {} hours from now. Got: {}, Expected between: {} and {}",
-                hours, delete_at, expected_min, expected_max
+                "Calculated delete_at should be approximately {hours} hours from now. Got: {delete_at}, Expected between: {expected_min} and {expected_max}"
             );
         }
     }
@@ -3116,6 +3130,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: None,
+            metadata: None,
         }
     }
 
@@ -3181,6 +3196,7 @@ mod tests {
             network_type: NetworkType::Evm,
             noop_count: Some(5),
             is_canceled: Some(true),
+            metadata: None,
         };
 
         // Create a partial update that only changes status

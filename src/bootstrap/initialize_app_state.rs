@@ -4,8 +4,9 @@
 //! including setting up repositories, job queues, and other necessary components.
 use crate::{
     config::{RepositoryStorageType, ServerConfig},
-    jobs::{self, Queue},
+    jobs,
     models::{AppState, DefaultAppState},
+    queues::create_queue_backend,
     repositories::{
         ApiKeyRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage,
         PluginRepositoryStorage, RelayerRepositoryStorage, SignerRepositoryStorage,
@@ -133,9 +134,8 @@ pub async fn initialize_app_state(
 
     let repositories = initialize_repositories(&server_config, repo_connections).await?;
 
-    // Queue always uses Redis with deadpool connections
-    let queue = Queue::setup(redis_connections).await?;
-    let job_producer = Arc::new(jobs::JobProducer::new(queue.clone()));
+    let queue_backend = create_queue_backend(redis_connections).await?;
+    let job_producer = Arc::new(jobs::JobProducer::new(queue_backend));
 
     let app_state = web::ThinData(AppState {
         relayer_repository: repositories.relayer,
@@ -261,8 +261,7 @@ mod tests {
         };
         assert!(
             error.to_string().contains("encryption key"),
-            "Expected error about encryption key, got: {}",
-            error
+            "Expected error about encryption key, got: {error}"
         );
     }
 
@@ -284,8 +283,7 @@ mod tests {
             error
                 .to_string()
                 .contains("Redis connections required for Redis storage type"),
-            "Expected error about Redis pool being required, got: {}",
-            error
+            "Expected error about Redis pool being required, got: {error}"
         );
     }
 
@@ -319,7 +317,7 @@ mod tests {
 
         // Count the repositories by checking Arc strong counts
         // All should have at least 1 reference
-        let repo_refs = vec![
+        let repo_refs = [
             Arc::strong_count(&repositories.relayer),
             Arc::strong_count(&repositories.transaction),
             Arc::strong_count(&repositories.signer),
@@ -332,12 +330,7 @@ mod tests {
 
         assert_eq!(repo_refs.len(), 8, "Expected exactly 8 repositories");
         for (i, count) in repo_refs.iter().enumerate() {
-            assert!(
-                *count >= 1,
-                "Repository {} has invalid Arc count: {}",
-                i,
-                count
-            );
+            assert!(*count >= 1, "Repository {i} has invalid Arc count: {count}");
         }
     }
 
@@ -407,7 +400,7 @@ mod tests {
 
         // Create multiple relayers
         for i in 0..5 {
-            let relayer = create_mock_relayer(format!("list-test-{}", i), false);
+            let relayer = create_mock_relayer(format!("list-test-{i}"), false);
             repositories.relayer.create(relayer).await.unwrap();
         }
 
@@ -419,8 +412,8 @@ mod tests {
         for i in 0..5 {
             let found = all_relayers
                 .iter()
-                .any(|r| r.id == format!("list-test-{}", i));
-            assert!(found, "Expected to find relayer list-test-{}", i);
+                .any(|r| r.id == format!("list-test-{i}"));
+            assert!(found, "Expected to find relayer list-test-{i}");
         }
     }
 

@@ -94,7 +94,7 @@ mod tests {
             .zip(TEST_ED25519_PUBLIC_KEY.iter())
             .enumerate()
         {
-            assert_eq!(a, b, "Byte mismatch at position {}", i);
+            assert_eq!(a, b, "Byte mismatch at position {i}");
         }
     }
 }

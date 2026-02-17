@@ -9,10 +9,9 @@ use std::time::{Duration, Instant};
 use deadpool_redis::Pool;
 use tokio::sync::RwLock;
 
-use crate::jobs::{JobProducerTrait, Queue};
 use crate::models::health::{
-    ComponentStatus, Components, PluginHealth, PoolStatus, QueueHealth, QueueHealthStatus,
-    ReadinessResponse, RedisHealth, RedisHealthStatus, SystemHealth,
+    ComponentStatus, Components, PluginHealth, PoolStatus, QueueHealth, ReadinessResponse,
+    RedisHealth, RedisHealthStatus, SystemHealth,
 };
 use crate::models::{
     NetworkRepoModel, NotificationRepoModel, RelayerRepoModel, SignerRepoModel, ThinDataAppState,
@@ -24,6 +23,7 @@ use crate::repositories::{
 };
 use crate::services::plugins::get_pool_manager;
 use crate::utils::RedisConnections;
+use crate::{jobs::JobProducerTrait, queues::QueueBackend};
 
 // ============================================================================
 // Constants
@@ -191,56 +191,23 @@ fn redis_status_to_health(status: RedisHealthStatus) -> RedisHealth {
     }
 }
 
-// ============================================================================
-// Queue Health Checks
-// ============================================================================
-
-/// Check health of Queue's Redis connection.
+/// Create a neutral Redis health snapshot when Redis storage is not used.
 ///
-/// Sends a PING command to verify the queue's Redis connection is responsive within the timeout.
-async fn check_queue_health(queue: &Queue) -> QueueHealthStatus {
-    let mut conn = queue.relayer_health_check_queue.get_connection().clone();
+/// In this mode Redis should not degrade readiness because it is not a required
+/// dependency of the active repository backend.
+fn create_not_applicable_redis_health() -> RedisHealth {
+    let neutral_pool = PoolStatus {
+        connected: true,
+        available: 0,
+        max_size: 0,
+        error: None,
+    };
 
-    let result = tokio::time::timeout(PING_TIMEOUT, async {
-        redis::cmd("PING").query_async::<String>(&mut conn).await
-    })
-    .await;
-
-    // result is Result<Result<String, RedisError>, Elapsed>
-    // Must check both: timeout didn't expire AND PING succeeded
-    match result {
-        Ok(Ok(_)) => QueueHealthStatus {
-            healthy: true,
-            error: None,
-        },
-        Ok(Err(e)) => {
-            // PING call failed (but didn't timeout)
-            tracing::warn!(error = %e, "Queue PING check failed");
-            QueueHealthStatus {
-                healthy: false,
-                error: Some(format!("Queue connection: {e}")),
-            }
-        }
-        Err(_) => {
-            // Timeout expired
-            tracing::warn!("Queue PING check timed out");
-            QueueHealthStatus {
-                healthy: false,
-                error: Some("Queue connection: PING check timed out".to_string()),
-            }
-        }
-    }
-}
-
-/// Convert QueueHealthStatus to QueueHealth.
-fn queue_status_to_health(status: QueueHealthStatus) -> QueueHealth {
-    QueueHealth {
-        status: if status.healthy {
-            ComponentStatus::Healthy
-        } else {
-            ComponentStatus::Unhealthy
-        },
-        error: status.error,
+    RedisHealth {
+        status: ComponentStatus::Healthy,
+        primary_pool: neutral_pool.clone(),
+        reader_pool: neutral_pool,
+        error: None,
     }
 }
 
@@ -267,6 +234,45 @@ fn create_unavailable_health() -> (RedisHealth, QueueHealth) {
     };
 
     (redis, queue)
+}
+
+/// Check health of the active queue backend.
+async fn check_queue_backend_health(
+    queue_backend: Option<Arc<crate::queues::QueueBackendStorage>>,
+) -> QueueHealth {
+    match queue_backend {
+        Some(backend) => match backend.health_check().await {
+            Ok(backend_healths) => {
+                let all_healthy = backend_healths.iter().all(|h| h.is_healthy);
+                let error = if all_healthy {
+                    None
+                } else {
+                    let unhealthy_queues: Vec<_> = backend_healths
+                        .iter()
+                        .filter(|h| !h.is_healthy)
+                        .map(|h| h.queue_type.to_string())
+                        .collect();
+                    Some(format!("Unhealthy queues: {}", unhealthy_queues.join(", ")))
+                };
+                QueueHealth {
+                    status: if all_healthy {
+                        ComponentStatus::Healthy
+                    } else {
+                        ComponentStatus::Unhealthy
+                    },
+                    error,
+                }
+            }
+            Err(_) => {
+                let (_, unavailable_queue) = create_unavailable_health();
+                unavailable_queue
+            }
+        },
+        None => {
+            let (_, unavailable_queue) = create_unavailable_health();
+            unavailable_queue
+        }
+    }
 }
 
 // ============================================================================
@@ -625,39 +631,28 @@ where
         return cached;
     }
 
-    // Try to get queue for Redis and Queue health checks
-    let queue = match data.job_producer.get_queue().await {
-        Ok(queue) => Some(queue),
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to get queue from job producer");
-            None
-        }
-    };
-
     // Perform health checks
     let system = check_system_health();
     let plugins = check_plugin_health().await;
 
-    let (redis, queue_health) = if let Some(ref q) = queue {
-        let redis_connections = q.redis_connections();
+    // Redis storage health is derived from repository storage, independent of queue backend.
+    let redis = if let Some((redis_connections, _key_prefix)) =
+        data.transaction_repository.connection_info()
+    {
         let redis_status = check_redis_health(&redis_connections).await;
-        let queue_status = check_queue_health(q).await;
-
-        (
-            redis_status_to_health(redis_status),
-            queue_status_to_health(queue_status),
-        )
+        redis_status_to_health(redis_status)
     } else {
-        create_unavailable_health()
+        create_not_applicable_redis_health()
     };
+
+    // Queue health is derived from the active queue backend.
+    let queue_health = check_queue_backend_health(data.job_producer.get_queue_backend()).await;
 
     // Build response
     let response = build_response(system, redis, queue_health, plugins);
 
-    // Cache only if we have a working queue (cache is less useful in degraded state)
-    if queue.is_some() {
-        cache_response(&response).await;
-    }
+    // Cache the response
+    cache_response(&response).await;
 
     response
 }
@@ -1110,30 +1105,6 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_status_to_health_healthy() {
-        let status = QueueHealthStatus {
-            healthy: true,
-            error: None,
-        };
-
-        let health = queue_status_to_health(status);
-        assert_eq!(health.status, ComponentStatus::Healthy);
-        assert!(health.error.is_none());
-    }
-
-    #[test]
-    fn test_queue_status_to_health_unhealthy() {
-        let status = QueueHealthStatus {
-            healthy: false,
-            error: Some("Stats timeout".to_string()),
-        };
-
-        let health = queue_status_to_health(status);
-        assert_eq!(health.status, ComponentStatus::Unhealthy);
-        assert!(health.error.is_some());
-    }
-
-    #[test]
     fn test_create_unavailable_health() {
         let (redis, queue) = create_unavailable_health();
 
@@ -1201,80 +1172,6 @@ mod tests {
             health.status,
             ComponentStatus::Healthy | ComponentStatus::Degraded | ComponentStatus::Unhealthy
         ));
-    }
-
-    // -------------------------------------------------------------------------
-    // Nested Result Pattern Tests (documents check_queue_health behavior)
-    // -------------------------------------------------------------------------
-
-    /// Represents a timeout error for testing (mirrors tokio::time::error::Elapsed)
-    #[derive(Debug)]
-    struct TimeoutError;
-
-    /// Helper that mimics the nested Result pattern from timeout + async operation.
-    /// This documents the correct handling to prevent regression of the bug where
-    /// `result.is_ok()` incorrectly marked failed operations as healthy.
-    fn evaluate_nested_result<T, E: std::fmt::Display>(
-        result: Result<Result<T, E>, TimeoutError>,
-    ) -> (bool, Option<String>) {
-        match result {
-            Ok(Ok(_)) => (true, None),
-            Ok(Err(e)) => (false, Some(format!("Operation failed: {e}"))),
-            Err(_) => (false, Some("Operation timed out".to_string())),
-        }
-    }
-
-    #[test]
-    fn test_nested_result_success() {
-        // Simulates: timeout didn't expire AND inner operation succeeded
-        let result: Result<Result<(), &str>, TimeoutError> = Ok(Ok(()));
-        let (healthy, error) = evaluate_nested_result(result);
-
-        assert!(healthy);
-        assert!(error.is_none());
-    }
-
-    #[test]
-    fn test_nested_result_inner_error() {
-        // Simulates: timeout didn't expire BUT inner operation failed
-        // This is the bug case - previously `result.is_ok()` returned true here!
-        let result: Result<Result<(), &str>, TimeoutError> = Ok(Err("connection refused"));
-        let (healthy, error) = evaluate_nested_result(result);
-
-        assert!(!healthy, "Inner error should mark as unhealthy");
-        assert!(error.is_some());
-        assert!(error.unwrap().contains("connection refused"));
-    }
-
-    #[test]
-    fn test_nested_result_timeout() {
-        // Simulates: timeout expired
-        let result: Result<Result<(), &str>, TimeoutError> = Err(TimeoutError);
-        let (healthy, error) = evaluate_nested_result(result);
-
-        assert!(!healthy);
-        assert!(error.is_some());
-        assert!(error.unwrap().contains("timed out"));
-    }
-
-    #[test]
-    fn test_nested_result_is_ok_pitfall() {
-        // Documents the pitfall: is_ok() only checks outer Result
-        let inner_error: Result<Result<(), &str>, TimeoutError> = Ok(Err("inner error"));
-
-        // This is the WRONG way (the bug)
-        let wrong_healthy = inner_error.is_ok();
-        assert!(
-            wrong_healthy,
-            "is_ok() returns true even with inner error - this is the bug!"
-        );
-
-        // This is the CORRECT way (the fix)
-        let correct_healthy = matches!(inner_error, Ok(Ok(_)));
-        assert!(
-            !correct_healthy,
-            "matches! correctly identifies inner error"
-        );
     }
 
     // -------------------------------------------------------------------------

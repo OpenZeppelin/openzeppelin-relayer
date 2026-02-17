@@ -2074,7 +2074,7 @@ mod tests {
             RelayerError::ProviderError(msg) => {
                 assert!(msg.contains("rpc failure"));
             }
-            other => panic!("expected ProviderError, got {:?}", other),
+            other => panic!("expected ProviderError, got {other:?}"),
         }
     }
 
@@ -2233,7 +2233,7 @@ mod tests {
             RelayerError::UnderlyingSolanaProvider(err) => {
                 assert!(err.to_string().contains("oops"));
             }
-            other => panic!("expected ProviderError, got {:?}", other),
+            other => panic!("expected ProviderError, got {other:?}"),
         }
     }
 
@@ -2287,7 +2287,7 @@ mod tests {
             RelayerError::InsufficientBalanceError(msg) => {
                 assert_eq!(msg, "Insufficient balance");
             }
-            other => panic!("expected InsufficientBalanceError, got {:?}", other),
+            other => panic!("expected InsufficientBalanceError, got {other:?}"),
         }
     }
 
@@ -2309,7 +2309,7 @@ mod tests {
             RelayerError::ProviderError(msg) => {
                 assert!(msg.contains("fail"));
             }
-            other => panic!("expected ProviderError, got {:?}", other),
+            other => panic!("expected ProviderError, got {other:?}"),
         }
     }
 
@@ -2354,11 +2354,11 @@ mod tests {
         let data = resp.result.unwrap();
         let sol_res = match data {
             NetworkRpcResult::Solana(inner) => inner,
-            other => panic!("expected Solana, got {:?}", other),
+            other => panic!("expected Solana, got {other:?}"),
         };
         let features = match sol_res {
             SolanaRpcResult::GetFeaturesEnabled(f) => f,
-            other => panic!("expected GetFeaturesEnabled, got {:?}", other),
+            other => panic!("expected GetFeaturesEnabled, got {other:?}"),
         };
         assert_eq!(features.features, vec!["gasless".to_string()]);
     }
@@ -2629,7 +2629,7 @@ mod tests {
             RelayerError::PolicyConfigurationError(msg) => {
                 assert!(msg.contains("Error while processing allowed tokens policy"));
             }
-            other => panic!("Expected PolicyConfigurationError, got {:?}", other),
+            other => panic!("Expected PolicyConfigurationError, got {other:?}"),
         }
     }
 
@@ -2716,7 +2716,7 @@ mod tests {
                     && statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(move |_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {
@@ -2778,7 +2778,7 @@ mod tests {
             RelayerError::UnderlyingSolanaProvider(err) => {
                 assert!(err.to_string().contains("RPC error"));
             }
-            other => panic!("Expected UnderlyingSolanaProvider, got {:?}", other),
+            other => panic!("Expected UnderlyingSolanaProvider, got {other:?}"),
         }
     }
 
@@ -2813,7 +2813,7 @@ mod tests {
                     && statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(|_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {

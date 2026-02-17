@@ -554,8 +554,7 @@ mod tests {
         if let Err(ApiError::BadRequest(msg)) = signer_result {
             assert!(
                 msg.contains("does not match"),
-                "Error should mention type mismatch: {}",
-                msg
+                "Error should mention type mismatch: {msg}"
             );
         } else {
             panic!("Expected BadRequest error for type mismatch");

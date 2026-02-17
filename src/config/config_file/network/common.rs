@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn test_network_config_common_debug() {
         let config = create_network_common("test-network");
-        let debug_str = format!("{:?}", config);
+        let debug_str = format!("{config:?}");
 
         assert!(debug_str.contains("NetworkConfigCommon"));
         assert!(debug_str.contains("test-network"));
@@ -1303,13 +1303,11 @@ mod tests {
         assert_eq!(child_rpc2.weight, 75);
 
         // Should not have any parent URLs
-        assert!(rpc_configs
+        assert!(!rpc_configs
             .iter()
-            .find(|c| c.url == "https://rpc1.example.com")
-            .is_none());
-        assert!(rpc_configs
+            .any(|c| c.url == "https://rpc1.example.com"));
+        assert!(!rpc_configs
             .iter()
-            .find(|c| c.url == "https://rpc2.example.com")
-            .is_none());
+            .any(|c| c.url == "https://rpc2.example.com"));
     }
 }

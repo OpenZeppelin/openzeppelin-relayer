@@ -516,9 +516,7 @@ mod tests {
             assert_eq!(
                 price,
                 base_gas_price * multiplier / 100,
-                "Price for {:?} should be {}% of base price",
-                speed,
-                multiplier
+                "Price for {speed:?} should be {multiplier}% of base price"
             );
         }
     }

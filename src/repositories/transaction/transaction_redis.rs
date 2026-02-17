@@ -1791,7 +1791,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
-                hash: Some(format!("0x{}", id)),
+                hash: Some(format!("0x{id}")),
                 speed: Some(Speed::Fast),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -1799,6 +1799,7 @@ mod tests {
             }),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -1849,7 +1850,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisTransactionRepository::new(connections, key_prefix)
             .expect("Failed to create RedisTransactionRepository")
@@ -2631,6 +2632,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             delete_at: None,
+            metadata: None,
         };
 
         let updated = repo
@@ -2731,7 +2733,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisTransactionRepository"));
         assert!(debug_str.contains("test_prefix"));
     }
@@ -2868,8 +2870,7 @@ mod tests {
             // Should have delete_at set
             assert!(
                 updated.delete_at.is_some(),
-                "delete_at should be set for status: {:?}",
-                status
+                "delete_at should be set for status: {status:?}"
             );
 
             // Verify the timestamp is reasonable (approximately 6 hours from now)
@@ -2885,9 +2886,7 @@ mod tests {
             assert!(
                 duration_from_before >= expected_duration - tolerance
                     && duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status,
-                duration_from_before
+                "delete_at should be approximately 6 hours from now for status: {status:?}. Duration: {duration_from_before:?}"
             );
         }
 
@@ -2930,8 +2929,7 @@ mod tests {
             // Should NOT have delete_at set
             assert!(
                 updated.delete_at.is_none(),
-                "delete_at should NOT be set for status: {:?}",
-                status
+                "delete_at should NOT be set for status: {status:?}"
             );
         }
 
@@ -2988,8 +2986,7 @@ mod tests {
         assert!(
             duration_from_before >= expected_duration - tolerance
                 && duration_from_before <= expected_duration + tolerance,
-            "delete_at should be approximately 8 hours from now. Duration: {:?}",
-            duration_from_before
+            "delete_at should be approximately 8 hours from now. Duration: {duration_from_before:?}"
         );
 
         // Also verify other fields were updated
@@ -3146,7 +3143,7 @@ mod tests {
         // Create multiple transactions
         let mut created_ids = Vec::new();
         for i in 1..=5 {
-            let tx_id = format!("test-multi-{}-{}", base_id, i);
+            let tx_id = format!("test-multi-{base_id}-{i}");
             let tx = create_test_transaction(&tx_id);
             repo.create(tx).await.unwrap();
             created_ids.push(tx_id);
@@ -3201,7 +3198,7 @@ mod tests {
 
         // Create some transactions
         let existing_ids: Vec<String> = (1..=3)
-            .map(|i| format!("test-mixed-existing-{}-{}", base_id, i))
+            .map(|i| format!("test-mixed-existing-{base_id}-{i}"))
             .collect();
 
         for id in &existing_ids {
@@ -3210,7 +3207,7 @@ mod tests {
         }
 
         let nonexistent_ids: Vec<String> = (1..=2)
-            .map(|i| format!("test-mixed-nonexistent-{}-{}", base_id, i))
+            .map(|i| format!("test-mixed-nonexistent-{base_id}-{i}"))
             .collect();
 
         // Try to delete mix of existing and non-existing
@@ -3305,7 +3302,7 @@ mod tests {
         let mut created_ids = Vec::new();
 
         for i in 0..count {
-            let tx_id = format!("test-large-{}-{}", base_id, i);
+            let tx_id = format!("test-large-{base_id}-{i}");
             let tx = create_test_transaction(&tx_id);
             repo.create(tx).await.unwrap();
             created_ids.push(tx_id);

@@ -156,8 +156,7 @@ mod tests {
         // Valid status codes are: 200 (ready), 503 (not ready), or 500 (internal error in test)
         assert!(
             status == 200 || status == 503 || status == 500,
-            "Status should be 200, 503, or 500, got {}",
-            status
+            "Status should be 200, 503, or 500, got {status}"
         );
     }
 
@@ -289,8 +288,7 @@ mod tests {
             let overall_status = json["status"].as_str().unwrap();
             assert!(
                 valid_statuses.contains(&overall_status),
-                "Overall status '{}' should be valid",
-                overall_status
+                "Overall status '{overall_status}' should be valid"
             );
 
             // Check component statuses
