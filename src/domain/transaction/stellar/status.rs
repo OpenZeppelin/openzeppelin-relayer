@@ -10,7 +10,10 @@ use soroban_rs::xdr::{
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
-use crate::constants::{get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout};
+use crate::constants::{
+    get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout,
+    STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL,
+};
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
@@ -387,6 +390,19 @@ where
 
         let fee_charged = provider_response.result.as_ref().map(|r| r.fee_charged);
         let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
+        let stellar_data = tx.network_data.get_stellar_transaction_data().ok();
+        let outer_tx_hash = stellar_data
+            .as_ref()
+            .and_then(|data| data.hash.clone())
+            .filter(|hash| !hash.is_empty());
+        let network_passphrase = stellar_data
+            .as_ref()
+            .map(|data| data.network_passphrase.as_str())
+            .unwrap_or("Test SDF Network ; September 2015");
+        let tx_hash_for_lab = inner_tx_hash
+            .clone()
+            .or_else(|| outer_tx_hash.clone())
+            .filter(|hash| !hash.is_empty());
 
         warn!(
             tx_id = %tx.id,
@@ -400,9 +416,30 @@ where
             "stellar transaction failed"
         );
 
-        let status_reason = format!(
+        let mut status_details = vec![format!(
             "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: {result_code}."
-        );
+        )];
+
+        if let Some(inner) = inner_result_code {
+            status_details.push(format!("Inner result: {inner}."));
+        }
+        if let Some(op) = op_result_code {
+            status_details.push(format!("Operation result: {op}."));
+        }
+        if let Some(inner_hash) = &inner_tx_hash {
+            status_details.push(format!("Inner tx hash: {inner_hash}."));
+        }
+        if let Some(outer_hash) = &outer_tx_hash {
+            status_details.push(format!("Outer tx hash: {outer_hash}."));
+        }
+        if let Some(hash) = tx_hash_for_lab {
+            let lab_url = build_stellar_lab_transaction_url(network_passphrase, &hash);
+            status_details.push(format!(
+                "Debug in Stellar Lab (click \"Load Transaction\"): {lab_url}"
+            ));
+        }
+
+        let status_reason = status_details.join(" ");
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -615,6 +652,34 @@ fn first_failing_op(ops: &[OperationResult]) -> Option<&'static str> {
         },
         _ => Some(op.name()),
     }
+}
+
+/// Builds a Stellar Lab transaction dashboard URL for easier debugging.
+fn build_stellar_lab_transaction_url(network_passphrase: &str, tx_hash: &str) -> String {
+    let (network_id, label, horizon_url, rpc_url) =
+        if network_passphrase == "Public Global Stellar Network ; September 2015" {
+            (
+                "mainnet",
+                "Mainnet",
+                STELLAR_HORIZON_MAINNET_URL,
+                "https://mainnet.sorobanrpc.com",
+            )
+        } else {
+            (
+                "testnet",
+                "Testnet",
+                STELLAR_HORIZON_TESTNET_URL,
+                "https://soroban-testnet.stellar.org",
+            )
+        };
+
+    let horizon_param = horizon_url.replacen("https://", "https:////", 1);
+    let rpc_param = rpc_url.replacen("https://", "https:////", 1);
+    let passphrase_param = network_passphrase.replace(' ', "%20").replace(';', "%3B");
+
+    format!(
+        "https://lab.stellar.org/transaction/dashboard?$=network$id={network_id}&label={label}&horizonUrl={horizon_param}&rpcUrl={rpc_param}&passphrase={passphrase_param}&txDashboard$transactionHash={tx_hash};;"
+    )
 }
 
 #[cfg(test)]
@@ -959,10 +1024,11 @@ mod tests {
             assert_eq!(handled_tx.id, "tx-fail-this");
             assert_eq!(handled_tx.status, TransactionStatus::Failed);
             assert!(handled_tx.status_reason.is_some());
-            assert_eq!(
-                handled_tx.status_reason.unwrap(),
-                "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: unknown."
-            );
+            let reason = handled_tx.status_reason.unwrap();
+            assert!(reason.contains("Transaction failed on-chain."));
+            assert!(reason.contains("Specific XDR reason: unknown."));
+            assert!(reason.contains("Outer tx hash:"));
+            assert!(reason.contains("Debug in Stellar Lab"));
         }
 
         #[tokio::test]
@@ -2531,6 +2597,34 @@ mod tests {
         fn first_failing_op_op_bad_auth() {
             let ops: VecM<OperationResult> = vec![OperationResult::OpBadAuth].try_into().unwrap();
             assert_eq!(first_failing_op(ops.as_slice()), Some("OpBadAuth"));
+        }
+
+        #[test]
+        fn build_stellar_lab_url_mainnet() {
+            let url = build_stellar_lab_transaction_url(
+                "Public Global Stellar Network ; September 2015",
+                "abc123",
+            );
+            assert!(url.contains("network$id=mainnet"));
+            assert!(url.contains("label=Mainnet"));
+            assert!(url.contains("horizonUrl=https:////horizon.stellar.org"));
+            assert!(url.contains("rpcUrl=https:////mainnet.sorobanrpc.com"));
+            assert!(url.contains(
+                "passphrase=Public%20Global%20Stellar%20Network%20%3B%20September%202015"
+            ));
+            assert!(url.contains("txDashboard$transactionHash=abc123"));
+        }
+
+        #[test]
+        fn build_stellar_lab_url_testnet() {
+            let url =
+                build_stellar_lab_transaction_url("Test SDF Network ; September 2015", "def456");
+            assert!(url.contains("network$id=testnet"));
+            assert!(url.contains("label=Testnet"));
+            assert!(url.contains("horizonUrl=https:////horizon-testnet.stellar.org"));
+            assert!(url.contains("rpcUrl=https:////soroban-testnet.stellar.org"));
+            assert!(url.contains("passphrase=Test%20SDF%20Network%20%3B%20September%202015"));
+            assert!(url.contains("txDashboard$transactionHash=def456"));
         }
     }
 }
