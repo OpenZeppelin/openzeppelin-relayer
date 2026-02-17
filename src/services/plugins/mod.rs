@@ -194,20 +194,20 @@ fn build_metadata(
     }
 }
 
-fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry], request_id: Option<String>) {
+fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry], request_id: &str) {
     for entry in logs {
         match entry.level {
             LogLevel::Error => {
-                tracing::error!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::error!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Warn => {
-                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Info | LogLevel::Log => {
-                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Debug => {
-                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = ?request_id, "{}", entry.message)
+                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Result => {}
         }
@@ -277,7 +277,11 @@ impl<R: PluginRunnerTrait> PluginService<R> {
             .map(|q| serde_json::to_string(&q).unwrap_or_default());
 
         let request_id = get_request_id();
-        let request_id_for_logs = request_id.clone();
+        let request_id_for_logs: String = request_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let result = self
             .runner
             .run(
@@ -300,11 +304,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
         match result {
             Ok(script_result) => {
                 if plugin.forward_logs {
-                    forward_logs_to_tracing(
-                        &plugin.id,
-                        &script_result.logs,
-                        request_id_for_logs.clone(),
-                    );
+                    forward_logs_to_tracing(&plugin.id, &script_result.logs, &request_id_for_logs);
                 }
                 // Include logs/traces only if enabled via plugin config
                 let logs = if plugin.emit_logs {
@@ -333,7 +333,7 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                 PluginError::HandlerError(payload) => {
                     if plugin.forward_logs {
                         if let Some(logs) = payload.logs.as_deref() {
-                            forward_logs_to_tracing(&plugin.id, logs, request_id_for_logs.clone());
+                            forward_logs_to_tracing(&plugin.id, logs, &request_id_for_logs);
                         }
                     }
                     let failure = payload.into_response(plugin.emit_logs, plugin.emit_traces);
@@ -1049,6 +1049,32 @@ mod tests {
         assert!(captured.contains("plugin_id=test-plugin-levels"));
         assert!(captured.contains("ERROR"));
         assert!(captured.contains("WARN"));
+        let request_id_values: Vec<&str> = captured
+            .match_indices("request_id=")
+            .filter_map(|(idx, _)| {
+                let tail = &captured[idx + "request_id=".len()..];
+                tail.split_whitespace()
+                    .next()
+                    .map(|value| value.trim_matches(|c: char| c == ',' || c == '"' || c == '}'))
+            })
+            .collect();
+        assert!(
+            !request_id_values.is_empty(),
+            "expected forwarded plugin logs to include request_id field, captured: {}",
+            captured
+        );
+        assert!(
+            request_id_values.iter().all(|value| !value.is_empty()),
+            "expected non-empty request_id values, captured: {}",
+            captured
+        );
+        assert!(
+            request_id_values
+                .iter()
+                .all(|value| uuid::Uuid::parse_str(value).is_ok()),
+            "expected request_id fallback to be UUID when no span request id is set, captured: {}",
+            captured
+        );
     }
 
     #[tokio::test]
@@ -1107,8 +1133,7 @@ mod tests {
         // (internal framework logs like "Calling plugin" may still appear)
         assert!(
             !captured.contains("should-not-emit"),
-            "plugin logs should not be forwarded when disabled, but found: {}",
-            captured
+            "plugin logs should not be forwarded when disabled, but found: {captured}"
         );
     }
 

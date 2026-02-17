@@ -409,7 +409,7 @@ mod tests {
         // Verify the lock key format: {prefix}:lock:{name}
         let prefix = "myrelayer";
         let lock_name = "transaction_cleanup";
-        let lock_key = format!("{}:lock:{}", prefix, lock_name);
+        let lock_key = format!("{prefix}:lock:{lock_name}");
         assert_eq!(lock_key, "myrelayer:lock:transaction_cleanup");
     }
 
@@ -418,7 +418,7 @@ mod tests {
         // Test with a more realistic prefix
         let prefix = "oz-relayer-prod";
         let lock_name = "transaction_cleanup";
-        let lock_key = format!("{}:lock:{}", prefix, lock_name);
+        let lock_key = format!("{prefix}:lock:{lock_name}");
         assert_eq!(lock_key, "oz-relayer-prod:lock:transaction_cleanup");
     }
 
@@ -494,7 +494,7 @@ mod tests {
             let pool = Arc::new(pool);
 
             let connections = RedisConnections::new_single_pool(pool);
-            let debug_str = format!("{:?}", connections);
+            let debug_str = format!("{connections:?}");
 
             assert!(debug_str.contains("RedisConnections"));
         }
@@ -647,7 +647,7 @@ mod tests {
             // Format: {prefix}:lock:{name}
             let prefix = "test_prefix";
             let lock_name = "cleanup";
-            let lock_key = format!("{}:lock:{}", prefix, lock_name);
+            let lock_key = format!("{prefix}:lock:{lock_name}");
 
             let lock = DistributedLock::new(conn, &lock_key, Duration::from_secs(60));
 
@@ -749,7 +749,7 @@ mod tests {
                     .ok_or("lock held")?;
 
                 // Simulate early return (error path)
-                return Err("simulated error");
+                Err("simulated error")
 
                 // _guard is dropped here due to early return
             }

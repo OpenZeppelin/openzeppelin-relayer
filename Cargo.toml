@@ -22,6 +22,7 @@ panic = "unwind"
 [dependencies]
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
 aws-sdk-kms = "1.91.0"
+aws-sdk-sqs = "1.56.0"
 actix-web = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -46,6 +47,7 @@ regex = "1"
 futures = "0.3"
 uuid = { version = "1.11", features = ["v4", "v5"] }
 chrono = "0.4"
+cron = "0.13"
 eyre = "0.6"
 color-eyre = "0.6"
 apalis = { version = "0.7", features = ["limit", "retry", "catch-panic", "timeout"] }

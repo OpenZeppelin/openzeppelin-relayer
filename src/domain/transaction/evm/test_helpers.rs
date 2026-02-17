@@ -81,6 +81,7 @@ pub mod test_utils {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         }
     }
 

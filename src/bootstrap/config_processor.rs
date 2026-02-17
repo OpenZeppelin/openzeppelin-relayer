@@ -907,7 +907,7 @@ mod tests {
         use crate::config::network::test_utils::*;
 
         let networks = (0..10)
-            .map(|i| create_evm_network_wrapped(&format!("network-{}", i)))
+            .map(|i| create_evm_network_wrapped(&format!("network-{i}")))
             .collect();
 
         let config = Config {
@@ -926,11 +926,10 @@ mod tests {
         assert_eq!(stored_networks.len(), 10);
 
         for i in 0..10 {
-            let expected_name = format!("network-{}", i);
+            let expected_name = format!("network-{i}");
             assert!(
                 stored_networks.iter().any(|n| n.name == expected_name),
-                "Network {} not found",
-                expected_name
+                "Network {expected_name} not found"
             );
         }
 

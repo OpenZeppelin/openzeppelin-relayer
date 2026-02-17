@@ -387,7 +387,7 @@ mod tests {
             ApiError::NotFound(msg) => {
                 assert!(msg.contains("nonexistent-network"));
             }
-            _ => panic!("Expected NotFound error, got {:?}", error),
+            _ => panic!("Expected NotFound error, got {error:?}"),
         }
     }
 
@@ -521,7 +521,7 @@ mod tests {
             ApiError::NotFound(msg) => {
                 assert!(msg.contains("nonexistent-network"));
             }
-            _ => panic!("Expected NotFound error, got {:?}", error),
+            _ => panic!("Expected NotFound error, got {error:?}"),
         }
     }
 
@@ -542,7 +542,7 @@ mod tests {
             ApiError::BadRequest(msg) => {
                 assert!(msg.contains("At least one field must be provided"));
             }
-            _ => panic!("Expected BadRequest error, got {:?}", error),
+            _ => panic!("Expected BadRequest error, got {error:?}"),
         }
     }
 
@@ -565,7 +565,7 @@ mod tests {
             ApiError::BadRequest(msg) => {
                 assert!(msg.contains("at least one RPC endpoint"));
             }
-            _ => panic!("Expected BadRequest error, got {:?}", error),
+            _ => panic!("Expected BadRequest error, got {error:?}"),
         }
     }
 
@@ -590,7 +590,7 @@ mod tests {
             ApiError::BadRequest(msg) => {
                 assert!(msg.contains("Invalid RPC URL"));
             }
-            _ => panic!("Expected BadRequest error, got {:?}", error),
+            _ => panic!("Expected BadRequest error, got {error:?}"),
         }
     }
 

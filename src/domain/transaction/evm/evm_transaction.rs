@@ -251,11 +251,12 @@ where
             })
     }
 
-    /// Updates a transaction's status.
+    /// Updates a transaction's status, optionally including a status reason.
     pub(super) async fn update_transaction_status(
         &self,
         tx: TransactionRepoModel,
         new_status: TransactionStatus,
+        status_reason: Option<String>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let confirmed_at = if new_status == TransactionStatus::Confirmed {
             Some(Utc::now().to_rfc3339())
@@ -266,6 +267,7 @@ where
         let update_request = TransactionUpdateRequest {
             status: Some(new_status),
             confirmed_at,
+            status_reason,
             ..Default::default()
         };
 
@@ -963,11 +965,21 @@ where
         if tx.status == TransactionStatus::Pending {
             debug!("transaction is in pending state, updating status to canceled");
             return self
-                .update_transaction_status(tx, TransactionStatus::Canceled)
+                .update_transaction_status(
+                    tx,
+                    TransactionStatus::Canceled,
+                    Some("Transaction canceled by user".to_string()),
+                )
                 .await;
         }
 
-        let update = self.prepare_noop_update_request(&tx, true, None).await?;
+        let update = self
+            .prepare_noop_update_request(
+                &tx,
+                true,
+                Some("Transaction canceled by user, replacing with NOOP".to_string()),
+            )
+            .await?;
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
@@ -1259,6 +1271,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -1473,7 +1486,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1577,7 +1590,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1731,7 +1744,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let prepared_tx = result.unwrap();
         // Transaction should proceed normally (not be marked as Failed)
@@ -2125,7 +2138,7 @@ mod tests {
                 .replace_transaction(test_tx.clone(), replacement_request)
                 .await;
             if let Err(ref e) = result {
-                eprintln!("Replace transaction failed with error: {:?}", e);
+                eprintln!("Replace transaction failed with error: {e:?}");
             }
             assert!(result.is_ok());
             let replaced_tx = result.unwrap();
@@ -3246,7 +3259,7 @@ mod tests {
         };
 
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
         let updated_tx = result.unwrap();
         assert_eq!(
             updated_tx.status,

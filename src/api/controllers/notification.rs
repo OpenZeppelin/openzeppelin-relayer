@@ -359,7 +359,7 @@ mod tests {
 
         // Create multiple test notifications
         for i in 1..=5 {
-            let notification = create_test_notification_model(&format!("test-{}", i));
+            let notification = create_test_notification_model(&format!("test-{i}"));
             app_state
                 .notification_repository
                 .create(notification)
@@ -907,7 +907,7 @@ mod tests {
             assert!(msg.contains("Stellar Relayer"));
             assert!(msg.contains("remove or reconfigure"));
         } else {
-            panic!("Expected BadRequest error, got: {:?}", error);
+            panic!("Expected BadRequest error, got: {error:?}");
         }
     }
 

@@ -261,6 +261,49 @@ impl ServerConfig {
         format!("{conf_dir}{config_file_name}")
     }
 
+    /// Gets the queue backend from environment variable or default.
+    ///
+    /// Supported values: "redis", "sqs"
+    /// Defaults to "redis" when not set.
+    pub fn get_queue_backend() -> String {
+        env::var("QUEUE_BACKEND").unwrap_or_else(|_| "redis".to_string())
+    }
+
+    /// Gets the SQS queue type from environment variable or default.
+    ///
+    /// Supported values: "auto" (default), "standard", "fifo"
+    /// - `auto`: auto-detect by probing queues at startup
+    /// - `standard` / `fifo`: skip probing, use the specified type directly
+    pub fn get_sqs_queue_type() -> String {
+        env::var("SQS_QUEUE_TYPE").unwrap_or_else(|_| "auto".to_string())
+    }
+
+    /// Gets the AWS region from environment variable.
+    ///
+    /// Required when using SQS queue backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_REGION is not set.
+    pub fn get_aws_region() -> Result<String, String> {
+        env::var("AWS_REGION")
+            .map_err(|_| "AWS_REGION not set. Required for SQS backend.".to_string())
+    }
+
+    /// Gets the AWS account ID from environment variable.
+    ///
+    /// Required when using SQS queue backend and SQS_QUEUE_URL_PREFIX is not provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_ACCOUNT_ID is not set.
+    pub fn get_aws_account_id() -> Result<String, String> {
+        env::var("AWS_ACCOUNT_ID").map_err(|_| {
+            "AWS_ACCOUNT_ID not set. Required when SQS_QUEUE_URL_PREFIX is not provided."
+                .to_string()
+        })
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
@@ -519,6 +562,19 @@ impl ServerConfig {
             .unwrap_or_else(|_| "30".to_string())
             .parse()
             .unwrap_or(30)
+    }
+
+    /// Gets whether distributed mode is enabled from the `DISTRIBUTED_MODE` environment variable.
+    ///
+    /// When `true`, distributed locks are used to coordinate across multiple instances
+    /// (e.g., preventing duplicate cron execution in multi-instance deployments).
+    /// When `false` (default), locks are skipped — appropriate for single-instance deployments.
+    ///
+    /// Defaults to `false`.
+    pub fn get_distributed_mode() -> bool {
+        env::var("DISTRIBUTED_MODE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
     }
 
     // =========================================================================
@@ -1291,8 +1347,7 @@ mod tests {
                 );
                 assert_eq!(
                     actual_env_var, expected_env_var,
-                    "Env var name should be correctly formatted for worker: {}",
-                    worker_name
+                    "Env var name should be correctly formatted for worker: {worker_name}"
                 );
             }
         }
@@ -1643,7 +1698,7 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("CONNECTION_BACKLOG", value.to_string());
                 let result = ServerConfig::get_connection_backlog();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("CONNECTION_BACKLOG");
@@ -1739,7 +1794,7 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
                 let result = ServerConfig::get_request_timeout_seconds();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("REQUEST_TIMEOUT_SECONDS");
@@ -1839,6 +1894,46 @@ mod tests {
 
             env::remove_var("REDIS_URL");
             env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_sqs_queue_type_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_auto_when_env_not_set() {
+            env::remove_var("SQS_QUEUE_TYPE");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "auto", "Should default to 'auto'");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_fifo_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "fifo");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "fifo");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_standard_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "standard");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "standard");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_raw_value_for_unknown() {
+            env::set_var("SQS_QUEUE_TYPE", "unknown");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "unknown");
+            env::remove_var("SQS_QUEUE_TYPE");
         }
     }
 

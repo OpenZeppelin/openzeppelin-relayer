@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn test_storage_enum_debug() {
         let storage = PluginRepositoryStorage::new_in_memory();
-        let debug_str = format!("{:?}", storage);
+        let debug_str = format!("{storage:?}");
         assert!(debug_str.contains("InMemory"));
     }
 
@@ -502,7 +502,7 @@ mod tests {
         let storage = PluginRepositoryStorage::new_in_memory();
 
         for i in 1..=10 {
-            let plugin = create_test_plugin(&format!("plugin-{}", i), &format!("/path/{}.js", i));
+            let plugin = create_test_plugin(&format!("plugin-{i}"), &format!("/path/{i}.js"));
             storage.add(plugin).await.unwrap();
         }
 
@@ -635,10 +635,7 @@ mod tests {
 
         for i in 1..=5 {
             storage
-                .add(create_test_plugin(
-                    &format!("p{}", i),
-                    &format!("/{}.js", i),
-                ))
+                .add(create_test_plugin(&format!("p{i}"), &format!("/{i}.js")))
                 .await
                 .unwrap();
         }
@@ -740,8 +737,8 @@ mod tests {
         for i in 1..=10 {
             storage
                 .add(create_test_plugin(
-                    &format!("plugin{}", i),
-                    &format!("/{}.js", i),
+                    &format!("plugin{i}"),
+                    &format!("/{i}.js"),
                 ))
                 .await
                 .unwrap();
@@ -766,8 +763,8 @@ mod tests {
         for i in 1..=10 {
             storage
                 .add(create_test_plugin(
-                    &format!("plugin{}", i),
-                    &format!("/{}.js", i),
+                    &format!("plugin{i}"),
+                    &format!("/{i}.js"),
                 ))
                 .await
                 .unwrap();
@@ -791,8 +788,8 @@ mod tests {
         for i in 1..=10 {
             storage
                 .add(create_test_plugin(
-                    &format!("plugin{}", i),
-                    &format!("/{}.js", i),
+                    &format!("plugin{i}"),
+                    &format!("/{i}.js"),
                 ))
                 .await
                 .unwrap();
@@ -816,8 +813,8 @@ mod tests {
         for i in 1..=5 {
             storage
                 .add(create_test_plugin(
-                    &format!("plugin{}", i),
-                    &format!("/{}.js", i),
+                    &format!("plugin{i}"),
+                    &format!("/{i}.js"),
                 ))
                 .await
                 .unwrap();
@@ -840,8 +837,8 @@ mod tests {
         for i in 1..=5 {
             storage
                 .add(create_test_plugin(
-                    &format!("plugin{}", i),
-                    &format!("/{}.js", i),
+                    &format!("plugin{i}"),
+                    &format!("/{i}.js"),
                 ))
                 .await
                 .unwrap();
@@ -967,7 +964,7 @@ mod tests {
 
         for i in 1..=5 {
             storage
-                .store_compiled_code(&format!("plugin-{}", i), &format!("code-{}", i), None)
+                .store_compiled_code(&format!("plugin-{i}"), &format!("code-{i}"), None)
                 .await
                 .unwrap();
         }
@@ -976,7 +973,7 @@ mod tests {
 
         for i in 1..=5 {
             assert!(!storage
-                .has_compiled_code(&format!("plugin-{}", i))
+                .has_compiled_code(&format!("plugin-{i}"))
                 .await
                 .unwrap());
         }
@@ -1196,9 +1193,9 @@ mod tests {
         for i in 1..=5 {
             storage
                 .store_compiled_code(
-                    &format!("plugin-{}", i),
-                    &format!("code for plugin {}", i),
-                    Some(&format!("hash-{}", i)),
+                    &format!("plugin-{i}"),
+                    &format!("code for plugin {i}"),
+                    Some(&format!("hash-{i}")),
                 )
                 .await
                 .unwrap();
@@ -1207,22 +1204,22 @@ mod tests {
         // Verify all
         for i in 1..=5 {
             assert!(storage
-                .has_compiled_code(&format!("plugin-{}", i))
+                .has_compiled_code(&format!("plugin-{i}"))
                 .await
                 .unwrap());
             assert_eq!(
                 storage
-                    .get_compiled_code(&format!("plugin-{}", i))
+                    .get_compiled_code(&format!("plugin-{i}"))
                     .await
                     .unwrap(),
-                Some(format!("code for plugin {}", i))
+                Some(format!("code for plugin {i}"))
             );
             assert_eq!(
                 storage
-                    .get_source_hash(&format!("plugin-{}", i))
+                    .get_source_hash(&format!("plugin-{i}"))
                     .await
                     .unwrap(),
-                Some(format!("hash-{}", i))
+                Some(format!("hash-{i}"))
             );
         }
 

@@ -149,6 +149,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         }
     }
 
@@ -223,7 +224,7 @@ mod tests {
                 assert_eq!(updated_data.sequence_number, Some(42));
                 assert_eq!(updated_data.signatures.len(), 1);
             }
-            Err(e) => panic!("Test failed with error: {:?}", e),
+            Err(e) => panic!("Test failed with error: {e:?}"),
         }
     }
 
@@ -292,7 +293,7 @@ mod tests {
                 assert!(updated_data.simulation_transaction_data.is_some());
                 assert_eq!(updated_data.signatures.len(), 1);
             }
-            Err(e) => panic!("Test failed with error: {:?}", e),
+            Err(e) => panic!("Test failed with error: {e:?}"),
         }
     }
 
@@ -519,7 +520,7 @@ mod tests {
                 assert!(msg.contains("not supported via operations path"));
                 assert!(msg.contains("fee bump"));
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 }

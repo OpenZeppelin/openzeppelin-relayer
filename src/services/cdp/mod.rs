@@ -704,7 +704,7 @@ mod tests {
                 assert!(!signature.is_empty());
             }
             Err(e) => {
-                panic!("Expected success but got error: {:?}", e);
+                panic!("Expected success but got error: {e:?}");
             }
         }
     }
@@ -745,7 +745,7 @@ mod tests {
                 assert!(!signed_tx.is_empty());
             }
             Err(e) => {
-                panic!("Expected success but got error: {:?}", e);
+                panic!("Expected success but got error: {e:?}");
             }
         }
     }
@@ -822,7 +822,7 @@ mod tests {
                 assert!(!signed_tx.is_empty());
             }
             Err(e) => {
-                panic!("Expected success but got error: {:?}", e);
+                panic!("Expected success but got error: {e:?}");
             }
         }
     }

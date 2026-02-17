@@ -836,7 +836,7 @@ mod tests {
             code: -32000,
             message: "insufficient funds".to_string(),
         };
-        let error_string = format!("{}", error);
+        let error_string = format!("{error}");
         assert!(error_string.contains("-32000"));
         assert!(error_string.contains("insufficient funds"));
     }
@@ -864,13 +864,12 @@ mod tests {
         // 5xx errors should mark provider as failed
         for status_code in 500..=599 {
             let error = ProviderError::RequestError {
-                error: format!("Server error {}", status_code),
+                error: format!("Server error {status_code}"),
                 status_code,
             };
             assert!(
                 should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
+                "Status code {status_code} should mark provider as failed"
             );
         }
     }
@@ -881,13 +880,12 @@ mod tests {
         let auth_errors = [401, 403];
         for &status_code in &auth_errors {
             let error = ProviderError::RequestError {
-                error: format!("Auth error {}", status_code),
+                error: format!("Auth error {status_code}"),
                 status_code,
             };
             assert!(
                 should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
+                "Status code {status_code} should mark provider as failed"
             );
         }
     }
@@ -898,13 +896,12 @@ mod tests {
         let not_found_errors = [404, 410];
         for &status_code in &not_found_errors {
             let error = ProviderError::RequestError {
-                error: format!("Not found error {}", status_code),
+                error: format!("Not found error {status_code}"),
                 status_code,
             };
             assert!(
                 should_mark_provider_failed(&error),
-                "Status code {} should mark provider as failed",
-                status_code
+                "Status code {status_code} should mark provider as failed"
             );
         }
     }
@@ -915,13 +912,12 @@ mod tests {
         let client_errors = [400, 405, 413, 414, 415, 422, 429];
         for &status_code in &client_errors {
             let error = ProviderError::RequestError {
-                error: format!("Client error {}", status_code),
+                error: format!("Client error {status_code}"),
                 status_code,
             };
             assert!(
                 !should_mark_provider_failed(&error),
-                "Status code {} should NOT mark provider as failed",
-                status_code
+                "Status code {status_code} should NOT mark provider as failed"
             );
         }
     }
@@ -941,8 +937,7 @@ mod tests {
         for error in errors {
             assert!(
                 !should_mark_provider_failed(&error),
-                "Error type {:?} should NOT mark provider as failed",
-                error
+                "Error type {error:?} should NOT mark provider as failed"
             );
         }
     }
@@ -960,7 +955,7 @@ mod tests {
 
         for (status_code, should_fail) in edge_cases {
             let error = ProviderError::RequestError {
-                error: format!("Edge case error {}", status_code),
+                error: format!("Edge case error {status_code}"),
                 status_code,
             };
             assert_eq!(
@@ -986,8 +981,7 @@ mod tests {
         for error in retriable_errors {
             assert!(
                 is_retriable_error(&error),
-                "Error type {:?} should be retriable",
-                error
+                "Error type {error:?} should be retriable"
             );
         }
     }
@@ -1007,8 +1001,7 @@ mod tests {
         for error in non_retriable_errors {
             assert!(
                 !is_retriable_error(&error),
-                "Error type {:?} should NOT be retriable",
-                error
+                "Error type {error:?} should NOT be retriable"
             );
         }
     }
@@ -1028,8 +1021,7 @@ mod tests {
             let error = ProviderError::Other(message.to_string());
             assert!(
                 is_retriable_error(&error),
-                "Error with message '{}' should be retriable",
-                message
+                "Error with message '{message}' should be retriable"
             );
         }
     }
@@ -1049,8 +1041,7 @@ mod tests {
             let error = ProviderError::Other(message.to_string());
             assert!(
                 !is_retriable_error(&error),
-                "Error with message '{}' should NOT be retriable",
-                message
+                "Error with message '{message}' should NOT be retriable"
             );
         }
     }
@@ -1074,8 +1065,7 @@ mod tests {
             let error = ProviderError::Other(message.to_string());
             assert!(
                 is_retriable_error(&error),
-                "Error with message '{}' should be retriable (case insensitive)",
-                message
+                "Error with message '{message}' should be retriable (case insensitive)"
             );
         }
     }
@@ -1103,9 +1093,7 @@ mod tests {
             };
             assert!(
                 is_retriable_error(&error),
-                "Status code {} ({}) should be retriable",
-                status_code,
-                description
+                "Status code {status_code} ({description}) should be retriable"
             );
         }
     }
@@ -1125,9 +1113,7 @@ mod tests {
             };
             assert!(
                 !is_retriable_error(&error),
-                "Status code {} ({}) should NOT be retriable",
-                status_code,
-                description
+                "Status code {status_code} ({description}) should NOT be retriable"
             );
         }
     }
@@ -1148,9 +1134,7 @@ mod tests {
             };
             assert!(
                 is_retriable_error(&error),
-                "Status code {} ({}) should be retriable",
-                status_code,
-                description
+                "Status code {status_code} ({description}) should be retriable"
             );
         }
     }
@@ -1194,9 +1178,7 @@ mod tests {
             };
             assert!(
                 !is_retriable_error(&error),
-                "Status code {} ({}) should NOT be retriable",
-                status_code,
-                description
+                "Status code {status_code} ({description}) should NOT be retriable"
             );
         }
     }
@@ -1225,9 +1207,7 @@ mod tests {
             };
             assert!(
                 !is_retriable_error(&error),
-                "Status code {} ({}) should NOT be retriable",
-                status_code,
-                description
+                "Status code {status_code} ({description}) should NOT be retriable"
             );
         }
     }

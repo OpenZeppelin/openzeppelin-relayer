@@ -1440,7 +1440,7 @@ mod tests {
         fn create_test_tx_with_age(seconds_ago: i64) -> TransactionRepoModel {
             let created_at = (Utc::now() - Duration::seconds(seconds_ago)).to_rfc3339();
             let mut tx = create_mock_transaction();
-            tx.id = format!("test-tx-{}", seconds_ago);
+            tx.id = format!("test-tx-{seconds_ago}");
             tx.created_at = created_at;
             tx.network_data = NetworkTransactionData::Stellar(StellarTransactionData {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"

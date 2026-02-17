@@ -1085,11 +1085,10 @@ mod tests {
                         "Policy violation: Token So11111111111111111111111111111111111111112 not \
                          allowed for transfers"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 }

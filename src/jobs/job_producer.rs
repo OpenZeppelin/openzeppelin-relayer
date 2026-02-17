@@ -8,16 +8,16 @@
 
 use crate::{
     jobs::{
-        Job, NotificationSend, Queue, RelayerHealthCheck, TransactionRequest, TransactionSend,
+        Job, NotificationSend, RelayerHealthCheck, TransactionRequest, TransactionSend,
         TransactionStatusCheck,
     },
     models::RelayerError,
     observability::request_id::get_request_id,
+    queues::{QueueBackend, QueueBackendStorage, QueueBackendType},
 };
-use apalis::prelude::Storage;
-use apalis_redis::RedisError;
 use async_trait::async_trait;
 use serde::Serialize;
+use std::sync::Arc;
 use thiserror::Error;
 use tracing::{debug, error};
 
@@ -32,24 +32,16 @@ pub enum JobProducerError {
     QueueError(String),
 }
 
-impl From<RedisError> for JobProducerError {
-    fn from(err: RedisError) -> Self {
-        error!(error = %err, "Redis error during job production");
-        JobProducerError::QueueError(err.to_string())
-    }
-}
-
 impl From<JobProducerError> for RelayerError {
     fn from(err: JobProducerError) -> Self {
         RelayerError::QueueError(err.to_string())
     }
 }
 
-/// Job producer that enqueues jobs to Redis-backed queues.
-///
+/// Job producer that enqueues jobs via the configured queue backend.
 #[derive(Debug, Clone)]
 pub struct JobProducer {
-    queue: Queue,
+    queue_backend: Arc<QueueBackendStorage>,
 }
 
 #[async_trait]
@@ -91,19 +83,35 @@ pub trait JobProducerTrait: Send + Sync {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError>;
 
-    async fn get_queue(&self) -> Result<Queue, JobProducerError>;
+    /// Returns active queue backend storage when available.
+    fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+        None
+    }
+
+    /// Returns active queue backend type.
+    fn backend_type(&self) -> QueueBackendType {
+        QueueBackendType::Redis
+    }
 }
 
 impl JobProducer {
-    pub fn new(queue: Queue) -> Self {
-        Self { queue }
+    pub fn new(queue_backend: Arc<QueueBackendStorage>) -> Self {
+        Self { queue_backend }
+    }
+
+    pub fn queue_backend(&self) -> Arc<QueueBackendStorage> {
+        self.queue_backend.clone()
     }
 }
 
 #[async_trait]
 impl JobProducerTrait for JobProducer {
-    async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-        Ok(self.queue.clone())
+    fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+        Some(self.queue_backend())
+    }
+
+    fn backend_type(&self) -> QueueBackendType {
+        self.queue_backend.backend_type()
     }
 
     async fn produce_transaction_request_job(
@@ -115,25 +123,21 @@ impl JobProducerTrait for JobProducer {
             "Producing transaction request job: {:?}",
             transaction_process_job
         );
-        // Clone the specific storage - this is cheap (Arc clone internally)
-        let mut storage = self.queue.transaction_request_queue.clone();
         let job = Job::new(JobType::TransactionRequest, transaction_process_job)
             .with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
 
-        match scheduled_on {
-            Some(scheduled_on) => {
-                storage.schedule(job, scheduled_on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_transaction_request(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
+
         debug!(
             job_type = %JobType::TransactionRequest,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -150,25 +154,22 @@ impl JobProducerTrait for JobProducer {
         transaction_submit_job: TransactionSend,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut storage = self.queue.transaction_submission_queue.clone();
         let job = Job::new(JobType::TransactionSend, transaction_submit_job)
             .with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
         let command = job.data.command.clone();
 
-        match scheduled_on {
-            Some(on) => {
-                storage.schedule(job, on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_transaction_submission(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
+
         debug!(
             job_type = %JobType::TransactionSend,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -191,30 +192,19 @@ impl JobProducerTrait for JobProducer {
             transaction_status_check_job.clone(),
         )
         .with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
 
-        // Route to the appropriate queue based on network type
-        // Clone the specific storage to avoid lock contention
-        use crate::models::NetworkType;
-        let mut storage = match transaction_status_check_job.network_type {
-            Some(NetworkType::Evm) => self.queue.transaction_status_queue_evm.clone(),
-            Some(NetworkType::Stellar) => self.queue.transaction_status_queue_stellar.clone(),
-            _ => self.queue.transaction_status_queue.clone(), // Generic queue or legacy messages without network_type
-        };
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_transaction_status_check(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
 
-        match scheduled_on {
-            Some(on) => {
-                storage.schedule(job, on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
         debug!(
             job_type = %JobType::TransactionStatusCheck,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             tx_id = %tx_id,
@@ -231,24 +221,20 @@ impl JobProducerTrait for JobProducer {
         notification_send_job: NotificationSend,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut storage = self.queue.notification_queue.clone();
         let job = Job::new(JobType::NotificationSend, notification_send_job)
             .with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let notification_id = job.data.notification_id.clone();
 
-        match scheduled_on {
-            Some(on) => {
-                storage.schedule(job, on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_notification(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
 
         debug!(
             job_type = %JobType::NotificationSend,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             notification_id = %notification_id,
@@ -263,24 +249,19 @@ impl JobProducerTrait for JobProducer {
         swap_request_job: TokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut storage = self.queue.token_swap_request_queue.clone();
         let job =
             Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
-
-        match scheduled_on {
-            Some(on) => {
-                storage.schedule(job, on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_token_swap_request(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
 
         debug!(
             job_type = %JobType::TokenSwapRequest,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             relayer_id = %relayer_id,
@@ -295,27 +276,22 @@ impl JobProducerTrait for JobProducer {
         relayer_health_check_job: RelayerHealthCheck,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let mut storage = self.queue.relayer_health_check_queue.clone();
         let job = Job::new(
             JobType::RelayerHealthCheck,
             relayer_health_check_job.clone(),
         )
         .with_request_id(get_request_id());
-        let job_id = job.message_id.clone();
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
-
-        match scheduled_on {
-            Some(scheduled_on) => {
-                storage.schedule(job, scheduled_on).await?;
-            }
-            None => {
-                storage.push(job).await?;
-            }
-        }
+        let backend = self.queue_backend();
+        let job_id = backend
+            .produce_relayer_health_check(job, scheduled_on)
+            .await
+            .map_err(|e| JobProducerError::QueueError(e.to_string()))?;
 
         debug!(
             job_type = %JobType::RelayerHealthCheck,
+            backend = %backend.backend_type(),
             job_id = %job_id,
             request_id = ?request_id,
             relayer_id = %relayer_id,
@@ -424,8 +400,8 @@ mod tests {
 
     #[async_trait]
     impl JobProducerTrait for TestJobProducer {
-        async fn get_queue(&self) -> Result<Queue, JobProducerError> {
-            unimplemented!("get_queue not used in tests")
+        fn get_queue_backend(&self) -> Option<Arc<QueueBackendStorage>> {
+            None
         }
 
         async fn produce_transaction_request_job(
@@ -1082,21 +1058,17 @@ mod tests {
         let producer = TestJobProducer::new();
 
         // Test with various scheduling delays
-        let delays = vec![1, 10, 60, 300, 3600]; // 1s, 10s, 1m, 5m, 1h
+        let delays = [1, 10, 60, 300, 3600]; // 1s, 10s, 1m, 5m, 1h
 
         for (idx, delay) in delays.iter().enumerate() {
-            let request = TransactionRequest::new(format!("tx-delay-{}", idx), "relayer-1");
+            let request = TransactionRequest::new(format!("tx-delay-{idx}"), "relayer-1");
             let timestamp = calculate_scheduled_timestamp(*delay);
 
             let result = producer
                 .produce_transaction_request_job(request, Some(timestamp))
                 .await;
 
-            assert!(
-                result.is_ok(),
-                "Failed to schedule job with delay {}",
-                delay
-            );
+            assert!(result.is_ok(), "Failed to schedule job with delay {delay}");
         }
     }
 

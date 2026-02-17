@@ -12,10 +12,16 @@ use std::{
     fs::{create_dir_all, metadata, File, OpenOptions},
     path::Path,
 };
-use tracing::info;
+use tracing::{info, subscriber::Interest, Metadata};
 use tracing_appender::non_blocking;
 use tracing_error::ErrorLayer;
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{
+    filter::LevelFilter,
+    fmt,
+    layer::{Context, Layer},
+    prelude::*,
+    EnvFilter,
+};
 
 use crate::constants::{
     DEFAULT_LOG_DIR, DEFAULT_LOG_FORMAT, DEFAULT_LOG_LEVEL, DEFAULT_LOG_MODE,
@@ -81,6 +87,30 @@ fn parse_level_filter(level: &str) -> LevelFilter {
     }
 }
 
+/// Keeps span contexts enabled at all levels regardless of output log filtering.
+#[derive(Default)]
+struct SpanKeepaliveLayer;
+
+impl<S> Layer<S> for SpanKeepaliveLayer
+where
+    S: tracing::Subscriber,
+{
+    fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
+        if metadata.is_span() {
+            // Force-enable spans so context can be constructed even when event output is filtered.
+            Interest::always()
+        } else {
+            // Let event filtering be handled by output layers/filters.
+            Interest::sometimes()
+        }
+    }
+
+    fn enabled(&self, _metadata: &Metadata<'_>, _ctx: Context<'_, S>) -> bool {
+        // Do not suppress events here; output layers still decide via their own filters.
+        true
+    }
+}
+
 /// Builds filter directives string by combining user configuration with default suppressions
 /// for noisy crates. Only adds suppressions for crates not explicitly configured by the user.
 fn build_filter_directives() -> String {
@@ -108,6 +138,12 @@ fn build_filter_directives() -> String {
     directives.join(",")
 }
 
+fn build_env_filter(default_level: LevelFilter, directives: &str) -> EnvFilter {
+    EnvFilter::builder()
+        .with_default_directive(default_level.into())
+        .parse_lossy(directives)
+}
+
 /// Sets up logging by reading configuration from environment variables.
 pub fn setup_logging() {
     // Set RUST_LOG from LOG_LEVEL if RUST_LOG is not already set
@@ -120,9 +156,7 @@ pub fn setup_logging() {
     // Configure filter, format, and mode from environment
     // Suppress noisy HTTP/TLS debug logs by default unless explicitly configured
     let default_level = parse_level_filter(DEFAULT_LOG_LEVEL);
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(default_level.into())
-        .parse_lossy(build_filter_directives());
+    let filter_directives = build_filter_directives();
 
     let format = env::var("LOG_FORMAT").unwrap_or_else(|_| DEFAULT_LOG_FORMAT.to_string());
     let log_mode = env::var("LOG_MODE").unwrap_or_else(|_| DEFAULT_LOG_MODE.to_string());
@@ -170,7 +204,7 @@ pub fn setup_logging() {
         match format.as_str() {
             "pretty" => {
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
                     .with(
                         fmt::layer()
@@ -179,13 +213,14 @@ pub fn setup_logging() {
                             .pretty()
                             .with_thread_ids(true)
                             .with_file(true)
-                            .with_line_number(true),
+                            .with_line_number(true)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
                     )
                     .init();
             }
             "json" => {
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
                     .with(
                         fmt::layer()
@@ -196,21 +231,23 @@ pub fn setup_logging() {
                             .with_span_list(true)
                             .with_thread_ids(true)
                             .with_file(true)
-                            .with_line_number(true),
+                            .with_line_number(true)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
                     )
                     .init();
             }
             _ => {
                 // compact is default
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
                     .with(
                         fmt::layer()
                             .with_writer(non_blocking_writer)
                             .with_ansi(false)
                             .compact()
-                            .with_target(false),
+                            .with_target(false)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
                     )
                     .init();
             }
@@ -220,20 +257,21 @@ pub fn setup_logging() {
         match format.as_str() {
             "pretty" => {
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
                     .with(
                         fmt::layer()
                             .pretty()
                             .with_thread_ids(true)
                             .with_file(true)
-                            .with_line_number(true),
+                            .with_line_number(true)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
                     )
                     .init();
             }
             "json" => {
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
                     .with(
                         fmt::layer()
@@ -242,16 +280,22 @@ pub fn setup_logging() {
                             .with_span_list(true)
                             .with_thread_ids(true)
                             .with_file(true)
-                            .with_line_number(true),
+                            .with_line_number(true)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
                     )
                     .init();
             }
             _ => {
                 // compact is default
                 tracing_subscriber::registry()
-                    .with(env_filter)
+                    .with(SpanKeepaliveLayer)
                     .with(ErrorLayer::default())
-                    .with(fmt::layer().compact().with_target(false))
+                    .with(
+                        fmt::layer()
+                            .compact()
+                            .with_target(false)
+                            .with_filter(build_env_filter(default_level, &filter_directives)),
+                    )
                     .init();
             }
         }
@@ -433,7 +477,7 @@ mod tests {
             env::set_var("LOG_MAX_SIZE", "1024"); // 1KB for testing
 
             // We don't call setup_logging() again, but we can test the directory creation logic
-            if let Some(parent) = Path::new(&format!("{}/relayer.log", log_path)).parent() {
+            if let Some(parent) = Path::new(&format!("{log_path}/relayer.log")).parent() {
                 create_dir_all(parent).expect("Failed to create log directory");
             }
 
@@ -822,6 +866,49 @@ mod tests {
     }
 
     #[test]
+    fn test_keepalive_layer_preserves_debug_span_context_at_warn_output() {
+        let _subscriber_guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry()
+                .with(SpanKeepaliveLayer)
+                .with(
+                    fmt::layer()
+                        .with_writer(std::io::sink)
+                        .with_filter(EnvFilter::new("warn")),
+                ),
+        );
+
+        let span = tracing::debug_span!("debug_ctx");
+        let _guard = span.enter();
+
+        crate::observability::request_id::set_request_id("keepalive-request-id");
+        assert_eq!(
+            crate::observability::request_id::get_request_id().as_deref(),
+            Some("keepalive-request-id")
+        );
+    }
+
+    #[test]
+    fn test_keepalive_layer_does_not_suppress_warn_events() {
+        let buffer = Arc::new(StdMutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(SpanKeepaliveLayer)
+            .with(
+                fmt::layer()
+                    .with_writer(test_helpers::TestMakeWriter(buffer.clone()))
+                    .with_ansi(false)
+                    .with_filter(EnvFilter::new("warn")),
+            );
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+        tracing::warn!(target: "openzeppelin_relayer", "keepalive warn event");
+        let output = test_helpers::get_output(&buffer);
+        assert!(
+            output.contains("keepalive warn event"),
+            "Warn event should be captured when keepalive layer is used"
+        );
+    }
+
+    #[test]
     fn test_build_filter_directives_no_rust_log() {
         // Lock mutex to prevent test interference
         let _guard = ENV_MUTEX.lock().unwrap();
@@ -897,8 +984,7 @@ mod tests {
         // Should NOT contain reqwest=warn since user configured it
         assert!(
             !result.contains("reqwest=warn"),
-            "Should not add reqwest=warn when user configured reqwest. Result: {}",
-            result
+            "Should not add reqwest=warn when user configured reqwest. Result: {result}"
         );
 
         // Should still contain other suppressions

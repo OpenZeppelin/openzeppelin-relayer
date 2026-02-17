@@ -1026,7 +1026,8 @@ mod tests {
             "policies": {
                 "min_balance": 40000000,
                 "max_fee": 300000,
-                "timeout_seconds": 180
+                "timeout_seconds": 180,
+                "fee_payment_strategy": "relayer"
             }
         }"#;
 

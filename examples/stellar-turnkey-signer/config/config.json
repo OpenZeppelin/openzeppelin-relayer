@@ -9,7 +9,8 @@
       "signer_id": "turnkey-signer-stellar",
       "network_type": "stellar",
       "policies": {
-        "min_balance": 0
+        "min_balance": 0,
+        "fee_payment_strategy": "relayer"
       }
     }
   ],

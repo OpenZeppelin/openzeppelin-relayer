@@ -897,7 +897,7 @@ mod tests {
     fn test_large_number_of_networks() {
         let mut networks = Vec::new();
         for i in 0..100 {
-            networks.push(create_evm_network_wrapped(&format!("network-{}", i)));
+            networks.push(create_evm_network_wrapped(&format!("network-{i}")));
         }
 
         let config = NetworksFileConfig::new(networks);
@@ -908,7 +908,7 @@ mod tests {
         // Test that all networks are accessible
         for i in 0..100 {
             assert!(config
-                .get_network(ConfigFileNetworkType::Evm, &format!("network-{}", i))
+                .get_network(ConfigFileNetworkType::Evm, &format!("network-{i}"))
                 .is_some());
         }
     }

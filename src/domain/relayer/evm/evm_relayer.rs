@@ -1206,7 +1206,7 @@ mod tests {
                     && statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(move |_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {
@@ -1292,7 +1292,7 @@ mod tests {
                 statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(|_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {
@@ -1433,7 +1433,7 @@ mod tests {
                     && statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(|_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {

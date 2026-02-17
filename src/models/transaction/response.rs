@@ -241,6 +241,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -288,6 +289,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -338,6 +340,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -394,6 +397,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -438,6 +442,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model);

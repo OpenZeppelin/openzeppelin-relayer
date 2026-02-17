@@ -641,7 +641,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
-            e => panic!("Expected InvalidAssetFormat, got: {:?}", e),
+            e => panic!("Expected InvalidAssetFormat, got: {e:?}"),
         }
 
         // Empty string
@@ -677,7 +677,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::EmptyIssuerAddress(_) => {}
-            e => panic!("Expected EmptyIssuerAddress, got: {:?}", e),
+            e => panic!("Expected EmptyIssuerAddress, got: {e:?}"),
         }
     }
 
@@ -689,7 +689,7 @@ mod tests {
             StellarTransactionUtilsError::InvalidIssuerLength(expected, _) => {
                 assert_eq!(expected, STELLAR_ADDRESS_LENGTH);
             }
-            e => panic!("Expected InvalidIssuerLength, got: {:?}", e),
+            e => panic!("Expected InvalidIssuerLength, got: {e:?}"),
         }
     }
 
@@ -703,7 +703,7 @@ mod tests {
             StellarTransactionUtilsError::InvalidIssuerPrefix(expected, _) => {
                 assert_eq!(expected, STELLAR_ACCOUNT_PREFIX);
             }
-            e => panic!("Expected InvalidIssuerPrefix, got: {:?}", e),
+            e => panic!("Expected InvalidIssuerPrefix, got: {e:?}"),
         }
     }
 
@@ -870,7 +870,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::InvalidAssetFormat(_) => {}
-            e => panic!("Expected InvalidAssetFormat, got: {:?}", e),
+            e => panic!("Expected InvalidAssetFormat, got: {e:?}"),
         }
     }
 
@@ -886,7 +886,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::EmptyAssetCode(_) => {}
-            e => panic!("Expected EmptyAssetCode, got: {:?}", e),
+            e => panic!("Expected EmptyAssetCode, got: {e:?}"),
         }
     }
 
@@ -905,7 +905,7 @@ mod tests {
                 assert_eq!(max, MAX_ASSET_CODE_LENGTH);
                 assert_eq!(code, "VERYLONGASSETCODE");
             }
-            e => panic!("Expected AssetCodeTooLong, got: {:?}", e),
+            e => panic!("Expected AssetCodeTooLong, got: {e:?}"),
         }
     }
 
@@ -917,7 +917,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::EmptyIssuerAddress(_) => {}
-            e => panic!("Expected EmptyIssuerAddress, got: {:?}", e),
+            e => panic!("Expected EmptyIssuerAddress, got: {e:?}"),
         }
     }
 
@@ -931,7 +931,7 @@ mod tests {
             StellarTransactionUtilsError::InvalidIssuerLength(expected, _) => {
                 assert_eq!(expected, STELLAR_ADDRESS_LENGTH);
             }
-            e => panic!("Expected InvalidIssuerLength, got: {:?}", e),
+            e => panic!("Expected InvalidIssuerLength, got: {e:?}"),
         }
     }
 
@@ -950,7 +950,7 @@ mod tests {
             StellarTransactionUtilsError::InvalidIssuerPrefix(expected, _) => {
                 assert_eq!(expected, STELLAR_ACCOUNT_PREFIX);
             }
-            e => panic!("Expected InvalidIssuerPrefix, got: {:?}", e),
+            e => panic!("Expected InvalidIssuerPrefix, got: {e:?}"),
         }
     }
 
@@ -1194,7 +1194,7 @@ mod tests {
                 assert_eq!(asset_id, asset);
                 assert_eq!(account_id, account);
             }
-            e => panic!("Expected NoTrustlineFound, got: {:?}", e),
+            e => panic!("Expected NoTrustlineFound, got: {e:?}"),
         }
     }
 
@@ -1222,7 +1222,7 @@ mod tests {
                 assert_eq!(asset_id, asset);
                 assert_eq!(account_id, account);
             }
-            e => panic!("Expected NoTrustlineFound, got: {:?}", e),
+            e => panic!("Expected NoTrustlineFound, got: {e:?}"),
         }
     }
 
@@ -1295,7 +1295,7 @@ mod tests {
                 assert_eq!(max, MAX_ASSET_CODE_LENGTH);
                 assert_eq!(code, "VERYLONGASSETCODE");
             }
-            e => panic!("Expected AssetCodeTooLong, got: {:?}", e),
+            e => panic!("Expected AssetCodeTooLong, got: {e:?}"),
         }
     }
 
@@ -1404,7 +1404,7 @@ mod tests {
                 assert_eq!(hi, 1);
                 assert_eq!(lo, 1000000);
             }
-            e => panic!("Expected BalanceTooLarge, got: {:?}", e),
+            e => panic!("Expected BalanceTooLarge, got: {e:?}"),
         }
     }
 
@@ -1429,7 +1429,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::NegativeBalanceI128(_) => {}
-            e => panic!("Expected NegativeBalanceI128, got: {:?}", e),
+            e => panic!("Expected NegativeBalanceI128, got: {e:?}"),
         }
     }
 
@@ -1512,7 +1512,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             StellarTransactionUtilsError::UnexpectedBalanceType(_) => {}
-            e => panic!("Expected UnexpectedBalanceType, got: {:?}", e),
+            e => panic!("Expected UnexpectedBalanceType, got: {e:?}"),
         }
     }
 

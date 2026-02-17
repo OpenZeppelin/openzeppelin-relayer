@@ -1199,7 +1199,7 @@ dependencies = [
  "apalis-core",
  "async-stream",
  "chrono",
- "cron",
+ "cron 0.15.0",
  "futures",
  "tower 0.5.3",
 ]
@@ -1683,6 +1683,29 @@ name = "aws-sdk-kms"
 version = "1.98.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50c74fef3d08159467cad98300f33a2e3bd1a985d527ad66ab0ea83c95e3a615"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sqs"
+version = "1.92.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a930bbcf95be5e2e1424c1df814265e86e5796ad0eac3104ebeb0180279ab7"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -2849,6 +2872,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "cron"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eee8b2b4516038bc0f1d3c9934bcb4a13dd316e04abbc63c96757a6d75978532"
+dependencies = [
+ "chrono",
+ "nom",
+ "once_cell",
 ]
 
 [[package]]
@@ -5632,6 +5666,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-kms",
+ "aws-sdk-sqs",
  "base64 0.22.1",
  "bincode",
  "bs58",
@@ -5641,6 +5676,7 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "cron 0.13.0",
  "crossbeam",
  "ctor",
  "dashmap 6.1.0",

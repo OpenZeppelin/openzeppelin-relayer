@@ -616,8 +616,7 @@ mod tests {
                 msg.contains("PLUGIN_POOL_CONNECT_RETRIES")
                     || msg.contains("PLUGIN_POOL_MAX_CONNECTIONS")
                     || msg.contains("Failed to connect"),
-                "Error message should contain helpful info: {}",
-                msg
+                "Error message should contain helpful info: {msg}"
             );
         }
     }
@@ -657,7 +656,7 @@ mod tests {
             let pool_clone = pool.clone();
             handles.push(tokio::spawn(async move {
                 let permit = pool_clone.semaphore.clone().acquire_owned().await;
-                assert!(permit.is_ok(), "Task {} should acquire permit", i);
+                assert!(permit.is_ok(), "Task {i} should acquire permit");
                 // Hold permit briefly
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }));

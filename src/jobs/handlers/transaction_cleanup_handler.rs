@@ -12,7 +12,6 @@
 //! ensuring the lock expires before the next scheduled run.
 
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, *};
 use chrono::{DateTime, Utc};
 use eyre::Result;
 use std::sync::Arc;
@@ -20,12 +19,17 @@ use std::time::Duration;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    constants::{FINAL_TRANSACTION_STATUSES, WORKER_TRANSACTION_CLEANUP_RETRIES},
+    config::ServerConfig,
+    constants::{
+        FINAL_TRANSACTION_STATUSES, TRANSACTION_CLEANUP_LOCK_TTL_SECS,
+        WORKER_TRANSACTION_CLEANUP_RETRIES,
+    },
     jobs::handle_result,
     models::{
         DefaultAppState, NetworkTransactionData, PaginationQuery, RelayerRepoModel,
         TransactionRepoModel, TransactionStatus,
     },
+    queues::{HandlerError, WorkerContext},
     repositories::{Repository, TransactionDeleteRequest, TransactionRepository},
     utils::DistributedLock,
 };
@@ -49,22 +53,6 @@ const MAX_CLEANUP_ITERATIONS_PER_STATUS: u32 = 1500;
 /// Only one instance across the cluster should run cleanup at a time.
 const CLEANUP_LOCK_NAME: &str = "transaction_cleanup";
 
-/// TTL for the distributed lock (9 minutes).
-///
-/// This value should be:
-/// 1. Greater than the worst-case cleanup runtime to prevent concurrent execution
-/// 2. Less than the cron interval (10 minutes) to ensure availability for the next run
-///
-/// If cleanup consistently takes longer than this TTL, another instance may acquire
-/// the lock and run concurrently. In that case, consider:
-/// - Increasing the TTL (and cron interval accordingly)
-/// - Optimizing the cleanup process
-/// - Implementing lock refresh during long-running operations
-///
-/// The lock is automatically released when processing completes (via Drop),
-/// so the TTL primarily serves as a safety net for crashed instances.
-const CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
-
 /// Handles periodic transaction cleanup jobs from the queue.
 ///
 /// This function processes expired transactions by:
@@ -77,29 +65,29 @@ const CLEANUP_LOCK_TTL_SECS: u64 = 9 * 60;
 /// # Arguments
 /// * `job` - The cron reminder job triggering the cleanup
 /// * `data` - Application state containing repositories
-/// * `attempt` - Current attempt number for retry logic
+/// * `ctx` - Worker context with attempt number and task ID
 ///
 /// # Returns
-/// * `Result<(), Error>` - Success or failure of cleanup processing
+/// * `Result<(), HandlerError>` - Success or failure of cleanup processing
 #[instrument(
     level = "debug",
     skip(job, data),
     fields(
         job_type = "transaction_cleanup",
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
     ),
     err
 )]
 pub async fn transaction_cleanup_handler(
     job: TransactionCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-) -> Result<(), Error> {
-    let result = handle_request(job, data, attempt.clone()).await;
+    data: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
+    let result = handle_request(job, &data).await;
 
     handle_result(
         result,
-        attempt,
+        &ctx,
         "TransactionCleanup",
         WORKER_TRANSACTION_CLEANUP_RETRIES,
     )
@@ -118,49 +106,53 @@ pub struct TransactionCleanupCronReminder();
 /// # Arguments
 /// * `_job` - The cron reminder job (currently unused)
 /// * `data` - Application state containing repositories
-/// * `_attempt` - Current attempt number (currently unused)
 ///
 /// # Returns
 /// * `Result<()>` - Success or failure of the cleanup operation
 async fn handle_request(
     _job: TransactionCleanupCronReminder,
-    data: Data<ThinData<DefaultAppState>>,
-    _attempt: Attempt,
+    data: &ThinData<DefaultAppState>,
 ) -> Result<()> {
     let transaction_repo = data.transaction_repository();
 
-    // Attempt to acquire distributed lock to prevent multiple instances from
-    // running cleanup simultaneously. This is necessary because CronStream
-    // is local to each instance, not distributed via Redis queues.
-    // The lock key includes the relayer prefix to support multi-tenant deployments.
-    // Key format: {prefix}:lock:{name} (e.g., "oz-relayer:lock:transaction_cleanup")
-    let lock_guard = if let Some((conn, prefix)) = transaction_repo.connection_info() {
-        let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
-        let lock =
-            DistributedLock::new(conn, &lock_key, Duration::from_secs(CLEANUP_LOCK_TTL_SECS));
+    // In distributed mode, acquire a lock to prevent multiple instances from
+    // running cleanup simultaneously. In single-instance mode, skip locking.
+    let lock_guard = if ServerConfig::get_distributed_mode() {
+        if let Some((connections, prefix)) = transaction_repo.connection_info() {
+            let conn = connections.primary().clone();
+            let lock_key = format!("{prefix}:lock:{CLEANUP_LOCK_NAME}");
+            let lock = DistributedLock::new(
+                conn,
+                &lock_key,
+                Duration::from_secs(TRANSACTION_CLEANUP_LOCK_TTL_SECS),
+            );
 
-        match lock.try_acquire().await {
-            Ok(Some(guard)) => {
-                debug!(lock_key = %lock_key, "acquired distributed lock for transaction cleanup");
-                Some(guard)
+            match lock.try_acquire().await {
+                Ok(Some(guard)) => {
+                    debug!(lock_key = %lock_key, "acquired distributed lock for transaction cleanup");
+                    Some(guard)
+                }
+                Ok(None) => {
+                    info!(lock_key = %lock_key, "transaction cleanup skipped - another instance is processing");
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Fail closed: skip cleanup if we can't communicate with Redis for locking,
+                    // to prevent concurrent execution across multiple instances
+                    warn!(
+                        error = %e,
+                        lock_key = %lock_key,
+                        "failed to acquire distributed lock, skipping cleanup"
+                    );
+                    return Ok(());
+                }
             }
-            Ok(None) => {
-                info!(lock_key = %lock_key, "transaction cleanup skipped - another instance is processing");
-                return Ok(());
-            }
-            Err(e) => {
-                // If we can't communicate with Redis for locking, log warning but proceed
-                // This maintains backwards compatibility and handles Redis connection issues
-                warn!(
-                    error = %e,
-                    lock_key = %lock_key,
-                    "failed to acquire distributed lock, proceeding with cleanup anyway"
-                );
-                None
-            }
+        } else {
+            debug!("in-memory repository detected, skipping distributed lock");
+            None
         }
     } else {
-        debug!("in-memory repository detected, skipping distributed lock");
+        debug!("distributed mode disabled, skipping lock acquisition");
         None
     };
 
@@ -780,7 +772,7 @@ mod tests {
 
         for i in 0..5 {
             let tx = create_test_transaction(
-                &format!("expired-tx-{}", i),
+                &format!("expired-tx-{i}"),
                 relayer_id,
                 TransactionStatus::Confirmed,
                 Some(expired_delete_at.clone()),
@@ -792,7 +784,7 @@ mod tests {
         assert_eq!(transaction_repo.count().await.unwrap(), 5);
 
         // Delete them using batch delete
-        let ids: Vec<String> = (0..5).map(|i| format!("expired-tx-{}", i)).collect();
+        let ids: Vec<String> = (0..5).map(|i| format!("expired-tx-{i}")).collect();
         let result = transaction_repo.delete_by_ids(ids).await.unwrap();
 
         assert_eq!(result.deleted_count, 5);
@@ -1189,7 +1181,7 @@ mod tests {
         // Create 5 confirmed transactions
         for i in 1..=5 {
             let mut tx = create_test_transaction(
-                &format!("tx-{}", i),
+                &format!("tx-{i}"),
                 relayer_id,
                 TransactionStatus::Confirmed,
                 None,

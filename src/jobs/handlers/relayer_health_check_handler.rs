@@ -13,6 +13,7 @@ use crate::{
         TransactionRepoModel,
     },
     observability::request_id::set_request_id,
+    queues::{HandlerError, WorkerContext},
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
@@ -20,7 +21,6 @@ use crate::{
     utils::calculate_scheduled_timestamp,
 };
 use actix_web::web::ThinData;
-use apalis::prelude::{Attempt, Data, TaskId, *};
 use eyre::Result;
 use std::time::Duration;
 use tracing::{debug, info, instrument, warn};
@@ -44,7 +44,7 @@ use tracing::{debug, info, instrument, warn};
 ///
 /// * `job` - The job containing relayer health check data
 /// * `app_state` - Application state with repositories and services
-/// * `attempt` - Current attempt number for retry logic
+/// * `ctx` - Worker context with attempt number and task ID
 ///
 /// # Returns
 ///
@@ -56,31 +56,30 @@ use tracing::{debug, info, instrument, warn};
         request_id = ?job.request_id,
         job_id = %job.message_id,
         job_type = %job.job_type.to_string(),
-        attempt = %attempt.current(),
+        attempt = %ctx.attempt,
         relayer_id = %job.data.relayer_id,
-        task_id = %task_id.to_string(),
+        task_id = %ctx.task_id,
     )
 )]
 pub async fn relayer_health_check_handler(
     job: Job<RelayerHealthCheck>,
-    app_state: Data<ThinData<DefaultAppState>>,
-    attempt: Attempt,
-    task_id: TaskId,
-) -> Result<(), Error> {
+    app_state: ThinData<DefaultAppState>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError> {
     if let Some(request_id) = job.request_id.clone() {
         set_request_id(request_id);
     }
 
-    relayer_health_check_handler_impl(job, app_state, attempt).await
+    relayer_health_check_handler_impl(job, app_state, ctx).await
 }
 
 /// Generic implementation of the health check handler
 #[allow(clippy::type_complexity)]
 async fn relayer_health_check_handler_impl<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     job: Job<RelayerHealthCheck>,
-    app_state: Data<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-    attempt: Attempt,
-) -> Result<(), Error>
+    app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    ctx: WorkerContext,
+) -> Result<(), HandlerError>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -95,7 +94,7 @@ where
     let result = check_and_reenable_relayer(job.data, &app_state).await;
     handle_result(
         result,
-        attempt,
+        &ctx,
         "relayer_health_check",
         WORKER_DEFAULT_MAXIMUM_RETRIES,
     )
@@ -303,7 +302,7 @@ mod tests {
     fn create_disabled_relayer(id: &str) -> RelayerRepoModel {
         RelayerRepoModel {
             id: id.to_string(),
-            name: format!("Relayer {}", id),
+            name: format!("Relayer {id}"),
             network: "sepolia".to_string(),
             paused: false,
             network_type: NetworkType::Evm,
@@ -368,7 +367,7 @@ mod tests {
         relayer_repo.create(relayer).await.unwrap();
 
         // Create app state
-        let app_state = Data::new(actix_web::web::ThinData(AppState {
+        let app_state = actix_web::web::ThinData(AppState {
             relayer_repository: relayer_repo,
             transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
             signer_repository: Arc::new(SignerRepositoryStorage::new_in_memory()),
@@ -380,15 +379,15 @@ mod tests {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
-        }));
+        });
 
         // Create job
         let health_check = RelayerHealthCheck::new("test-handler-enabled".to_string());
         let job = Job::new(crate::jobs::JobType::RelayerHealthCheck, health_check);
-        let attempt = Attempt::new_with_value(1);
+        let ctx = WorkerContext::new(1, "test-task".into());
 
         // Call the handler implementation - should exit early
-        let result = relayer_health_check_handler_impl(job, app_state, attempt).await;
+        let result = relayer_health_check_handler_impl(job, app_state, ctx).await;
 
         // Should succeed (exits early)
         assert!(result.is_ok());
@@ -553,14 +552,13 @@ mod tests {
             let delay = calculate_backoff_delay(retry);
             if delay < Duration::from_secs(60) {
                 // Before cap, should increase
-                assert!(delay > prev_delay, "Retry {}: delay should increase", retry);
+                assert!(delay > prev_delay, "Retry {retry}: delay should increase");
             } else {
                 // At or after cap, should stay at 60
                 assert_eq!(
                     delay,
                     Duration::from_secs(60),
-                    "Retry {}: should cap at 60s",
-                    retry
+                    "Retry {retry}: should cap at 60s"
                 );
             }
             prev_delay = delay;

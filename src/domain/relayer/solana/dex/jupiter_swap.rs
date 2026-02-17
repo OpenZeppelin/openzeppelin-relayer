@@ -345,11 +345,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to get Jupiter quote")
                         && error_message.contains("insufficient liquidity"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -410,11 +409,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to get swap transaction")
                         && error_message.contains("rate limit exceeded"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -473,11 +471,10 @@ mod tests {
             Err(RelayerError::DexError(error_message)) => {
                 assert!(
                     error_message.contains("Failed to decode swap transaction"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -549,11 +546,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to sign Dex transaction")
                         && error_message.contains("Failed to sign: invalid key"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected DexError but got different error: {:?}", e),
+            Err(e) => panic!("Expected DexError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -631,11 +627,10 @@ mod tests {
                 assert!(
                     error_message.contains("Failed to send transaction")
                         && error_message.contains("Insufficient balance"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected ProviderError but got different error: {:?}", e),
+            Err(e) => panic!("Expected ProviderError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }
@@ -718,11 +713,10 @@ mod tests {
                 assert!(
                     error_message.contains("Transaction failed to confirm")
                         && error_message.contains("Transaction timed out"),
-                    "Error message did not contain expected substrings: {}",
-                    error_message
+                    "Error message did not contain expected substrings: {error_message}"
                 );
             }
-            Err(e) => panic!("Expected ProviderError but got different error: {:?}", e),
+            Err(e) => panic!("Expected ProviderError but got different error: {e:?}"),
             Ok(_) => panic!("Expected error but got Ok"),
         }
     }

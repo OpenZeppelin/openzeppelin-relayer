@@ -1068,7 +1068,7 @@ mod tests {
             assert!(msg.contains("Stellar Relayer"));
             assert!(msg.contains("remove or reconfigure"));
         } else {
-            panic!("Expected BadRequest error, got: {:?}", error);
+            panic!("Expected BadRequest error, got: {error:?}");
         }
     }
 

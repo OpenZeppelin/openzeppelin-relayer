@@ -1234,7 +1234,7 @@ mod tests {
                     && statuses == [TransactionStatus::Confirmed]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == false
+                    && !(*oldest_first)
             })
             .returning(move |_, _, _, _| {
                 Ok(crate::repositories::PaginatedResult {
@@ -2070,7 +2070,7 @@ mod tests {
 
             let result = relayer.process_transaction_request(tx_request).await;
             if let Err(e) = &result {
-                panic!("process_transaction_request failed: {}", e);
+                panic!("process_transaction_request failed: {e}");
             }
             assert!(result.is_ok());
         }
@@ -2106,8 +2106,9 @@ mod tests {
                         let now = Utc::now().timestamp();
                         let diff = scheduled_at - now;
                         // Allow some tolerance (within 2 seconds)
-                        diff >= (STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS - 2)
-                            && diff <= (STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS + 2)
+                        ((STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS - 2)
+                            ..=(STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS + 2))
+                            .contains(&diff)
                     } else {
                         false
                     }
@@ -2186,8 +2187,7 @@ mod tests {
             let err_msg = result.err().unwrap().to_string();
             assert!(
                 err_msg.contains("Database connection failed"),
-                "Error was: {}",
-                err_msg
+                "Error was: {err_msg}"
             );
         }
 

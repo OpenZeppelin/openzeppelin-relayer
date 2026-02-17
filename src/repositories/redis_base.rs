@@ -847,7 +847,7 @@ mod tests {
                 {
                     // Expected for connection/client errors
                 }
-                _ => panic!("Unexpected error type for {:?}", kind),
+                _ => panic!("Unexpected error type for {kind:?}"),
             }
         }
     }
@@ -911,8 +911,7 @@ mod tests {
                 RepositoryError::ConnectionError(msg) => {
                     assert!(
                         msg.contains(context),
-                        "Context '{}' should appear in error message",
-                        context
+                        "Context '{context}' should appear in error message"
                     );
                 }
                 _ => panic!("Expected ConnectionError"),

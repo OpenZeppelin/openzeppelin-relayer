@@ -496,7 +496,7 @@ mod tests {
             emit_traces: false,
             raw_response: false,
             allow_get_invocation: false,
-            config: config_value.as_object().map(|m| m.clone()),
+            config: config_value.as_object().cloned(),
             forward_logs: false,
         };
         let app_state =
@@ -533,7 +533,7 @@ mod tests {
             emit_traces: false,
             raw_response: true,
             allow_get_invocation: false,
-            config: config_value.as_object().map(|m| m.clone()),
+            config: config_value.as_object().cloned(),
             forward_logs: false,
         };
         let app_state =
