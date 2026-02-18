@@ -223,6 +223,12 @@ The plugin implements the API defined by the x402 v2 spec, making it compatible 
 
 To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (and similar packages), point the facilitator to your Relayer plugin URL and pass the Relayer API key via `createAuthHeaders`:
 
+**.env**
+```text
+STELLAR_ADDRESS=
+FACILITATOR_URL=http://localhost:8080/api/v1/plugins/x402-facilitator/call
+```
+
 ```typescript
 import { config } from "dotenv";
 import express from "express";
