@@ -108,7 +108,7 @@ Note on `path`: this is the plugin entrypoint path as seen by the running Relaye
 - `emit_traces`: Whether to include plugin traces in API responses (default: false)
 - `raw_response`: Whether to return raw plugin response without ApiResponse wrapper (default: false, recommended for x402 compatibility)
 - `config.networks`: Array of network configurations
-  - `network`: Network identifier (e.g., "stellar-testnet", "stellar")
+  - `network`: Network identifier (e.g., "stellar:testnet", "stellar:pubnet")
   - `type`: Network type (must be "stellar")
   - `relayer_id`: ID of the relayer to use for this network
   - `assets`: Array of supported asset contract addresses
@@ -227,7 +227,7 @@ import { paymentMiddleware } from "x402-express";
 
 const facilitatorUrl =
   "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
-const network = "stellar-testnet";
+const network = "stellar:testnet";
 const payTo = "G..."; // Payment receiver G address
 
 app.use(

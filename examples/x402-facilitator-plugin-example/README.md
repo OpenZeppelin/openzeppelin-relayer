@@ -147,7 +147,7 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
       "config": {
         "networks": [
           {
-            "network": "stellar-testnet",
+            "network": "stellar:testnet",
             "type": "stellar",
             "relayer_id": "stellar-example",
             "assets": [
@@ -165,7 +165,7 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
 
 - `networks`: Array of network configurations
   - `type`: Network type (e.g., "stellar")
-  - `network`: Network identifier (e.g., "stellar-testnet", "stellar")
+  - `network`: Network identifier (e.g., "stellar:testnet", "stellar:pubnet")
   - `relayer_id`: ID of the relayer to use for this network
   - `assets`: Array of supported asset contract addresses
   - `channel_service_api_url` (optional): Channel service API URL for settlement
@@ -207,7 +207,7 @@ To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (a
 import { paymentMiddleware } from "x402-express";
 
 const facilitatorUrl = "https://your-relayer-host/api/v1/plugins/x402-facilitator/call";
-const network = "stellar-testnet";
+const network = "stellar:testnet";
 const payTo = "G..."; // Payment receiver G address
 
 app.use(
