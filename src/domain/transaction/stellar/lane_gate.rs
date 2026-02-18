@@ -138,7 +138,7 @@ mod tests {
                 thread::spawn(move || {
                     barrier.wait(); // start together
                     for a in 0..ATTEMPTS {
-                        let tx = format!("t{}-{}", idx, a);
+                        let tx = format!("t{idx}-{a}");
                         if claim("relayer", &tx) {
                             let cur = active.fetch_add(1, Ordering::SeqCst) + 1;
                             // record maximum concurrent owners

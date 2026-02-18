@@ -57,6 +57,12 @@ pub enum JobType {
 pub struct TransactionRequest {
     pub transaction_id: String,
     pub relayer_id: String,
+    /// Network type for this transaction request.
+    /// Used by SQS backend to choose the FIFO message group strategy:
+    /// EVM uses relayer_id (nonce ordering), others use transaction_id (parallelism).
+    /// Optional for backward compatibility with older queued messages.
+    #[serde(default)]
+    pub network_type: Option<NetworkType>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
@@ -65,8 +71,14 @@ impl TransactionRequest {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
+            network_type: None,
             metadata: None,
         }
+    }
+
+    pub fn with_network_type(mut self, network_type: NetworkType) -> Self {
+        self.network_type = Some(network_type);
+        self
     }
 
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
@@ -89,19 +101,28 @@ pub struct TransactionSend {
     pub transaction_id: String,
     pub relayer_id: String,
     pub command: TransactionCommand,
+    /// Network type for this transaction submission.
+    /// Used by SQS backend to choose the FIFO message group strategy:
+    /// EVM uses relayer_id (nonce ordering), others use transaction_id (parallelism).
+    /// Optional for backward compatibility with older queued messages.
+    #[serde(default)]
+    pub network_type: Option<NetworkType>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
 impl TransactionSend {
+    // Submit a transaction to the relayer
     pub fn submit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
             command: TransactionCommand::Submit,
+            network_type: None,
             metadata: None,
         }
     }
 
+    // Cancel a transaction
     pub fn cancel(
         transaction_id: impl Into<String>,
         relayer_id: impl Into<String>,
@@ -113,28 +134,40 @@ impl TransactionSend {
             command: TransactionCommand::Cancel {
                 reason: reason.into(),
             },
+            network_type: None,
             metadata: None,
         }
     }
 
+    // Resubmit a transaction
     pub fn resubmit(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
             command: TransactionCommand::Resubmit,
+            network_type: None,
             metadata: None,
         }
     }
 
+    // Resend a transaction
     pub fn resend(transaction_id: impl Into<String>, relayer_id: impl Into<String>) -> Self {
         Self {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
             command: TransactionCommand::Resend,
+            network_type: None,
             metadata: None,
         }
     }
 
+    // Set the network type for this transaction submission
+    pub fn with_network_type(mut self, network_type: NetworkType) -> Self {
+        self.network_type = Some(network_type);
+        self
+    }
+
+    // Set the metadata for this transaction submission
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = Some(metadata);
         self
@@ -154,6 +187,7 @@ pub struct TransactionStatusCheck {
 }
 
 impl TransactionStatusCheck {
+    // Create a new transaction status check
     pub fn new(
         transaction_id: impl Into<String>,
         relayer_id: impl Into<String>,
@@ -167,6 +201,7 @@ impl TransactionStatusCheck {
         }
     }
 
+    // Set the metadata for this transaction status check
     pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
         self.metadata = Some(metadata);
         self
@@ -386,7 +421,7 @@ mod tests {
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                panic!("Deserialization error: {}", e);
+                panic!("Deserialization error: {e}");
             }
         }
     }
@@ -428,7 +463,7 @@ mod tests {
                 assert_eq!(notification_send, deserialized);
             }
             Err(e) => {
-                panic!("Deserialization error: {}", e);
+                panic!("Deserialization error: {e}");
             }
         }
     }

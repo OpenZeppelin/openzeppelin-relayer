@@ -432,7 +432,7 @@ mod tests {
         let config = create_evm_config("mainnet", 1, "ETH");
         let network_repo = NetworkRepoModel::new_evm(config);
 
-        let debug_str = format!("{:?}", network_repo);
+        let debug_str = format!("{network_repo:?}");
         assert!(debug_str.contains("NetworkRepoModel"));
         assert!(debug_str.contains("mainnet"));
         assert!(debug_str.contains("Evm"));

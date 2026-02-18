@@ -181,7 +181,7 @@ mod tests {
         let aad = "oz-relayer:signer:sync-test-id".to_string();
 
         // with_aad_sync should set context for synchronous code
-        let result = EncryptionContext::with_aad_sync(aad.clone(), || EncryptionContext::get());
+        let result = EncryptionContext::with_aad_sync(aad.clone(), EncryptionContext::get);
 
         assert_eq!(result, Some(aad));
     }
@@ -198,7 +198,7 @@ mod tests {
 
             // Nested context shadows outer
             let inner_result =
-                EncryptionContext::with_aad_sync(inner_aad.clone(), || EncryptionContext::get());
+                EncryptionContext::with_aad_sync(inner_aad.clone(), EncryptionContext::get);
             assert_eq!(inner_result, Some(inner_aad));
 
             // Back to outer context

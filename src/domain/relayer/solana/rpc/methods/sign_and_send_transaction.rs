@@ -691,18 +691,16 @@ mod tests {
                 assert!(
                     error_string
                         .contains("Insufficient balance for cumulative transfers: account "),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
                 assert!(
                     error_string.contains(
                         "has balance 1000000 but requires 6000000 across all instructions"
                     ),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 
@@ -869,11 +867,10 @@ mod tests {
                 let error_string = err.to_string();
                 assert!(
                     error_string.contains("Insufficient balance:"),
-                    "Unexpected error message: {}",
-                    err
+                    "Unexpected error message: {err}"
                 );
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 

@@ -1241,8 +1241,7 @@ mod tests {
 
         assert!(
             simulation_result.is_ok(),
-            "Simulation failed: {:?}",
-            simulation_result
+            "Simulation failed: {simulation_result:?}"
         );
 
         let result = simulation_result.unwrap();
@@ -1860,7 +1859,7 @@ mod tests {
             error: "Server error".to_string(),
             status_code: 500,
         };
-        let error_str = format!("{}", error);
+        let error_str = format!("{error}");
         assert!(error_str.contains("HTTP 500"));
         assert!(error_str.contains("Server error"));
     }

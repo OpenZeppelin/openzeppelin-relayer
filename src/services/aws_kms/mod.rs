@@ -507,6 +507,12 @@ pub mod tests {
         pub public_key_raw: [u8; 32],
     }
 
+    impl Default for TestEd25519Keys {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl TestEd25519Keys {
         pub fn new() -> Self {
             // Well-known test Ed25519 public key (32 bytes)

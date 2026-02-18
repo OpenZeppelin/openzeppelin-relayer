@@ -41,8 +41,7 @@ mod tests {
         for code in codes {
             assert!(
                 !(code >= -32099 && code <= -32000),
-                "Code {} is part of the reserved range for implementation-defined server errors",
-                code
+                "Code {code} is part of the reserved range for implementation-defined server errors"
             );
         }
     }
@@ -81,8 +80,7 @@ mod tests {
         for code in codes {
             assert!(
                 code <= -33000,
-                "All OpenZeppelin codes should be <= -33000, found: {}",
-                code
+                "All OpenZeppelin codes should be <= -33000, found: {code}"
             );
         }
     }

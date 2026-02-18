@@ -13,10 +13,10 @@
 //! for error handling.
 use crate::{
     constants::{STELLAR_HORIZON_MAINNET_URL, STELLAR_HORIZON_TESTNET_URL},
-    jobs::JobProducer,
+    jobs::{JobProducer, StatusCheckContext},
     models::{
         EvmNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel, SignerRepoModel,
-        SolanaNetwork, StellarNetwork, TransactionError, TransactionRepoModel,
+        SolanaNetwork, StellarNetwork, StellarSwapStrategy, TransactionError, TransactionRepoModel,
     },
     repositories::{
         NetworkRepository, NetworkRepositoryStorage, RelayerRepositoryStorage,
@@ -29,7 +29,7 @@ use crate::{
         },
         provider::get_network_provider,
         signer::{EvmSignerFactory, SolanaSignerFactory, StellarSignerFactory},
-        stellar_dex::OrderBookService,
+        stellar_dex::{DexServiceWrapper, OrderBookService, SoroswapService, StellarDexService},
     },
 };
 use async_trait::async_trait;
@@ -37,6 +37,7 @@ use eyre::Result;
 #[cfg(test)]
 use mockall::automock;
 use std::sync::Arc;
+use tracing::instrument;
 
 pub mod common;
 pub mod evm;
@@ -106,6 +107,9 @@ pub trait Transaction {
     ///
     /// * `tx` - A `TransactionRepoModel` representing the transaction whose status is to be
     ///   handled.
+    /// * `context` - Optional `StatusCheckContext` containing failure tracking information
+    ///   for circuit breaker decisions. When provided, handlers can use this to decide
+    ///   whether to force-finalize a transaction that has exceeded retry limits.
     ///
     /// # Returns
     ///
@@ -113,6 +117,7 @@ pub trait Transaction {
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
     /// Cancels a transaction.
@@ -193,6 +198,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the prepared `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn prepare_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -213,6 +229,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the submitted `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn submit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -232,6 +259,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the resubmitted `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn resubmit_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -249,18 +287,39 @@ impl Transaction for NetworkTransaction {
     ///
     /// * `tx` - A `TransactionRepoModel` representing the transaction whose status is to be
     ///   handled.
+    /// * `context` - Optional `StatusCheckContext` containing failure tracking information
+    ///   for circuit breaker decisions.
     ///
     /// # Returns
     ///
     /// A `Result` containing the updated `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx, context),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+            has_context = %context.is_some(),
+        )
+    )]
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         match self {
-            NetworkTransaction::Evm(relayer) => relayer.handle_transaction_status(tx).await,
-            NetworkTransaction::Solana(relayer) => relayer.handle_transaction_status(tx).await,
-            NetworkTransaction::Stellar(relayer) => relayer.handle_transaction_status(tx).await,
+            NetworkTransaction::Evm(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
+            NetworkTransaction::Solana(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
+            NetworkTransaction::Stellar(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
         }
     }
 
@@ -273,6 +332,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the canceled `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn cancel_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -294,6 +364,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the new `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, old_tx, new_tx_request),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %old_tx.id,
+            relayer_id = %old_tx.relayer_id,
+            tx_status = ?old_tx.status,
+            network_type = ?old_tx.network_type,
+        )
+    )]
     async fn replace_transaction(
         &self,
         old_tx: TransactionRepoModel,
@@ -319,6 +400,17 @@ impl Transaction for NetworkTransaction {
     /// # Returns
     ///
     /// A `Result` containing the signed `TransactionRepoModel` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn sign_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -340,6 +432,17 @@ impl Transaction for NetworkTransaction {
     ///
     /// A `Result` containing a boolean indicating the validity of the transaction or a
     /// `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(self, tx),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_status = ?tx.status,
+            network_type = ?tx.network_type,
+        )
+    )]
     async fn validate_transaction(
         &self,
         tx: TransactionRepoModel,
@@ -393,6 +496,23 @@ impl RelayerTransactionFactory {
     /// # Returns
     ///
     /// A `Result` containing the created `NetworkTransaction` or a `TransactionError`.
+    #[instrument(
+        level = "debug",
+        skip(
+            relayer,
+            signer,
+            relayer_repository,
+            network_repository,
+            transaction_repository,
+            transaction_counter_store,
+            job_producer
+        ),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %relayer.id,
+            network_type = ?relayer.network_type,
+        )
+    )]
     pub async fn create_transaction(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,
@@ -515,7 +635,7 @@ impl RelayerTransactionFactory {
                     get_network_provider(&network, relayer.custom_rpc_urls.clone())
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
 
-                // Create DEX service for swap operations and validations using Horizon API
+                // Create DEX service for swap operations and validations
                 let horizon_url = network.horizon_url.clone().unwrap_or_else(|| {
                     if network.is_testnet() {
                         STELLAR_HORIZON_TESTNET_URL.to_string()
@@ -526,13 +646,80 @@ impl RelayerTransactionFactory {
                 let provider_arc = Arc::new(stellar_provider.clone());
                 // Clone Arc for DEX service (cheap - just increments reference count)
                 let signer_arc = signer_service.clone();
-                let dex_service = Arc::new(
-                    OrderBookService::new(horizon_url, provider_arc, signer_arc).map_err(|e| {
-                        TransactionError::NetworkConfiguration(format!(
-                            "Failed to create DEX service: {e}",
-                        ))
-                    })?,
-                );
+
+                // Get strategies from relayer policy (default to OrderBook if none specified)
+                let strategies = relayer
+                    .policies
+                    .get_stellar_policy()
+                    .get_swap_config()
+                    .and_then(|config| {
+                        if config.strategies.is_empty() {
+                            None
+                        } else {
+                            Some(config.strategies.clone())
+                        }
+                    })
+                    .unwrap_or_else(|| vec![StellarSwapStrategy::OrderBook]);
+
+                // Create DEX services for each configured strategy
+                let mut dex_services: Vec<DexServiceWrapper<_, _>> = Vec::new();
+                for strategy in &strategies {
+                    match strategy {
+                        StellarSwapStrategy::OrderBook => {
+                            let order_book_service = Arc::new(
+                                OrderBookService::new(
+                                    horizon_url.clone(),
+                                    provider_arc.clone(),
+                                    signer_arc.clone(),
+                                )
+                                .map_err(|e| {
+                                    TransactionError::NetworkConfiguration(format!(
+                                        "Failed to create OrderBook DEX service: {e}"
+                                    ))
+                                })?,
+                            );
+                            dex_services.push(DexServiceWrapper::OrderBook(order_book_service));
+                        }
+                        StellarSwapStrategy::Soroswap => {
+                            let is_testnet = network.is_testnet();
+                            let network_label = if is_testnet { "TESTNET" } else { "MAINNET" };
+
+                            let router_address =
+                                crate::config::ServerConfig::resolve_stellar_soroswap_router_address(is_testnet)
+                                    .ok_or_else(|| {
+                                        eyre::eyre!(
+                                            "Soroswap router address not configured. Set STELLAR_{network_label}_SOROSWAP_ROUTER_ADDRESS env var."
+                                        )
+                                    })?;
+                            let factory_address =
+                                crate::config::ServerConfig::resolve_stellar_soroswap_factory_address(is_testnet)
+                                    .ok_or_else(|| {
+                                        eyre::eyre!(
+                                            "Soroswap factory address not configured. Set STELLAR_{network_label}_SOROSWAP_FACTORY_ADDRESS env var."
+                                        )
+                                    })?;
+                            let native_wrapper_address =
+                                crate::config::ServerConfig::resolve_stellar_soroswap_native_wrapper_address(is_testnet)
+                                    .ok_or_else(|| {
+                                        eyre::eyre!(
+                                            "Soroswap native wrapper address not configured. Set STELLAR_{network_label}_SOROSWAP_NATIVE_WRAPPER_ADDRESS env var."
+                                        )
+                                    })?;
+
+                            let soroswap_service = Arc::new(SoroswapService::new(
+                                router_address,
+                                factory_address,
+                                native_wrapper_address,
+                                provider_arc.clone(),
+                                network.passphrase.clone(),
+                            ));
+                            dex_services.push(DexServiceWrapper::Soroswap(soroswap_service));
+                        }
+                    }
+                }
+
+                // Create multi-strategy DEX service
+                let dex_service = Arc::new(StellarDexService::new(dex_services));
 
                 Ok(NetworkTransaction::Stellar(DefaultStellarTransaction::new(
                     relayer,

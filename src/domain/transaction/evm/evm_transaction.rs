@@ -20,7 +20,9 @@ use crate::{
         },
         EvmTransactionValidationError, EvmTransactionValidator,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionSend, TransactionStatusCheck},
+    jobs::{
+        JobProducer, JobProducerTrait, StatusCheckContext, TransactionSend, TransactionStatusCheck,
+    },
     models::{
         produce_transaction_update_notification_payload, EvmNetwork, EvmTransactionData,
         NetworkRepoModel, NetworkTransactionData, NetworkTransactionRequest, NetworkType,
@@ -177,6 +179,11 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "enqueueing submit transaction job"
+        );
         let job = TransactionSend::submit(tx.id.clone(), tx.relayer_id.clone());
 
         self.job_producer()
@@ -192,6 +199,11 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "enqueueing resubmit transaction job"
+        );
         let job = TransactionSend::resubmit(tx.id.clone(), tx.relayer_id.clone());
 
         self.job_producer()
@@ -207,6 +219,11 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "enqueueing resend transaction job"
+        );
         let job = TransactionSend::resend(tx.id.clone(), tx.relayer_id.clone());
 
         self.job_producer()
@@ -234,11 +251,12 @@ where
             })
     }
 
-    /// Updates a transaction's status.
+    /// Updates a transaction's status, optionally including a status reason.
     pub(super) async fn update_transaction_status(
         &self,
         tx: TransactionRepoModel,
         new_status: TransactionStatus,
+        status_reason: Option<String>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         let confirmed_at = if new_status == TransactionStatus::Confirmed {
             Some(Utc::now().to_rfc3339())
@@ -249,6 +267,7 @@ where
         let update_request = TransactionUpdateRequest {
             status: Some(new_status),
             confirmed_at,
+            status_reason,
             ..Default::default()
         };
 
@@ -425,7 +444,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("preparing transaction {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "preparing transaction"
+        );
 
         // If transaction is not in Pending status, return Ok to avoid wasteful retries
         // (e.g., if it's already Sent, Failed, or in another state)
@@ -452,10 +476,19 @@ where
                     evm_data.gas_limit = Some(estimated_gas_limit);
                 }
                 Err(estimation_error) => {
-                    error!(error = ?estimation_error, "failed to estimate gas limit");
+                    error!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        error = ?estimation_error,
+                        "failed to estimate gas limit"
+                    );
 
                     let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
-                    debug!(gas_limit = %default_gas_limit, "fallback to default gas limit");
+                    debug!(
+                        tx_id = %tx.id,
+                        gas_limit = %default_gas_limit,
+                        "fallback to default gas limit"
+                    );
                     evm_data.gas_limit = Some(default_gas_limit);
                 }
             }
@@ -495,7 +528,12 @@ where
             .get_transaction_price_params(&evm_data, relayer)
             .await?;
 
-        debug!(gas_price = ?price_params.gas_price, "gas price");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            gas_price = ?price_params.gas_price,
+            "gas price"
+        );
 
         // Validate the relayer has sufficient balance before consuming nonce and signing
         if let Err(balance_error) = self
@@ -505,7 +543,12 @@ where
             // Only mark as Failed for actual insufficient balance, not RPC errors
             match &balance_error {
                 TransactionError::InsufficientBalance(_) => {
-                    warn!(error = %balance_error, "insufficient balance for transaction");
+                    warn!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        error = %balance_error,
+                        "insufficient balance for transaction"
+                    );
 
                     let updated_tx = self
                         .mark_transaction_as_failed(
@@ -600,6 +643,13 @@ where
             .partial_update(tx_with_nonce.id.clone(), postsign_update)
             .await?;
 
+        debug!(
+            tx_id = %updated_tx.id,
+            relayer_id = %updated_tx.relayer_id,
+            status = ?updated_tx.status,
+            "transaction status updated to Sent"
+        );
+
         // after preparing the transaction, we need to submit it to the job queue
         self.job_producer
             .produce_submit_transaction_job(
@@ -611,9 +661,10 @@ where
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
                 tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
                 status = ?TransactionStatus::Sent,
-                "sending transaction update notification failed after prepare: {:?}",
-                e
+                error = %e,
+                "sending transaction update notification failed after prepare"
             );
         }
 
@@ -633,7 +684,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("submitting transaction {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "submitting transaction"
+        );
 
         // If transaction is not in correct status, return Ok to avoid wasteful retries
         // (e.g., if it's already in a final state like Failed, Confirmed, etc.)
@@ -696,8 +752,9 @@ where
             Ok(tx) => tx,
             Err(e) => {
                 error!(
-                    error = %e,
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    error = %e,
                     "CRITICAL: transaction sent to blockchain but failed to update database - transaction may not be tracked correctly"
                 );
                 // Transaction is on-chain - don't propagate error to avoid wasteful retries
@@ -709,9 +766,10 @@ where
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
                 tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
                 status = ?TransactionStatus::Submitted,
-                "sending transaction update notification failed after submit: {:?}",
-                e
+                error = %e,
+                "sending transaction update notification failed after submit",
             );
         }
 
@@ -730,8 +788,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_status_impl(tx).await
+        self.handle_status_impl(tx, context).await
     }
     /// Resubmits a transaction with updated parameters.
     ///
@@ -746,7 +805,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!("resubmitting transaction {}", tx.id);
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "resubmitting transaction"
+        );
 
         // If transaction is not in correct status, return Ok to avoid wasteful retries
         if let Err(e) = ensure_status_one_of(
@@ -773,7 +837,12 @@ where
             .await?;
 
         if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
-            warn!(price_params = ?bumped_price_params, "bumped gas price does not meet minimum requirement, skipping resubmission");
+            warn!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                price_params = ?bumped_price_params,
+                "bumped gas price does not meet minimum requirement, skipping resubmission"
+            );
             return Ok(tx);
         }
 
@@ -879,8 +948,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        info!("cancelling transaction {}", tx.id);
-        debug!(status = ?tx.status, "transaction status");
+        info!(tx_id = %tx.id, status = ?tx.status, "cancelling transaction");
 
         // Validate state: can only cancel transactions that are still pending
         ensure_status_one_of(
@@ -897,11 +965,21 @@ where
         if tx.status == TransactionStatus::Pending {
             debug!("transaction is in pending state, updating status to canceled");
             return self
-                .update_transaction_status(tx, TransactionStatus::Canceled)
+                .update_transaction_status(
+                    tx,
+                    TransactionStatus::Canceled,
+                    Some("Transaction canceled by user".to_string()),
+                )
                 .await;
         }
 
-        let update = self.prepare_noop_update_request(&tx, true, None).await?;
+        let update = self
+            .prepare_noop_update_request(
+                &tx,
+                true,
+                Some("Transaction canceled by user, replacing with NOOP".to_string()),
+            )
+            .await?;
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
@@ -1193,6 +1271,7 @@ mod tests {
             hashes: Vec::new(),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -1407,7 +1486,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1511,7 +1590,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let updated_tx = result.unwrap();
         assert_eq!(
@@ -1665,7 +1744,7 @@ mod tests {
         };
 
         let result = evm_transaction.prepare_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
 
         let prepared_tx = result.unwrap();
         // Transaction should proceed normally (not be marked as Failed)
@@ -2059,7 +2138,7 @@ mod tests {
                 .replace_transaction(test_tx.clone(), replacement_request)
                 .await;
             if let Err(ref e) = result {
-                eprintln!("Replace transaction failed with error: {:?}", e);
+                eprintln!("Replace transaction failed with error: {e:?}");
             }
             assert!(result.is_ok());
             let replaced_tx = result.unwrap();
@@ -3180,7 +3259,7 @@ mod tests {
         };
 
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
-        assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
         let updated_tx = result.unwrap();
         assert_eq!(
             updated_tx.status,

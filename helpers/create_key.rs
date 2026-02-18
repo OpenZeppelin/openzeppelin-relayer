@@ -80,7 +80,7 @@ impl std::error::Error for PasswordError {}
 /// A String containing the generated filename
 fn generate_default_filename() -> String {
     let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-    format!("key_{}.json", timestamp)
+    format!("key_{timestamp}.json")
 }
 
 /// Validates password complexity requirements
@@ -154,7 +154,7 @@ fn main() -> Result<()> {
     let config_dir = current_dir.join(&args.output_dir);
 
     fs::create_dir_all(&config_dir)
-        .wrap_err_with(|| format!("Failed to create directory: {:?}", config_dir))?;
+        .wrap_err_with(|| format!("Failed to create directory: {config_dir:?}"))?;
 
     let key_path = config_dir.join(&filename);
 
@@ -168,7 +168,7 @@ fn main() -> Result<()> {
     LocalClient::generate(args.output_dir.into(), args.password, Some(&filename));
 
     println!("Generated new key:");
-    println!("Keystore file created at: {:?}", key_path);
+    println!("Keystore file created at: {key_path:?}");
 
     Ok(())
 }

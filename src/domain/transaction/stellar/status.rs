@@ -3,7 +3,10 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::{DateTime, Utc};
-use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
+use soroban_rs::xdr::{
+    Error, Hash, InnerTransactionResultResult, InvokeHostFunctionResult, Limits, OperationResult,
+    OperationResultTr, TransactionEnvelope, TransactionResultResult, WriteXdr,
+};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
@@ -15,13 +18,16 @@ use crate::domain::transaction::util::{get_age_since_created, get_age_since_sent
 use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
     constants::STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS,
-    jobs::{JobProducerTrait, TransactionRequest},
+    jobs::{JobProducerTrait, StatusCheckContext, TransactionRequest},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait,
+        signer::{Signer, StellarSignTrait},
+    },
 };
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
@@ -29,23 +35,61 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
 {
     /// Main status handling method with robust error handling.
     /// This method checks transaction status and handles lane cleanup for finalized transactions.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction to check status for
+    /// * `context` - Optional circuit breaker context with failure tracking information
     pub async fn handle_transaction_status_impl(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "handling transaction status"
+        );
 
         // Early exit for final states - no need to check
         if is_final_state(&tx.status) {
-            info!(tx_id = %tx.id, status = ?tx.status, "transaction in final state, skipping status check");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction in final state, skipping status check"
+            );
             return Ok(tx);
+        }
+
+        // Check if circuit breaker should force finalization
+        if let Some(ref ctx) = context {
+            if ctx.should_force_finalize() {
+                let reason = format!(
+                    "Transaction status monitoring failed after {} consecutive errors (total: {}). \
+                     Last status: {:?}. Unable to determine final on-chain state.",
+                    ctx.consecutive_failures, ctx.total_failures, tx.status
+                );
+                warn!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    total_failures = ctx.total_failures,
+                    max_consecutive = ctx.max_consecutive_failures,
+                    "circuit breaker triggered, forcing transaction to failed state"
+                );
+                // Note: Expiry checks are already performed in the normal flow for Pending/Sent
+                // states (before any RPC calls). If we've hit consecutive failures, it's a strong
+                // signal that status monitoring is fundamentally broken for this transaction.
+                return self.mark_as_failed(tx, reason).await;
+            }
         }
 
         match self.status_core(tx.clone()).await {
@@ -214,7 +258,7 @@ where
 
         // Try to enqueue next transaction
         if let Err(e) = self.enqueue_next_pending_transaction(&tx.id).await {
-            warn!(error = %e, "failed to enqueue next pending transaction after expiration");
+            warn!(tx_id = %tx.id, relayer_id = %tx.relayer_id, error = %e, "failed to enqueue next pending transaction after expiration");
         }
 
         Ok(expired_tx)
@@ -311,22 +355,58 @@ where
         tx: TransactionRepoModel,
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let base_reason = "Transaction failed on-chain. Provider status: FAILED.".to_string();
-        let detailed_reason = if let Some(ref tx_result_xdr) = provider_response.result {
-            format!(
-                "{} Specific XDR reason: {}.",
-                base_reason,
-                tx_result_xdr.result.name()
-            )
-        } else {
-            format!("{base_reason} No detailed XDR result available.")
-        };
+        let result_code = provider_response
+            .result
+            .as_ref()
+            .map(|r| r.result.name())
+            .unwrap_or("unknown");
 
-        warn!(reason = %detailed_reason, "stellar transaction failed");
+        // Extract inner failure fields for fee-bump and op-level detail
+        let (inner_result_code, op_result_code, inner_tx_hash, inner_fee_charged) =
+            match provider_response.result.as_ref().map(|r| &r.result) {
+                Some(TransactionResultResult::TxFeeBumpInnerFailed(pair)) => {
+                    let inner = &pair.result.result;
+                    let op = match inner {
+                        InnerTransactionResultResult::TxFailed(ops) => {
+                            first_failing_op(ops.as_slice())
+                        }
+                        _ => None,
+                    };
+                    (
+                        Some(inner.name()),
+                        op,
+                        Some(hex::encode(pair.transaction_hash.0)),
+                        pair.result.fee_charged,
+                    )
+                }
+                Some(TransactionResultResult::TxFailed(ops)) => {
+                    (None, first_failing_op(ops.as_slice()), None, 0)
+                }
+                _ => (None, None, None, 0),
+            };
+
+        let fee_charged = provider_response.result.as_ref().map(|r| r.fee_charged);
+        let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
+
+        warn!(
+            tx_id = %tx.id,
+            result_code,
+            inner_result_code = inner_result_code.unwrap_or("n/a"),
+            op_result_code = op_result_code.unwrap_or("n/a"),
+            inner_tx_hash = inner_tx_hash.as_deref().unwrap_or("n/a"),
+            inner_fee_charged,
+            fee_charged = ?fee_charged,
+            fee_bid = ?fee_bid,
+            "stellar transaction failed"
+        );
+
+        let status_reason = format!(
+            "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: {result_code}."
+        );
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
-            status_reason: Some(detailed_reason),
+            status_reason: Some(status_reason),
             ..Default::default()
         };
 
@@ -474,7 +554,12 @@ where
         tx: TransactionRepoModel,
         original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = %original_status_str,
+            "stellar transaction status is still pending, will retry check later"
+        );
 
         // Check for expiration and max lifetime for Submitted transactions
         if tx.status == TransactionStatus::Submitted {
@@ -490,6 +575,45 @@ where
         }
 
         Ok(tx)
+    }
+}
+
+/// Extracts the fee bid from a transaction envelope.
+///
+/// For fee-bump transactions, returns the outer bump fee (the max the submitter was
+/// willing to pay). For regular V1 transactions, returns the `fee` field.
+fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
+    match envelope {
+        TransactionEnvelope::TxFeeBump(fb) => fb.tx.fee,
+        TransactionEnvelope::Tx(v1) => v1.tx.fee as i64,
+        TransactionEnvelope::TxV0(v0) => v0.tx.fee as i64,
+    }
+}
+
+/// Returns the `.name()` of the first failing operation in the results.
+///
+/// Scans left-to-right since earlier operations may show success while a later
+/// one carries the actual failure code. Returns `None` if no failure is found.
+fn first_failing_op(ops: &[OperationResult]) -> Option<&'static str> {
+    let op = ops.iter().find(|op| match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => {
+                !matches!(r, InvokeHostFunctionResult::Success(_))
+            }
+            OperationResultTr::ExtendFootprintTtl(r) => r.name() != "Success",
+            OperationResultTr::RestoreFootprint(r) => r.name() != "Success",
+            _ => false,
+        },
+        _ => true,
+    })?;
+    match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => Some(r.name()),
+            OperationResultTr::ExtendFootprintTtl(r) => Some(r.name()),
+            OperationResultTr::RestoreFootprint(r) => Some(r.name()),
+            _ => Some(tr.name()),
+        },
+        _ => Some(op.name()),
     }
 }
 
@@ -632,7 +756,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -666,7 +790,7 @@ mod tests {
             initial_tx_for_handling.status = TransactionStatus::Submitted;
 
             let result = handler
-                .handle_transaction_status_impl(initial_tx_for_handling)
+                .handle_transaction_status_impl(initial_tx_for_handling, None)
                 .await;
 
             assert!(result.is_ok());
@@ -717,7 +841,9 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let original_tx_clone = tx_to_handle.clone();
 
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             assert!(result.is_ok());
             let returned_tx = result.unwrap();
@@ -788,7 +914,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -825,7 +951,7 @@ mod tests {
             initial_tx_for_handling.status = TransactionStatus::Submitted;
 
             let result = handler
-                .handle_transaction_status_impl(initial_tx_for_handling)
+                .handle_transaction_status_impl(initial_tx_for_handling, None)
                 .await;
 
             assert!(result.is_ok());
@@ -835,7 +961,7 @@ mod tests {
             assert!(handled_tx.status_reason.is_some());
             assert_eq!(
                 handled_tx.status_reason.unwrap(),
-                "Transaction failed on-chain. Provider status: FAILED. No detailed XDR result available."
+                "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: unknown."
             );
         }
 
@@ -884,7 +1010,9 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             // Provider errors are now propagated as errors (retriable)
             assert!(result.is_err());
@@ -933,7 +1061,7 @@ mod tests {
                         && statuses == [TransactionStatus::Pending]
                         && query.page == 1
                         && query.per_page == 1
-                        && *oldest_first == true
+                        && *oldest_first
                 })
                 .times(1)
                 .returning(move |_, _, _, _| {
@@ -946,7 +1074,9 @@ mod tests {
                 }); // No pending transactions
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             // Should succeed but mark transaction as Failed
             assert!(result.is_ok(), "Expected Ok result");
@@ -1030,7 +1160,9 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let initial_tx = tx_to_handle.clone();
 
-            let result = handler.handle_transaction_status_impl(initial_tx).await;
+            let result = handler
+                .handle_transaction_status_impl(initial_tx, None)
+                .await;
 
             assert!(result.is_ok());
             let handled_tx = result.unwrap();
@@ -1110,7 +1242,9 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let initial_tx = tx_to_handle.clone();
 
-            let result = handler.handle_transaction_status_impl(initial_tx).await;
+            let result = handler
+                .handle_transaction_status_impl(initial_tx, None)
+                .await;
 
             assert!(result.is_ok());
             let handled_tx = result.unwrap();
@@ -1155,7 +1289,9 @@ mod tests {
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             // Provider errors are now propagated as errors (retriable)
             assert!(result.is_err());
@@ -1205,7 +1341,7 @@ mod tests {
                     id == "tx-with-result"
                         && update.status == Some(TransactionStatus::Confirmed)
                         && update.confirmed_at.is_some()
-                        && update.network_data.as_ref().map_or(false, |and| {
+                        && update.network_data.as_ref().is_some_and(|and| {
                             if let NetworkTransactionData::Stellar(stellar_data) = and {
                                 // Verify transaction_result_xdr is present
                                 stellar_data.transaction_result_xdr.is_some()
@@ -1247,7 +1383,9 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             assert!(result.is_ok());
             let handled_tx = result.unwrap();
@@ -1337,7 +1475,9 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx_to_handle).await;
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
 
             assert!(result.is_ok());
             let handled_tx = result.unwrap();
@@ -1378,7 +1518,9 @@ mod tests {
                 .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx.clone()).await;
+            let result = handler
+                .handle_transaction_status_impl(tx.clone(), None)
+                .await;
 
             assert!(result.is_ok());
             let returned_tx = result.unwrap();
@@ -1413,7 +1555,9 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx.clone()).await;
+            let result = handler
+                .handle_transaction_status_impl(tx.clone(), None)
+                .await;
 
             assert!(result.is_ok());
             let returned_tx = result.unwrap();
@@ -1470,7 +1614,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1480,7 +1624,7 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let expired_tx = result.unwrap();
@@ -1551,11 +1695,12 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let failed_tx = result.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            // assert_eq!(failed_tx.status_reason.as_ref().unwrap(), "Transaction stuck in Sent status for too long");
             assert!(failed_tx
                 .status_reason
                 .as_ref()
@@ -1607,7 +1752,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1617,7 +1762,7 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let failed_tx = result.unwrap();
@@ -1650,7 +1795,7 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let tx_result = result.unwrap();
@@ -1677,7 +1822,7 @@ mod tests {
                 .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let tx_result = result.unwrap();
@@ -1709,7 +1854,7 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let tx_result = result.unwrap();
@@ -1754,7 +1899,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1764,7 +1909,7 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let failed_tx = result.unwrap();
@@ -1831,7 +1976,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1841,7 +1986,7 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let failed_tx = result.unwrap();
@@ -1907,7 +2052,7 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_find_by_status_paginated()
-                .returning(|_, _, _, _| {
+                .returning(move |_, _, _, _| {
                     Ok(PaginatedResult {
                         items: vec![],
                         total: 0,
@@ -1917,7 +2062,7 @@ mod tests {
                 });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
-            let result = handler.handle_transaction_status_impl(tx).await;
+            let result = handler.handle_transaction_status_impl(tx, None).await;
 
             assert!(result.is_ok());
             let expired_tx = result.unwrap();
@@ -1938,8 +2083,7 @@ mod tests {
                 MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository,
             },
             services::{
-                provider::MockStellarProviderTrait, signer::MockSigner,
-                stellar_dex::MockStellarDexServiceTrait,
+                provider::MockStellarProviderTrait, stellar_dex::MockStellarDexServiceTrait,
             },
         };
         use chrono::{Duration, Utc};
@@ -1949,7 +2093,7 @@ mod tests {
             MockRelayerRepository,
             MockTransactionRepository,
             MockJobProducerTrait,
-            MockSigner,
+            MockStellarCombinedSigner,
             MockStellarProviderTrait,
             MockTransactionCounterTrait,
             MockStellarDexServiceTrait,
@@ -1991,6 +2135,402 @@ mod tests {
         fn test_invalid_format_not_expired() {
             // Invalid format should be treated as not expired (conservative)
             assert!(!TestHandler::is_valid_until_string_expired("not-a-date"));
+        }
+    }
+
+    // Tests for circuit breaker functionality
+    mod circuit_breaker_tests {
+        use super::*;
+        use crate::jobs::StatusCheckContext;
+        use crate::models::NetworkType;
+
+        /// Helper to create a context that should trigger the circuit breaker
+        fn create_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                110, // consecutive_failures: exceeds Stellar threshold of 100
+                150, // total_failures
+                160, // total_retries
+                100, // max_consecutive_failures (Stellar default)
+                300, // max_total_failures (Stellar default)
+                NetworkType::Stellar,
+            )
+        }
+
+        /// Helper to create a context that should NOT trigger the circuit breaker
+        fn create_safe_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                10,  // consecutive_failures: below threshold
+                20,  // total_failures
+                25,  // total_retries
+                100, // max_consecutive_failures
+                300, // max_total_failures
+                NetworkType::Stellar,
+            )
+        }
+
+        /// Helper to create a context that triggers via total failures (safety net)
+        fn create_total_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                20,  // consecutive_failures: below threshold
+                310, // total_failures: exceeds Stellar threshold of 300
+                350, // total_retries
+                100, // max_consecutive_failures
+                300, // max_total_failures
+                NetworkType::Stellar,
+            )
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_submitted_marks_as_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Submitted;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+
+            // Expect partial_update to be called with Failed status
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // Mock notification
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending (called after lane cleanup)
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let ctx = create_triggered_context();
+
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, Some(ctx))
+                .await;
+
+            assert!(result.is_ok());
+            let tx = result.unwrap();
+            assert_eq!(tx.status, TransactionStatus::Failed);
+            assert!(tx.status_reason.is_some());
+            assert!(tx.status_reason.unwrap().contains("consecutive errors"));
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_pending_marks_as_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Pending;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+
+            // Expect partial_update to be called with Failed status
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let ctx = create_triggered_context();
+
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, Some(ctx))
+                .await;
+
+            assert!(result.is_ok());
+            let tx = result.unwrap();
+            assert_eq!(tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_total_failures_triggers() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Submitted;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            // Use context that triggers via total failures (safety net)
+            let ctx = create_total_triggered_context();
+
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, Some(ctx))
+                .await;
+
+            assert!(result.is_ok());
+            let tx = result.unwrap();
+            assert_eq!(tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_below_threshold_continues() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Submitted;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            let tx_hash_bytes = [1u8; 32];
+            let tx_hash_hex = hex::encode(tx_hash_bytes);
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(tx_hash_hex.clone());
+            }
+
+            // Below threshold, should continue with normal status checking
+            mocks
+                .provider
+                .expect_get_transaction()
+                .returning(|_| Box::pin(async { Ok(dummy_get_transaction_response("SUCCESS")) }));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let ctx = create_safe_context();
+
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, Some(ctx))
+                .await;
+
+            assert!(result.is_ok());
+            let tx = result.unwrap();
+            // Should become Confirmed (normal flow), not Failed (circuit breaker)
+            assert_eq!(tx.status, TransactionStatus::Confirmed);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_final_state_early_return() {
+            let relayer = create_test_relayer();
+            let mocks = default_test_mocks();
+
+            // Transaction is already in final state
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Confirmed;
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let ctx = create_triggered_context();
+
+            // Even with triggered context, final states should return early
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle.clone(), Some(ctx))
+                .await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().id, tx_to_handle.id);
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_no_context_continues() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx_to_handle = create_test_transaction(&relayer.id);
+            tx_to_handle.status = TransactionStatus::Submitted;
+            tx_to_handle.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            let tx_hash_bytes = [1u8; 32];
+            let tx_hash_hex = hex::encode(tx_hash_bytes);
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx_to_handle.network_data
+            {
+                stellar_data.hash = Some(tx_hash_hex.clone());
+            }
+
+            // No context means no circuit breaker
+            mocks
+                .provider
+                .expect_get_transaction()
+                .returning(|_| Box::pin(async { Ok(dummy_get_transaction_response("SUCCESS")) }));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = create_test_transaction("test-relayer");
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+            // Pass None for context - should continue normally
+            let result = handler
+                .handle_transaction_status_impl(tx_to_handle, None)
+                .await;
+
+            assert!(result.is_ok());
+            let tx = result.unwrap();
+            assert_eq!(tx.status, TransactionStatus::Confirmed);
+        }
+    }
+
+    mod failure_detail_helper_tests {
+        use super::*;
+        use soroban_rs::xdr::{InvokeHostFunctionResult, OperationResult, OperationResultTr, VecM};
+
+        #[test]
+        fn first_failing_op_finds_trapped() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Trapped),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("Trapped"));
+        }
+
+        #[test]
+        fn first_failing_op_skips_success() {
+            let ops: VecM<OperationResult> = vec![
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::Success(soroban_rs::xdr::Hash([0u8; 32])),
+                )),
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::ResourceLimitExceeded,
+                )),
+            ]
+            .try_into()
+            .unwrap();
+            assert_eq!(
+                first_failing_op(ops.as_slice()),
+                Some("ResourceLimitExceeded")
+            );
+        }
+
+        #[test]
+        fn first_failing_op_all_success_returns_none() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(
+                    soroban_rs::xdr::Hash([0u8; 32]),
+                )),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), None);
+        }
+
+        #[test]
+        fn first_failing_op_empty_returns_none() {
+            assert_eq!(first_failing_op(&[]), None);
+        }
+
+        #[test]
+        fn first_failing_op_op_bad_auth() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpBadAuth].try_into().unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("OpBadAuth"));
         }
     }
 }

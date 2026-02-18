@@ -366,6 +366,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
         transaction_repo.create(test_transaction).await.unwrap();
 

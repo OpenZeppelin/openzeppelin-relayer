@@ -67,6 +67,12 @@ pub enum StellarTransactionUtilsError {
     #[error("Cannot set time bounds on fee-bump transactions")]
     CannotSetTimeBoundsOnFeeBump,
 
+    #[error("V0 transactions are not supported")]
+    V0TransactionsNotSupported,
+
+    #[error("Cannot update sequence number on fee bump transaction")]
+    CannotUpdateSequenceOnFeeBump,
+
     #[error("Invalid transaction format: {0}")]
     InvalidTransactionFormat(String),
 
@@ -184,6 +190,14 @@ impl From<StellarTransactionUtilsError> for RelayerError {
                     "Cannot set time bounds on fee-bump transactions".to_string(),
                 )
             }
+            StellarTransactionUtilsError::V0TransactionsNotSupported => {
+                RelayerError::ValidationError("V0 transactions are not supported".to_string())
+            }
+            StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump => {
+                RelayerError::ValidationError(
+                    "Cannot update sequence number on fee bump transaction".to_string(),
+                )
+            }
             StellarTransactionUtilsError::InvalidAccountAddress(_, msg)
             | StellarTransactionUtilsError::InvalidContractAddress(_, msg)
             | StellarTransactionUtilsError::SymbolCreationFailed(_, msg)
@@ -277,10 +291,14 @@ where
     );
 
     // Fetch account info from chain
-    let account = provider
-        .get_account(relayer_address)
-        .await
-        .map_err(|e| format!("Failed to fetch account from chain: {e}"))?;
+    let account = provider.get_account(relayer_address).await.map_err(|e| {
+        warn!(
+            address = %relayer_address,
+            error = %e,
+            "get_account failed in fetch_next_sequence_from_chain"
+        );
+        format!("Failed to fetch account from chain: {e}")
+    })?;
 
     let on_chain_seq = account.seq_num.0; // Extract the i64 value
     let next_usable = next_sequence_u64(on_chain_seq)
@@ -349,6 +367,39 @@ pub fn create_transaction_signature_payload(
         tagged_transaction: soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::Tx(
             transaction.clone(),
         ),
+    }
+}
+
+/// Update the sequence number in a transaction envelope.
+///
+/// Only V1 (Tx) envelopes are supported; V0 and fee-bump envelopes return an error.
+pub fn update_envelope_sequence(
+    envelope: &mut TransactionEnvelope,
+    sequence: i64,
+) -> Result<(), StellarTransactionUtilsError> {
+    match envelope {
+        TransactionEnvelope::Tx(v1) => {
+            v1.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
+            Ok(())
+        }
+        TransactionEnvelope::TxV0(_) => {
+            Err(StellarTransactionUtilsError::V0TransactionsNotSupported)
+        }
+        TransactionEnvelope::TxFeeBump(_) => {
+            Err(StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump)
+        }
+    }
+}
+
+/// Extract the fee (in stroops) from a V1 transaction envelope.
+pub fn envelope_fee_in_stroops(
+    envelope: &TransactionEnvelope,
+) -> Result<u64, StellarTransactionUtilsError> {
+    match envelope {
+        TransactionEnvelope::Tx(env) => Ok(u64::from(env.tx.fee)),
+        _ => Err(StellarTransactionUtilsError::InvalidTransactionFormat(
+            "Expected V1 transaction envelope".to_string(),
+        )),
     }
 }
 
@@ -1389,7 +1440,7 @@ mod tests {
         fn create_test_tx_with_age(seconds_ago: i64) -> TransactionRepoModel {
             let created_at = (Utc::now() - Duration::seconds(seconds_ago)).to_rfc3339();
             let mut tx = create_mock_transaction();
-            tx.id = format!("test-tx-{}", seconds_ago);
+            tx.id = format!("test-tx-{seconds_ago}");
             tx.created_at = created_at;
             tx.network_data = NetworkTransactionData::Stellar(StellarTransactionData {
                 source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
@@ -1647,6 +1698,161 @@ mod parse_contract_address_tests {
     #[test]
     fn test_parse_empty_contract_address() {
         let result = parse_contract_address("");
+        assert!(result.is_err());
+    }
+}
+
+// ============================================================================
+// Update Envelope Sequence and Envelope Fee Tests
+// ============================================================================
+
+#[cfg(test)]
+mod update_envelope_sequence_tests {
+    use super::*;
+    use soroban_rs::xdr::{
+        FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
+        FeeBumpTransactionInnerTx, Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction,
+        TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV0Ext,
+        TransactionV1Envelope, Uint256, VecM,
+    };
+
+    fn create_minimal_v1_envelope() -> TransactionEnvelope {
+        let tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_v0_envelope() -> TransactionEnvelope {
+        let tx = TransactionV0 {
+            source_account_ed25519: Uint256([0u8; 32]),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            time_bounds: None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionV0Ext::V0,
+        };
+        TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_fee_bump_envelope() -> TransactionEnvelope {
+        let inner_tx = Transaction {
+            source_account: MuxedAccount::Ed25519(Uint256([0u8; 32])),
+            fee: 100,
+            seq_num: SequenceNumber(0),
+            cond: Preconditions::None,
+            memo: Memo::None,
+            operations: VecM::default(),
+            ext: TransactionExt::V0,
+        };
+        let inner_envelope = TransactionV1Envelope {
+            tx: inner_tx,
+            signatures: VecM::default(),
+        };
+        let fee_bump_tx = FeeBumpTransaction {
+            fee_source: MuxedAccount::Ed25519(Uint256([1u8; 32])),
+            fee: 200,
+            inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
+            ext: FeeBumpTransactionExt::V0,
+        };
+        TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[test]
+    fn test_update_envelope_sequence() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 12345).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 12345);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_v0_returns_error() {
+        let mut envelope = create_v0_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::V0TransactionsNotSupported => {}
+            _ => panic!("Expected V0TransactionsNotSupported error"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_fee_bump_returns_error() {
+        let mut envelope = create_fee_bump_envelope();
+        let result = update_envelope_sequence(&mut envelope, 12345);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump => {}
+            _ => panic!("Expected CannotUpdateSequenceOnFeeBump error"),
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_zero() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, 0).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, 0);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_update_envelope_sequence_max_value() {
+        let mut envelope = create_minimal_v1_envelope();
+        update_envelope_sequence(&mut envelope, i64::MAX).unwrap();
+        if let TransactionEnvelope::Tx(v1) = &envelope {
+            assert_eq!(v1.tx.seq_num.0, i64::MAX);
+        } else {
+            panic!("Expected Tx envelope");
+        }
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_v1() {
+        let envelope = create_minimal_v1_envelope();
+        let fee = envelope_fee_in_stroops(&envelope).unwrap();
+        assert_eq!(fee, 100);
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_v0_returns_error() {
+        let envelope = create_v0_envelope();
+        let result = envelope_fee_in_stroops(&envelope);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            StellarTransactionUtilsError::InvalidTransactionFormat(msg) => {
+                assert!(msg.contains("Expected V1"));
+            }
+            _ => panic!("Expected InvalidTransactionFormat error"),
+        }
+    }
+
+    #[test]
+    fn test_envelope_fee_in_stroops_fee_bump_returns_error() {
+        let envelope = create_fee_bump_envelope();
+        let result = envelope_fee_in_stroops(&envelope);
         assert!(result.is_err());
     }
 }
@@ -2884,6 +3090,541 @@ mod set_time_bounds_tests {
                 assert_eq!(bounds.max_time.0, valid_until.timestamp() as u64);
             }
             _ => panic!("Expected TxV0 envelope"),
+        }
+    }
+}
+
+// ============================================================================
+// From<StellarTransactionUtilsError> for RelayerError Tests
+// ============================================================================
+
+#[cfg(test)]
+mod stellar_transaction_utils_error_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn test_v0_transactions_not_supported_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::V0TransactionsNotSupported;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "V0 transactions are not supported");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_cannot_update_sequence_on_fee_bump_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::CannotUpdateSequenceOnFeeBump;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "Cannot update sequence number on fee bump transaction");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_cannot_set_time_bounds_on_fee_bump_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::CannotSetTimeBoundsOnFeeBump;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "Cannot set time bounds on fee-bump transactions");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_transaction_format_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::InvalidTransactionFormat("bad format".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "bad format");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_cannot_modify_fee_bump_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::CannotModifyFeeBump;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "Cannot add operations to fee-bump transactions");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_too_many_operations_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::TooManyOperations(100);
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Too many operations"));
+                assert!(msg.contains("100"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_sequence_overflow_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::SequenceOverflow("overflow msg".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "overflow msg");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_simulation_no_results_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::SimulationNoResults;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert!(msg.contains("no results"));
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_asset_code_too_long_converts_to_validation_error() {
+        let err =
+            StellarTransactionUtilsError::AssetCodeTooLong(12, "VERYLONGASSETCODE".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Asset code too long"));
+                assert!(msg.contains("12"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_asset_format_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::InvalidAssetFormat("bad asset".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert_eq!(msg, "bad asset");
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_account_address_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::InvalidAccountAddress(
+            "GABC".to_string(),
+            "parse error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "parse error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_contract_address_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::InvalidContractAddress(
+            "CABC".to_string(),
+            "contract parse error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "contract parse error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_symbol_creation_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::SymbolCreationFailed(
+            "Balance".to_string(),
+            "too long".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "too long");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_key_vector_creation_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::KeyVectorCreationFailed(
+            "Balance".to_string(),
+            "vec error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "vec error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_contract_data_query_persistent_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::ContractDataQueryPersistentFailed(
+            "balance".to_string(),
+            "rpc error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "rpc error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_contract_data_query_temporary_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::ContractDataQueryTemporaryFailed(
+            "balance".to_string(),
+            "temp error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "temp error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_ledger_entry_parse_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::LedgerEntryParseFailed(
+            "entry".to_string(),
+            "xdr error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "xdr error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_no_entries_found_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::NoEntriesFound("balance".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("No entries found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_empty_entries_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::EmptyEntries("balance".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Empty entries"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_ledger_entry_type_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::UnexpectedLedgerEntryType("balance".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Unexpected ledger entry type"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_issuer_length_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::InvalidIssuerLength(56, "SHORT".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("56"));
+                assert!(msg.contains("SHORT"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_issuer_prefix_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::InvalidIssuerPrefix('G', "CABC123".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("'G'"));
+                assert!(msg.contains("CABC123"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_account_fetch_failed_converts_to_provider_error() {
+        let err = StellarTransactionUtilsError::AccountFetchFailed("fetch error".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ProviderError(msg) => {
+                assert_eq!(msg, "fetch error");
+            }
+            _ => panic!("Expected ProviderError"),
+        }
+    }
+
+    #[test]
+    fn test_trustline_query_failed_converts_to_provider_error() {
+        let err = StellarTransactionUtilsError::TrustlineQueryFailed(
+            "USDC".to_string(),
+            "rpc fail".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ProviderError(msg) => {
+                assert_eq!(msg, "rpc fail");
+            }
+            _ => panic!("Expected ProviderError"),
+        }
+    }
+
+    #[test]
+    fn test_contract_invocation_failed_converts_to_provider_error() {
+        let err = StellarTransactionUtilsError::ContractInvocationFailed(
+            "transfer".to_string(),
+            "invoke error".to_string(),
+        );
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ProviderError(msg) => {
+                assert_eq!(msg, "invoke error");
+            }
+            _ => panic!("Expected ProviderError"),
+        }
+    }
+
+    #[test]
+    fn test_xdr_parse_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::XdrParseFailed("xdr parse fail".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "xdr parse fail");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_operation_extraction_failed_converts_to_internal_error() {
+        let err =
+            StellarTransactionUtilsError::OperationExtractionFailed("extract fail".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "extract fail");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_simulation_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::SimulationFailed("sim error".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "sim error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_simulation_check_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::SimulationCheckFailed("check fail".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "check fail");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_dex_quote_failed_converts_to_internal_error() {
+        let err = StellarTransactionUtilsError::DexQuoteFailed("dex error".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::Internal(msg) => {
+                assert_eq!(msg, "dex error");
+            }
+            _ => panic!("Expected Internal error"),
+        }
+    }
+
+    #[test]
+    fn test_empty_asset_code_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::EmptyAssetCode("CODE:ISSUER".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Asset code cannot be empty"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_empty_issuer_address_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::EmptyIssuerAddress("USDC:".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Issuer address cannot be empty"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_no_trustline_found_converts_to_validation_error() {
+        let err =
+            StellarTransactionUtilsError::NoTrustlineFound("USDC".to_string(), "GABC".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("No trustline found"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_unsupported_trustline_version_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::UnsupportedTrustlineVersion;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Unsupported trustline"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_trustline_entry_type_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::UnexpectedTrustlineEntryType;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Unexpected ledger entry type"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_balance_too_large_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::BalanceTooLarge(1, 999);
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Balance too large"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_negative_balance_i128_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::NegativeBalanceI128(42);
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Negative balance"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_negative_balance_i64_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::NegativeBalanceI64(-5);
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Negative balance"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_balance_type_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::UnexpectedBalanceType("Bool(true)".to_string());
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Unexpected balance value type"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_unexpected_contract_data_entry_type_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::UnexpectedContractDataEntryType;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Unexpected ledger entry type"));
+            }
+            _ => panic!("Expected ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_native_asset_in_trustline_query_converts_to_validation_error() {
+        let err = StellarTransactionUtilsError::NativeAssetInTrustlineQuery;
+        let relayer_err: RelayerError = err.into();
+        match relayer_err {
+            RelayerError::ValidationError(msg) => {
+                assert!(msg.contains("Native asset"));
+            }
+            _ => panic!("Expected ValidationError"),
         }
     }
 }

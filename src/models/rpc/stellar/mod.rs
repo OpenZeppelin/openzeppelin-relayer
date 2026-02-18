@@ -12,7 +12,8 @@ use crate::{
 #[schema(as = StellarFeeEstimateRequestParams)]
 pub struct FeeEstimateRequestParams {
     /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
-    /// Mutually exclusive with operations field
+    /// Mutually exclusive with operations field.
+    /// For Soroban gas abstraction: pass XDR containing InvokeHostFunction operation.
     #[schema(nullable = true)]
     pub transaction_xdr: Option<String>,
     /// Source account address (required when operations are provided)
@@ -23,7 +24,9 @@ pub struct FeeEstimateRequestParams {
     /// Mutually exclusive with transaction_xdr field
     #[schema(nullable = true)]
     pub operations: Option<Vec<OperationSpec>>,
-    /// Asset identifier for fee token (e.g., "native" or "USDC:GA5Z...")
+    /// Asset identifier for fee token.
+    /// For classic: "native" or "USDC:GA5Z..." format.
+    /// For Soroban: contract address (C...) format.
     pub fee_token: String,
 }
 
@@ -81,6 +84,16 @@ pub struct FeeEstimateResult {
     pub fee_in_token: String,
     /// Conversion rate from XLM to token (as string)
     pub conversion_rate: String,
+    /// Maximum fee in token amount (raw units as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token: Option<String>,
+    /// Maximum fee in token amount (decimal UI representation as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token_ui: Option<String>,
 }
 
 // prepareTransaction
@@ -90,7 +103,8 @@ pub struct FeeEstimateResult {
 #[schema(as = StellarPrepareTransactionRequestParams)]
 pub struct PrepareTransactionRequestParams {
     /// Pre-built transaction XDR (base64 encoded, signed or unsigned)
-    /// Mutually exclusive with operations field
+    /// Mutually exclusive with operations field.
+    /// For Soroban gas abstraction: pass XDR containing InvokeHostFunction operation.
     #[schema(nullable = true)]
     pub transaction_xdr: Option<String>,
     /// Operations array to build transaction from
@@ -101,7 +115,9 @@ pub struct PrepareTransactionRequestParams {
     /// For gasless transactions, this should be the user's account address
     #[schema(nullable = true)]
     pub source_account: Option<String>,
-    /// Asset identifier for fee token
+    /// Asset identifier for fee token.
+    /// For classic: "native" or "USDC:GA5Z..." format.
+    /// For Soroban: contract address (C...) format.
     pub fee_token: String,
 }
 
@@ -167,6 +183,21 @@ pub struct PrepareTransactionResult {
     pub fee_token: String,
     /// Transaction validity timestamp (ISO 8601 format)
     pub valid_until: String,
+    /// User authorization entry XDR (base64 encoded).
+    /// Present for Soroban gas abstraction - user must sign this auth entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub user_auth_entry: Option<String>,
+    /// Maximum fee in token amount (raw units as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token: Option<String>,
+    /// Maximum fee in token amount (decimal UI representation as string).
+    /// Only present for Soroban gas abstraction - includes slippage buffer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = true)]
+    pub max_fee_in_token_ui: Option<String>,
 }
 
 /// Stellar RPC method enum
@@ -510,5 +541,87 @@ mod tests {
         } else {
             panic!("Expected BadRequest error for empty operations");
         }
+    }
+
+    #[test]
+    fn test_fee_estimate_result() {
+        let result = FeeEstimateResult {
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_token: "1500000".to_string(),
+            conversion_rate: "10.0".to_string(),
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
+        };
+        assert_eq!(result.fee_in_token_ui, "1.5");
+        assert_eq!(result.fee_in_token, "1500000");
+        assert_eq!(result.conversion_rate, "10.0");
+    }
+
+    #[test]
+    fn test_fee_estimate_result_with_max_fee() {
+        let result = FeeEstimateResult {
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_token: "1500000".to_string(),
+            conversion_rate: "10.0".to_string(),
+            max_fee_in_token: Some("1575000".to_string()),
+            max_fee_in_token_ui: Some("1.575".to_string()),
+        };
+        assert_eq!(result.max_fee_in_token, Some("1575000".to_string()));
+        assert_eq!(result.max_fee_in_token_ui, Some("1.575".to_string()));
+        // Verify serialization includes max_fee fields when present
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("max_fee_in_token"));
+        assert!(json.contains("max_fee_in_token_ui"));
+    }
+
+    #[test]
+    fn test_fee_estimate_result_skips_none_max_fee() {
+        let result = FeeEstimateResult {
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_token: "1500000".to_string(),
+            conversion_rate: "10.0".to_string(),
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
+        };
+        // Verify serialization skips None fields
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("max_fee_in_token"));
+    }
+
+    #[test]
+    fn test_prepare_transaction_result_with_soroban_fields() {
+        let result = PrepareTransactionResult {
+            transaction: "AAAAAgAAAAA=".to_string(),
+            fee_in_token: "1500000".to_string(),
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_stroops: "150000".to_string(),
+            fee_token: "CUSDC".to_string(),
+            valid_until: "2024-01-01T00:00:00Z".to_string(),
+            user_auth_entry: Some("AAAABgAAAAA=".to_string()),
+            max_fee_in_token: Some("1575000".to_string()),
+            max_fee_in_token_ui: Some("1.575".to_string()),
+        };
+        assert!(result.user_auth_entry.is_some());
+        assert!(result.max_fee_in_token.is_some());
+        assert!(result.max_fee_in_token_ui.is_some());
+    }
+
+    #[test]
+    fn test_prepare_transaction_result_without_soroban_fields() {
+        let result = PrepareTransactionResult {
+            transaction: "AAAAAgAAAAA=".to_string(),
+            fee_in_token: "1500000".to_string(),
+            fee_in_token_ui: "1.5".to_string(),
+            fee_in_stroops: "150000".to_string(),
+            fee_token: "USDC:GA...".to_string(),
+            valid_until: "2024-01-01T00:00:00Z".to_string(),
+            user_auth_entry: None,
+            max_fee_in_token: None,
+            max_fee_in_token_ui: None,
+        };
+        // Verify serialization skips None fields
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("user_auth_entry"));
+        assert!(!json.contains("max_fee_in_token"));
     }
 }

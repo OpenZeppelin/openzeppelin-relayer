@@ -700,11 +700,7 @@ mod tests {
                     }
                 ]
             });
-            create_temp_file(
-                &dir,
-                &format!("config_{}.json", i),
-                &network_data.to_string(),
-            );
+            create_temp_file(&dir, &format!("config_{i}.json"), &network_data.to_string());
         }
 
         let result = NetworkFileLoader::load_networks_from_directory(dir.path());
@@ -1080,7 +1076,7 @@ mod tests {
 
         // Test Debug formatting
         let source = NetworksSource::List(vec![]);
-        let debug_str = format!("{:?}", source);
+        let debug_str = format!("{source:?}");
         assert!(debug_str.contains("List"));
     }
 

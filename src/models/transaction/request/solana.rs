@@ -611,8 +611,8 @@ mod tests {
         for i in 0..(REQUEST_MAX_TOTAL_ACCOUNTS + 1) {
             let mut instruction = create_valid_instruction_spec();
             // Change program_id to create unique accounts
-            instruction.program_id = format!("{:0>44}", i); // Create unique but invalid pubkeys
-                                                            // Add a unique account
+            instruction.program_id = format!("{i:0>44}"); // Create unique but invalid pubkeys
+                                                          // Add a unique account
             instruction.accounts.push(crate::models::SolanaAccountMeta {
                 pubkey: format!("{:0>44}", i + 1000), // Another unique account
                 is_signer: false,

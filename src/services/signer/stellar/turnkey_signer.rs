@@ -232,7 +232,9 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
                 self.sign_transaction_directly(&transaction, &network_id)
                     .await?
             }
-            TransactionInput::UnsignedXdr(xdr) | TransactionInput::SignedXdr { xdr, .. } => {
+            TransactionInput::UnsignedXdr(xdr)
+            | TransactionInput::SignedXdr { xdr, .. }
+            | TransactionInput::SorobanGasAbstraction { xdr, .. } => {
                 let envelope =
                     TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|e| {
                         SignerError::SigningError(format!(

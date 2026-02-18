@@ -13,18 +13,17 @@
 //!
 //! # Example
 //! ```rust, ignore
-//! # use your_crate::{PriceCalculator, EvmTransactionData, RelayerRepoModel, EvmGasPriceService};
-//! # async fn example<P: EvmProviderTrait>(
+//! # use openzeppelin_relayer::domain::transaction::evm::PriceCalculator;
+//! # use openzeppelin_relayer::models::{EvmTransactionData, RelayerRepoModel, TransactionError};
+//! # use openzeppelin_relayer::services::gas::evm_gas_price::EvmGasPriceServiceTrait;
+//! # async fn example<G: EvmGasPriceServiceTrait>(
+//! #     calculator: &PriceCalculator<G>,
 //! #     tx_data: &EvmTransactionData,
 //! #     relayer: &RelayerRepoModel,
-//! #     gas_price_service: &EvmGasPriceService<P>,
-//! #     provider: &P
 //! # ) -> Result<(), TransactionError> {
-//! let price_params = PriceCalculator::get_transaction_price_params(
+//! let price_params = calculator.get_transaction_price_params(
 //!     tx_data,
-//!     relayer,
-//!     gas_price_service,
-//!     provider
+//!     relayer
 //! ).await?;
 //! # Ok(())
 //! # }
@@ -1777,9 +1776,7 @@ mod tests {
         let result = calculate_min_bump(base_price);
         assert!(
             result > base_price,
-            "Result {} should be greater than base_price {}",
-            result,
-            base_price
+            "Result {result} should be greater than base_price {base_price}"
         );
 
         let base_price = 9u128;
@@ -1824,15 +1821,11 @@ mod tests {
             let result = calculate_min_bump(base_price);
             assert!(
                 result > base_price,
-                "calculate_min_bump({}) = {} should be greater than base_price",
-                base_price,
-                result
+                "calculate_min_bump({base_price}) = {result} should be greater than base_price"
             );
             assert!(
                 result >= base_price.saturating_add(1),
-                "calculate_min_bump({}) = {} should be at least base_price + 1",
-                base_price,
-                result
+                "calculate_min_bump({base_price}) = {result} should be at least base_price + 1"
             );
         }
     }
@@ -2155,8 +2148,7 @@ mod tests {
             // For Speed::Fast, should be around 30_000_000 (0.03 Gwei) based on our mock
             assert!(
                 priority_fee <= 50_000_000, // Should be reasonable for current market, not a bump
-                "Priority fee should be based on current market, not bumped: {}",
-                priority_fee
+                "Priority fee should be based on current market, not bumped: {priority_fee}"
             );
         }
     }
@@ -2220,9 +2212,8 @@ mod tests {
             120_000_000_000,
             "With force_bump=false, gas price should be capped at 120 Gwei"
         );
-        assert_eq!(
+        assert!(
             result_capped.is_min_bumped.unwrap(),
-            true,
             "Should still meet minimum bump requirement"
         );
 
@@ -2238,9 +2229,8 @@ mod tests {
             150_000_000_000,
             "With force_bump=true, gas price should NOT be capped and use market price of 150 Gwei"
         );
-        assert_eq!(
+        assert!(
             result_uncapped.is_min_bumped.unwrap(),
-            true,
             "Should meet minimum bump requirement"
         );
 

@@ -5,10 +5,14 @@ use std::collections::HashMap;
 
 use crate::{
     api::controllers::plugin,
-    models::{ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest},
+    metrics::PLUGIN_CALLS,
+    models::{
+        ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest,
+        UpdatePluginRequest,
+    },
     repositories::PluginRepositoryTrait,
 };
-use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder, ResponseError};
 use url::form_urlencoded;
 
 /// List plugins
@@ -60,11 +64,12 @@ fn extract_query_params(http_req: &HttpRequest) -> HashMap<String, Vec<String>> 
 /// Resolves the effective route from path and query parameters.
 /// Path route takes precedence; if empty, falls back to `route` query parameter.
 fn resolve_route(path_route: &str, http_req: &HttpRequest) -> String {
+    // Early return to avoid unnecessary query parameter parsing when path_route is provided
     if !path_route.is_empty() {
         return path_route.to_string();
     }
 
-    // Check for route in query parameters
+    // Only parse query parameters when path_route is empty (lazy evaluation)
     let query_params = extract_query_params(http_req);
     query_params
         .get("route")
@@ -132,12 +137,30 @@ async fn plugin_call(
     let mut plugin_call_request =
         match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
             Ok(req) => req,
-            Err(resp) => return Ok(resp),
+            Err(resp) => {
+                // Track failed request (400 Bad Request)
+                PLUGIN_CALLS
+                    .with_label_values(&[plugin_id.as_str(), "POST", "400"])
+                    .inc();
+                return Ok(resp);
+            }
         };
     plugin_call_request.method = Some("POST".to_string());
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
+    };
+    let status = status_code.as_str();
+    PLUGIN_CALLS
+        .with_label_values(&[plugin_id.as_str(), "POST", status])
+        .inc();
+
+    result
 }
 
 /// Calls a plugin method via GET request.
@@ -151,13 +174,24 @@ async fn plugin_call_get(
     let route = resolve_route(&path_route, &http_req);
 
     // Check if GET requests are allowed for this plugin
-    let plugin = data
-        .plugin_repository
-        .get_by_id(&plugin_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+    let plugin = match data.plugin_repository.get_by_id(&plugin_id).await? {
+        Some(p) => p,
+        None => {
+            // Track 404
+            PLUGIN_CALLS
+                .with_label_values(&[plugin_id.as_str(), "GET", "404"])
+                .inc();
+            return Err(ApiError::NotFound(format!(
+                "Plugin with id {plugin_id} not found"
+            )));
+        }
+    };
 
     if !plugin.allow_get_invocation {
+        // Track 405 Method Not Allowed
+        PLUGIN_CALLS
+            .with_label_values(&[plugin_id.as_str(), "GET", "405"])
+            .inc();
         return Ok(HttpResponse::MethodNotAllowed().json(ApiResponse::<()>::error(
             "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
         )));
@@ -172,7 +206,40 @@ async fn plugin_call_get(
         query: Some(extract_query_params(&http_req)),
     };
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
+    };
+    let status = status_code.as_str();
+    PLUGIN_CALLS
+        .with_label_values(&[plugin_id.as_str(), "GET", status])
+        .inc();
+
+    result
+}
+
+/// Get plugin by ID
+#[get("/plugins/{plugin_id}")]
+async fn get_plugin(
+    path: web::Path<String>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    let plugin_id = path.into_inner();
+    plugin::get_plugin(plugin_id, data).await
+}
+
+/// Update plugin configuration
+#[patch("/plugins/{plugin_id}")]
+async fn update_plugin(
+    path: web::Path<String>,
+    body: web::Json<UpdatePluginRequest>,
+    data: web::ThinData<DefaultAppState>,
+) -> impl Responder {
+    let plugin_id = path.into_inner();
+    plugin::update_plugin(plugin_id, body.into_inner(), data).await
 }
 
 /// Initializes the routes for the plugins module.
@@ -180,6 +247,8 @@ pub fn init(cfg: &mut web::ServiceConfig) {
     // Register routes with literal segments before routes with path parameters
     cfg.service(plugin_call); // POST /plugins/{plugin_id}/call
     cfg.service(plugin_call_get); // GET /plugins/{plugin_id}/call
+    cfg.service(get_plugin); // GET /plugins/{plugin_id}
+    cfg.service(update_plugin); // PATCH /plugins/{plugin_id}
     cfg.service(list_plugins); // GET /plugins
 }
 
@@ -921,9 +990,7 @@ mod tests {
             assert_eq!(
                 captured_req.route,
                 Some(expected_route.to_string()),
-                "Route should be '{}' for URI '{}'",
-                expected_route,
-                uri
+                "Route should be '{expected_route}' for URI '{uri}'"
             );
         }
     }
@@ -1089,8 +1156,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body_bytes).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Test case 2: Single quotes (not valid JSON)
@@ -1183,7 +1249,7 @@ mod tests {
 
         // Test with a reasonably long query string (1000 chars)
         let long_value = "a".repeat(1000);
-        let uri = format!("/test?data={}", long_value);
+        let uri = format!("/test?data={long_value}");
 
         let req = TestRequest::default().uri(&uri).to_http_request();
 
@@ -1497,8 +1563,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Verify that invalid request was not captured
@@ -1667,9 +1732,7 @@ mod tests {
             assert_eq!(
                 req.route,
                 Some(expected_route.to_string()),
-                "Route '{}' should be preserved as '{}'",
-                route,
-                expected_route
+                "Route '{route}' should be preserved as '{expected_route}'"
             );
         }
     }
@@ -1760,5 +1823,326 @@ mod tests {
             "Route handler should be executed, got status: {}",
             resp.status()
         );
+    }
+
+    // ============================================================================
+    // GET PLUGIN ROUTE TESTS
+    // ============================================================================
+
+    /// Mock handler for get plugin that returns a plugin by ID
+    async fn mock_get_plugin(path: web::Path<String>) -> impl Responder {
+        let plugin_id = path.into_inner();
+
+        if plugin_id == "not-found" {
+            return HttpResponse::NotFound().json(ApiResponse::<()>::error(format!(
+                "Plugin with id {plugin_id} not found"
+            )));
+        }
+
+        let plugin = PluginModel {
+            id: plugin_id,
+            path: "test-path.ts".to_string(),
+            timeout: Duration::from_secs(30),
+            emit_logs: true,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: true,
+            config: None,
+            forward_logs: true,
+        };
+
+        HttpResponse::Ok().json(ApiResponse::success(plugin))
+    }
+
+    #[actix_web::test]
+    async fn test_get_plugin_route_success() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}").route(web::get().to(mock_get_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/my-plugin")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let response: ApiResponse<PluginModel> = serde_json::from_slice(&body).unwrap();
+        assert!(response.success);
+        assert_eq!(response.data.as_ref().unwrap().id, "my-plugin");
+        assert!(response.data.as_ref().unwrap().emit_logs);
+        assert!(response.data.as_ref().unwrap().forward_logs);
+    }
+
+    #[actix_web::test]
+    async fn test_get_plugin_route_not_found() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}").route(web::get().to(mock_get_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/plugins/not-found")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
+    }
+
+    // ============================================================================
+    // UPDATE PLUGIN ROUTE TESTS
+    // ============================================================================
+
+    /// Mock handler for update plugin that returns the updated plugin
+    async fn mock_update_plugin(
+        path: web::Path<String>,
+        body: web::Json<UpdatePluginRequest>,
+    ) -> impl Responder {
+        let plugin_id = path.into_inner();
+        let update = body.into_inner();
+
+        // Simulate successful update
+        let updated_plugin = PluginModel {
+            id: plugin_id,
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(update.timeout.unwrap_or(30)),
+            emit_logs: update.emit_logs.unwrap_or(false),
+            emit_traces: update.emit_traces.unwrap_or(false),
+            raw_response: update.raw_response.unwrap_or(false),
+            allow_get_invocation: update.allow_get_invocation.unwrap_or(false),
+            config: update.config.flatten(),
+            forward_logs: update.forward_logs.unwrap_or(false),
+        };
+
+        HttpResponse::Ok().json(ApiResponse::success(updated_plugin))
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_success() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::patch()
+            .uri("/plugins/test-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "timeout": 60,
+                "emit_logs": true,
+                "forward_logs": true
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let response: ApiResponse<PluginModel> = serde_json::from_slice(&body).unwrap();
+        assert!(response.success);
+        assert_eq!(response.data.as_ref().unwrap().id, "test-plugin");
+        assert_eq!(
+            response.data.as_ref().unwrap().timeout,
+            Duration::from_secs(60)
+        );
+        assert!(response.data.as_ref().unwrap().emit_logs);
+        assert!(response.data.as_ref().unwrap().forward_logs);
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_with_config() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::patch()
+            .uri("/plugins/my-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "config": {
+                    "feature_enabled": true,
+                    "api_key": "secret123"
+                }
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let response: ApiResponse<PluginModel> = serde_json::from_slice(&body).unwrap();
+        assert!(response.success);
+        assert!(response.data.as_ref().unwrap().config.is_some());
+        let config = response.data.as_ref().unwrap().config.as_ref().unwrap();
+        assert_eq!(
+            config.get("feature_enabled"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(config.get("api_key"), Some(&serde_json::json!("secret123")));
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_clear_config() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::patch()
+            .uri("/plugins/test-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "config": null
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let response: ApiResponse<PluginModel> = serde_json::from_slice(&body).unwrap();
+        assert!(response.success);
+        assert!(response.data.as_ref().unwrap().config.is_none());
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_empty_body() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        // Empty JSON object - no fields to update
+        let req = test::TestRequest::patch()
+            .uri("/plugins/test-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({}))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_all_fields() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::patch()
+            .uri("/plugins/full-update-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "timeout": 120,
+                "emit_logs": true,
+                "emit_traces": true,
+                "raw_response": true,
+                "allow_get_invocation": true,
+                "forward_logs": true,
+                "config": {
+                    "key": "value"
+                }
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+
+        let body = test::read_body(resp).await;
+        let response: ApiResponse<PluginModel> = serde_json::from_slice(&body).unwrap();
+        let plugin = response.data.unwrap();
+
+        assert_eq!(plugin.timeout, Duration::from_secs(120));
+        assert!(plugin.emit_logs);
+        assert!(plugin.emit_traces);
+        assert!(plugin.raw_response);
+        assert!(plugin.allow_get_invocation);
+        assert!(plugin.forward_logs);
+        assert!(plugin.config.is_some());
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_invalid_json() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        let req = test::TestRequest::patch()
+            .uri("/plugins/test-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_payload("{ invalid json }")
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_client_error());
+    }
+
+    #[actix_web::test]
+    async fn test_update_plugin_route_unknown_field_rejected() {
+        let app = test::init_service(
+            App::new()
+                .service(
+                    web::resource("/plugins/{plugin_id}")
+                        .route(web::patch().to(mock_update_plugin)),
+                )
+                .configure(init),
+        )
+        .await;
+
+        // UpdatePluginRequest has deny_unknown_fields, so this should fail
+        let req = test::TestRequest::patch()
+            .uri("/plugins/test-plugin")
+            .insert_header(("Content-Type", "application/json"))
+            .set_json(serde_json::json!({
+                "timeout": 60,
+                "unknown_field": "should_fail"
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_client_error());
     }
 }

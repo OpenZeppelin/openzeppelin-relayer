@@ -22,7 +22,7 @@ use crate::{
         },
         Transaction,
     },
-    jobs::{JobProducer, JobProducerTrait, TransactionSend},
+    jobs::{JobProducer, JobProducerTrait, StatusCheckContext, TransactionSend},
     models::{
         produce_transaction_update_notification_payload, EncodedSerializedTransaction,
         NetworkTransactionData, NetworkTransactionRequest, RelayerRepoModel, SolanaTransactionData,
@@ -115,7 +115,12 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "preparing Solana transaction");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "preparing Solana transaction"
+        );
 
         // If transaction is not in Pending status, return Ok to avoid wasteful retries
         // (e.g., if it's already Sent, Failed, or in another state)
@@ -137,6 +142,7 @@ where
             // Use the provided blockhash from user - resubmit logic will handle expiration if needed
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 "transaction mode: using pre-built transaction with provided blockhash"
             );
             decode_solana_transaction_from_string(transaction_str)?
@@ -144,6 +150,7 @@ where
             // Instructions mode: build transaction from instructions with fresh blockhash
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 "instructions mode: building transaction with fresh blockhash"
             );
 
@@ -178,6 +185,7 @@ where
             if is_transient {
                 warn!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     error = %validation_error,
                     "transient validation error (likely RPC/network issue), will retry"
                 );
@@ -186,6 +194,7 @@ where
                 // Permanent validation error (policy violation, insufficient balance, etc.) - mark as failed
                 warn!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     error = %validation_error,
                     "permanent validation error, marking transaction as failed"
                 );
@@ -227,10 +236,23 @@ where
             ..Default::default()
         };
 
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "updating transaction status to Sent"
+        );
+
         let updated_tx = self
             .transaction_repository
             .partial_update(tx.id.clone(), update)
             .await?;
+
+        debug!(
+            tx_id = %updated_tx.id,
+            relayer_id = %updated_tx.relayer_id,
+            status = ?updated_tx.status,
+            "transaction updated, enqueueing submit job"
+        );
 
         // After preparing the transaction, produce a submit job to send it to the blockchain
         self.job_producer
@@ -258,11 +280,17 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "submitting Solana transaction to blockchain");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "submitting Solana transaction to blockchain"
+        );
 
         if tx.status != TransactionStatus::Sent && tx.status != TransactionStatus::Submitted {
             debug!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 status = ?tx.status,
                 "transaction not in expected status for submission, skipping"
             );
@@ -281,6 +309,7 @@ where
                 if matches!(provider_error, SolanaProviderError::AlreadyProcessed(_)) {
                     debug!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         signature = ?solana_data.signature,
                         "transaction already processed on-chain"
                     );
@@ -299,6 +328,7 @@ where
                     // The resubmit logic will fetch fresh blockhash, re-sign, and resubmit
                     debug!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         error = %provider_error,
                         "blockhash expired for single-signer transaction, status check will trigger resubmit"
                     );
@@ -307,6 +337,7 @@ where
 
                 error!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     error = %provider_error,
                     "failed to send transaction to blockchain"
                 );
@@ -326,7 +357,11 @@ where
             }
         };
 
-        debug!(tx_id = %tx.id, "transaction submitted successfully to blockchain");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "transaction submitted successfully to blockchain"
+        );
 
         // Transaction is now on-chain - update status and timestamp
         // Append signature to hashes array to track attempts
@@ -377,7 +412,11 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, "resubmitting Solana transaction");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            "resubmitting Solana transaction"
+        );
 
         // Validate transaction is in correct status for resubmission
         if !matches!(
@@ -386,6 +425,7 @@ where
         ) {
             warn!(
                 tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
                 status = ?tx.status,
                 "transaction not in expected status for resubmission, skipping"
             );
@@ -397,6 +437,7 @@ where
 
         info!(
             tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
             old_blockhash = %transaction.message.recent_blockhash,
             "fetching fresh blockhash for resubmission"
         );
@@ -445,6 +486,7 @@ where
             Ok(sig) => {
                 info!(
                     tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
                     signature = %sig,
                     new_blockhash = %fresh_blockhash,
                     "transaction resubmitted successfully with fresh blockhash"
@@ -456,6 +498,7 @@ where
                 if matches!(e, SolanaProviderError::AlreadyProcessed(_)) {
                     warn!(
                         tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
                         error = %e,
                         "resubmission indicates transaction already on-chain - keeping original signature"
                     );
@@ -573,7 +616,7 @@ where
     }
 
     /// Marks a transaction as failed and updates the database.
-    async fn mark_transaction_as_failed(
+    pub(super) async fn mark_transaction_as_failed(
         &self,
         tx: &TransactionRepoModel,
         error: &TransactionError,
@@ -698,8 +741,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_transaction_status_impl(tx).await
+        self.handle_transaction_status_impl(tx, context).await
     }
 
     async fn cancel_transaction(
@@ -1699,7 +1743,7 @@ mod tests {
         // Call handle_transaction_status - with new implementation,
         // Pending transactions just return Ok without querying provider
         let result = transaction_handler
-            .handle_transaction_status(test_tx.clone())
+            .handle_transaction_status(test_tx.clone(), None)
             .await;
 
         // Verify the result is Ok and transaction is unchanged

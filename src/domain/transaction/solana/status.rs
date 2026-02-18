@@ -22,7 +22,7 @@ use crate::domain::transaction::solana::utils::{
     is_resubmitable, map_solana_status_to_transaction_status, too_many_solana_attempts,
 };
 use crate::{
-    jobs::{JobProducerTrait, TransactionRequest, TransactionSend},
+    jobs::{JobProducerTrait, StatusCheckContext, TransactionRequest, TransactionSend},
     models::{
         RelayerRepoModel, SolanaTransactionStatus, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -45,16 +45,54 @@ where
     /// 2. Reload transaction from DB if status changed (ensures fresh data)
     /// 3. Check if too early for resubmit checks (young transactions just update status)
     /// 4. Handle based on detected status (handlers update DB if needed)
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - The transaction to check status for
+    /// * `context` - Optional circuit breaker context with failure tracking information
     pub async fn handle_transaction_status_impl(
         &self,
         mut tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "handling solana transaction status");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "handling solana transaction status"
+        );
 
         // Early return if transaction is already in a final state
         if is_final_state(&tx.status) {
-            debug!(status = ?tx.status, "transaction already in final state");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction already in final state"
+            );
             return Ok(tx);
+        }
+
+        // Check if circuit breaker should force finalization
+        if let Some(ref ctx) = context {
+            if ctx.should_force_finalize() {
+                let reason = format!(
+                    "Transaction status monitoring failed after {} consecutive errors (total: {}). \
+                     Last status: {:?}. Unable to determine final on-chain state.",
+                    ctx.consecutive_failures, ctx.total_failures, tx.status
+                );
+                warn!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    total_failures = ctx.total_failures,
+                    max_consecutive = ctx.max_consecutive_failures,
+                    "circuit breaker triggered, forcing transaction to failed state"
+                );
+                // Note: Expiry checks (is_valid_until_expired) are already performed in the normal
+                // flow before any RPC calls. If we've hit consecutive failures, it means RPC is
+                // failing, so blockhash checks would also fail. Just mark as Failed.
+                return self.mark_as_failed(tx, reason).await;
+            }
         }
 
         // Step 1: Check transaction status (query chain or return current)
@@ -362,6 +400,7 @@ where
     async fn is_blockhash_valid(
         &self,
         transaction: &SolanaTransaction,
+        tx_id: &str,
     ) -> Result<bool, TransactionError> {
         let blockhash = transaction.message.recent_blockhash;
 
@@ -374,12 +413,16 @@ where
             Err(e) => {
                 // Check if blockhash not found
                 if matches!(e, SolanaProviderError::BlockhashNotFound(_)) {
-                    info!("blockhash not found on chain, treating as expired");
+                    info!(
+                        tx_id = %tx_id,
+                        "blockhash not found on chain, treating as expired"
+                    );
                     return Ok(false);
                 }
 
                 // Propagate the error so the job system can retry the status check later
                 warn!(
+                    tx_id = %tx_id,
                     error = %e,
                     "error checking blockhash validity, propagating error for retry"
                 );
@@ -422,10 +465,22 @@ where
             ..Default::default()
         };
 
-        self.transaction_repository()
+        let updated_tx = self
+            .transaction_repository()
             .partial_update(tx.id.clone(), update_request)
             .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        // Send notification (best effort)
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                error = %e,
+                "failed to send notification for failed transaction"
+            );
+        }
+
+        Ok(updated_tx)
     }
 
     /// Check if valid_until has expired
@@ -605,7 +660,7 @@ where
         let transaction = decode_solana_transaction(&tx)?;
 
         // Step 6: Check if blockhash is expired
-        let blockhash_valid = self.is_blockhash_valid(&transaction).await?;
+        let blockhash_valid = self.is_blockhash_valid(&transaction, &tx.id).await?;
 
         if blockhash_valid {
             debug!(
@@ -666,7 +721,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        jobs::{MockJobProducerTrait, TransactionCommand},
+        jobs::{JobProducerError, MockJobProducerTrait, TransactionCommand},
         models::{NetworkTransactionData, SolanaTransactionData},
         repositories::{MockRelayerRepository, MockTransactionRepository},
         services::{
@@ -722,7 +777,7 @@ mod tests {
         // Test with Confirmed status
         let tx_confirmed = create_tx_with_signature(TransactionStatus::Confirmed, None);
         let result = handler
-            .handle_transaction_status_impl(tx_confirmed.clone())
+            .handle_transaction_status_impl(tx_confirmed.clone(), None)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().id, tx_confirmed.id);
@@ -730,7 +785,7 @@ mod tests {
         // Test with Failed status
         let tx_failed = create_tx_with_signature(TransactionStatus::Failed, None);
         let result = handler
-            .handle_transaction_status_impl(tx_failed.clone())
+            .handle_transaction_status_impl(tx_failed.clone(), None)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().id, tx_failed.id);
@@ -738,7 +793,7 @@ mod tests {
         // Test with Expired status
         let tx_expired = create_tx_with_signature(TransactionStatus::Expired, None);
         let result = handler
-            .handle_transaction_status_impl(tx_expired.clone())
+            .handle_transaction_status_impl(tx_expired.clone(), None)
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap().id, tx_expired.id);
@@ -801,7 +856,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -865,7 +922,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -929,7 +988,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -972,7 +1033,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         // Provider error in check_transaction_status returns current status
         // Status unchanged, so no DB update, handler just returns Ok(tx)
@@ -1036,7 +1099,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -1084,7 +1149,7 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx).await;
+        let result = handler.handle_transaction_status_impl(tx, None).await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -1156,7 +1221,9 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx.clone()).await;
+        let result = handler
+            .handle_transaction_status_impl(tx.clone(), None)
+            .await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -1216,7 +1283,7 @@ mod tests {
             Arc::new(MockSolanaSignTrait::new()),
         )?;
 
-        let result = handler.handle_transaction_status_impl(tx).await;
+        let result = handler.handle_transaction_status_impl(tx, None).await;
 
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
@@ -1604,7 +1671,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -1639,7 +1706,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_ok());
         assert!(!result.unwrap());
@@ -1676,7 +1743,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();
@@ -1891,7 +1958,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mark_as_failed() -> Result<()> {
+    async fn test_mark_as_failed_without_notification() -> Result<()> {
+        // When relayer has no notification_id configured, no notification should be sent
         let provider = MockSolanaProviderTrait::new();
         let relayer_repo = Arc::new(MockRelayerRepository::new());
         let mut tx_repo = MockTransactionRepository::new();
@@ -1915,6 +1983,7 @@ mod tests {
                 Ok(failed_tx)
             });
 
+        // Relayer has no notification_id, so no notification should be produced
         let handler = SolanaRelayerTransaction::new(
             create_mock_solana_relayer("test-relayer".to_string(), false),
             relayer_repo,
@@ -1926,6 +1995,119 @@ mod tests {
 
         let result = handler.mark_as_failed(tx, reason.to_string()).await;
 
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_failed_sends_notification() -> Result<()> {
+        // When relayer has notification_id configured, notification should be sent (best effort)
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create relayer with notification configured
+        let mut relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test failure";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Failed)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        // Expect notification to be produced
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        let handler = SolanaRelayerTransaction::new(
+            relayer,
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_failed(tx, reason.to_string()).await;
+
+        assert!(result.is_ok());
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.status, TransactionStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_as_failed_notification_error_does_not_fail() -> Result<()> {
+        // Even if notification fails, mark_as_failed should still succeed (best effort)
+        let provider = MockSolanaProviderTrait::new();
+        let relayer_repo = Arc::new(MockRelayerRepository::new());
+        let mut tx_repo = MockTransactionRepository::new();
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Create relayer with notification configured
+        let mut relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+        relayer.notification_id = Some("test-notification".to_string());
+
+        let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+        let tx_id = tx.id.clone();
+        let reason = "Test failure";
+
+        tx_repo
+            .expect_partial_update()
+            .withf(move |tx_id_param, update_req| {
+                tx_id_param == &tx_id
+                    && update_req.status == Some(TransactionStatus::Failed)
+                    && update_req.status_reason == Some(reason.to_string())
+            })
+            .times(1)
+            .returning(move |_, _| {
+                let mut failed_tx = create_tx_with_signature(TransactionStatus::Failed, None);
+                failed_tx.status = TransactionStatus::Failed;
+                Ok(failed_tx)
+            });
+
+        // Notification fails, but mark_as_failed should still succeed
+        job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(JobProducerError::QueueError(
+                        "Notification service unavailable".to_string(),
+                    ))
+                })
+            });
+
+        let handler = SolanaRelayerTransaction::new(
+            relayer,
+            relayer_repo,
+            Arc::new(provider),
+            Arc::new(tx_repo),
+            Arc::new(job_producer),
+            Arc::new(MockSolanaSignTrait::new()),
+        )?;
+
+        let result = handler.mark_as_failed(tx, reason.to_string()).await;
+
+        // Should succeed despite notification failure (best effort)
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
         assert_eq!(updated_tx.status, TransactionStatus::Failed);
@@ -1981,5 +2163,306 @@ mod tests {
         let updated_tx = result.unwrap();
         assert_eq!(updated_tx.status, TransactionStatus::Confirmed);
         Ok(())
+    }
+
+    // Tests for circuit breaker functionality
+    mod circuit_breaker_tests {
+        use super::*;
+        use crate::jobs::StatusCheckContext;
+        use crate::models::NetworkType;
+
+        /// Helper to create a context that should trigger the circuit breaker
+        fn create_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                45,  // consecutive_failures: exceeds Solana threshold of 38
+                60,  // total_failures
+                70,  // total_retries
+                38,  // max_consecutive_failures (Solana default)
+                115, // max_total_failures (Solana default)
+                NetworkType::Solana,
+            )
+        }
+
+        /// Helper to create a context that should NOT trigger the circuit breaker
+        fn create_safe_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                5,   // consecutive_failures: below threshold
+                10,  // total_failures
+                15,  // total_retries
+                38,  // max_consecutive_failures
+                115, // max_total_failures
+                NetworkType::Solana,
+            )
+        }
+
+        /// Helper to create a context that triggers via total failures (safety net)
+        fn create_total_triggered_context() -> StatusCheckContext {
+            StatusCheckContext::new(
+                10,  // consecutive_failures: below threshold
+                120, // total_failures: exceeds Solana threshold of 115
+                130, // total_retries
+                38,  // max_consecutive_failures
+                115, // max_total_failures
+                NetworkType::Solana,
+            )
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_submitted_marks_as_failed() -> Result<()> {
+            let provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let mut tx_repo = MockTransactionRepository::new();
+            let job_producer = Arc::new(MockJobProducerTrait::new());
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            let tx = create_tx_with_signature(TransactionStatus::Submitted, Some("test-sig"));
+
+            // Expect partial_update to be called with Failed status
+            tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx =
+                        create_tx_with_signature(TransactionStatus::Submitted, Some("test-sig"));
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                job_producer,
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            let ctx = create_triggered_context();
+            let result = handler
+                .handle_transaction_status_impl(tx, Some(ctx))
+                .await?;
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result.status_reason.is_some());
+            assert!(result.status_reason.unwrap().contains("consecutive errors"));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_pending_marks_as_failed() -> Result<()> {
+            let provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let mut tx_repo = MockTransactionRepository::new();
+            let job_producer = Arc::new(MockJobProducerTrait::new());
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            let tx = create_tx_with_signature(TransactionStatus::Pending, None);
+
+            // Expect partial_update to be called with Failed status
+            tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, update| {
+                    let mut updated_tx = create_tx_with_signature(TransactionStatus::Pending, None);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                job_producer,
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            let ctx = create_triggered_context();
+            let result = handler
+                .handle_transaction_status_impl(tx, Some(ctx))
+                .await?;
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_total_failures_triggers() -> Result<()> {
+            let provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let mut tx_repo = MockTransactionRepository::new();
+            let job_producer = Arc::new(MockJobProducerTrait::new());
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            let tx = create_tx_with_signature(TransactionStatus::Submitted, Some("test-sig"));
+
+            tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .returning(|_, _| {
+                    let mut updated_tx =
+                        create_tx_with_signature(TransactionStatus::Failed, Some("test-sig"));
+                    updated_tx.status_reason =
+                        Some("Circuit breaker triggered by total failures".to_string());
+                    Ok(updated_tx)
+                });
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                job_producer,
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            // Use context that triggers via total failures (safety net)
+            let ctx = create_total_triggered_context();
+            let result = handler
+                .handle_transaction_status_impl(tx, Some(ctx))
+                .await?;
+
+            assert_eq!(result.status, TransactionStatus::Failed);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_below_threshold_continues() -> Result<()> {
+            let mut provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let mut tx_repo = MockTransactionRepository::new();
+            let job_producer = Arc::new(MockJobProducerTrait::new());
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            // Use a valid Base58-encoded signature
+            let signature_str =
+                "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+            let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+
+            // Below threshold, should continue with normal status checking
+            // Return Confirmed status to verify normal flow works
+            provider
+                .expect_get_transaction_status()
+                .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Confirmed) }));
+
+            tx_repo.expect_get_by_id().returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Submitted,
+                    Some(signature_str),
+                ))
+            });
+
+            // Expect normal flow to update status
+            tx_repo.expect_partial_update().returning(move |_, update| {
+                let mut updated_tx =
+                    create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+                updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                Ok(updated_tx)
+            });
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                job_producer,
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            let ctx = create_safe_context();
+            let result = handler
+                .handle_transaction_status_impl(tx, Some(ctx))
+                .await?;
+
+            // Should not be Failed (circuit breaker not triggered)
+            // SolanaTransactionStatus::Confirmed maps to TransactionStatus::Mined
+            assert_eq!(result.status, TransactionStatus::Mined);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_final_state_early_return() -> Result<()> {
+            let provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let tx_repo = MockTransactionRepository::new();
+            let job_producer = MockJobProducerTrait::new();
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            // Transaction is already in final state
+            let tx = create_tx_with_signature(TransactionStatus::Confirmed, Some("test-sig"));
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                Arc::new(job_producer),
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            let ctx = create_triggered_context();
+
+            // Even with triggered context, final states should return early
+            let result = handler
+                .handle_transaction_status_impl(tx, Some(ctx))
+                .await?;
+
+            assert_eq!(result.status, TransactionStatus::Confirmed);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_no_context_continues() -> Result<()> {
+            let mut provider = MockSolanaProviderTrait::new();
+            let relayer_repo = Arc::new(MockRelayerRepository::new());
+            let mut tx_repo = MockTransactionRepository::new();
+            let job_producer = Arc::new(MockJobProducerTrait::new());
+            let relayer = create_mock_solana_relayer("test-relayer".to_string(), false);
+
+            // Use a valid Base58-encoded signature
+            let signature_str =
+                "4XFPmbPT4TRchFWNmQD2N8BhjxJQKqYdXWQG7kJJtxCBZ8Y9WtNDoPAwQaHFYnVynCjMVyF9TCMrpPFkEpG7LpZr";
+            let tx = create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+
+            // No context means no circuit breaker
+            provider
+                .expect_get_transaction_status()
+                .returning(|_| Box::pin(async { Ok(SolanaTransactionStatus::Confirmed) }));
+
+            tx_repo.expect_get_by_id().returning(move |_| {
+                Ok(create_tx_with_signature(
+                    TransactionStatus::Submitted,
+                    Some(signature_str),
+                ))
+            });
+
+            tx_repo.expect_partial_update().returning(move |_, update| {
+                let mut updated_tx =
+                    create_tx_with_signature(TransactionStatus::Submitted, Some(signature_str));
+                updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                Ok(updated_tx)
+            });
+
+            let handler = SolanaRelayerTransaction::new(
+                relayer,
+                relayer_repo,
+                Arc::new(provider),
+                Arc::new(tx_repo),
+                job_producer,
+                Arc::new(MockSolanaSignTrait::new()),
+            )?;
+
+            // Pass None for context - should continue normally
+            let result = handler.handle_transaction_status_impl(tx, None).await?;
+
+            // SolanaTransactionStatus::Confirmed maps to TransactionStatus::Mined
+            assert_eq!(result.status, TransactionStatus::Mined);
+            Ok(())
+        }
     }
 }

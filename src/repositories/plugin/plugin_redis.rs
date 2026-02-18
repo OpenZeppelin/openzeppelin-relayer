@@ -3,27 +3,40 @@
 use crate::models::{PaginationQuery, PluginModel, RepositoryError};
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{BatchRetrievalResult, PaginatedResult, PluginRepositoryTrait};
+use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::aio::ConnectionManager;
+use lru::LruCache;
+use parking_lot::RwLock;
 use redis::AsyncCommands;
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, error, warn};
 
 const PLUGIN_PREFIX: &str = "plugin";
 const PLUGIN_LIST_KEY: &str = "plugin_list";
+const COMPILED_CODE_PREFIX: &str = "compiled_code";
+const SOURCE_HASH_PREFIX: &str = "source_hash";
+
+#[derive(Clone)]
+struct CachedCompiledCode {
+    code: String,
+    cached_at: Instant,
+}
 
 #[derive(Clone)]
 pub struct RedisPluginRepository {
-    pub client: Arc<ConnectionManager>,
+    pub connections: Arc<RedisConnections>,
     pub key_prefix: String,
+    compiled_code_cache: Arc<RwLock<LruCache<String, CachedCompiledCode>>>,
 }
 
 impl RedisRepository for RedisPluginRepository {}
 
 impl RedisPluginRepository {
     pub fn new(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         if key_prefix.is_empty() {
@@ -33,8 +46,11 @@ impl RedisPluginRepository {
         }
 
         Ok(Self {
-            client: connection_manager,
+            connections,
             key_prefix,
+            compiled_code_cache: Arc::new(RwLock::new(LruCache::new(
+                NonZeroUsize::new(100).unwrap(),
+            ))),
         })
     }
 
@@ -48,6 +64,16 @@ impl RedisPluginRepository {
         format!("{}:{}", self.key_prefix, PLUGIN_LIST_KEY)
     }
 
+    /// Generate key for compiled code: compiled_code:{plugin_id}
+    fn compiled_code_key(&self, plugin_id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, COMPILED_CODE_PREFIX, plugin_id)
+    }
+
+    /// Generate key for source hash: source_hash:{plugin_id}
+    fn source_hash_key(&self, plugin_id: &str) -> String {
+        format!("{}:{}:{}", self.key_prefix, SOURCE_HASH_PREFIX, plugin_id)
+    }
+
     /// Get plugin by ID using an existing connection.
     /// This method is useful to prevent creating new connections for
     /// getting individual plugins on list operations.
@@ -59,7 +85,7 @@ impl RedisPluginRepository {
     async fn get_by_id_with_connection(
         &self,
         id: &str,
-        conn: &mut ConnectionManager,
+        conn: &mut deadpool_redis::Connection,
     ) -> Result<Option<PluginModel>, RepositoryError> {
         if id.is_empty() {
             return Err(RepositoryError::InvalidData(
@@ -73,7 +99,7 @@ impl RedisPluginRepository {
         let json: Option<String> = conn
             .get(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, &format!("get_plugin_by_id_{id}")))?;
+            .map_err(|e| self.map_redis_error(e, "get_plugin_by_id"))?;
 
         match json {
             Some(json) => {
@@ -100,7 +126,9 @@ impl RedisPluginRepository {
             });
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_ids")
+            .await?;
         let keys: Vec<String> = ids.iter().map(|id| self.plugin_key(id)).collect();
 
         let values: Vec<Option<String>> = conn
@@ -141,7 +169,7 @@ impl RedisPluginRepository {
 impl fmt::Debug for RedisPluginRepository {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RedisPluginRepository")
-            .field("client", &"<ConnectionManager>")
+            .field("pool", &"<Pool>")
             .field("key_prefix", &self.key_prefix)
             .finish()
     }
@@ -150,7 +178,9 @@ impl fmt::Debug for RedisPluginRepository {
 #[async_trait]
 impl PluginRepositoryTrait for RedisPluginRepository {
     async fn get_by_id(&self, id: &str) -> Result<Option<PluginModel>, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_by_id")
+            .await?;
         self.get_by_id_with_connection(id, &mut conn).await
     }
 
@@ -167,7 +197,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "add")
+            .await?;
         let key = self.plugin_key(&plugin.id);
         let list_key = self.plugin_list_key();
 
@@ -177,7 +209,7 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         let exists: bool = conn
             .exists(&key)
             .await
-            .map_err(|e| self.map_redis_error(e, &format!("check_plugin_exists_{}", plugin.id)))?;
+            .map_err(|e| self.map_redis_error(e, "check_plugin_exists"))?;
 
         if exists {
             return Err(RepositoryError::ConstraintViolation(format!(
@@ -197,11 +229,50 @@ impl PluginRepositoryTrait for RedisPluginRepository {
 
         pipe.exec_async(&mut conn).await.map_err(|e| {
             error!(plugin_id = %plugin.id, error = %e, "failed to add plugin");
-            self.map_redis_error(e, &format!("add_plugin_{}", plugin.id))
+            self.map_redis_error(e, "add_plugin")
         })?;
 
         debug!(plugin_id = %plugin.id, "successfully added plugin");
         Ok(())
+    }
+
+    async fn update(&self, plugin: PluginModel) -> Result<PluginModel, RepositoryError> {
+        if plugin.id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Plugin ID cannot be empty".to_string(),
+            ));
+        }
+
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
+        let key = self.plugin_key(&plugin.id);
+
+        debug!(plugin_id = %plugin.id, "updating plugin");
+
+        // Check if plugin exists
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("check_plugin_exists_{}", plugin.id)))?;
+
+        if !exists {
+            return Err(RepositoryError::NotFound(format!(
+                "Plugin with ID {} not found",
+                plugin.id
+            )));
+        }
+
+        // Serialize plugin
+        let json = self.serialize_entity(&plugin, |p| &p.id, "plugin")?;
+
+        // Update the plugin data
+        conn.set::<_, _, ()>(&key, &json)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("update_plugin_{}", plugin.id)))?;
+
+        debug!(plugin_id = %plugin.id, "successfully updated plugin");
+        Ok(plugin)
     }
 
     async fn list_paginated(
@@ -220,35 +291,41 @@ impl PluginRepositoryTrait for RedisPluginRepository {
             ));
         }
 
-        let mut conn = self.client.as_ref().clone();
-        let plugin_list_key = self.plugin_list_key();
+        let (total, ids_to_query) = {
+            let mut conn = self
+                .get_connection(self.connections.reader(), "list_paginated")
+                .await?;
+            let plugin_list_key = self.plugin_list_key();
 
-        // Get total count
-        let total: u64 = conn
-            .scard(&plugin_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
+            // Get total count
+            let total: u64 = conn
+                .scard(&plugin_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_count"))?;
 
-        if total == 0 {
-            return Ok(PaginatedResult {
-                items: vec![],
-                total: 0,
-                page: query.page,
-                per_page: query.per_page,
-            });
-        }
+            if total == 0 {
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
 
-        // Get all IDs and paginate in memory
-        let all_ids: Vec<String> = conn
-            .smembers(&plugin_list_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
+            // Get all IDs and paginate in memory
+            let all_ids: Vec<String> = conn
+                .smembers(&plugin_list_key)
+                .await
+                .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
 
-        let start = ((query.page - 1) * query.per_page) as usize;
-        let end = (start + query.per_page as usize).min(all_ids.len());
+            let start = ((query.page - 1) * query.per_page) as usize;
+            let end = (start + query.per_page as usize).min(all_ids.len());
 
-        let ids_to_query = &all_ids[start..end];
-        let items = self.get_by_ids(ids_to_query).await?;
+            (total, all_ids[start..end].to_vec())
+            // Connection dropped here before nested call to avoid connection doubling
+        };
+
+        let items = self.get_by_ids(&ids_to_query).await?;
 
         Ok(PaginatedResult {
             items: items.results.clone(),
@@ -259,7 +336,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn count(&self) -> Result<usize, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "count")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         let count: u64 = conn
@@ -271,7 +350,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn has_entries(&self) -> Result<bool, RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_entries")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("checking if plugin entries exist");
@@ -286,7 +367,9 @@ impl PluginRepositoryTrait for RedisPluginRepository {
     }
 
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
-        let mut conn = self.client.as_ref().clone();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         let plugin_list_key = self.plugin_list_key();
 
         debug!("dropping all plugin entries");
@@ -322,6 +405,172 @@ impl PluginRepositoryTrait for RedisPluginRepository {
         debug!(count = %plugin_ids.len(), "dropped plugin entries");
         Ok(())
     }
+
+    // Compiled code cache methods
+
+    async fn get_compiled_code(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        const CACHE_TTL_SECS: u64 = 300; // 5 minutes
+
+        // Check memory cache first - extract data without holding lock across await
+        // The cache is invalidated by store_compiled_code and invalidate_compiled_code,
+        // so we can trust it within the TTL without calling Redis to verify
+        let cached_code = {
+            let cache = self.compiled_code_cache.read();
+            cache.peek(plugin_id).and_then(|cached| {
+                if cached.cached_at.elapsed().as_secs() < CACHE_TTL_SECS {
+                    Some(cached.code.clone())
+                } else {
+                    None
+                }
+            })
+        };
+
+        if let Some(code) = cached_code {
+            return Ok(Some(code));
+        }
+
+        // Cache miss or expired - fetch from Redis
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_compiled_code")
+            .await?;
+        let key = self.compiled_code_key(plugin_id);
+
+        let code: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("get_compiled_code_{plugin_id}")))?;
+
+        // Update cache if found - fetch hash in same connection batch would be better
+        // but for now we avoid the extra Redis call since the hash is only used for
+        // external invalidation which already clears the in-memory cache
+        if let Some(ref code_str) = code {
+            let mut cache = self.compiled_code_cache.write();
+            cache.put(
+                plugin_id.to_string(),
+                CachedCompiledCode {
+                    code: code_str.clone(),
+                    cached_at: Instant::now(),
+                },
+            );
+        }
+
+        Ok(code)
+    }
+
+    async fn store_compiled_code(
+        &self,
+        plugin_id: &str,
+        compiled_code: &str,
+        source_hash: Option<&str>,
+    ) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "store_compiled_code")
+            .await?;
+        let code_key = self.compiled_code_key(plugin_id);
+
+        debug!(plugin_id = %plugin_id, "storing compiled code in Redis");
+
+        // Use pipeline to store both code and hash atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.set(&code_key, compiled_code);
+
+        if let Some(hash) = source_hash {
+            let hash_key = self.source_hash_key(plugin_id);
+            pipe.set(&hash_key, hash);
+        }
+
+        pipe.exec_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("store_compiled_code_{plugin_id}")))?;
+
+        // Invalidate memory cache
+        self.compiled_code_cache.write().pop(plugin_id);
+
+        Ok(())
+    }
+
+    async fn invalidate_compiled_code(&self, plugin_id: &str) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "invalidate_compiled_code")
+            .await?;
+        let code_key = self.compiled_code_key(plugin_id);
+        let hash_key = self.source_hash_key(plugin_id);
+
+        debug!(plugin_id = %plugin_id, "invalidating compiled code in Redis");
+
+        // Use pipeline to delete both keys atomically
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.del(&code_key);
+        pipe.del(&hash_key);
+
+        pipe.exec_async(&mut conn).await.map_err(|e| {
+            self.map_redis_error(e, &format!("invalidate_compiled_code_{plugin_id}"))
+        })?;
+
+        // Invalidate memory cache
+        self.compiled_code_cache.write().pop(plugin_id);
+
+        Ok(())
+    }
+
+    async fn invalidate_all_compiled_code(&self) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "invalidate_all_compiled_code")
+            .await?;
+        let plugin_list_key = self.plugin_list_key();
+
+        debug!("invalidating all compiled code in Redis");
+
+        // Get all plugin IDs from the list
+        let plugin_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_plugin_list_for_invalidate"))?;
+
+        // Delete all compiled code and hash keys
+        for plugin_id in &plugin_ids {
+            let code_key = self.compiled_code_key(plugin_id);
+            let hash_key = self.source_hash_key(plugin_id);
+
+            let _ = conn.del::<_, ()>(&code_key).await;
+            let _ = conn.del::<_, ()>(&hash_key).await;
+        }
+
+        // Clear all cached compiled code
+        self.compiled_code_cache.write().clear();
+
+        Ok(())
+    }
+
+    async fn has_compiled_code(&self, plugin_id: &str) -> Result<bool, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.reader(), "has_compiled_code")
+            .await?;
+        let key = self.compiled_code_key(plugin_id);
+
+        let exists: bool = conn
+            .exists(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("exists_compiled_code_{plugin_id}")))?;
+
+        Ok(exists)
+    }
+
+    async fn get_source_hash(&self, plugin_id: &str) -> Result<Option<String>, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.reader(), "get_source_hash")
+            .await?;
+        let key = self.source_hash_key(plugin_id);
+
+        let hash: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, &format!("get_source_hash_{plugin_id}")))?;
+
+        Ok(hash)
+    }
 }
 
 #[cfg(test)]
@@ -348,18 +597,21 @@ mod tests {
     async fn setup_test_repo() -> RedisPluginRepository {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/".to_string());
-        let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
-        let mut connection_manager = ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let cfg = deadpool_redis::Config::from_url(&redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        // Clear the plugin lists
-        connection_manager
-            .del::<&str, ()>("test_plugin:plugin_list")
-            .await
-            .unwrap();
+        let random_id = uuid::Uuid::new_v4().to_string();
+        let key_prefix = format!("test_prefix:{random_id}");
 
-        RedisPluginRepository::new(Arc::new(connection_manager), "test_plugin".to_string())
+        RedisPluginRepository::new(connections, key_prefix)
             .expect("Failed to create Redis plugin repository")
     }
 
@@ -367,19 +619,25 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_creation() {
         let repo = setup_test_repo().await;
-        assert_eq!(repo.key_prefix, "test_plugin");
+        assert!(repo.key_prefix.contains("test_prefix"));
     }
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_new_repository_empty_prefix_fails() {
-        let client =
-            redis::Client::open("redis://127.0.0.1:6379/").expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create Redis connection manager");
+        let redis_url = "redis://127.0.0.1:6379/";
+        let cfg = deadpool_redis::Config::from_url(redis_url);
+        let pool = Arc::new(
+            cfg.builder()
+                .expect("Failed to create pool builder")
+                .max_size(16)
+                .runtime(deadpool_redis::Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        let result = RedisPluginRepository::new(Arc::new(connection_manager), "".to_string());
+        let result = RedisPluginRepository::new(connections, "".to_string());
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -393,10 +651,10 @@ mod tests {
         let repo = setup_test_repo().await;
 
         let plugin_key = repo.plugin_key("test-plugin");
-        assert_eq!(plugin_key, "test_plugin:plugin:test-plugin");
+        assert!(plugin_key.contains(":plugin:test-plugin"));
 
         let list_key = repo.plugin_list_key();
-        assert_eq!(list_key, "test_plugin:plugin_list");
+        assert!(list_key.contains(":plugin_list"));
     }
 
     #[tokio::test]
@@ -477,9 +735,9 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisPluginRepository"));
-        assert!(debug_str.contains("test_plugin"));
+        assert!(debug_str.contains("test_prefix"));
     }
 
     #[tokio::test]
@@ -539,9 +797,11 @@ mod tests {
             .get_by_ids(&[plugin1.id.clone(), plugin2.id.clone()])
             .await
             .unwrap();
-        assert!(retrieved.results.len() == 2);
-        assert_eq!(retrieved.results[0].id, plugin2.id);
-        assert_eq!(retrieved.results[1].id, plugin1.id);
+        assert_eq!(retrieved.results.len(), 2);
+        // Results order may vary, so check that both plugins are present
+        let result_ids: Vec<String> = retrieved.results.iter().map(|p| p.id.clone()).collect();
+        assert!(result_ids.contains(&plugin1.id));
+        assert!(result_ids.contains(&plugin2.id));
         assert_eq!(retrieved.failed_ids.len(), 0);
     }
 

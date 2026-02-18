@@ -15,8 +15,8 @@ services:
       - channels_admin_secret
     environment:
       REDIS_URL: redis://redis:6379
-      RATE_LIMIT_REQUESTS_PER_SECOND: 10
-      RATE_LIMIT_BURST: 50
+      RATE_LIMIT_REQUESTS_PER_SECOND: 50
+      RATE_LIMIT_BURST: 500
       LOG_LEVEL: ${LOG_LEVEL}
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
       API_KEY: ${API_KEY}
@@ -30,6 +30,8 @@ services:
       FEE_LIMIT: ${FEE_LIMIT}
       API_KEY_HEADER: ${API_KEY_HEADER}
       FEE_RESET_PERIOD_SECONDS: ${FEE_RESET_PERIOD_SECONDS}
+      LIMITED_CONTRACTS: ${LIMITED_CONTRACTS}
+      CONTRACT_CAPACITY_RATIO: ${CONTRACT_CAPACITY_RATIO}
     security_opt:
       - no-new-privileges
     networks:

@@ -719,7 +719,7 @@ mod solana_signer_factory_tests {
             SignerError::SigningError(msg) => {
                 assert!(msg.contains("Signer public key not found in transaction signers"));
             }
-            _ => panic!("Expected SigningError, got {:?}", error),
+            _ => panic!("Expected SigningError, got {error:?}"),
         }
     }
 
@@ -769,7 +769,7 @@ mod solana_signer_factory_tests {
             SignerError::SigningError(msg) => {
                 assert!(msg.contains("Signer is not marked as a required signer"));
             }
-            _ => panic!("Expected SigningError, got {:?}", error),
+            _ => panic!("Expected SigningError, got {error:?}"),
         }
     }
 

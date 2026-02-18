@@ -28,7 +28,7 @@ pub fn check_authorization_header(req: &ServiceRequest, expected_key: &SecretStr
             return false;
         }
 
-        return &SecretString::new(token) == expected_key;
+        return expected_key.equals_str(token);
     }
     false
 }

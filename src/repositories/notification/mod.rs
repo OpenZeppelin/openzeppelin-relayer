@@ -21,8 +21,8 @@ mod notification_redis;
 
 pub use notification_in_memory::*;
 pub use notification_redis::*;
-use redis::aio::ConnectionManager;
 
+use crate::utils::RedisConnections;
 use crate::{
     models::{NotificationRepoModel, RepositoryError},
     repositories::{PaginatedResult, PaginationQuery, Repository},
@@ -42,11 +42,11 @@ impl NotificationRepositoryStorage {
         Self::InMemory(InMemoryNotificationRepository::new())
     }
     pub fn new_redis(
-        connection_manager: Arc<ConnectionManager>,
+        connections: Arc<RedisConnections>,
         key_prefix: String,
     ) -> Result<Self, RepositoryError> {
         Ok(Self::Redis(RedisNotificationRepository::new(
-            connection_manager,
+            connections,
             key_prefix,
         )?))
     }
@@ -223,7 +223,7 @@ mod tests {
 
         // Add test notifications
         for i in 1..=5 {
-            let notification = create_test_notification(&format!("notification-{}", i));
+            let notification = create_test_notification(&format!("notification-{i}"));
             storage.create(notification).await?;
         }
 
@@ -402,7 +402,7 @@ mod tests {
 
         // Add multiple notifications
         for i in 1..=5 {
-            let notification = create_test_notification(&format!("notification-{}", i));
+            let notification = create_test_notification(&format!("notification-{i}"));
             storage.create(notification).await?;
         }
 

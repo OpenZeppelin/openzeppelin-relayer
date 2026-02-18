@@ -6,6 +6,8 @@ use crate::{
     constants::{
         DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS, DEFAULT_PROVIDER_FAILURE_THRESHOLD,
         DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
+        STELLAR_FEE_FORWARDER_MAINNET, STELLAR_SOROSWAP_MAINNET_FACTORY,
+        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_MAINNET_ROUTER,
     },
     models::SecretString,
 };
@@ -28,14 +30,27 @@ impl FromStr for RepositoryStorageType {
     }
 }
 
+/// Returns `Some(s.to_string())` when `s` is non-empty, `None` otherwise.
+fn non_empty_const(s: &str) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// The host address the server will bind to.
     pub host: String,
     /// The port number the server will listen on.
     pub port: u16,
-    /// The URL for the Redis instance.
+    /// The URL for the Redis primary instance (used for write operations).
     pub redis_url: String,
+    /// Optional URL for Redis reader endpoint (used for read operations).
+    /// When set, read operations use this endpoint while writes use `redis_url`.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub redis_reader_url: Option<String>,
     /// The file path to the server's configuration file.
     pub config_file_path: String,
     /// The API key used for authentication.
@@ -52,6 +67,13 @@ pub struct ServerConfig {
     pub redis_connection_timeout_ms: u64,
     /// The prefix for the Redis key.
     pub redis_key_prefix: String,
+    /// Maximum number of connections in the Redis pool.
+    pub redis_pool_max_size: usize,
+    /// Maximum pool size for reader connections. Defaults to 1000.
+    /// Useful for read-heavy workloads where more reader connections are beneficial.
+    pub redis_reader_pool_max_size: usize,
+    /// Timeout in milliseconds waiting to get a connection from the pool.
+    pub redis_pool_timeout_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -90,6 +112,22 @@ pub struct ServerConfig {
     pub connection_backlog: u32,
     /// Request handler timeout in seconds for API endpoints.
     pub request_timeout_seconds: u64,
+    /// Stellar mainnet FeeForwarder contract address for gas abstraction.
+    pub stellar_mainnet_fee_forwarder_address: Option<String>,
+    /// Stellar testnet FeeForwarder contract address for gas abstraction.
+    pub stellar_testnet_fee_forwarder_address: Option<String>,
+    /// Stellar mainnet Soroswap router contract address.
+    pub stellar_mainnet_soroswap_router_address: Option<String>,
+    /// Stellar testnet Soroswap router contract address.
+    pub stellar_testnet_soroswap_router_address: Option<String>,
+    /// Stellar mainnet Soroswap factory contract address.
+    pub stellar_mainnet_soroswap_factory_address: Option<String>,
+    /// Stellar testnet Soroswap factory contract address.
+    pub stellar_testnet_soroswap_factory_address: Option<String>,
+    /// Stellar mainnet native XLM wrapper token address for Soroswap.
+    pub stellar_mainnet_soroswap_native_wrapper_address: Option<String>,
+    /// Stellar testnet native XLM wrapper token address for Soroswap.
+    pub stellar_testnet_soroswap_native_wrapper_address: Option<String>,
 }
 
 impl ServerConfig {
@@ -124,6 +162,8 @@ impl ServerConfig {
             host: Self::get_host(),
             port: Self::get_port(),
             redis_url: Self::get_redis_url(), // Uses panicking version as required
+            redis_reader_url: Self::get_redis_reader_url_optional(),
+            redis_reader_pool_max_size: Self::get_redis_reader_pool_max_size(),
             config_file_path: Self::get_config_file_path(),
             api_key: Self::get_api_key(), // Uses panicking version as required
             rate_limit_requests_per_second: Self::get_rate_limit_requests_per_second(),
@@ -132,6 +172,8 @@ impl ServerConfig {
             enable_swagger: Self::get_enable_swagger(),
             redis_connection_timeout_ms: Self::get_redis_connection_timeout_ms(),
             redis_key_prefix: Self::get_redis_key_prefix(),
+            redis_pool_max_size: Self::get_redis_pool_max_size(),
+            redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -150,6 +192,22 @@ impl ServerConfig {
             max_connections: Self::get_max_connections(),
             connection_backlog: Self::get_connection_backlog(),
             request_timeout_seconds: Self::get_request_timeout_seconds(),
+            stellar_mainnet_fee_forwarder_address: Self::get_stellar_mainnet_fee_forwarder_address(
+            ),
+            stellar_testnet_fee_forwarder_address: Self::get_stellar_testnet_fee_forwarder_address(
+            ),
+            stellar_mainnet_soroswap_router_address:
+                Self::get_stellar_mainnet_soroswap_router_address(),
+            stellar_testnet_soroswap_router_address:
+                Self::get_stellar_testnet_soroswap_router_address(),
+            stellar_mainnet_soroswap_factory_address:
+                Self::get_stellar_mainnet_soroswap_factory_address(),
+            stellar_testnet_soroswap_factory_address:
+                Self::get_stellar_testnet_soroswap_factory_address(),
+            stellar_mainnet_soroswap_native_wrapper_address:
+                Self::get_stellar_mainnet_soroswap_native_wrapper_address(),
+            stellar_testnet_soroswap_native_wrapper_address:
+                Self::get_stellar_testnet_soroswap_native_wrapper_address(),
         }
     }
 
@@ -178,6 +236,13 @@ impl ServerConfig {
         env::var("REDIS_URL").ok()
     }
 
+    /// Gets the Redis reader URL from environment variable or returns None if not set.
+    /// When set, read operations will use this endpoint while writes use REDIS_URL.
+    /// Useful for AWS ElastiCache with read replicas.
+    pub fn get_redis_reader_url_optional() -> Option<String> {
+        env::var("REDIS_READER_URL").ok()
+    }
+
     /// Gets the config file path from environment variables or default
     pub fn get_config_file_path() -> String {
         let conf_dir = if env::var("IN_DOCKER")
@@ -194,6 +259,49 @@ impl ServerConfig {
             env::var("CONFIG_FILE_NAME").unwrap_or_else(|_| "config.json".to_string());
 
         format!("{conf_dir}{config_file_name}")
+    }
+
+    /// Gets the queue backend from environment variable or default.
+    ///
+    /// Supported values: "redis", "sqs"
+    /// Defaults to "redis" when not set.
+    pub fn get_queue_backend() -> String {
+        env::var("QUEUE_BACKEND").unwrap_or_else(|_| "redis".to_string())
+    }
+
+    /// Gets the SQS queue type from environment variable or default.
+    ///
+    /// Supported values: "auto" (default), "standard", "fifo"
+    /// - `auto`: auto-detect by probing queues at startup
+    /// - `standard` / `fifo`: skip probing, use the specified type directly
+    pub fn get_sqs_queue_type() -> String {
+        env::var("SQS_QUEUE_TYPE").unwrap_or_else(|_| "auto".to_string())
+    }
+
+    /// Gets the AWS region from environment variable.
+    ///
+    /// Required when using SQS queue backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_REGION is not set.
+    pub fn get_aws_region() -> Result<String, String> {
+        env::var("AWS_REGION")
+            .map_err(|_| "AWS_REGION not set. Required for SQS backend.".to_string())
+    }
+
+    /// Gets the AWS account ID from environment variable.
+    ///
+    /// Required when using SQS queue backend and SQS_QUEUE_URL_PREFIX is not provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if AWS_ACCOUNT_ID is not set.
+    pub fn get_aws_account_id() -> Result<String, String> {
+        env::var("AWS_ACCOUNT_ID").map_err(|_| {
+            "AWS_ACCOUNT_ID not set. Required when SQS_QUEUE_URL_PREFIX is not provided."
+                .to_string()
+        })
     }
 
     /// Gets the API key from environment variable (panics if not set or too short)
@@ -259,6 +367,38 @@ impl ServerConfig {
     /// Gets the Redis key prefix from environment variable or default
     pub fn get_redis_key_prefix() -> String {
         env::var("REDIS_KEY_PREFIX").unwrap_or_else(|_| "oz-relayer".to_string())
+    }
+
+    /// Gets the Redis pool max size from environment variable or default
+    /// Returns default (500) if value is 0 or invalid
+    pub fn get_redis_pool_max_size() -> usize {
+        env::var("REDIS_POOL_MAX_SIZE")
+            .unwrap_or_else(|_| "500".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(500)
+    }
+
+    /// Gets the Redis reader pool max size from environment variable.
+    /// Returns 1000 if not set or invalid.
+    pub fn get_redis_reader_pool_max_size() -> usize {
+        env::var("REDIS_READER_POOL_MAX_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(1000)
+    }
+
+    /// Gets the Redis pool timeout from environment variable or default
+    /// Returns default (10000) if value is 0 or invalid
+    pub fn get_redis_pool_timeout_ms() -> u64 {
+        env::var("REDIS_POOL_TIMEOUT_MS")
+            .unwrap_or_else(|_| "10000".to_string())
+            .parse()
+            .ok()
+            .filter(|&v| v > 0)
+            .unwrap_or(10000)
     }
 
     /// Gets the RPC timeout from environment variable or default
@@ -424,6 +564,101 @@ impl ServerConfig {
             .unwrap_or(30)
     }
 
+    /// Gets whether distributed mode is enabled from the `DISTRIBUTED_MODE` environment variable.
+    ///
+    /// When `true`, distributed locks are used to coordinate across multiple instances
+    /// (e.g., preventing duplicate cron execution in multi-instance deployments).
+    /// When `false` (default), locks are skipped — appropriate for single-instance deployments.
+    ///
+    /// Defaults to `false`.
+    pub fn get_distributed_mode() -> bool {
+        env::var("DISTRIBUTED_MODE")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    }
+
+    // =========================================================================
+    // Stellar Contract Address Getters (raw env var reads)
+    // =========================================================================
+
+    pub fn get_stellar_mainnet_fee_forwarder_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_FEE_FORWARDER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_fee_forwarder_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_FEE_FORWARDER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_mainnet_soroswap_router_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_ROUTER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_soroswap_router_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_ROUTER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_mainnet_soroswap_factory_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_FACTORY_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_soroswap_factory_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_FACTORY_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_mainnet_soroswap_native_wrapper_address() -> Option<String> {
+        env::var("STELLAR_MAINNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
+    }
+
+    pub fn get_stellar_testnet_soroswap_native_wrapper_address() -> Option<String> {
+        env::var("STELLAR_TESTNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS").ok()
+    }
+
+    // =========================================================================
+    // Stellar Contract Address Resolvers
+    // =========================================================================
+    // For mainnet: env var override → hardcoded default from constants.
+    // For testnet: env var only (no hardcoded defaults).
+
+    /// Resolves the FeeForwarder contract address for the given network.
+    pub fn resolve_stellar_fee_forwarder_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_fee_forwarder_address()
+        } else {
+            Self::get_stellar_mainnet_fee_forwarder_address()
+                .or_else(|| non_empty_const(STELLAR_FEE_FORWARDER_MAINNET))
+        }
+    }
+
+    /// Resolves the Soroswap router contract address for the given network.
+    pub fn resolve_stellar_soroswap_router_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_router_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_router_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_ROUTER.to_string()))
+        }
+    }
+
+    /// Resolves the Soroswap factory contract address for the given network.
+    pub fn resolve_stellar_soroswap_factory_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_factory_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_factory_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_FACTORY.to_string()))
+        }
+    }
+
+    /// Resolves the Soroswap native wrapper token address for the given network.
+    pub fn resolve_stellar_soroswap_native_wrapper_address(is_testnet: bool) -> Option<String> {
+        if is_testnet {
+            Self::get_stellar_testnet_soroswap_native_wrapper_address()
+        } else {
+            Self::get_stellar_mainnet_soroswap_native_wrapper_address()
+                .or_else(|| Some(STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER.to_string()))
+        }
+    }
+
     /// Get worker concurrency from environment variable or use default
     ///
     /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`
@@ -473,6 +708,7 @@ mod tests {
         env::remove_var("REPOSITORY_STORAGE_TYPE");
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_READER_URL");
         // Set required variables for most tests
         env::set_var("REDIS_URL", "redis://localhost:6379");
         env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
@@ -654,6 +890,7 @@ mod tests {
         env::remove_var("ENABLE_SWAGGER");
         env::remove_var("REDIS_CONNECTION_TIMEOUT_MS");
         env::remove_var("REDIS_KEY_PREFIX");
+        env::remove_var("REDIS_READER_URL");
         env::remove_var("RPC_TIMEOUT_MS");
         env::remove_var("PROVIDER_MAX_RETRIES");
         env::remove_var("PROVIDER_RETRY_BASE_DELAY_MS");
@@ -663,6 +900,8 @@ mod tests {
         env::remove_var("RESET_STORAGE_ON_START");
         env::remove_var("STORAGE_ENCRYPTION_KEY");
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
 
         // Test individual getters with defaults
         assert_eq!(ServerConfig::get_host(), "0.0.0.0");
@@ -688,6 +927,8 @@ mod tests {
         assert!(!ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_none());
         assert_eq!(ServerConfig::get_transaction_expiration_hours(), 4.0);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
     }
 
     #[test]
@@ -719,6 +960,8 @@ mod tests {
         env::set_var("RESET_STORAGE_ON_START", "true");
         env::set_var("STORAGE_ENCRYPTION_KEY", "my-encryption-key");
         env::set_var("TRANSACTION_EXPIRATION_HOURS", "12");
+        env::set_var("REDIS_POOL_MAX_SIZE", "200");
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "20000");
 
         // Test individual getters with custom values
         assert_eq!(ServerConfig::get_host(), "192.168.1.1");
@@ -750,6 +993,69 @@ mod tests {
         assert!(ServerConfig::get_reset_storage_on_start());
         assert!(ServerConfig::get_storage_encryption_key().is_some());
         assert_eq!(ServerConfig::get_transaction_expiration_hours(), 12.0);
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 200);
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 20000);
+    }
+
+    #[test]
+    fn test_get_redis_pool_max_size() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_MAX_SIZE", "100");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 100);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_MAX_SIZE", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_MAX_SIZE", "0");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 500);
+
+        // Test large value
+        env::set_var("REDIS_POOL_MAX_SIZE", "10000");
+        assert_eq!(ServerConfig::get_redis_pool_max_size(), 10000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_MAX_SIZE");
+    }
+
+    #[test]
+    fn test_get_redis_pool_timeout_ms() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        // Test default value when env var is not set
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test custom value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "15000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 15000);
+
+        // Test invalid value returns default
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "not_a_number");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test zero value returns default (invalid)
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "0");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 10000);
+
+        // Test large value
+        env::set_var("REDIS_POOL_TIMEOUT_MS", "60000");
+        assert_eq!(ServerConfig::get_redis_pool_timeout_ms(), 60000);
+
+        // Cleanup
+        env::remove_var("REDIS_POOL_TIMEOUT_MS");
     }
 
     #[test]
@@ -1041,8 +1347,7 @@ mod tests {
                 );
                 assert_eq!(
                     actual_env_var, expected_env_var,
-                    "Env var name should be correctly formatted for worker: {}",
-                    worker_name
+                    "Env var name should be correctly formatted for worker: {worker_name}"
                 );
             }
         }
@@ -1393,7 +1698,7 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("CONNECTION_BACKLOG", value.to_string());
                 let result = ServerConfig::get_connection_backlog();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("CONNECTION_BACKLOG");
@@ -1489,10 +1794,241 @@ mod tests {
             for (value, description) in test_cases {
                 env::set_var("REQUEST_TIMEOUT_SECONDS", value.to_string());
                 let result = ServerConfig::get_request_timeout_seconds();
-                assert_eq!(result, value, "Should accept {}: {}", description, value);
+                assert_eq!(result, value, "Should accept {description}: {value}");
             }
 
             env::remove_var("REQUEST_TIMEOUT_SECONDS");
+        }
+    }
+
+    mod get_redis_reader_url_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_none_when_env_not_set() {
+            env::remove_var("REDIS_READER_URL");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert!(
+                result.is_none(),
+                "Should return None when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("redis://reader:6379".to_string()),
+                "Should return the env var value"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_empty_string_when_set_to_empty() {
+            env::set_var("REDIS_READER_URL", "");
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some("".to_string()),
+                "Should return empty string when set to empty"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_aws_elasticache_reader_url() {
+            // Test with typical AWS ElastiCache reader endpoint format
+            let reader_url = "redis://my-cluster-ro.xxx.cache.amazonaws.com:6379";
+            env::set_var("REDIS_READER_URL", reader_url);
+            let result = ServerConfig::get_redis_reader_url_optional();
+            assert_eq!(
+                result,
+                Some(reader_url.to_string()),
+                "Should accept AWS ElastiCache reader endpoint"
+            );
+            env::remove_var("REDIS_READER_URL");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("REDIS_READER_URL", "redis://reader:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert_eq!(
+                config.redis_reader_url,
+                Some("redis://reader:6379".to_string())
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("REDIS_READER_URL");
+            env::remove_var("API_KEY");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_without_redis_reader_url() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::remove_var("REDIS_READER_URL");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(config.redis_url, "redis://primary:6379");
+            assert!(
+                config.redis_reader_url.is_none(),
+                "redis_reader_url should be None when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_sqs_queue_type_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_auto_when_env_not_set() {
+            env::remove_var("SQS_QUEUE_TYPE");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "auto", "Should default to 'auto'");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_fifo_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "fifo");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "fifo");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_standard_when_set() {
+            env::set_var("SQS_QUEUE_TYPE", "standard");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "standard");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_raw_value_for_unknown() {
+            env::set_var("SQS_QUEUE_TYPE", "unknown");
+            let result = ServerConfig::get_sqs_queue_type();
+            assert_eq!(result, "unknown");
+            env::remove_var("SQS_QUEUE_TYPE");
+        }
+    }
+
+    mod get_redis_reader_pool_max_size_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 when env var is not set"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_value_when_set() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "2000");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 2000, "Should return the parsed value");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_invalid() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "not_a_number");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for invalid values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_zero() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "0");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(result, 1000, "Should return default 1000 when value is 0");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_negative() {
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "-100");
+            let result = ServerConfig::get_redis_reader_pool_max_size();
+            assert_eq!(
+                result, 1000,
+                "Should return default 1000 for negative values"
+            );
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_includes_reader_pool_max_size() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::set_var("REDIS_READER_POOL_MAX_SIZE", "750");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 750,
+                "Should include reader pool max size in config"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+        }
+
+        #[test]
+        #[serial]
+        fn test_config_uses_default_when_not_set() {
+            env::set_var("REDIS_URL", "redis://primary:6379");
+            env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D");
+            env::remove_var("REDIS_READER_POOL_MAX_SIZE");
+
+            let config = ServerConfig::from_env();
+
+            assert_eq!(
+                config.redis_reader_pool_max_size, 1000,
+                "Should use default 1000 when not set"
+            );
+
+            env::remove_var("REDIS_URL");
+            env::remove_var("API_KEY");
         }
     }
 }

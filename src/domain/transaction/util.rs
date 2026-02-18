@@ -5,7 +5,7 @@
 //! repositories and factories to perform these operations.
 use actix_web::web::ThinData;
 use chrono::{DateTime, Duration, Utc};
-use tracing::warn;
+use tracing::{instrument, warn};
 
 use crate::{
     domain::get_relayer_by_id,
@@ -33,6 +33,14 @@ use super::{NetworkTransaction, RelayerTransactionFactory};
 ///
 /// A `Result` containing a `TransactionRepoModel` if successful, or an `ApiError` if an error
 /// occurs.
+#[instrument(
+    level = "debug",
+    skip(state),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        tx_id = %transaction_id,
+    )
+)]
 pub async fn get_transaction_by_id<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     transaction_id: String,
     state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -65,6 +73,14 @@ where
 /// # Returns
 ///
 /// A `Result` containing a `NetworkTransaction` if successful, or an `ApiError` if an error occurs.
+#[instrument(
+    level = "debug",
+    skip(state),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        relayer_id = %relayer_id,
+    )
+)]
 pub async fn get_relayer_transaction(
     relayer_id: String,
     state: &ThinData<DefaultAppState>,
@@ -98,6 +114,14 @@ pub async fn get_relayer_transaction(
 /// # Returns
 ///
 /// A `Result` containing a `NetworkTransaction` if successful, or an `ApiError` if an error occurs.
+#[instrument(
+    level = "debug",
+    skip(state, relayer_model),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        relayer_id = %relayer_model.id,
+    )
+)]
 pub async fn get_relayer_transaction_by_model(
     relayer_model: RelayerRepoModel,
     state: &ThinData<DefaultAppState>,
@@ -346,7 +370,7 @@ mod tests {
             for invalid_ts in invalid_timestamps {
                 tx.created_at = invalid_ts.to_string();
                 let result = get_age_since_created(&tx);
-                assert!(result.is_err(), "Expected error for: {}", invalid_ts);
+                assert!(result.is_err(), "Expected error for: {invalid_ts}");
             }
         }
     }

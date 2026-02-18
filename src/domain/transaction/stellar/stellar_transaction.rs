@@ -6,7 +6,7 @@
 use crate::{
     constants::DEFAULT_STELLAR_CONCURRENT_TRANSACTIONS,
     domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
-    jobs::{JobProducer, JobProducerTrait, TransactionRequest},
+    jobs::{JobProducer, JobProducerTrait, StatusCheckContext, TransactionRequest},
     models::{
         produce_transaction_update_notification_payload, NetworkTransactionRequest,
         PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
@@ -18,14 +18,14 @@ use crate::{
     },
     services::{
         provider::{StellarProvider, StellarProviderTrait},
-        signer::{Signer, StellarSigner},
-        stellar_dex::{OrderBookService, StellarDexServiceTrait},
+        signer::{Signer, StellarSignTrait, StellarSigner},
+        stellar_dex::{StellarDexService, StellarDexServiceTrait},
     },
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::lane_gate;
 
@@ -35,7 +35,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -56,7 +56,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -244,7 +244,16 @@ where
         // Use the shared helper to fetch the next sequence
         let next_usable_seq = fetch_next_sequence_from_chain(self.provider(), relayer_address)
             .await
-            .map_err(TransactionError::UnexpectedError)?;
+            .map_err(|e| {
+                warn!(
+                    address = %relayer_address,
+                    error = %e,
+                    "failed to fetch sequence from chain in sync_sequence_from_chain"
+                );
+                TransactionError::UnexpectedError(format!(
+                    "Failed to sync sequence from chain: {e}"
+                ))
+            })?;
 
         // Update the local counter to the next usable sequence
         self.transaction_counter_service()
@@ -286,7 +295,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -315,8 +324,9 @@ where
     async fn handle_transaction_status(
         &self,
         tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_transaction_status_impl(tx).await
+        self.handle_transaction_status_impl(tx, context).await
     }
 
     async fn cancel_transaction(
@@ -356,17 +366,21 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
-    OrderBookService<StellarProvider, StellarSigner>,
+    StellarDexService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repositories::transaction::RedisTransactionRepository;
+    use crate::utils::RedisConnections;
     use crate::{
         models::{NetworkTransactionData, RepositoryError},
         services::provider::ProviderError,
     };
+    use deadpool_redis::{Config, Runtime};
     use std::sync::Arc;
+    use uuid::Uuid;
 
     use crate::domain::transaction::stellar::test_helpers::*;
 
@@ -519,7 +533,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(move |_, _, _, _| {
@@ -562,7 +576,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(|_, _, _, _| {
@@ -825,22 +839,24 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_find_oldest_pending_for_relayer_with_redis() {
-        use crate::repositories::transaction::RedisTransactionRepository;
-        use redis::Client;
-        use uuid::Uuid;
-
         // Setup Redis repository
         let redis_url = std::env::var("REDIS_TEST_URL")
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-        let client = Client::open(redis_url).expect("Failed to create Redis client");
-        let connection_manager = redis::aio::ConnectionManager::new(client)
-            .await
-            .expect("Failed to create connection manager");
+        let pool = Arc::new(
+            Config::from_url(&redis_url)
+                .builder()
+                .expect("Failed to create Redis pool builder")
+                .max_size(16)
+                .runtime(Runtime::Tokio1)
+                .build()
+                .expect("Failed to build Redis pool"),
+        );
+        let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_stellar:{}", random_id);
+        let key_prefix = format!("test_stellar:{random_id}");
         let tx_repo = Arc::new(
-            RedisTransactionRepository::new(Arc::new(connection_manager), key_prefix)
+            RedisTransactionRepository::new(connections, key_prefix)
                 .expect("Failed to create RedisTransactionRepository"),
         );
 
