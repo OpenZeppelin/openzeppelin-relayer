@@ -1,0 +1,26 @@
+{
+  "name": "x402-facilitator-plugin-example",
+  "version": "0.1.0",
+  "description": "Example for x402 Facilitator plugin",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": ["openzeppelin", "relayer", "plugin", "x402", "facilitator"],
+  "author": "OpenZeppelin",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "@openzeppelin/relayer-plugin-x402-facilitator": "github:OpenZeppelin/relayer-plugin-x402-facilitator",
+    "@openzeppelin/relayer-sdk": "^1.9.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@openzeppelin/relayer-plugin-x402-facilitator"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
