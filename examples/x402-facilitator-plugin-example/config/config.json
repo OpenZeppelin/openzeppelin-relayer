@@ -40,7 +40,7 @@
       "config": {
         "networks": [
           {
-            "network": "stellar-testnet",
+            "network": "stellar:testnet",
             "type": "stellar",
             "relayer_id": "stellar-example",
             "assets": [
