@@ -70,9 +70,17 @@ pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
 /// Safety net for transactions without time bounds - prevents infinite retries.
 pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 
+/// Minimum time (seconds) after sent_at before resubmitting a Submitted transaction.
+pub const STELLAR_RESUBMIT_SUBMITTED_TIMEOUT_SECONDS: i64 = 10;
+
 /// Get resend timeout duration for stuck Sent transactions
 pub fn get_stellar_resend_timeout() -> Duration {
     Duration::seconds(STELLAR_RESEND_TIMEOUT_SECONDS)
+}
+
+/// Get resubmit timeout duration for Submitted transactions
+pub fn get_stellar_resubmit_submitted_timeout() -> Duration {
+    Duration::seconds(STELLAR_RESUBMIT_SUBMITTED_TIMEOUT_SECONDS)
 }
 
 /// Get max lifetime duration for stuck transactions (Sent, Pending, Submitted)

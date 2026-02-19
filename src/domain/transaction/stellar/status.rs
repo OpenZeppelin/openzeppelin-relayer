@@ -10,7 +10,10 @@ use soroban_rs::xdr::{
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
-use crate::constants::{get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout};
+use crate::constants::{
+    get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout,
+    get_stellar_resubmit_submitted_timeout,
+};
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
 use crate::domain::transaction::stellar::utils::extract_time_bounds;
@@ -138,52 +141,15 @@ where
     }
 
     /// Core status checking logic - pure business logic without error handling concerns.
+    /// Dispatches to the appropriate handler based on internal transaction status.
     async fn status_core(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // Early exits for unsubmitted transactions - they don't have on-chain hashes yet
-        // The submit handler will schedule status checks after submission
-        if tx.status == TransactionStatus::Pending {
-            return self.handle_pending_state(tx).await;
-        }
-
-        if tx.status == TransactionStatus::Sent {
-            return self.handle_sent_state(tx).await;
-        }
-
-        let stellar_hash = match self.parse_and_validate_hash(&tx) {
-            Ok(hash) => hash,
-            Err(e) => {
-                // Transaction should be in Submitted or later state
-                // If hash is missing, this is a database inconsistency that won't fix itself
-                warn!(
-                    tx_id = %tx.id,
-                    status = ?tx.status,
-                    error = ?e,
-                    "failed to parse and validate hash for submitted transaction"
-                );
-                return self
-                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
-                    .await;
-            }
-        };
-
-        let provider_response = match self.provider().get_transaction(&stellar_hash).await {
-            Ok(response) => response,
-            Err(e) => {
-                warn!(error = ?e, "provider get_transaction failed");
-                return Err(TransactionError::from(e));
-            }
-        };
-
-        match provider_response.status.as_str().to_uppercase().as_str() {
-            "SUCCESS" => self.handle_stellar_success(tx, provider_response).await,
-            "FAILED" => self.handle_stellar_failed(tx, provider_response).await,
-            _ => {
-                self.handle_stellar_pending(tx, provider_response.status)
-                    .await
-            }
+        match tx.status {
+            TransactionStatus::Pending => self.handle_pending_state(tx).await,
+            TransactionStatus::Sent => self.handle_sent_state(tx).await,
+            _ => self.handle_submitted_state(tx).await,
         }
     }
 
@@ -548,33 +514,76 @@ where
         }
     }
 
-    /// Handles the logic when a Stellar transaction is still pending or in an unknown state.
-    pub async fn handle_stellar_pending(
+    /// Handles status checking for Submitted transactions (and any other state with a hash).
+    /// Parses the hash, queries the provider, and dispatches to success/failed/pending handlers.
+    /// For non-final on-chain status, checks expiration/max-lifetime and resubmits if needed.
+    async fn handle_submitted_state(
         &self,
         tx: TransactionRepoModel,
-        original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(
-            tx_id = %tx.id,
-            relayer_id = %tx.relayer_id,
-            status = %original_status_str,
-            "stellar transaction status is still pending, will retry check later"
-        );
+        let stellar_hash = match self.parse_and_validate_hash(&tx) {
+            Ok(hash) => hash,
+            Err(e) => {
+                // If hash is missing, this is a database inconsistency that won't fix itself
+                warn!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    error = ?e,
+                    "failed to parse and validate hash for submitted transaction"
+                );
+                return self
+                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
+                    .await;
+            }
+        };
 
-        // Check for expiration and max lifetime for Submitted transactions
-        if tx.status == TransactionStatus::Submitted {
-            if let Some(result) = self
-                .check_expiration_and_max_lifetime(
-                    tx.clone(),
-                    "Transaction stuck in Submitted status for too long".to_string(),
-                )
-                .await
-            {
-                return result;
+        let provider_response = match self.provider().get_transaction(&stellar_hash).await {
+            Ok(response) => response,
+            Err(e) => {
+                warn!(error = ?e, "provider get_transaction failed");
+                return Err(TransactionError::from(e));
+            }
+        };
+
+        match provider_response.status.as_str().to_uppercase().as_str() {
+            "SUCCESS" => self.handle_stellar_success(tx, provider_response).await,
+            "FAILED" => self.handle_stellar_failed(tx, provider_response).await,
+            _ => {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    status = %provider_response.status,
+                    "submitted transaction not yet final on-chain, will retry check later"
+                );
+
+                // Check for expiration and max lifetime
+                if let Some(result) = self
+                    .check_expiration_and_max_lifetime(
+                        tx.clone(),
+                        "Transaction stuck in Submitted status for too long".to_string(),
+                    )
+                    .await
+                {
+                    return result;
+                }
+
+                // Resubmit transaction if it's been longer than the resubmit timeout.
+                // Stellar Core retries internally for ~3 ledgers. After that, the tx may
+                // have been dropped from the mempool. Resubmitting is safe (idempotent).
+                let age = get_age_since_sent_or_created(&tx)?;
+                if age > get_stellar_resubmit_submitted_timeout() {
+                    info!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        age_seconds = age.num_seconds(),
+                        "resubmitting Submitted transaction to ensure mempool inclusion"
+                    );
+                    send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+                }
+
+                Ok(tx)
             }
         }
-
-        Ok(tx)
     }
 }
 
@@ -837,6 +846,13 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .never();
+
+            // Submitted tx older than resubmit timeout triggers resubmission
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let original_tx_clone = tx_to_handle.clone();
@@ -2040,6 +2056,177 @@ mod tests {
                     updated.status_reason = update.status_reason.clone();
                     Ok(updated)
                 });
+
+            // Notification for expiration
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let expired_tx = result.unwrap();
+            assert_eq!(expired_tx.status, TransactionStatus::Expired);
+            assert!(expired_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("expired"));
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_resubmits_after_timeout() {
+            use crate::constants::get_stellar_resubmit_submitted_timeout;
+
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            // Created more than resubmit timeout ago (11s > 10s)
+            tx.created_at =
+                (Utc::now() - get_stellar_resubmit_submitted_timeout() - Duration::seconds(1))
+                    .to_rfc3339();
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [8u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status (not SUCCESS or FAILED)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should resubmit the transaction
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_no_resubmit_before_timeout() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-young".to_string();
+            tx.status = TransactionStatus::Submitted;
+            // Created just now - below resubmit timeout
+            tx.created_at = Utc::now().to_rfc3339();
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [9u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status (not SUCCESS or FAILED)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_expired_before_resubmit() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-expired-no-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+            // Set valid_until to a past time (expired)
+            tx.valid_until = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [10u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should mark as Expired, NOT resubmit
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_id, update| update.status == Some(TransactionStatus::Expired))
+                .times(1)
+                .returning(|id, update| {
+                    let mut updated = create_test_transaction("test");
+                    updated.id = id;
+                    updated.status = update.status.unwrap();
+                    updated.status_reason = update.status_reason.clone();
+                    Ok(updated)
+                });
+
+            // Should NOT resubmit
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
 
             // Notification for expiration
             mocks
