@@ -1,5 +1,5 @@
 {
-  "name": "x402-facilitator-plugin-example",
+  "name": "x402-facilitator-plugin",
   "version": "0.1.0",
   "description": "Example for x402 Facilitator plugin",
   "main": "index.js",

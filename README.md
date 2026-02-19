@@ -65,6 +65,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file       |
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file         |
 | [`aws-sqs-queue-storage`](./examples/aws-sqs-queue-storage/)                         | Local SQS queue backend setup using LocalStack           |
+| [`x402-facilitator-plugin`](./examples/x402-facilitator-plugin/)                     | x402 Facilitator plugin                                  |
 
 Each example includes:
 

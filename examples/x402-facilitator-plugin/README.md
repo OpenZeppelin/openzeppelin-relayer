@@ -7,7 +7,7 @@ Run the x402 Facilitator plugin with OpenZeppelin Relayer to enable payment veri
 ```bash
 # Clone and navigate to this example:
 git clone https://github.com/OpenZeppelin/openzeppelin-relayer
-cd openzeppelin-relayer/examples/x402-facilitator-plugin-example
+cd openzeppelin-relayer/examples/x402-facilitator-plugin
 
 # Then follow the Setup steps below.
 ```
@@ -48,7 +48,7 @@ All configurations are pre-set for testnet use.
 Install and build the x402 Facilitator plugin:
 
 ```bash
-# From this directory (examples/x402-facilitator-plugin-example)
+# From this directory (examples/x402-facilitator-plugin)
 cd x402-facilitator
 pnpm install
 pnpm run build
@@ -61,7 +61,7 @@ The x402 Facilitator plugin requires relayer keys for submitting transactions:
 
 - **Relayer account**: Pays transaction fees and submits transactions
 
-From this directory (`examples/x402-facilitator-plugin-example`), run these commands.
+From this directory (`examples/x402-facilitator-plugin`), run these commands.
 
 #### Create relayer account
 
