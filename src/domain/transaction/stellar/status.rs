@@ -12,11 +12,12 @@ use tracing::{debug, info, warn};
 use super::{is_final_state, StellarRelayerTransaction};
 use crate::constants::{
     get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout,
-    get_stellar_resubmit_submitted_timeout,
+    STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS, STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
 };
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
-use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
-use crate::domain::transaction::stellar::utils::extract_time_bounds;
+use crate::domain::transaction::stellar::utils::{
+    compute_resubmit_backoff_interval, extract_return_value_from_meta, extract_time_bounds,
+};
 use crate::domain::transaction::util::{get_age_since_created, get_age_since_sent_or_created};
 use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
@@ -567,18 +568,26 @@ where
                     return result;
                 }
 
-                // Resubmit transaction if it's been longer than the resubmit timeout.
-                // Stellar Core retries internally for ~3 ledgers. After that, the tx may
-                // have been dropped from the mempool. Resubmitting is safe (idempotent).
-                let age = get_age_since_sent_or_created(&tx)?;
-                if age > get_stellar_resubmit_submitted_timeout() {
-                    info!(
-                        tx_id = %tx.id,
-                        relayer_id = %tx.relayer_id,
-                        age_seconds = age.num_seconds(),
-                        "resubmitting Submitted transaction to ensure mempool inclusion"
-                    );
-                    send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+                // Resubmit with exponential backoff based on total transaction age.
+                // The backoff interval grows: 10s → 20s → 40s → 80s → 120s (capped).
+                let total_age = get_age_since_created(&tx)?;
+                if let Some(backoff_interval) = compute_resubmit_backoff_interval(
+                    total_age,
+                    STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
+                    STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+                ) {
+                    let age_since_last_submit = get_age_since_sent_or_created(&tx)?;
+                    if age_since_last_submit > backoff_interval {
+                        info!(
+                            tx_id = %tx.id,
+                            relayer_id = %tx.relayer_id,
+                            total_age_seconds = total_age.num_seconds(),
+                            since_last_submit_seconds = age_since_last_submit.num_seconds(),
+                            backoff_interval_seconds = backoff_interval.num_seconds(),
+                            "resubmitting Submitted transaction to ensure mempool inclusion"
+                        );
+                        send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+                    }
                 }
 
                 Ok(tx)
@@ -2092,18 +2101,16 @@ mod tests {
 
         #[tokio::test]
         async fn test_handle_submitted_state_resubmits_after_timeout() {
-            use crate::constants::get_stellar_resubmit_submitted_timeout;
-
+            // Transaction created 11s ago, sent_at also 11s ago → exceeds base interval (10s)
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
             let mut tx = create_test_transaction(&relayer.id);
             tx.id = "tx-submitted-resubmit".to_string();
             tx.status = TransactionStatus::Submitted;
-            // Created more than resubmit timeout ago (11s > 10s)
-            tx.created_at =
-                (Utc::now() - get_stellar_resubmit_submitted_timeout() - Duration::seconds(1))
-                    .to_rfc3339();
+            let eleven_seconds_ago = (Utc::now() - Duration::seconds(11)).to_rfc3339();
+            tx.created_at = eleven_seconds_ago.clone();
+            tx.sent_at = Some(eleven_seconds_ago);
             // Set a hash so it can query provider
             let tx_hash_bytes = [8u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
@@ -2128,6 +2135,137 @@ mod tests {
                 .expect_produce_submit_transaction_job()
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_backoff_increases_interval() {
+            // Transaction created 25s ago but sent_at only 15s ago.
+            // At total_age=25s, backoff interval = 20s (base*2^1, since 25/10=2, log2(2)=1).
+            // age_since_last_submit=15s < 20s → should NOT resubmit yet.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-backoff".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(15)).to_rfc3339());
+            let tx_hash_bytes = [11u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit (15s < 20s backoff interval)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_backoff_resubmits_when_interval_exceeded() {
+            // Transaction created 25s ago, sent_at 21s ago.
+            // At total_age=25s, backoff interval = 20s (base*2^1).
+            // age_since_last_submit=21s > 20s → should resubmit.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-backoff-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(21)).to_rfc3339());
+            let tx_hash_bytes = [12u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should resubmit (21s > 20s backoff interval)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_recent_sent_at_prevents_resubmit() {
+            // Transaction created 60s ago (old), but sent_at only 5s ago (recent resubmission).
+            // At total_age=60s, backoff interval = 40s (base*2^2, since 60/10=6, log2(6)≈2).
+            // age_since_last_submit=5s < 40s → should NOT resubmit.
+            // This verifies that sent_at being updated on resubmission correctly resets the clock.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-recent-sent".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(60)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(5)).to_rfc3339());
+            let tx_hash_bytes = [13u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit (sent_at is recent despite old created_at)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let result = handler.handle_transaction_status_impl(tx, None).await;
