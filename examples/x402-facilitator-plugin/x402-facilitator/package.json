@@ -10,8 +10,8 @@
   "author": "OpenZeppelin",
   "license": "AGPL-3.0",
   "dependencies": {
-    "@openzeppelin/relayer-plugin-x402-facilitator": "github:OpenZeppelin/relayer-plugin-x402-facilitator",
-    "@openzeppelin/relayer-sdk": "^1.8.0"
+    "@openzeppelin/relayer-plugin-x402-facilitator": "^0.1.0",
+    "@openzeppelin/relayer-sdk": "^1.10.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.3",
