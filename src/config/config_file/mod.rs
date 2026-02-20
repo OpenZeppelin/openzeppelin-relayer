@@ -672,7 +672,7 @@ mod tests {
     fn setup_network_file(dir_path: &Path, file_name: &str, content: &str) {
         let file_path = dir_path.join(file_name);
         let mut file = File::create(&file_path).expect("Failed to create temp network file");
-        writeln!(file, "{}", content).expect("Failed to write to temp network file");
+        writeln!(file, "{content}").expect("Failed to write to temp network file");
     }
 
     #[test]
@@ -892,7 +892,7 @@ mod tests {
     fn setup_config_file(dir_path: &Path, file_name: &str, content: &str) {
         let file_path = dir_path.join(file_name);
         let mut file = File::create(&file_path).expect("Failed to create temp config file");
-        write!(file, "{}", content).expect("Failed to write to temp config file");
+        write!(file, "{content}").expect("Failed to write to temp config file");
     }
 
     #[test]
@@ -1479,9 +1479,9 @@ mod tests {
         let stellar = ConfigFileNetworkType::Stellar;
 
         // Test that Debug formatting works (which is what we have)
-        let evm_str = format!("{:?}", evm);
-        let solana_str = format!("{:?}", solana);
-        let stellar_str = format!("{:?}", stellar);
+        let evm_str = format!("{evm:?}");
+        let solana_str = format!("{solana:?}");
+        let stellar_str = format!("{stellar:?}");
 
         assert!(evm_str.contains("Evm"));
         assert!(solana_str.contains("Solana"));

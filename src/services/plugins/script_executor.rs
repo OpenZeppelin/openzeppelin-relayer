@@ -313,7 +313,7 @@ mod tests {
             // The message should contain something about the error
             assert!(!ctx.message.is_empty());
         } else {
-            panic!("Expected PluginError::HandlerError, got: {:?}", result);
+            panic!("Expected PluginError::HandlerError, got: {result:?}");
         }
     }
 
@@ -364,7 +364,7 @@ mod tests {
                 let d = ctx.details.expect("details should be present");
                 assert_eq!(d["field"].as_str(), Some("email"));
             }
-            other => panic!("Expected HandlerError, got: {:?}", other),
+            other => panic!("Expected HandlerError, got: {other:?}"),
         }
     }
     #[tokio::test]

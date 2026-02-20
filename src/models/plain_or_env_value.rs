@@ -301,8 +301,7 @@ mod tests {
         assert!(
             serialized.contains(r#""value":"REDACTED"#)
                 || (serialized.contains(r#""value":""#) && !serialized.contains("test-secret")),
-            "Expected protected value, got: {}",
-            serialized
+            "Expected protected value, got: {serialized}"
         );
     }
 
@@ -351,7 +350,7 @@ mod tests {
     #[test]
     fn test_error_messages() {
         let error = PlainOrEnvValueError::MissingEnvVar("TEST_VAR".to_string());
-        let message = format!("{}", error);
+        let message = format!("{error}");
         assert_eq!(message, "Missing env var: TEST_VAR");
     }
 

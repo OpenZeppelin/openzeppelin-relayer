@@ -528,8 +528,7 @@ mod tests {
         if let Err(ApiError::BadRequest(msg)) = result {
             assert!(
                 msg.contains("gas_limit is required when gas_limit_estimation policy is disabled"),
-                "Expected specific error message, got: {}",
-                msg
+                "Expected specific error message, got: {msg}"
             );
         } else {
             panic!("Expected BadRequest error");

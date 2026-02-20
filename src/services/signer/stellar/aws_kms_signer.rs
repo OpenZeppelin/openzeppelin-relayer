@@ -17,7 +17,9 @@ use crate::{
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
-    DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
+    DecoratedSignature, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ReadXdr,
+    ScBytes, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, Signature, SignatureHint,
+    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanCredentials, Transaction,
     TransactionEnvelope, WriteXdr,
 };
 use tracing::debug;
@@ -81,7 +83,8 @@ impl<T: AwsKmsStellarService> Signer for AwsKmsSigner<T> {
                     .await?
             }
             crate::models::TransactionInput::UnsignedXdr(xdr)
-            | crate::models::TransactionInput::SignedXdr { xdr, .. } => {
+            | crate::models::TransactionInput::SignedXdr { xdr, .. }
+            | crate::models::TransactionInput::SorobanGasAbstraction { xdr, .. } => {
                 // Parse the XDR envelope and sign
                 let envelope =
                     TransactionEnvelope::from_xdr_base64(xdr, Limits::none()).map_err(|e| {

@@ -11,6 +11,7 @@
 use actix_web::web::ThinData;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tracing::instrument;
 use utoipa::ToSchema;
 
 #[cfg(test)]
@@ -526,6 +527,15 @@ impl<
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     > RelayerFactoryTrait<J, RR, TR, NR, NFR, SR, TCR, PR, AKR> for RelayerFactory
 {
+    #[instrument(
+        level = "debug",
+        skip(relayer, signer, state),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %relayer.id,
+            network_type = ?relayer.network_type,
+        )
+    )]
     async fn create_relayer(
         relayer: RelayerRepoModel,
         signer: SignerRepoModel,

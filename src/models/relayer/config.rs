@@ -195,6 +195,7 @@ pub struct ConfigFileRelayerStellarPolicy {
     pub min_balance: Option<u64>,
     pub concurrent_transactions: Option<bool>,
     /// Determines if the relayer pays the transaction fee or the user. Optional.
+    /// When set to "user" with STELLAR_FEE_FORWARDER_ADDRESS env var, enables soroban gas abstraction as well.
     pub fee_payment_strategy: Option<ConfigFileStellarFeePaymentStrategy>,
     /// Default slippage percentage for token conversions. Optional.
     pub slippage_percentage: Option<f32>,
@@ -1265,10 +1266,7 @@ mod tests {
                 // Also acceptable - network doesn't exist in our mock config
             }
             Err(other) => {
-                panic!(
-                    "Expected DuplicateId or InvalidReference error, got: {:?}",
-                    other
-                );
+                panic!("Expected DuplicateId or InvalidReference error, got: {other:?}");
             }
             Ok(_) => {
                 panic!("Expected validation to fail but it succeeded");

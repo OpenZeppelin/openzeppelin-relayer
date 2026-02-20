@@ -152,6 +152,7 @@ pub mod mockutils {
             network_type: NetworkType::Evm,
             noop_count: None,
             is_canceled: None,
+            metadata: None,
         }
     }
 
@@ -175,6 +176,7 @@ pub mod mockutils {
             noop_count: None,
             is_canceled: None,
             delete_at: None,
+            metadata: None,
         }
     }
 
@@ -264,6 +266,14 @@ pub mod mockutils {
             .expect_produce_token_swap_request_job()
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
+        mock_job_producer
+            .expect_backend_type()
+            .return_const(crate::queues::QueueBackendType::Redis);
+
+        mock_job_producer
+            .expect_get_queue_backend()
+            .return_const(None);
+
         AppState {
             relayer_repository,
             transaction_repository,
@@ -341,6 +351,14 @@ pub mod mockutils {
             request_timeout_seconds: 30,
             redis_reader_url: None,
             redis_reader_pool_max_size: 1000,
+            stellar_mainnet_fee_forwarder_address: None,
+            stellar_testnet_fee_forwarder_address: None,
+            stellar_mainnet_soroswap_router_address: None,
+            stellar_testnet_soroswap_router_address: None,
+            stellar_mainnet_soroswap_factory_address: None,
+            stellar_testnet_soroswap_factory_address: None,
+            stellar_mainnet_soroswap_native_wrapper_address: None,
+            stellar_testnet_soroswap_native_wrapper_address: None,
         }
     }
 }

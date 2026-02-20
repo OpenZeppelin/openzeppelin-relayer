@@ -22,6 +22,7 @@ panic = "unwind"
 [dependencies]
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
 aws-sdk-kms = "1.91.0"
+aws-sdk-sqs = "1.56.0"
 actix-web = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -46,6 +47,7 @@ regex = "1"
 futures = "0.3"
 uuid = { version = "1.11", features = ["v4", "v5"] }
 chrono = "0.4"
+cron = "0.13"
 eyre = "0.6"
 color-eyre = "0.6"
 apalis = { version = "0.7", features = ["limit", "retry", "catch-panic", "timeout"] }
@@ -66,6 +68,7 @@ hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 sha3 = { version = "0.10" }
 dashmap = { version = "6.1" }
+scc = "2"
 crossbeam = { version = "0.8.4" }
 async-channel = "2.5"
 actix-governor = "0.8"
@@ -103,6 +106,7 @@ solana-system-interface = { version = "2.0.0", features = ["bincode"] }
 cdp-sdk = "0.1.0"
 reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
 url = "2"
+lru = "0.16"
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
@@ -113,7 +117,7 @@ proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 
 
 [[bin]]
@@ -145,6 +149,10 @@ path = "helpers/generate_openapi.rs"
 [[example]]
 name = "verify_eip712"
 path = "helpers/verify_eip712.rs"
+
+[[example]]
+name = "sign_soroban_auth_entry"
+path = "helpers/sign_soroban_auth_entry.rs"
 
 [lib]
 path = "src/lib.rs"

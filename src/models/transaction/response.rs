@@ -181,7 +181,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
 pub enum SponsoredTransactionQuoteResponse {
     /// Solana-specific fee estimate result
     Solana(SolanaFeeEstimateResult),
-    /// Stellar-specific fee estimate result
+    /// Stellar-specific fee estimate result (classic and Soroban)
     Stellar(StellarFeeEstimateResult),
 }
 
@@ -193,7 +193,8 @@ pub enum SponsoredTransactionQuoteResponse {
 pub enum SponsoredTransactionBuildResponse {
     /// Solana-specific prepare transaction result
     Solana(SolanaPrepareTransactionResult),
-    /// Stellar-specific prepare transaction result
+    /// Stellar-specific prepare transaction result (classic and Soroban)
+    /// For Soroban: includes optional user_auth_entry, expiration_ledger
     Stellar(StellarPrepareTransactionResult),
 }
 
@@ -240,6 +241,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -287,6 +289,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -337,6 +340,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -393,6 +397,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model.clone());
@@ -437,6 +442,7 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             delete_at: None,
+            metadata: None,
         };
 
         let response = TransactionResponse::from(model);

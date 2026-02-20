@@ -93,6 +93,19 @@ impl SecretString {
             bytes.len() >= min_length
         })
     }
+
+    pub fn equals_str(&self, candidate: &str) -> bool {
+        self.with_secret_vec(|secret_vec| {
+            let self_bytes = secret_vec.borrow();
+            let candidate_bytes = candidate.as_bytes();
+
+            if self_bytes.len() != candidate_bytes.len() {
+                return false;
+            }
+
+            subtle::ConstantTimeEq::ct_eq(&*self_bytes, candidate_bytes).into()
+        })
+    }
 }
 
 impl Serialize for SecretString {
@@ -236,7 +249,7 @@ mod tests {
     fn test_debug_output_redacts_content() {
         let secret = SecretString::new("should_not_appear_in_debug");
 
-        let debug_str = format!("{:?}", secret);
+        let debug_str = format!("{secret:?}");
 
         assert_eq!(debug_str, "SecretString(REDACTED)");
         assert!(!debug_str.contains("should_not_appear_in_debug"));

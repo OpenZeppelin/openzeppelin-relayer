@@ -177,7 +177,7 @@ mod tests {
 
         let mock_sig_bytes = [1u8; 64];
         let mock_sig_base64 = base64::engine::general_purpose::STANDARD.encode(mock_sig_bytes);
-        let mock_vault_signature = format!("vault:v1:{}", mock_sig_base64);
+        let mock_vault_signature = format!("vault:v1:{mock_sig_base64}");
 
         mock_vault_service
             .expect_sign()

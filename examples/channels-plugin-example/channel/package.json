@@ -13,8 +13,8 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@openzeppelin/relayer-plugin-channels": "^0.6.0",
-    "@openzeppelin/relayer-sdk": "^1.9.0"
+    "@openzeppelin/relayer-plugin-channels": "^0.12.0",
+    "@openzeppelin/relayer-sdk": "^1.10.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

@@ -5,13 +5,14 @@ use std::collections::HashMap;
 
 use crate::{
     api::controllers::plugin,
+    metrics::PLUGIN_CALLS,
     models::{
         ApiError, ApiResponse, DefaultAppState, PaginationQuery, PluginCallRequest,
         UpdatePluginRequest,
     },
     repositories::PluginRepositoryTrait,
 };
-use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder};
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse, Responder, ResponseError};
 use url::form_urlencoded;
 
 /// List plugins
@@ -136,12 +137,30 @@ async fn plugin_call(
     let mut plugin_call_request =
         match build_plugin_call_request_from_post_body(&route, &http_req, body.as_ref()) {
             Ok(req) => req,
-            Err(resp) => return Ok(resp),
+            Err(resp) => {
+                // Track failed request (400 Bad Request)
+                PLUGIN_CALLS
+                    .with_label_values(&[plugin_id.as_str(), "POST", "400"])
+                    .inc();
+                return Ok(resp);
+            }
         };
     plugin_call_request.method = Some("POST".to_string());
     plugin_call_request.query = Some(extract_query_params(&http_req));
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
+    };
+    let status = status_code.as_str();
+    PLUGIN_CALLS
+        .with_label_values(&[plugin_id.as_str(), "POST", status])
+        .inc();
+
+    result
 }
 
 /// Calls a plugin method via GET request.
@@ -155,13 +174,24 @@ async fn plugin_call_get(
     let route = resolve_route(&path_route, &http_req);
 
     // Check if GET requests are allowed for this plugin
-    let plugin = data
-        .plugin_repository
-        .get_by_id(&plugin_id)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Plugin with id {plugin_id} not found")))?;
+    let plugin = match data.plugin_repository.get_by_id(&plugin_id).await? {
+        Some(p) => p,
+        None => {
+            // Track 404
+            PLUGIN_CALLS
+                .with_label_values(&[plugin_id.as_str(), "GET", "404"])
+                .inc();
+            return Err(ApiError::NotFound(format!(
+                "Plugin with id {plugin_id} not found"
+            )));
+        }
+    };
 
     if !plugin.allow_get_invocation {
+        // Track 405 Method Not Allowed
+        PLUGIN_CALLS
+            .with_label_values(&[plugin_id.as_str(), "GET", "405"])
+            .inc();
         return Ok(HttpResponse::MethodNotAllowed().json(ApiResponse::<()>::error(
             "GET requests are not enabled for this plugin. Set 'allow_get_invocation: true' in plugin configuration to enable.",
         )));
@@ -176,7 +206,19 @@ async fn plugin_call_get(
         query: Some(extract_query_params(&http_req)),
     };
 
-    plugin::call_plugin(plugin_id, plugin_call_request, data).await
+    let result = plugin::call_plugin(plugin_id.clone(), plugin_call_request, data).await;
+
+    // Track the request with appropriate status
+    let status_code = match &result {
+        Ok(response) => response.status(),
+        Err(e) => e.error_response().status(),
+    };
+    let status = status_code.as_str();
+    PLUGIN_CALLS
+        .with_label_values(&[plugin_id.as_str(), "GET", status])
+        .inc();
+
+    result
 }
 
 /// Get plugin by ID
@@ -948,9 +990,7 @@ mod tests {
             assert_eq!(
                 captured_req.route,
                 Some(expected_route.to_string()),
-                "Route should be '{}' for URI '{}'",
-                expected_route,
-                uri
+                "Route should be '{expected_route}' for URI '{uri}'"
             );
         }
     }
@@ -1116,8 +1156,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body_bytes).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Test case 2: Single quotes (not valid JSON)
@@ -1210,7 +1249,7 @@ mod tests {
 
         // Test with a reasonably long query string (1000 chars)
         let long_value = "a".repeat(1000);
-        let uri = format!("/test?data={}", long_value);
+        let uri = format!("/test?data={long_value}");
 
         let req = TestRequest::default().uri(&uri).to_http_request();
 
@@ -1524,8 +1563,7 @@ mod tests {
         let body_str = std::str::from_utf8(&body).unwrap();
         assert!(
             body_str.contains("Invalid JSON"),
-            "Error message should contain 'Invalid JSON', got: {}",
-            body_str
+            "Error message should contain 'Invalid JSON', got: {body_str}"
         );
 
         // Verify that invalid request was not captured
@@ -1694,9 +1732,7 @@ mod tests {
             assert_eq!(
                 req.route,
                 Some(expected_route.to_string()),
-                "Route '{}' should be preserved as '{}'",
-                route,
-                expected_route
+                "Route '{route}' should be preserved as '{expected_route}'"
             );
         }
     }
@@ -1799,8 +1835,7 @@ mod tests {
 
         if plugin_id == "not-found" {
             return HttpResponse::NotFound().json(ApiResponse::<()>::error(format!(
-                "Plugin with id {} not found",
-                plugin_id
+                "Plugin with id {plugin_id} not found"
             )));
         }
 

@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     for (i, tx) in transactions.iter().enumerate() {
         let serialized = bincode::serialize(tx)?;
         let encoded = STANDARD.encode(serialized);
-        println!("Transaction {}: {}", i, encoded);
+        println!("Transaction {i}: {encoded}");
     }
 
     Ok(())

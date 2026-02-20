@@ -1,7 +1,3 @@
-/// This module handles job queue operations.
-mod queue;
-pub use queue::*;
-
 /// This module contains handlers for processing jobs.
 mod handlers;
 pub use handlers::*;

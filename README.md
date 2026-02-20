@@ -64,6 +64,8 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`evm-cdp-signer`](./examples/evm-cdp-signer/)                                       | Using CDP Signer for EVM secure signing                  |
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file       |
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file         |
+| [`aws-sqs-queue-storage`](./examples/aws-sqs-queue-storage/)                         | Local SQS queue backend setup using LocalStack           |
+| [`x402-facilitator-plugin`](./examples/x402-facilitator-plugin/)                     | x402 Facilitator plugin                                  |
 
 Each example includes:
 
@@ -315,6 +317,47 @@ Create `.env` with correct values according to your needs from `.env.example` fi
 
 ```sh
 cp .env.example .env
+```
+
+### Queue backend configuration (Redis or SQS)
+
+The relayer supports two queue backends:
+
+- `redis` (default): uses Apalis + Redis queues
+- `sqs`: uses AWS SQS workers/cron and minimizes Apalis queue usage
+
+Set in `.env`:
+
+```bash
+QUEUE_BACKEND=redis
+# or
+# QUEUE_BACKEND=sqs
+```
+
+When using SQS:
+
+```bash
+QUEUE_BACKEND=sqs
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=123456789012
+# Optional: "auto" (default), "standard", or "fifo"
+# SQS_QUEUE_TYPE=auto
+# Optional alternative to AWS_ACCOUNT_ID:
+# SQS_QUEUE_URL_PREFIX=https://sqs.us-east-1.amazonaws.com/123456789012/relayer-
+```
+
+By default (`SQS_QUEUE_TYPE=auto`), the relayer auto-detects whether queues are standard or FIFO at startup.
+
+Use distributed mode for multi-instance deployments so scheduled workers use Redis-based distributed locks and avoid duplicate execution:
+
+```bash
+DISTRIBUTED_MODE=true
+```
+
+For single-instance local development, keep:
+
+```bash
+DISTRIBUTED_MODE=false
 ```
 
 > **Note**: After the service is running, all configuration components (relayers, signers, notifications) can also be managed via REST API endpoints for runtime changes. See the [Configuration Guide](https://docs.openzeppelin.com/relayer/configuration) for details on API-based configuration management.

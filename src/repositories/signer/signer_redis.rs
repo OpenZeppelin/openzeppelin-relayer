@@ -220,17 +220,27 @@ impl Repository<SignerRepoModel, String> for RedisSignerRepository {
             .get_connection(self.connections.reader(), "get_by_id")
             .await?;
 
-        let data: String = conn
+        let data: Option<String> = conn
             .get(&key)
             .await
             .map_err(|e| self.map_redis_error(e, "get_by_id"))?;
 
-        // Deserialize signer with AAD context (decryption bound to storage key)
-        let signer = EncryptionContext::with_aad_sync(key, || {
-            self.deserialize_entity::<SignerRepoModel>(&data, &id, "signer")
-        })?;
-        debug!(signer_id = %id, "retrieved signer");
-        Ok(signer)
+        match data {
+            Some(json) => {
+                // Deserialize signer with AAD context (decryption bound to storage key)
+                let signer = EncryptionContext::with_aad_sync(key, || {
+                    self.deserialize_entity::<SignerRepoModel>(&json, &id, "signer")
+                })?;
+                debug!(signer_id = %id, "retrieved signer");
+                Ok(signer)
+            }
+            None => {
+                debug!(signer_id = %id, "signer not found");
+                Err(RepositoryError::NotFound(format!(
+                    "Signer with ID {id} not found"
+                )))
+            }
+        }
     }
 
     async fn update(
@@ -484,7 +494,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisSignerRepository::new(connections, key_prefix).expect("Failed to create repository")
     }
@@ -724,7 +734,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisSignerRepository"));
         assert!(debug_str.contains("test_prefix"));
     }

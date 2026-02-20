@@ -1272,19 +1272,14 @@ mod tests {
             Err(SolanaTransactionValidationError::ValidationError(msg)) => {
                 assert!(
                     msg.contains("Insufficient balance for cumulative transfers: account "),
-                    "Unexpected error message: {}",
-                    msg
+                    "Unexpected error message: {msg}"
                 );
                 assert!(
                     msg.contains("has balance 999 but requires 2000 across all instructions"),
-                    "Unexpected error message: {}",
-                    msg
+                    "Unexpected error message: {msg}"
                 );
             }
-            other => panic!(
-                "Expected ValidationError for insufficient balance, got {:?}",
-                other
-            ),
+            other => panic!("Expected ValidationError for insufficient balance, got {other:?}"),
         }
     }
 
@@ -1305,14 +1300,10 @@ mod tests {
             Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
                 assert!(
                     msg.contains("Transfer amount 500 exceeds max fee allowed 100"),
-                    "Unexpected error message: {}",
-                    msg
+                    "Unexpected error message: {msg}"
                 );
             }
-            other => panic!(
-                "Expected ValidationError for insufficient balance, got {:?}",
-                other
-            ),
+            other => panic!("Expected ValidationError for insufficient balance, got {other:?}"),
         }
     }
 
@@ -1357,11 +1348,10 @@ mod tests {
             Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
                 assert!(
                     msg.contains("not allowed for transfers"),
-                    "Error message '{}' should contain 'not allowed for transfers'",
-                    msg
+                    "Error message '{msg}' should contain 'not allowed for transfers'"
                 );
             }
-            other => panic!("Expected PolicyViolation error, got {:?}", other),
+            other => panic!("Expected PolicyViolation error, got {other:?}"),
         }
     }
 
@@ -1452,11 +1442,11 @@ mod tests {
             Err(SolanaTransactionValidationError::PolicyViolation(msg)) => {
                 assert_eq!(
                     msg,
-                    format!("Token {} not allowed for transfers", token_mint),
+                    format!("Token {token_mint} not allowed for transfers"),
                     "Error message should match expected format"
                 );
             }
-            other => panic!("Expected PolicyViolation error, got {:?}", other),
+            other => panic!("Expected PolicyViolation error, got {other:?}"),
         }
     }
 

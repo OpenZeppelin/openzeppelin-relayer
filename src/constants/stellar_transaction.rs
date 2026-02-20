@@ -2,8 +2,21 @@
 //!
 //! This module contains default values used throughout the Stellar transaction
 //! handling logic, including fees, retry delays, and timeout thresholds.
+//!
+//! ## Gas Abstraction Contract Addresses
+//!
+//! This module also contains default contract addresses for Soroban gas abstraction:
+//! - **Soroswap**: AMM DEX for token-to-XLM quotes and swaps
+//! - **FeeForwarder**: Contract that enables fee payment in tokens instead of XLM
+//!
+//! These addresses can be overridden via environment variables if needed.
+//! See `ServerConfig` for the corresponding env var names.
 
 use chrono::Duration;
+
+// =============================================================================
+// Transaction Fees
+// =============================================================================
 
 pub const STELLAR_DEFAULT_TRANSACTION_FEE: u32 = 100;
 /// Default maximum fee for fee-bump transactions (0.1 XLM = 1,000,000 stroops)
@@ -27,9 +40,16 @@ pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 pub const STELLAR_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 10;
 
 // Transaction validity
+/// Approximate Stellar ledger close time in seconds (used for ledger-based expiration)
+pub const STELLAR_LEDGER_TIME_SECONDS: u64 = 5;
+
 /// Default transaction validity duration (in minutes) for sponsored transactions
 /// Provides reasonable time for users to review and submit while ensuring transaction doesn't expire too quickly
 pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 2;
+
+/// Sponsored transaction validity in seconds (2 minutes).
+/// Used for gas abstraction authorization validity so it aligns with the transaction submission window.
+pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_SECONDS: u64 = 120;
 
 /// Get status check initial delay duration
 pub fn get_stellar_status_check_initial_delay() -> Duration {
@@ -50,12 +70,68 @@ pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
 /// Safety net for transactions without time bounds - prevents infinite retries.
 pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 
+/// Base interval (seconds) for resubmitting a Submitted transaction.
+/// Stellar Core retries internally for ~3 ledgers (~15s). We start resubmitting at 10s
+/// to ensure the transaction is back in the mempool before Core's window closes.
+pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 10;
+
+/// Maximum resubmit interval (seconds) to cap exponential backoff.
+/// Prevents excessively long gaps between resubmissions.
+pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 120;
+
 /// Get resend timeout duration for stuck Sent transactions
 pub fn get_stellar_resend_timeout() -> Duration {
     Duration::seconds(STELLAR_RESEND_TIMEOUT_SECONDS)
+}
+
+/// Get base resubmit interval for Submitted transactions
+pub fn get_stellar_resubmit_base_interval() -> Duration {
+    Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS)
+}
+
+/// Get maximum resubmit interval (backoff cap) for Submitted transactions
+pub fn get_stellar_resubmit_max_interval() -> Duration {
+    Duration::seconds(STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS)
 }
 
 /// Get max lifetime duration for stuck transactions (Sent, Pending, Submitted)
 pub fn get_stellar_max_stuck_transaction_lifetime() -> Duration {
     Duration::minutes(STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES)
 }
+
+// =============================================================================
+// Soroswap DEX Contract Addresses (Mainnet Only)
+// =============================================================================
+// Official Soroswap mainnet deployments from:
+// https://github.com/soroswap/core/blob/main/public/mainnet.contracts.json
+//
+// Testnet addresses must be provided via environment variables:
+// - STELLAR_TESTNET_SOROSWAP_ROUTER_ADDRESS
+// - STELLAR_TESTNET_SOROSWAP_FACTORY_ADDRESS
+// - STELLAR_TESTNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS
+
+/// Soroswap router contract address on Stellar mainnet
+pub const STELLAR_SOROSWAP_MAINNET_ROUTER: &str =
+    "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH";
+
+/// Soroswap factory contract address on Stellar mainnet
+pub const STELLAR_SOROSWAP_MAINNET_FACTORY: &str =
+    "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2";
+
+/// Native XLM wrapper token contract address on Stellar mainnet
+/// This is the Soroban token contract that wraps native XLM for use in Soroswap
+pub const STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER: &str =
+    "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
+
+// =============================================================================
+// FeeForwarder Contract Addresses (Mainnet Only)
+// =============================================================================
+// The FeeForwarder contract enables gas abstraction by allowing users to pay
+// transaction fees in tokens instead of native XLM.
+//
+// Testnet address must be provided via environment variable:
+// - STELLAR_TESTNET_FEE_FORWARDER_ADDRESS
+
+/// FeeForwarder contract address on Stellar mainnet
+/// Set to empty string until mainnet deployment is available
+pub const STELLAR_FEE_FORWARDER_MAINNET: &str = "";

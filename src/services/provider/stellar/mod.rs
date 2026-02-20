@@ -10,12 +10,13 @@ use soroban_rs::stellar_rpc_client::Client;
 use soroban_rs::stellar_rpc_client::{
     Error as StellarClientError, EventStart, EventType, GetEventsResponse, GetLatestLedgerResponse,
     GetLedgerEntriesResponse, GetNetworkResponse, GetTransactionResponse, GetTransactionsRequest,
-    GetTransactionsResponse, SimulateTransactionResponse,
+    GetTransactionsResponse, SendTransactionResponse, SimulateTransactionResponse,
 };
 use soroban_rs::xdr::{
     AccountEntry, ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
     LedgerKey, Limits, MuxedAccount, Operation, OperationBody, ReadXdr, ScAddress, ScSymbol, ScVal,
     SequenceNumber, Transaction, TransactionEnvelope, TransactionV1Envelope, Uint256, VecM,
+    WriteXdr,
 };
 #[cfg(test)]
 use soroban_rs::xdr::{AccountId, LedgerKeyAccount, PublicKey};
@@ -299,6 +300,26 @@ pub trait StellarProviderTrait: Send + Sync {
         &self,
         tx_envelope: &TransactionEnvelope,
     ) -> Result<Hash, ProviderError>;
+    /// Sends a transaction and returns the full response including the status field.
+    ///
+    /// # Why this method exists
+    ///
+    /// The `stellar-rpc-client` crate's `send_transaction` method only returns
+    /// `Result<Hash, Error>` and discards the status field for non-ERROR responses.
+    /// This means TRY_AGAIN_LATER is silently treated as success, which is problematic
+    /// for relayers that need to track transaction states precisely.
+    ///
+    /// This method calls the `sendTransaction` RPC directly to get the full
+    /// `SendTransactionResponse` including the status field:
+    /// - "PENDING": Transaction accepted for processing
+    /// - "DUPLICATE": Transaction already submitted
+    /// - "TRY_AGAIN_LATER": Transaction NOT queued (e.g., another tx from same account
+    ///   in mempool, fee too low and resubmitted too soon, or resource limits exceeded)
+    /// - "ERROR": Transaction validation failed
+    async fn send_transaction_with_status(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<SendTransactionResponse, ProviderError>;
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError>;
     async fn get_transactions(
         &self,
@@ -627,6 +648,32 @@ impl StellarProviderTrait for StellarProvider {
             }
         })
         .await
+    }
+
+    async fn send_transaction_with_status(
+        &self,
+        tx_envelope: &TransactionEnvelope,
+    ) -> Result<SendTransactionResponse, ProviderError> {
+        // Encode the transaction envelope to XDR base64
+        let tx_xdr = tx_envelope
+            .to_xdr_base64(Limits::none())
+            .map_err(|e| ProviderError::Other(format!("Failed to encode transaction XDR: {e}")))?;
+
+        // Call sendTransaction RPC method directly to get the full response
+        let params = serde_json::json!({
+            "transaction": tx_xdr
+        });
+
+        let result = self
+            .raw_request_dyn("sendTransaction", params, None)
+            .await?;
+
+        // Deserialize the response
+        serde_json::from_value(result).map_err(|e| {
+            ProviderError::Other(format!(
+                "Failed to deserialize SendTransactionResponse: {e}"
+            ))
+        })
     }
 
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError> {
@@ -1341,8 +1388,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get account"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1358,8 +1404,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to simulate transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1375,8 +1420,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to send transaction (polling)"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1391,8 +1435,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get network"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1407,8 +1450,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get latest ledger"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1424,8 +1466,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to send transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1441,8 +1482,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get transaction"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1461,8 +1501,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get transactions"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1478,8 +1517,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get ledger entries"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
 
@@ -1500,8 +1538,7 @@ mod stellar_rpc_tests {
             // Should contain the "Failed to..." context message
             assert!(
                 err_str.contains("Failed to get events"),
-                "Unexpected error message: {}",
-                err_str
+                "Unexpected error message: {err_str}"
             );
         }
     }

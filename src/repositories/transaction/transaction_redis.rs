@@ -1,5 +1,10 @@
 //! Redis-backed implementation of the TransactionRepository.
 
+use crate::domain::transaction::common::is_final_state;
+use crate::metrics::{
+    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
+    TRANSACTIONS_SUCCESS, TRANSACTION_PROCESSING_TIME,
+};
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
     TransactionStatus, TransactionUpdateRequest,
@@ -11,7 +16,8 @@ use crate::repositories::{
 };
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::AsyncCommands;
+use chrono::Utc;
+use redis::{AsyncCommands, Script};
 use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
@@ -541,6 +547,20 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             error!(tx_id = %entity.id, error = %e, "failed to update indexes for new transaction");
             return Err(e);
         }
+
+        // Track transaction creation metric
+        let network_type = format!("{:?}", entity.network_type).to_lowercase();
+        let relayer_id = entity.relayer_id.as_str();
+        TRANSACTIONS_CREATED
+            .with_label_values(&[relayer_id, &network_type])
+            .inc();
+
+        // Track initial status distribution (Pending)
+        let status = &entity.status;
+        let status_str = format!("{status:?}").to_lowercase();
+        TRANSACTIONS_BY_STATUS
+            .with_label_values(&[relayer_id, &network_type, &status_str])
+            .inc();
 
         debug!(tx_id = %entity.id, "successfully created transaction");
         Ok(entity)
@@ -1277,17 +1297,16 @@ impl TransactionRepository for RedisTransactionRepository {
         const MAX_RETRIES: u32 = 3;
         const BACKOFF_MS: u64 = 100;
 
-        // Fetch the original transaction state ONCE before retrying.
-        // This is critical: if conn.set() succeeds but update_indexes() fails,
-        // subsequent retries must still reference the original state to remove
-        // stale index entries. Otherwise, get_by_id() returns the already-updated
-        // record and update_indexes() skips removing the old indexes.
-        let original_tx = self.get_by_id(tx_id.clone()).await?;
+        // Optimistic CAS: only apply update if the current stored value still matches the
+        // expected pre-update value. This avoids duplicate status metric updates on races.
+        let mut original_tx = self.get_by_id(tx_id.clone()).await?;
         let mut updated_tx = original_tx.clone();
         updated_tx.apply_partial_update(update.clone());
 
         let key = self.tx_key(&updated_tx.relayer_id, &tx_id);
-        let value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
+        let mut original_value = self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
+        let mut updated_value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
+        let mut data_updated = false;
 
         let mut last_error = None;
 
@@ -1307,19 +1326,66 @@ impl TransactionRepository for RedisTransactionRepository {
                 }
             };
 
-            // Try to update transaction data
-            let result: Result<(), _> = conn.set(&key, &value).await;
-            match result {
-                Ok(_) => {}
-                Err(e) => {
+            if !data_updated {
+                let cas_script = Script::new(
+                    r#"
+                    local current = redis.call('GET', KEYS[1])
+                    if not current then
+                        return -1
+                    end
+                    if current == ARGV[1] then
+                        redis.call('SET', KEYS[1], ARGV[2])
+                        return 1
+                    end
+                    return 0
+                    "#,
+                );
+
+                let cas_result: i32 = match cas_script
+                    .key(&key)
+                    .arg(&original_value)
+                    .arg(&updated_value)
+                    .invoke_async(&mut conn)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        if attempt < MAX_RETRIES - 1 {
+                            warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed CAS transaction update, retrying");
+                            last_error = Some(self.map_redis_error(e, "partial_update_cas"));
+                            tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS))
+                                .await;
+                            continue;
+                        }
+                        return Err(self.map_redis_error(e, "partial_update_cas"));
+                    }
+                };
+
+                if cas_result == -1 {
+                    return Err(RepositoryError::NotFound(format!(
+                        "Transaction with ID {tx_id} not found"
+                    )));
+                }
+
+                if cas_result == 0 {
                     if attempt < MAX_RETRIES - 1 {
-                        warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to set transaction data, retrying");
-                        last_error = Some(self.map_redis_error(e, "partial_update"));
+                        warn!(tx_id = %tx_id, attempt = %attempt, "concurrent transaction update detected, rebasing retry");
+                        original_tx = self.get_by_id(tx_id.clone()).await?;
+                        updated_tx = original_tx.clone();
+                        updated_tx.apply_partial_update(update.clone());
+                        original_value =
+                            self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
+                        updated_value =
+                            self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
                         tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
                         continue;
                     }
-                    return Err(self.map_redis_error(e, "partial_update"));
+                    return Err(RepositoryError::TransactionFailure(format!(
+                        "Concurrent update conflict for transaction {tx_id}"
+                    )));
                 }
+
+                data_updated = true;
             }
 
             // Try to update indexes with the original pre-update state
@@ -1327,6 +1393,157 @@ impl TransactionRepository for RedisTransactionRepository {
             match self.update_indexes(&updated_tx, Some(&original_tx)).await {
                 Ok(_) => {
                     debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
+
+                    // Track metrics for transaction state changes
+                    if let Some(new_status) = &update.status {
+                        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
+                        let relayer_id = updated_tx.relayer_id.as_str();
+
+                        // Track submission (when status changes to Submitted)
+                        if original_tx.status != TransactionStatus::Submitted
+                            && *new_status == TransactionStatus::Submitted
+                        {
+                            TRANSACTIONS_SUBMITTED
+                                .with_label_values(&[relayer_id, &network_type])
+                                .inc();
+
+                            // Track processing time: creation to submission
+                            if let Ok(created_time) =
+                                chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                            {
+                                let processing_seconds =
+                                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds()
+                                        as f64;
+                                TRANSACTION_PROCESSING_TIME
+                                    .with_label_values(&[
+                                        relayer_id,
+                                        &network_type,
+                                        "creation_to_submission",
+                                    ])
+                                    .observe(processing_seconds);
+                            }
+                        }
+
+                        // Track status distribution (update gauge when status changes)
+                        if original_tx.status != *new_status {
+                            // Decrement old status and clamp to zero to avoid negative gauges.
+                            let old_status = &original_tx.status;
+                            let old_status_str = format!("{old_status:?}").to_lowercase();
+                            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
+                                relayer_id,
+                                &network_type,
+                                &old_status_str,
+                            ]);
+                            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
+                            old_status_gauge.set(clamped_value);
+
+                            // Increment new status
+                            let new_status_str = format!("{new_status:?}").to_lowercase();
+                            TRANSACTIONS_BY_STATUS
+                                .with_label_values(&[relayer_id, &network_type, &new_status_str])
+                                .inc();
+                        }
+
+                        // Track metrics for final transaction states
+                        // Only track when status changes from non-final to final state
+                        let was_final = is_final_state(&original_tx.status);
+                        let is_final = is_final_state(new_status);
+
+                        if !was_final && is_final {
+                            match new_status {
+                                TransactionStatus::Confirmed => {
+                                    TRANSACTIONS_SUCCESS
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .inc();
+
+                                    // Track processing time: submission to confirmation
+                                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
+                                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
+                                    {
+                                        if let (Ok(sent_time), Ok(confirmed_time)) = (
+                                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
+                                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
+                                        ) {
+                                            let processing_seconds = (confirmed_time
+                                                .with_timezone(&Utc)
+                                                - sent_time.with_timezone(&Utc))
+                                            .num_seconds()
+                                                as f64;
+                                            TRANSACTION_PROCESSING_TIME
+                                                .with_label_values(&[
+                                                    relayer_id,
+                                                    &network_type,
+                                                    "submission_to_confirmation",
+                                                ])
+                                                .observe(processing_seconds);
+                                        }
+                                    }
+
+                                    // Track processing time: creation to confirmation
+                                    if let Ok(created_time) =
+                                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                                    {
+                                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
+                                            if let Ok(confirmed_time) =
+                                                chrono::DateTime::parse_from_rfc3339(
+                                                    confirmed_at_str,
+                                                )
+                                            {
+                                                let processing_seconds = (confirmed_time
+                                                    .with_timezone(&Utc)
+                                                    - created_time.with_timezone(&Utc))
+                                                .num_seconds()
+                                                    as f64;
+                                                TRANSACTION_PROCESSING_TIME
+                                                    .with_label_values(&[
+                                                        relayer_id,
+                                                        &network_type,
+                                                        "creation_to_confirmation",
+                                                    ])
+                                                    .observe(processing_seconds);
+                                            }
+                                        }
+                                    }
+                                }
+                                TransactionStatus::Failed => {
+                                    // Parse status_reason to determine failure type
+                                    let failure_reason = updated_tx
+                                        .status_reason
+                                        .as_deref()
+                                        .map(|reason| {
+                                            if reason.starts_with("Submission failed:") {
+                                                "submission_failed"
+                                            } else if reason.starts_with("Preparation failed:") {
+                                                "preparation_failed"
+                                            } else {
+                                                "failed"
+                                            }
+                                        })
+                                        .unwrap_or("failed");
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[
+                                            relayer_id,
+                                            &network_type,
+                                            failure_reason,
+                                        ])
+                                        .inc();
+                                }
+                                TransactionStatus::Expired => {
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[relayer_id, &network_type, "expired"])
+                                        .inc();
+                                }
+                                TransactionStatus::Canceled => {
+                                    TRANSACTIONS_FAILED
+                                        .with_label_values(&[relayer_id, &network_type, "canceled"])
+                                        .inc();
+                                }
+                                _ => {
+                                    // Other final states (shouldn't happen, but handle gracefully)
+                                }
+                            }
+                        }
+                    }
                     return Ok(updated_tx);
                 }
                 Err(e) if attempt < MAX_RETRIES - 1 => {
@@ -1574,7 +1791,7 @@ mod tests {
                 to: Some("0xRecipient".to_string()),
                 chain_id: 1,
                 signature: None,
-                hash: Some(format!("0x{}", id)),
+                hash: Some(format!("0x{id}")),
                 speed: Some(Speed::Fast),
                 max_fee_per_gas: None,
                 max_priority_fee_per_gas: None,
@@ -1582,6 +1799,7 @@ mod tests {
             }),
             noop_count: None,
             is_canceled: Some(false),
+            metadata: None,
         }
     }
 
@@ -1632,7 +1850,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_prefix:{}", random_id);
+        let key_prefix = format!("test_prefix:{random_id}");
 
         RedisTransactionRepository::new(connections, key_prefix)
             .expect("Failed to create RedisTransactionRepository")
@@ -2414,6 +2632,7 @@ mod tests {
             priced_at: None,
             noop_count: None,
             delete_at: None,
+            metadata: None,
         };
 
         let updated = repo
@@ -2514,7 +2733,7 @@ mod tests {
     #[ignore = "Requires active Redis instance"]
     async fn test_debug_implementation() {
         let repo = setup_test_repo().await;
-        let debug_str = format!("{:?}", repo);
+        let debug_str = format!("{repo:?}");
         assert!(debug_str.contains("RedisTransactionRepository"));
         assert!(debug_str.contains("test_prefix"));
     }
@@ -2651,8 +2870,7 @@ mod tests {
             // Should have delete_at set
             assert!(
                 updated.delete_at.is_some(),
-                "delete_at should be set for status: {:?}",
-                status
+                "delete_at should be set for status: {status:?}"
             );
 
             // Verify the timestamp is reasonable (approximately 6 hours from now)
@@ -2666,10 +2884,9 @@ mod tests {
             let tolerance = Duration::minutes(5);
 
             assert!(
-                duration_from_before >= expected_duration - tolerance &&
-                duration_from_before <= expected_duration + tolerance,
-                "delete_at should be approximately 6 hours from now for status: {:?}. Duration: {:?}",
-                status, duration_from_before
+                duration_from_before >= expected_duration - tolerance
+                    && duration_from_before <= expected_duration + tolerance,
+                "delete_at should be approximately 6 hours from now for status: {status:?}. Duration: {duration_from_before:?}"
             );
         }
 
@@ -2712,8 +2929,7 @@ mod tests {
             // Should NOT have delete_at set
             assert!(
                 updated.delete_at.is_none(),
-                "delete_at should NOT be set for status: {:?}",
-                status
+                "delete_at should NOT be set for status: {status:?}"
             );
         }
 
@@ -2770,8 +2986,7 @@ mod tests {
         assert!(
             duration_from_before >= expected_duration - tolerance
                 && duration_from_before <= expected_duration + tolerance,
-            "delete_at should be approximately 8 hours from now. Duration: {:?}",
-            duration_from_before
+            "delete_at should be approximately 8 hours from now. Duration: {duration_from_before:?}"
         );
 
         // Also verify other fields were updated
@@ -2928,7 +3143,7 @@ mod tests {
         // Create multiple transactions
         let mut created_ids = Vec::new();
         for i in 1..=5 {
-            let tx_id = format!("test-multi-{}-{}", base_id, i);
+            let tx_id = format!("test-multi-{base_id}-{i}");
             let tx = create_test_transaction(&tx_id);
             repo.create(tx).await.unwrap();
             created_ids.push(tx_id);
@@ -2983,7 +3198,7 @@ mod tests {
 
         // Create some transactions
         let existing_ids: Vec<String> = (1..=3)
-            .map(|i| format!("test-mixed-existing-{}-{}", base_id, i))
+            .map(|i| format!("test-mixed-existing-{base_id}-{i}"))
             .collect();
 
         for id in &existing_ids {
@@ -2992,7 +3207,7 @@ mod tests {
         }
 
         let nonexistent_ids: Vec<String> = (1..=2)
-            .map(|i| format!("test-mixed-nonexistent-{}-{}", base_id, i))
+            .map(|i| format!("test-mixed-nonexistent-{base_id}-{i}"))
             .collect();
 
         // Try to delete mix of existing and non-existing
@@ -3087,7 +3302,7 @@ mod tests {
         let mut created_ids = Vec::new();
 
         for i in 0..count {
-            let tx_id = format!("test-large-{}-{}", base_id, i);
+            let tx_id = format!("test-large-{base_id}-{i}");
             let tx = create_test_transaction(&tx_id);
             repo.create(tx).await.unwrap();
             created_ids.push(tx_id);

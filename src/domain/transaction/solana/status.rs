@@ -55,11 +55,21 @@ where
         mut tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "handling solana transaction status");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "handling solana transaction status"
+        );
 
         // Early return if transaction is already in a final state
         if is_final_state(&tx.status) {
-            debug!(status = ?tx.status, "transaction already in final state");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction already in final state"
+            );
             return Ok(tx);
         }
 
@@ -390,6 +400,7 @@ where
     async fn is_blockhash_valid(
         &self,
         transaction: &SolanaTransaction,
+        tx_id: &str,
     ) -> Result<bool, TransactionError> {
         let blockhash = transaction.message.recent_blockhash;
 
@@ -402,12 +413,16 @@ where
             Err(e) => {
                 // Check if blockhash not found
                 if matches!(e, SolanaProviderError::BlockhashNotFound(_)) {
-                    info!("blockhash not found on chain, treating as expired");
+                    info!(
+                        tx_id = %tx_id,
+                        "blockhash not found on chain, treating as expired"
+                    );
                     return Ok(false);
                 }
 
                 // Propagate the error so the job system can retry the status check later
                 warn!(
+                    tx_id = %tx_id,
                     error = %e,
                     "error checking blockhash validity, propagating error for retry"
                 );
@@ -645,7 +660,7 @@ where
         let transaction = decode_solana_transaction(&tx)?;
 
         // Step 6: Check if blockhash is expired
-        let blockhash_valid = self.is_blockhash_valid(&transaction).await?;
+        let blockhash_valid = self.is_blockhash_valid(&transaction, &tx.id).await?;
 
         if blockhash_valid {
             debug!(
@@ -1656,7 +1671,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -1691,7 +1706,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_ok());
         assert!(!result.unwrap());
@@ -1728,7 +1743,7 @@ mod tests {
             SolanaTransaction::new_unsigned(Message::new(&[], Some(&Pubkey::new_unique())));
         transaction.message.recent_blockhash = blockhash;
 
-        let result = handler.is_blockhash_valid(&transaction).await;
+        let result = handler.is_blockhash_valid(&transaction, "test-tx-id").await;
 
         assert!(result.is_err());
         let error = result.unwrap_err();

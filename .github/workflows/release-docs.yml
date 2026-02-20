@@ -29,7 +29,7 @@ jobs:
       TAG: ${{ inputs.tag || github.event.inputs.tag }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76  # v2.14.0
+        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
         with:
           egress-policy: audit
       - name: Get github app token
@@ -39,7 +39,7 @@ jobs:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
       - name: Checkout tag
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           ref: ${{ env.TAG }}
           token: ${{ steps.gh-app-token.outputs.token }}
@@ -81,7 +81,7 @@ jobs:
           echo "PR_TITLE=${PR_TITLE:-}" >> $GITHUB_OUTPUT
       - name: Create Pull Request for Docs
         if: ${{ steps.validate_tag.outputs.PR_TITLE != '' }}
-        uses: peter-evans/create-pull-request@98357b18bf14b5342f975ff684046ec3b2a07725  # v8.0.0
+        uses: peter-evans/create-pull-request@c0f553fe549906ede9cf27b5156039d195d2ece0  # v8.1.0
         with:
           token: ${{ steps.gh-app-token.outputs.token }}
           title: ${{ steps.validate_tag.outputs.PR_TITLE }}

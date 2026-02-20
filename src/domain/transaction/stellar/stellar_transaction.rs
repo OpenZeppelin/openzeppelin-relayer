@@ -18,14 +18,14 @@ use crate::{
     },
     services::{
         provider::{StellarProvider, StellarProviderTrait},
-        signer::{Signer, StellarSigner},
-        stellar_dex::{OrderBookService, StellarDexServiceTrait},
+        signer::{Signer, StellarSignTrait, StellarSigner},
+        stellar_dex::{StellarDexService, StellarDexServiceTrait},
     },
     utils::calculate_scheduled_timestamp,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::lane_gate;
 
@@ -35,7 +35,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -56,7 +56,7 @@ where
     R: Repository<RelayerRepoModel, String>,
     T: TransactionRepository,
     J: JobProducerTrait,
-    S: Signer,
+    S: Signer + StellarSignTrait,
     P: StellarProviderTrait,
     C: TransactionCounterTrait,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -244,7 +244,16 @@ where
         // Use the shared helper to fetch the next sequence
         let next_usable_seq = fetch_next_sequence_from_chain(self.provider(), relayer_address)
             .await
-            .map_err(TransactionError::UnexpectedError)?;
+            .map_err(|e| {
+                warn!(
+                    address = %relayer_address,
+                    error = %e,
+                    "failed to fetch sequence from chain in sync_sequence_from_chain"
+                );
+                TransactionError::UnexpectedError(format!(
+                    "Failed to sync sequence from chain: {e}"
+                ))
+            })?;
 
         // Update the local counter to the next usable sequence
         self.transaction_counter_service()
@@ -286,7 +295,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: StellarDexServiceTrait + Send + Sync + 'static,
@@ -357,7 +366,7 @@ pub type DefaultStellarTransaction = StellarRelayerTransaction<
     StellarSigner,
     StellarProvider,
     TransactionCounterRepositoryStorage,
-    OrderBookService<StellarProvider, StellarSigner>,
+    StellarDexService<StellarProvider, StellarSigner>,
 >;
 
 #[cfg(test)]
@@ -524,7 +533,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(move |_, _, _, _| {
@@ -567,7 +576,7 @@ mod tests {
                 statuses == [TransactionStatus::Pending]
                     && query.page == 1
                     && query.per_page == 1
-                    && *oldest_first == true
+                    && *oldest_first
             })
             .times(1)
             .returning(|_, _, _, _| {
@@ -845,7 +854,7 @@ mod tests {
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
         let random_id = Uuid::new_v4().to_string();
-        let key_prefix = format!("test_stellar:{}", random_id);
+        let key_prefix = format!("test_stellar:{random_id}");
         let tx_repo = Arc::new(
             RedisTransactionRepository::new(connections, key_prefix)
                 .expect("Failed to create RedisTransactionRepository"),

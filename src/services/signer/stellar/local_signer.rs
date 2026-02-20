@@ -32,8 +32,7 @@ use eyre::Result;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
-    TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
-    Uint256, VecM, WriteXdr,
+    TransactionEnvelope, Uint256, WriteXdr,
 };
 use tracing::info;
 
@@ -132,7 +131,9 @@ impl Signer for LocalSigner {
                         SignerError::SigningError(format!("failed to sign transaction: {e}"))
                     })?
             }
-            TransactionInput::UnsignedXdr(xdr) | TransactionInput::SignedXdr { xdr, .. } => {
+            TransactionInput::UnsignedXdr(xdr)
+            | TransactionInput::SignedXdr { xdr, .. }
+            | TransactionInput::SorobanGasAbstraction { xdr, .. } => {
                 // Parse the XDR envelope and sign
                 let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
                     .map_err(|e| SignerError::SigningError(format!("invalid envelope XDR: {e}")))?;
@@ -219,7 +220,7 @@ mod tests {
         let result = signer.sign_transaction(evm_tx).await;
         assert!(result.is_err());
         let err = result.err().unwrap();
-        assert!(format!("{}", err).contains("failed to get tx data"));
+        assert!(format!("{err}").contains("failed to get tx data"));
     }
 
     #[tokio::test]

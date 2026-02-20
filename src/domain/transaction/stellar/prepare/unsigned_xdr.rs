@@ -2,7 +2,10 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use soroban_rs::xdr::{Limits, OperationBody, ReadXdr, TransactionEnvelope, WriteXdr};
+use soroban_rs::xdr::{
+    HostFunction, Limits, OperationBody, ReadXdr, ScAddress, ScVal, SorobanTransactionData,
+    TransactionEnvelope, TransactionExt, WriteXdr,
+};
 use tracing::debug;
 
 use crate::{
@@ -132,13 +135,27 @@ fn is_valid_swap_transaction(
         return Ok(false);
     }
 
-    // Check if the operation is PathPaymentStrictSend
     let op = &operations[0];
-    let path_payment = match &op.body {
-        OperationBody::PathPaymentStrictSend(path_payment_op) => path_payment_op,
-        _ => return Ok(false),
-    };
 
+    match &op.body {
+        // OrderBook swap: PathPaymentStrictSend (classic assets)
+        OperationBody::PathPaymentStrictSend(path_payment) => {
+            is_valid_orderbook_swap(path_payment, relayer_address, policy)
+        }
+        // Soroswap swap: InvokeHostFunction calling swap_exact_tokens_for_tokens
+        OperationBody::InvokeHostFunction(invoke_op) => {
+            is_valid_soroswap_swap(&invoke_op.host_function, relayer_address)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// Validate an OrderBook swap transaction (PathPaymentStrictSend)
+fn is_valid_orderbook_swap(
+    path_payment: &soroban_rs::xdr::PathPaymentStrictSendOp,
+    relayer_address: &str,
+    policy: &RelayerStellarPolicy,
+) -> Result<bool, TransactionError> {
     // Validate source asset is an allowed token
     let source_asset_id = asset_to_asset_id(&path_payment.send_asset).map_err(|e| {
         TransactionError::ValidationError(format!(
@@ -179,7 +196,46 @@ fn is_valid_swap_transaction(
         return Ok(false);
     }
 
-    // All validations passed - this is a valid swap transaction
+    Ok(true)
+}
+
+/// Validate a Soroswap swap transaction (InvokeHostFunction calling swap_exact_tokens_for_tokens)
+fn is_valid_soroswap_swap(
+    host_function: &HostFunction,
+    relayer_address: &str,
+) -> Result<bool, TransactionError> {
+    let invoke_args = match host_function {
+        HostFunction::InvokeContract(args) => args,
+        _ => return Ok(false),
+    };
+
+    // Must be calling swap_exact_tokens_for_tokens
+    if invoke_args.function_name.to_string() != "swap_exact_tokens_for_tokens" {
+        return Ok(false);
+    }
+
+    // swap_exact_tokens_for_tokens(amount_in, amount_out_min, path, to, deadline)
+    // args[3] is the `to` address — must be the relayer
+    if invoke_args.args.len() != 5 {
+        return Ok(false);
+    }
+
+    let to_address = match &invoke_args.args[3] {
+        ScVal::Address(ScAddress::Account(account_id)) => {
+            use soroban_rs::xdr::PublicKey;
+            match &account_id.0 {
+                PublicKey::PublicKeyTypeEd25519(key) => {
+                    stellar_strkey::ed25519::PublicKey(key.0).to_string()
+                }
+            }
+        }
+        _ => return Ok(false),
+    };
+
+    if to_address != relayer_address {
+        return Ok(false);
+    }
+
     Ok(true)
 }
 
@@ -317,7 +373,81 @@ where
     let stellar_data_with_sim = match simulate_if_needed(&envelope, provider).await? {
         Some(sim_resp) => {
             debug!("Applying simulation results to unsigned XDR transaction");
-            // Get operation count from the envelope
+
+            // Parse SorobanTransactionData from simulation response
+            let soroban_tx_data =
+                SorobanTransactionData::from_xdr_base64(&sim_resp.transaction_data, Limits::none())
+                    .map_err(|e| {
+                        TransactionError::ValidationError(format!(
+                            "Failed to parse simulation transaction_data: {e}"
+                        ))
+                    })?;
+
+            // Apply simulation results to the envelope:
+            // 1. Set TransactionExt::V1 with SorobanTransactionData (resource footprint)
+            // 2. Set auth entries on InvokeHostFunction operations
+            // 3. Update fee based on simulation
+            match &mut envelope {
+                TransactionEnvelope::Tx(ref mut env) => {
+                    // Apply SorobanTransactionData (resource footprint, read/write sets)
+                    env.tx.ext = TransactionExt::V1(soroban_tx_data);
+
+                    // Apply auth entries from simulation results
+                    if let Ok(results) = sim_resp.results() {
+                        if let Some(result) = results.first() {
+                            if !result.auth.is_empty() {
+                                // Find the InvokeHostFunction operation and set auth entries
+                                for op in env.tx.operations.iter_mut() {
+                                    if let OperationBody::InvokeHostFunction(ref mut invoke_op) =
+                                        op.body
+                                    {
+                                        invoke_op.auth =
+                                            result.auth.clone().try_into().map_err(|_| {
+                                                TransactionError::ValidationError(
+                                                    "Failed to set simulation auth entries"
+                                                        .to_string(),
+                                                )
+                                            })?;
+                                        debug!(
+                                            "Applied {} auth entries from simulation",
+                                            result.auth.len()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Update fee: inclusion fee + resource fee from simulation
+                    let op_count = env.tx.operations.len() as u64;
+                    let inclusion_fee = op_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+                    let resource_fee = sim_resp.min_resource_fee;
+                    let updated_fee = u32::try_from(inclusion_fee + resource_fee)
+                        .unwrap_or(u32::MAX)
+                        .max(STELLAR_DEFAULT_TRANSACTION_FEE);
+                    env.tx.fee = updated_fee;
+
+                    debug!(
+                        "Applied simulation: fee={}, resource_fee={}",
+                        updated_fee, resource_fee
+                    );
+                }
+                _ => {
+                    return Err(TransactionError::ValidationError(
+                        "Expected V1 transaction envelope for Soroban simulation".to_string(),
+                    ));
+                }
+            }
+
+            // Re-serialize the updated envelope with simulation data applied
+            let updated_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Failed to serialize envelope after simulation: {e}"
+                ))
+            })?;
+
+            // Update stellar data with new XDR and simulation metadata
+            stellar_data.transaction_input = TransactionInput::UnsignedXdr(updated_xdr);
             let op_count = extract_operations(&envelope)?.len() as u64;
             stellar_data
                 .with_simulation_data(sim_resp, op_count)
@@ -871,7 +1001,7 @@ mod tests {
 
         let mut policy = RelayerStellarPolicy::default();
         policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
-            asset: format!("USDC:{}", TEST_PK_2),
+            asset: format!("USDC:{TEST_PK_2}"),
             metadata: None,
             swap_config: None,
             max_allowed_fee: None,
@@ -1016,7 +1146,7 @@ mod tests {
 
         let mut policy = RelayerStellarPolicy::default();
         policy.allowed_tokens = Some(vec![crate::models::StellarAllowedTokensPolicy {
-            asset: format!("USDC:{}", TEST_PK_2),
+            asset: format!("USDC:{TEST_PK_2}"),
             metadata: None,
             swap_config: None,
             max_allowed_fee: None,
@@ -1025,6 +1155,526 @@ mod tests {
         let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
         assert!(result.is_ok());
         assert!(!result.unwrap()); // Should return false for wrong destination
+    }
+
+    // ===== Soroswap Swap Validation Tests =====
+
+    /// Helper: build a V1 envelope with a single InvokeHostFunction operation
+    fn create_soroswap_invoke_envelope(
+        source: &str,
+        function_name: &str,
+        args: Vec<ScVal>,
+    ) -> TransactionEnvelope {
+        use soroban_rs::xdr::{ContractId, Hash, InvokeContractArgs, InvokeHostFunctionOp, VecM};
+
+        let invoke_args = InvokeContractArgs {
+            contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+            function_name: function_name.as_bytes().to_vec().try_into().unwrap(),
+            args: args.try_into().unwrap(),
+        };
+
+        let op = soroban_rs::xdr::Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(invoke_args),
+                auth: VecM::default(),
+            }),
+        };
+
+        create_v1_envelope(source, vec![op], 100, 1)
+    }
+
+    /// Helper: build the 5 ScVal args for `swap_exact_tokens_for_tokens`
+    fn create_soroswap_swap_args(to_address: &str) -> Vec<ScVal> {
+        use soroban_rs::xdr::{AccountId, Int128Parts, PublicKey, Uint256};
+
+        let pk = stellar_strkey::ed25519::PublicKey::from_string(to_address).unwrap();
+        let to_account = ScVal::Address(ScAddress::Account(AccountId(
+            PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)),
+        )));
+
+        vec![
+            ScVal::I128(Int128Parts { hi: 0, lo: 1000000 }), // amount_in
+            ScVal::I128(Int128Parts { hi: 0, lo: 900000 }),  // amount_out_min
+            ScVal::Vec(Some(Default::default())),            // path (empty)
+            to_account,                                      // to
+            ScVal::U64(1_000_000_000),                       // deadline
+        ]
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_with_valid_soroswap_swap() {
+        let relayer_address = TEST_PK;
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_soroswap_wrong_function_name() {
+        let relayer_address = TEST_PK;
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope = create_soroswap_invoke_envelope(relayer_address, "transfer", args);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_soroswap_wrong_arg_count() {
+        use soroban_rs::xdr::Int128Parts;
+
+        let relayer_address = TEST_PK;
+        // Only 3 args instead of 5
+        let args = vec![
+            ScVal::I128(Int128Parts { hi: 0, lo: 1000000 }),
+            ScVal::I128(Int128Parts { hi: 0, lo: 900000 }),
+            ScVal::U64(1_000_000_000),
+        ];
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_soroswap_non_address_to_arg() {
+        use soroban_rs::xdr::Int128Parts;
+
+        let relayer_address = TEST_PK;
+        // args[3] is U64 instead of Address
+        let args = vec![
+            ScVal::I128(Int128Parts { hi: 0, lo: 1000000 }),
+            ScVal::I128(Int128Parts { hi: 0, lo: 900000 }),
+            ScVal::Vec(Some(Default::default())),
+            ScVal::U64(12345), // NOT an address
+            ScVal::U64(1_000_000_000),
+        ];
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_is_valid_swap_transaction_soroswap_wrong_to_address() {
+        let relayer_address = TEST_PK;
+        let args = create_soroswap_swap_args(TEST_PK_2); // different address
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+
+        let policy = RelayerStellarPolicy::default();
+        let result = is_valid_swap_transaction(&envelope, relayer_address, &policy);
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    // ===== Simulation Path Tests =====
+
+    /// Helper: create a valid SorobanTransactionData XDR base64 string
+    fn create_valid_soroban_tx_data_xdr() -> String {
+        use soroban_rs::xdr::{LedgerFootprint, SorobanResources, SorobanTransactionDataExt, VecM};
+
+        let data = SorobanTransactionData {
+            ext: SorobanTransactionDataExt::V0,
+            resources: SorobanResources {
+                footprint: LedgerFootprint {
+                    read_only: VecM::default(),
+                    read_write: VecM::default(),
+                },
+                instructions: 1000,
+                disk_read_bytes: 500,
+                write_bytes: 200,
+            },
+            resource_fee: 10000,
+        };
+        data.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Helper: create a valid SorobanAuthorizationEntry XDR base64 string
+    fn create_valid_auth_entry_xdr() -> String {
+        use soroban_rs::xdr::{
+            ContractId, Hash, InvokeContractArgs, SorobanAuthorizationEntry,
+            SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials, VecM,
+        };
+
+        let entry = SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::SourceAccount,
+            root_invocation: SorobanAuthorizedInvocation {
+                function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
+                    function_name: "test".as_bytes().to_vec().try_into().unwrap(),
+                    args: VecM::default(),
+                }),
+                sub_invocations: VecM::default(),
+            },
+        };
+        entry.to_xdr_base64(Limits::none()).unwrap()
+    }
+
+    /// Helper: create StellarTransactionData from an envelope
+    fn create_stellar_data_with_invoke(
+        source: &str,
+        envelope: &TransactionEnvelope,
+    ) -> crate::models::StellarTransactionData {
+        use crate::models::TransactionInput;
+
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        crate::models::StellarTransactionData {
+            source_account: source.to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            fee: None,
+            sequence_number: None,
+            transaction_input: TransactionInput::UnsignedXdr(xdr),
+            memo: None,
+            valid_until: None,
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        }
+    }
+
+    /// Helper: set up default mocks for simulation tests
+    fn setup_simulation_mocks(
+        min_resource_fee: u64,
+        tx_data_xdr: String,
+        results: Vec<soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw>,
+    ) -> (
+        MockTransactionCounterTrait,
+        MockStellarProviderTrait,
+        MockSigner,
+    ) {
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(move |_| {
+                let tx_data = tx_data_xdr.clone();
+                let res = results.clone();
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        min_resource_fee,
+                        transaction_data: tx_data,
+                        results: res,
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        let mut signer = MockSigner::new();
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+        signer.expect_sign_transaction().returning(|_| {
+            let sig_bytes: Vec<u8> = vec![1u8; 64];
+            let sig_bytes_m: BytesM<64> = sig_bytes.try_into().unwrap();
+            Box::pin(ready(Ok(SignTransactionResponse::Stellar(
+                crate::domain::SignTransactionResponseStellar {
+                    signature: DecoratedSignature {
+                        hint: SignatureHint([0; 4]),
+                        signature: Signature(sig_bytes_m),
+                    },
+                },
+            ))))
+        });
+
+        (counter, provider, signer)
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_and_auth() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+        let tx_data_xdr = create_valid_soroban_tx_data_xdr();
+        let auth_xdr = create_valid_auth_entry_xdr();
+        let results = vec![
+            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
+                auth: vec![auth_xdr],
+                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+            },
+        ];
+
+        let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        let updated_data = result.unwrap();
+        assert!(updated_data.signed_envelope_xdr.is_some());
+        assert!(!updated_data.signatures.is_empty());
+        assert!(updated_data.simulation_transaction_data.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_no_results() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+        let tx_data_xdr = create_valid_soroban_tx_data_xdr();
+
+        let (counter, provider, signer) = setup_simulation_mocks(3000, tx_data_xdr, vec![]);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        assert!(result.unwrap().simulation_transaction_data.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_empty_auth() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+        let tx_data_xdr = create_valid_soroban_tx_data_xdr();
+        let results = vec![
+            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
+                auth: vec![], // empty auth
+                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+            },
+        ];
+
+        let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_invalid_auth_skipped() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+        let tx_data_xdr = create_valid_soroban_tx_data_xdr();
+        // Invalid auth XDR causes results() to fail, which is silently skipped
+        let results = vec![
+            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
+                auth: vec!["invalid-auth-xdr".to_string()],
+                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+            },
+        ];
+
+        let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        // Invalid auth XDR is silently skipped via `if let Ok(results)`
+        assert!(
+            result.is_ok(),
+            "Expected success despite invalid auth, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_invalid_tx_data() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+
+        let (counter, provider, signer) =
+            setup_simulation_mocks(5000, "invalid-xdr-data".to_string(), vec![]);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::ValidationError(msg) => {
+                assert!(
+                    msg.contains("Failed to parse simulation transaction_data"),
+                    "Error message was: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected ValidationError, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_fee_calculation() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+        let tx_data_xdr = create_valid_soroban_tx_data_xdr();
+        let min_resource_fee = 7500u64;
+
+        let (counter, provider, signer) =
+            setup_simulation_mocks(min_resource_fee, tx_data_xdr, vec![]);
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected success, got: {:?}", result);
+        let updated_data = result.unwrap();
+        // fee = 1 op * 100 (STELLAR_DEFAULT_TRANSACTION_FEE) + 7500 = 7600
+        assert_eq!(updated_data.fee, Some(100 + min_resource_fee as u32));
+    }
+
+    #[tokio::test]
+    async fn test_process_unsigned_xdr_with_simulation_error_response() {
+        let relayer_address = TEST_PK;
+        let relayer_id = "test-relayer";
+
+        let mut counter = MockTransactionCounterTrait::new();
+        counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(42))));
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                        error: Some("Simulation failed: insufficient resources".to_string()),
+                        ..Default::default()
+                    },
+                )))
+            });
+
+        let mut signer = MockSigner::new();
+        signer.expect_address().returning(|| {
+            Box::pin(ready(Ok(crate::models::Address::Stellar(
+                "test-signer-address".to_string(),
+            ))))
+        });
+
+        let args = create_soroswap_swap_args(relayer_address);
+        let envelope =
+            create_soroswap_invoke_envelope(relayer_address, "swap_exact_tokens_for_tokens", args);
+        let stellar_data = create_stellar_data_with_invoke(relayer_address, &envelope);
+
+        let dex_service = MockStellarDexServiceTrait::new();
+        let result = process_unsigned_xdr(
+            &counter,
+            relayer_id,
+            relayer_address,
+            stellar_data,
+            &provider,
+            &signer,
+            None,
+            &dex_service,
+        )
+        .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::SimulationFailed(msg) => {
+                assert!(msg.contains("Simulation failed"));
+            }
+            other => panic!("Expected SimulationFailed, got: {:?}", other),
+        }
     }
 }
 
@@ -1274,11 +1924,10 @@ mod xdr_transaction_tests {
             // The StellarValidationError formats differently - check for the expected/actual pattern
             assert!(
                 msg.contains("does not match relayer account"),
-                "Error message was: {}",
-                msg
+                "Error message was: {msg}"
             );
         } else {
-            panic!("Expected ValidationError, got {:?}", result);
+            panic!("Expected ValidationError, got {result:?}");
         }
     }
 
@@ -1412,8 +2061,7 @@ mod xdr_transaction_tests {
         let result = handler.prepare_transaction_impl(tx).await;
         assert!(
             result.is_ok(),
-            "Expected successful preparation, got: {:?}",
-            result
+            "Expected successful preparation, got: {result:?}"
         );
     }
 
@@ -1464,7 +2112,7 @@ mod xdr_transaction_tests {
                 assert!(msg.contains("not supported via unsigned_xdr path"));
                 assert!(msg.contains("fee_bump"));
             }
-            other => panic!("Expected ValidationError, got: {:?}", other),
+            other => panic!("Expected ValidationError, got: {other:?}"),
         }
     }
 

@@ -390,7 +390,7 @@ mod tests {
 
         for (relayer_count, expected_init_count) in test_cases {
             let relayers: Vec<RelayerRepoModel> = (0..relayer_count)
-                .map(|i| create_mock_relayer(format!("relayer-{}", i), false))
+                .map(|i| create_mock_relayer(format!("relayer-{i}"), false))
                 .collect();
 
             let ids = get_relayer_ids_to_initialize(&relayers);
@@ -398,9 +398,7 @@ mod tests {
             assert_eq!(
                 ids.len(),
                 expected_init_count,
-                "Should create {} initializations for {} relayers",
-                expected_init_count,
-                relayer_count
+                "Should create {expected_init_count} initializations for {relayer_count} relayers"
             );
         }
     }

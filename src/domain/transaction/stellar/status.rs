@@ -3,14 +3,21 @@
 //! ensuring proper transaction state management and lane cleanup.
 
 use chrono::{DateTime, Utc};
-use soroban_rs::xdr::{Error, Hash, Limits, WriteXdr};
+use soroban_rs::xdr::{
+    Error, Hash, InnerTransactionResultResult, InvokeHostFunctionResult, Limits, OperationResult,
+    OperationResultTr, TransactionEnvelope, TransactionResultResult, WriteXdr,
+};
 use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
-use crate::constants::{get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout};
+use crate::constants::{
+    get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout,
+    STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS, STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+};
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
-use crate::domain::transaction::stellar::utils::extract_return_value_from_meta;
-use crate::domain::transaction::stellar::utils::extract_time_bounds;
+use crate::domain::transaction::stellar::utils::{
+    compute_resubmit_backoff_interval, extract_return_value_from_meta, extract_time_bounds,
+};
 use crate::domain::transaction::util::{get_age_since_created, get_age_since_sent_or_created};
 use crate::domain::xdr_utils::parse_transaction_xdr;
 use crate::{
@@ -21,7 +28,10 @@ use crate::{
         TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
-    services::{provider::StellarProviderTrait, signer::Signer},
+    services::{
+        provider::StellarProviderTrait,
+        signer::{Signer, StellarSignTrait},
+    },
 };
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
@@ -29,7 +39,7 @@ where
     R: Repository<RelayerRepoModel, String> + Send + Sync,
     T: TransactionRepository + Send + Sync,
     J: JobProducerTrait + Send + Sync,
-    S: Signer + Send + Sync,
+    S: Signer + StellarSignTrait + Send + Sync,
     P: StellarProviderTrait + Send + Sync,
     C: TransactionCounterTrait + Send + Sync,
     D: crate::services::stellar_dex::StellarDexServiceTrait + Send + Sync + 'static,
@@ -46,11 +56,21 @@ where
         tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(tx_id = %tx.id, status = ?tx.status, "handling transaction status");
+        debug!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            status = ?tx.status,
+            "handling transaction status"
+        );
 
         // Early exit for final states - no need to check
         if is_final_state(&tx.status) {
-            info!(tx_id = %tx.id, status = ?tx.status, "transaction in final state, skipping status check");
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                status = ?tx.status,
+                "transaction in final state, skipping status check"
+            );
             return Ok(tx);
         }
 
@@ -122,52 +142,15 @@ where
     }
 
     /// Core status checking logic - pure business logic without error handling concerns.
+    /// Dispatches to the appropriate handler based on internal transaction status.
     async fn status_core(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        // Early exits for unsubmitted transactions - they don't have on-chain hashes yet
-        // The submit handler will schedule status checks after submission
-        if tx.status == TransactionStatus::Pending {
-            return self.handle_pending_state(tx).await;
-        }
-
-        if tx.status == TransactionStatus::Sent {
-            return self.handle_sent_state(tx).await;
-        }
-
-        let stellar_hash = match self.parse_and_validate_hash(&tx) {
-            Ok(hash) => hash,
-            Err(e) => {
-                // Transaction should be in Submitted or later state
-                // If hash is missing, this is a database inconsistency that won't fix itself
-                warn!(
-                    tx_id = %tx.id,
-                    status = ?tx.status,
-                    error = ?e,
-                    "failed to parse and validate hash for submitted transaction"
-                );
-                return self
-                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
-                    .await;
-            }
-        };
-
-        let provider_response = match self.provider().get_transaction(&stellar_hash).await {
-            Ok(response) => response,
-            Err(e) => {
-                warn!(error = ?e, "provider get_transaction failed");
-                return Err(TransactionError::from(e));
-            }
-        };
-
-        match provider_response.status.as_str().to_uppercase().as_str() {
-            "SUCCESS" => self.handle_stellar_success(tx, provider_response).await,
-            "FAILED" => self.handle_stellar_failed(tx, provider_response).await,
-            _ => {
-                self.handle_stellar_pending(tx, provider_response.status)
-                    .await
-            }
+        match tx.status {
+            TransactionStatus::Pending => self.handle_pending_state(tx).await,
+            TransactionStatus::Sent => self.handle_sent_state(tx).await,
+            _ => self.handle_submitted_state(tx).await,
         }
     }
 
@@ -242,7 +225,7 @@ where
 
         // Try to enqueue next transaction
         if let Err(e) = self.enqueue_next_pending_transaction(&tx.id).await {
-            warn!(error = %e, "failed to enqueue next pending transaction after expiration");
+            warn!(tx_id = %tx.id, relayer_id = %tx.relayer_id, error = %e, "failed to enqueue next pending transaction after expiration");
         }
 
         Ok(expired_tx)
@@ -339,22 +322,58 @@ where
         tx: TransactionRepoModel,
         provider_response: soroban_rs::stellar_rpc_client::GetTransactionResponse,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let base_reason = "Transaction failed on-chain. Provider status: FAILED.".to_string();
-        let detailed_reason = if let Some(ref tx_result_xdr) = provider_response.result {
-            format!(
-                "{} Specific XDR reason: {}.",
-                base_reason,
-                tx_result_xdr.result.name()
-            )
-        } else {
-            format!("{base_reason} No detailed XDR result available.")
-        };
+        let result_code = provider_response
+            .result
+            .as_ref()
+            .map(|r| r.result.name())
+            .unwrap_or("unknown");
 
-        warn!(reason = %detailed_reason, "stellar transaction failed");
+        // Extract inner failure fields for fee-bump and op-level detail
+        let (inner_result_code, op_result_code, inner_tx_hash, inner_fee_charged) =
+            match provider_response.result.as_ref().map(|r| &r.result) {
+                Some(TransactionResultResult::TxFeeBumpInnerFailed(pair)) => {
+                    let inner = &pair.result.result;
+                    let op = match inner {
+                        InnerTransactionResultResult::TxFailed(ops) => {
+                            first_failing_op(ops.as_slice())
+                        }
+                        _ => None,
+                    };
+                    (
+                        Some(inner.name()),
+                        op,
+                        Some(hex::encode(pair.transaction_hash.0)),
+                        pair.result.fee_charged,
+                    )
+                }
+                Some(TransactionResultResult::TxFailed(ops)) => {
+                    (None, first_failing_op(ops.as_slice()), None, 0)
+                }
+                _ => (None, None, None, 0),
+            };
+
+        let fee_charged = provider_response.result.as_ref().map(|r| r.fee_charged);
+        let fee_bid = provider_response.envelope.as_ref().map(extract_fee_bid);
+
+        warn!(
+            tx_id = %tx.id,
+            result_code,
+            inner_result_code = inner_result_code.unwrap_or("n/a"),
+            op_result_code = op_result_code.unwrap_or("n/a"),
+            inner_tx_hash = inner_tx_hash.as_deref().unwrap_or("n/a"),
+            inner_fee_charged,
+            fee_charged = ?fee_charged,
+            fee_bid = ?fee_bid,
+            "stellar transaction failed"
+        );
+
+        let status_reason = format!(
+            "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: {result_code}."
+        );
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
-            status_reason: Some(detailed_reason),
+            status_reason: Some(status_reason),
             ..Default::default()
         };
 
@@ -496,28 +515,123 @@ where
         }
     }
 
-    /// Handles the logic when a Stellar transaction is still pending or in an unknown state.
-    pub async fn handle_stellar_pending(
+    /// Handles status checking for Submitted transactions (and any other state with a hash).
+    /// Parses the hash, queries the provider, and dispatches to success/failed/pending handlers.
+    /// For non-final on-chain status, checks expiration/max-lifetime and resubmits if needed.
+    async fn handle_submitted_state(
         &self,
         tx: TransactionRepoModel,
-        original_status_str: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        debug!(status = %original_status_str, "stellar transaction status is still pending, will retry check later");
+        let stellar_hash = match self.parse_and_validate_hash(&tx) {
+            Ok(hash) => hash,
+            Err(e) => {
+                // If hash is missing, this is a database inconsistency that won't fix itself
+                warn!(
+                    tx_id = %tx.id,
+                    status = ?tx.status,
+                    error = ?e,
+                    "failed to parse and validate hash for submitted transaction"
+                );
+                return self
+                    .mark_as_failed(tx, format!("Failed to parse and validate hash: {e}"))
+                    .await;
+            }
+        };
 
-        // Check for expiration and max lifetime for Submitted transactions
-        if tx.status == TransactionStatus::Submitted {
-            if let Some(result) = self
-                .check_expiration_and_max_lifetime(
-                    tx.clone(),
-                    "Transaction stuck in Submitted status for too long".to_string(),
-                )
-                .await
-            {
-                return result;
+        let provider_response = match self.provider().get_transaction(&stellar_hash).await {
+            Ok(response) => response,
+            Err(e) => {
+                warn!(error = ?e, "provider get_transaction failed");
+                return Err(TransactionError::from(e));
+            }
+        };
+
+        match provider_response.status.as_str().to_uppercase().as_str() {
+            "SUCCESS" => self.handle_stellar_success(tx, provider_response).await,
+            "FAILED" => self.handle_stellar_failed(tx, provider_response).await,
+            _ => {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    status = %provider_response.status,
+                    "submitted transaction not yet final on-chain, will retry check later"
+                );
+
+                // Check for expiration and max lifetime
+                if let Some(result) = self
+                    .check_expiration_and_max_lifetime(
+                        tx.clone(),
+                        "Transaction stuck in Submitted status for too long".to_string(),
+                    )
+                    .await
+                {
+                    return result;
+                }
+
+                // Resubmit with exponential backoff based on total transaction age.
+                // The backoff interval grows: 10s → 20s → 40s → 80s → 120s (capped).
+                let total_age = get_age_since_created(&tx)?;
+                if let Some(backoff_interval) = compute_resubmit_backoff_interval(
+                    total_age,
+                    STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
+                    STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+                ) {
+                    let age_since_last_submit = get_age_since_sent_or_created(&tx)?;
+                    if age_since_last_submit > backoff_interval {
+                        info!(
+                            tx_id = %tx.id,
+                            relayer_id = %tx.relayer_id,
+                            total_age_seconds = total_age.num_seconds(),
+                            since_last_submit_seconds = age_since_last_submit.num_seconds(),
+                            backoff_interval_seconds = backoff_interval.num_seconds(),
+                            "resubmitting Submitted transaction to ensure mempool inclusion"
+                        );
+                        send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+                    }
+                }
+
+                Ok(tx)
             }
         }
+    }
+}
 
-        Ok(tx)
+/// Extracts the fee bid from a transaction envelope.
+///
+/// For fee-bump transactions, returns the outer bump fee (the max the submitter was
+/// willing to pay). For regular V1 transactions, returns the `fee` field.
+fn extract_fee_bid(envelope: &TransactionEnvelope) -> i64 {
+    match envelope {
+        TransactionEnvelope::TxFeeBump(fb) => fb.tx.fee,
+        TransactionEnvelope::Tx(v1) => v1.tx.fee as i64,
+        TransactionEnvelope::TxV0(v0) => v0.tx.fee as i64,
+    }
+}
+
+/// Returns the `.name()` of the first failing operation in the results.
+///
+/// Scans left-to-right since earlier operations may show success while a later
+/// one carries the actual failure code. Returns `None` if no failure is found.
+fn first_failing_op(ops: &[OperationResult]) -> Option<&'static str> {
+    let op = ops.iter().find(|op| match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => {
+                !matches!(r, InvokeHostFunctionResult::Success(_))
+            }
+            OperationResultTr::ExtendFootprintTtl(r) => r.name() != "Success",
+            OperationResultTr::RestoreFootprint(r) => r.name() != "Success",
+            _ => false,
+        },
+        _ => true,
+    })?;
+    match op {
+        OperationResult::OpInner(tr) => match tr {
+            OperationResultTr::InvokeHostFunction(r) => Some(r.name()),
+            OperationResultTr::ExtendFootprintTtl(r) => Some(r.name()),
+            OperationResultTr::RestoreFootprint(r) => Some(r.name()),
+            _ => Some(tr.name()),
+        },
+        _ => Some(op.name()),
     }
 }
 
@@ -742,6 +856,13 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .never();
 
+            // Submitted tx older than resubmit timeout triggers resubmission
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let original_tx_clone = tx_to_handle.clone();
 
@@ -865,7 +986,7 @@ mod tests {
             assert!(handled_tx.status_reason.is_some());
             assert_eq!(
                 handled_tx.status_reason.unwrap(),
-                "Transaction failed on-chain. Provider status: FAILED. No detailed XDR result available."
+                "Transaction failed on-chain. Provider status: FAILED. Specific XDR reason: unknown."
             );
         }
 
@@ -1977,6 +2098,306 @@ mod tests {
                 .unwrap()
                 .contains("expired"));
         }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_resubmits_after_timeout() {
+            // Transaction created 11s ago, sent_at also 11s ago → exceeds base interval (10s)
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            let eleven_seconds_ago = (Utc::now() - Duration::seconds(11)).to_rfc3339();
+            tx.created_at = eleven_seconds_ago.clone();
+            tx.sent_at = Some(eleven_seconds_ago);
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [8u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status (not SUCCESS or FAILED)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should resubmit the transaction
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_backoff_increases_interval() {
+            // Transaction created 25s ago but sent_at only 15s ago.
+            // At total_age=25s, backoff interval = 20s (base*2^1, since 25/10=2, log2(2)=1).
+            // age_since_last_submit=15s < 20s → should NOT resubmit yet.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-backoff".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(15)).to_rfc3339());
+            let tx_hash_bytes = [11u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit (15s < 20s backoff interval)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_backoff_resubmits_when_interval_exceeded() {
+            // Transaction created 25s ago, sent_at 21s ago.
+            // At total_age=25s, backoff interval = 20s (base*2^1).
+            // age_since_last_submit=21s > 20s → should resubmit.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-backoff-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(21)).to_rfc3339());
+            let tx_hash_bytes = [12u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should resubmit (21s > 20s backoff interval)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_recent_sent_at_prevents_resubmit() {
+            // Transaction created 60s ago (old), but sent_at only 5s ago (recent resubmission).
+            // At total_age=60s, backoff interval = 40s (base*2^2, since 60/10=6, log2(6)≈2).
+            // age_since_last_submit=5s < 40s → should NOT resubmit.
+            // This verifies that sent_at being updated on resubmission correctly resets the clock.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-recent-sent".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::seconds(60)).to_rfc3339();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(5)).to_rfc3339());
+            let tx_hash_bytes = [13u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit (sent_at is recent despite old created_at)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_no_resubmit_before_timeout() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-young".to_string();
+            tx.status = TransactionStatus::Submitted;
+            // Created just now - below resubmit timeout
+            tx.created_at = Utc::now().to_rfc3339();
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [9u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status (not SUCCESS or FAILED)
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should NOT resubmit
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let tx_result = result.unwrap();
+            assert_eq!(tx_result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn test_handle_submitted_state_expired_before_resubmit() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-submitted-expired-no-resubmit".to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+            // Set valid_until to a past time (expired)
+            tx.valid_until = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+            // Set a hash so it can query provider
+            let tx_hash_bytes = [10u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Mock provider to return PENDING status
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash.clone()))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
+                });
+
+            // Should mark as Expired, NOT resubmit
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_id, update| update.status == Some(TransactionStatus::Expired))
+                .times(1)
+                .returning(|id, update| {
+                    let mut updated = create_test_transaction("test");
+                    updated.id = id;
+                    updated.status = update.status.unwrap();
+                    updated.status_reason = update.status_reason.clone();
+                    Ok(updated)
+                });
+
+            // Should NOT resubmit
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            // Notification for expiration
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Try to enqueue next pending
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok());
+            let expired_tx = result.unwrap();
+            assert_eq!(expired_tx.status, TransactionStatus::Expired);
+            assert!(expired_tx
+                .status_reason
+                .as_ref()
+                .unwrap()
+                .contains("expired"));
+        }
     }
 
     mod is_valid_until_expired_tests {
@@ -1987,8 +2408,7 @@ mod tests {
                 MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository,
             },
             services::{
-                provider::MockStellarProviderTrait, signer::MockSigner,
-                stellar_dex::MockStellarDexServiceTrait,
+                provider::MockStellarProviderTrait, stellar_dex::MockStellarDexServiceTrait,
             },
         };
         use chrono::{Duration, Utc};
@@ -1998,7 +2418,7 @@ mod tests {
             MockRelayerRepository,
             MockTransactionRepository,
             MockJobProducerTrait,
-            MockSigner,
+            MockStellarCombinedSigner,
             MockStellarProviderTrait,
             MockTransactionCounterTrait,
             MockStellarDexServiceTrait,
@@ -2380,6 +2800,62 @@ mod tests {
             assert!(result.is_ok());
             let tx = result.unwrap();
             assert_eq!(tx.status, TransactionStatus::Confirmed);
+        }
+    }
+
+    mod failure_detail_helper_tests {
+        use super::*;
+        use soroban_rs::xdr::{InvokeHostFunctionResult, OperationResult, OperationResultTr, VecM};
+
+        #[test]
+        fn first_failing_op_finds_trapped() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Trapped),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("Trapped"));
+        }
+
+        #[test]
+        fn first_failing_op_skips_success() {
+            let ops: VecM<OperationResult> = vec![
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::Success(soroban_rs::xdr::Hash([0u8; 32])),
+                )),
+                OperationResult::OpInner(OperationResultTr::InvokeHostFunction(
+                    InvokeHostFunctionResult::ResourceLimitExceeded,
+                )),
+            ]
+            .try_into()
+            .unwrap();
+            assert_eq!(
+                first_failing_op(ops.as_slice()),
+                Some("ResourceLimitExceeded")
+            );
+        }
+
+        #[test]
+        fn first_failing_op_all_success_returns_none() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpInner(
+                OperationResultTr::InvokeHostFunction(InvokeHostFunctionResult::Success(
+                    soroban_rs::xdr::Hash([0u8; 32]),
+                )),
+            )]
+            .try_into()
+            .unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), None);
+        }
+
+        #[test]
+        fn first_failing_op_empty_returns_none() {
+            assert_eq!(first_failing_op(&[]), None);
+        }
+
+        #[test]
+        fn first_failing_op_op_bad_auth() {
+            let ops: VecM<OperationResult> = vec![OperationResult::OpBadAuth].try_into().unwrap();
+            assert_eq!(first_failing_op(ops.as_slice()), Some("OpBadAuth"));
         }
     }
 }

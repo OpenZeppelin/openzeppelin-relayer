@@ -104,8 +104,7 @@ pub fn create_solana_network(network: &str) -> SolanaNetworkConfig {
             network: network.to_string(),
             from: None,
             rpc_urls: Some(vec![RpcConfig::new(format!(
-                "https://api.{}.solana.com",
-                network
+                "https://api.{network}.solana.com"
             ))]),
             explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(400),
@@ -123,8 +122,7 @@ pub fn create_solana_network_with_parent(network: &str, parent: &str) -> SolanaN
             network: network.to_string(),
             from: Some(parent.to_string()),
             rpc_urls: Some(vec![RpcConfig::new(format!(
-                "https://api.{}.solana.com",
-                network
+                "https://api.{network}.solana.com"
             ))]), // Override parent's RPC URLs
             explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(500), // Override parent's blocktime
@@ -142,8 +140,7 @@ pub fn create_stellar_network(network: &str) -> StellarNetworkConfig {
             network: network.to_string(),
             from: None,
             rpc_urls: Some(vec![RpcConfig::new(format!(
-                "https://horizon.{}.stellar.org",
-                network
+                "https://horizon.{network}.stellar.org"
             ))]),
             explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(5000),
@@ -151,7 +148,7 @@ pub fn create_stellar_network(network: &str) -> StellarNetworkConfig {
             tags: Some(vec!["stellar".to_string()]),
         },
         passphrase: Some("Test Network ; September 2015".to_string()),
-        horizon_url: Some(format!("https://horizon.{}.stellar.org", network)),
+        horizon_url: Some(format!("https://horizon.{network}.stellar.org")),
     }
 }
 
@@ -163,8 +160,7 @@ pub fn create_stellar_network_with_parent(network: &str, parent: &str) -> Stella
             network: network.to_string(),
             from: Some(parent.to_string()),
             rpc_urls: Some(vec![RpcConfig::new(format!(
-                "https://horizon.{}.stellar.org",
-                network
+                "https://horizon.{network}.stellar.org"
             ))]), // Override parent's RPC URLs
             explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
             average_blocktime_ms: Some(6000), // Override parent's blocktime
@@ -218,7 +214,7 @@ pub fn create_stellar_network_wrapped(network: &str) -> NetworkFileConfig {
 pub fn create_temp_file(dir: &TempDir, file_name: &str, content: &str) {
     let file_path = dir.path().join(file_name);
     let mut file = File::create(file_path).expect("Failed to create temp file");
-    write!(file, "{}", content).expect("Failed to write to temp file");
+    write!(file, "{content}").expect("Failed to write to temp file");
 }
 
 /// Creates a valid EVM network JSON for testing file loading.

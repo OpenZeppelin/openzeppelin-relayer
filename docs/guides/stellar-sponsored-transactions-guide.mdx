@@ -70,10 +70,12 @@ First, configure a Stellar relayer in your `config.json`:
 ### 2. Policy Configuration Explained
 
 #### `fee_payment_strategy`
+
 - **`relayer`**: Relayer pays all network fees. Users pay fees in tokens.
 - **`user`**: User must include fee payment in the transaction.
 
 #### `allowed_tokens`
+
 List of tokens that can be used for fee payment. Each token can have:
 
 - **`asset`**: Asset identifier in format `"native"` or `"CODE:ISSUER"` (e.g., `"USDC:GA5Z..."`)
@@ -85,6 +87,7 @@ List of tokens that can be used for fee payment. Each token can have:
   - `retain_min_amount`: Minimum amount to retain after swap
 
 #### `swap_config` (Global)
+
 Configuration for converting collected tokens back to XLM:
 
 - **`strategies`**: DEX strategies to use (currently supports `order-book`)
@@ -92,9 +95,11 @@ Configuration for converting collected tokens back to XLM:
 - **`min_balance_threshold`**: Minimum XLM balance (in stroops) before triggering swaps
 
 #### `slippage_percentage`
+
 Default slippage tolerance for token conversions (default: 1.0%)
 
 #### `fee_margin_percentage`
+
 Additional fee margin added to estimated fees to account for price fluctuations (default: 10.0%)
 
 ### 3. Enabling Trustlines
@@ -102,7 +107,6 @@ Additional fee margin added to estimated fees to account for price fluctuations 
 Before users can pay fees in tokens, the relayer account must establish trustlines to those tokens. This is a one-time setup per token.
 
 For a complete example of how to create trustlines, see the [Relayer SDK example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayer/stellar/sponsored/create-trustline.ts).
-
 
 ## Using the API
 
@@ -226,7 +230,7 @@ If the user's address is connected with another relayer configured in **relayer 
 
 **Endpoint:** `POST /api/v1/relayers/{relayer_id}/sign-transaction`
 
-```
+````
 
 #### Option 3: Custom Signing Solution
 
@@ -251,7 +255,7 @@ Submit the signed transaction to the relayer. The relayer will:
   "network": "testnet",
   "fee_bump": true
 }
-```
+````
 
 **Response:**
 
@@ -304,6 +308,7 @@ When building transactions from operations, use the following format:
 ```
 
 Supported operation types:
+
 - `payment`: Standard payment operation
 - `createAccount`: Account creation
 - `changeTrust`: Trustline management
@@ -331,7 +336,6 @@ Supported operation types:
 - `extendFootprintTtl`: Extend footprint TTL
 - `restoreFootprint`: Restore footprint
 
-
 ## Best Practices
 
 1. **Always Quote First**: Get a fee quote before building to show users the expected cost
@@ -341,6 +345,287 @@ Supported operation types:
 5. **Set Appropriate Limits**: Configure `max_allowed_fee` to prevent excessive fees
 6. **Use Fee Margins**: The `fee_margin_percentage` helps account for price fluctuations
 7. **Monitor Trustlines**: Ensure trustlines are established before users attempt transactions
+
+## Soroban Gas Abstraction
+
+### Overview
+
+Soroban Gas Abstraction extends the sponsored transaction concept to Soroban smart contracts. Instead of requiring users to hold XLM for contract invocation fees, users can pay in any Soroban token (e.g., a USDC Soroban token contract). This is powered by a **FeeForwarder smart contract** that wraps the user's contract call with fee collection logic.
+
+**How it differs from Classic Stellar Sponsored Transactions:**
+
+| Aspect               | Classic Stellar                                 | Soroban Gas Abstraction                                  |
+| -------------------- | ----------------------------------------------- | -------------------------------------------------------- |
+| **Transaction type** | Classic operations (payments, trustlines, etc.) | Soroban `InvokeHostFunction` operations                  |
+| **Fee mechanism**    | Fee-bump transaction wrapper                    | FeeForwarder smart contract                              |
+| **Fee token format** | Credit assets (`CODE:ISSUER`)                   | Soroban token contracts (`C...` address)                 |
+| **Authorization**    | Standard transaction signing                    | User signs a `SorobanAuthorizationEntry`                 |
+| **Submission**       | Relayer wraps in fee-bump envelope              | Relayer injects signed auth entries and submits directly |
+
+### Prerequisites
+
+- A running OpenZeppelin Relayer instance
+- A Stellar relayer configured with `"fee_payment_strategy": "user"`
+- A deployed **FeeForwarder contract** on the target network. [Check the OpenZeppelin contract here](https://github.com/OpenZeppelin/stellar-contracts/tree/main/packages/fee-abstraction)
+- The `STELLAR_TESTNET_FEE_FORWARDER_ADDRESS` or `STELLAR_MAINNET_FEE_FORWARDER_ADDRESS` environment variable set to the FeeForwarder contract address
+- Allowed tokens configured with Soroban token contract addresses (`C...` format)
+- Sufficient XLM balance in the relayer account for network fees
+
+### Configuration
+
+Configure the relayer with Soroban token contracts in the `allowed_tokens` list. Note that Soroban tokens use contract addresses (`C...` format) rather than the `CODE:ISSUER` format used for classic Stellar assets.
+
+```json
+{
+  "relayers": [
+    {
+      "id": "stellar-soroban-gas",
+      "name": "Stellar Soroban Gas Abstraction",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "stellar",
+      "policies": {
+        "fee_payment_strategy": "user",
+        "fee_margin_percentage": 5,
+        "allowed_tokens": [
+          {
+            "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+            "max_allowed_fee": 1000000000,
+            "swap_config": {
+              "slippage_percentage": 0.5,
+              "min_amount": 10000000,
+              "max_amount": 1000000000,
+              "retain_min_amount": 10000000
+            }
+          }
+        ],
+        "swap_config": {
+          "strategies": ["soroswap"],
+          "cron_schedule": "0 */6 * * *",
+          "min_balance_threshold": 50000000
+        }
+      }
+    }
+  ]
+}
+```
+
+Set the required environment variables:
+
+<Callout>
+  For testnet, you must provide all environment variables. For mainnet, the code
+  already contains default addresses, but you can override them using
+  environment variables.
+</Callout>
+
+```bash
+# Stellar FeeForwarder Contract Addresses
+# STELLAR_MAINNET_FEE_FORWARDER_ADDRESS=
+STELLAR_TESTNET_FEE_FORWARDER_ADDRESS=
+
+# Stellar Soroswap Router Contract Addresses
+STELLAR_MAINNET_SOROSWAP_ROUTER_ADDRESS=
+STELLAR_TESTNET_SOROSWAP_ROUTER_ADDRESS=
+
+# Stellar Soroswap Factory Contract Addresses
+STELLAR_MAINNET_SOROSWAP_FACTORY_ADDRESS=
+STELLAR_TESTNET_SOROSWAP_FACTORY_ADDRESS=
+
+# Stellar Soroswap Native Wrapper (XLM) Contract Addresses
+STELLAR_MAINNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS=
+STELLAR_TESTNET_SOROSWAP_NATIVE_WRAPPER_ADDRESS=
+```
+
+### Using the API
+
+The Soroban gas abstraction flow uses the same endpoints as classic sponsored transactions but with key differences in the request/response payloads and an additional authorization signing step.
+
+#### Step 1: Get Fee Quote
+
+Estimate the fee for a Soroban contract invocation in your preferred token.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/quote`
+
+**Request Body:**
+
+The `transaction_xdr` should contain the Soroban `InvokeHostFunction` operation, and the `fee_token` should be a Soroban token contract address (`C...` format).
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+}
+```
+
+**Response:**
+
+The response includes `max_fee_in_token` and `max_fee_in_token_ui` fields that account for slippage buffer. These represent the maximum amount the user authorizes.
+
+```json
+{
+  "success": true,
+  "data": {
+    "fee_in_token_ui": "1.5",
+    "fee_in_token": "15000000",
+    "conversion_rate": "0.15",
+    "max_fee_in_token": "15750000",
+    "max_fee_in_token_ui": "1.575"
+  }
+}
+```
+
+#### Step 2: Build Sponsored Transaction
+
+Prepare a Soroban transaction that wraps your contract call with the FeeForwarder contract.
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions/sponsored/build`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "fee_token": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+}
+```
+
+**Response:**
+
+The response includes a `user_auth_entry` field containing the Soroban authorization entry that the user must sign. This authorization entry authorizes the FeeForwarder contract to collect fees in the specified token on the user's behalf.
+
+```json
+{
+  "success": true,
+  "data": {
+    "transaction": "AAAAAgAAAAD...",
+    "fee_in_token_ui": "1.5",
+    "fee_in_token": "15000000",
+    "fee_in_stroops": "100000",
+    "fee_token": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "valid_until": "2024-01-01T00:01:00Z",
+    "user_auth_entry": "AAAABgAAAAA...",
+    "max_fee_in_token": "15750000",
+    "max_fee_in_token_ui": "1.575"
+  }
+}
+```
+
+#### Step 3: Sign the Authorization Entry
+
+Unlike classic sponsored transactions where the user signs the full transaction XDR, for Soroban gas abstraction the user must sign the **`user_auth_entry`** returned from the Build response. This is a `SorobanAuthorizationEntry` XDR that authorizes:
+
+1. The FeeForwarder contract to transfer fee tokens from the user to the relayer
+2. The user's original contract invocation (wrapped inside the FeeForwarder call)
+
+The signing method depends on your setup:
+
+- **Programmatic signing**: Use the Stellar SDK to sign the authorization entry with the user's private key
+- **Wallet signing**: Use a Soroban-compatible wallet that supports signing authorization entries
+- **CLI helper tool**: A ready-to-use signing tool is provided in the repository at `helpers/sign_soroban_auth_entry.rs`
+
+##### Using the CLI Helper Tool
+
+The repository includes a helper tool that signs Soroban authorization entries directly from the command line. This is useful for testing and development:
+
+```bash
+cargo run --example sign_soroban_auth_entry -- \
+  --secret-key "S..." \
+  --auth-entry "<base64 XDR from build response>" \
+  --network testnet
+```
+
+To generate the full JSON payload ready for the `/transactions` endpoint, include the `--transaction-xdr` flag:
+
+```bash
+cargo run --example sign_soroban_auth_entry -- \
+  --secret-key "S..." \
+  --auth-entry "<base64 XDR from build response>" \
+  --network testnet \
+  --transaction-xdr "<transaction XDR from build response>"
+```
+
+This outputs a JSON object with `network`, `transaction_xdr`, and `signed_auth_entry` fields that can be sent directly to the Submit endpoint.
+
+For complete code examples of signing authorization entries and testing the full gas abstraction flow (quote, build, sign, and send), see the [Relayer SDK examples](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/stellar/src/soroban). The example demonstrates the end-to-end flow including fee estimation, transaction building, authorization signing, and submission.
+
+#### Step 4: Submit to Relayer
+
+Submit the transaction XDR from the Build response along with the user's **signed authorization entry**. The relayer will:
+
+1. Inject the user's signed authorization entry into the transaction
+2. Add the relayer's own authorization entry (as the transaction source account)
+3. Re-simulate the transaction with the signed auth entries for accurate resource calculation
+4. Apply a resource buffer (15% safety margin) to prevent execution failures
+5. Sign the transaction with the relayer's key
+6. Submit it to the Stellar network
+
+**Endpoint:** `POST /api/v1/relayers/{relayer_id}/transactions`
+
+**Request Body:**
+
+```json
+{
+  "transaction_xdr": "AAAAAgAAAAD...",
+  "network": "testnet",
+  "signed_auth_entry": "AAAABgAAAAA..."
+}
+```
+
+> **Note:** The `signed_auth_entry` field is used instead of `fee_bump` for Soroban gas abstraction. These two fields are mutually exclusive.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "tx-123456",
+    "status": "pending",
+    "network_data": {
+      "signature": "abc123...",
+      "transaction": "AAAAAgAAAAD..."
+    }
+  }
+}
+```
+
+### Fee Token Format
+
+For Soroban gas abstraction, fee tokens are specified using Soroban contract addresses:
+
+- **Soroban token**: `"C..."` (e.g., `"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"`)
+
+This differs from classic sponsored transactions which use the `"CODE:ISSUER"` format. The relayer automatically detects whether to use the classic or Soroban flow based on the `fee_token` format and the presence of `InvokeHostFunction` operations in the transaction XDR.
+
+### How the FeeForwarder Contract Works
+
+The FeeForwarder contract acts as a proxy that:
+
+1. **Collects the fee**: Transfers the fee token amount from the user to the relayer
+2. **Executes the user's call**: Invokes the target contract function on behalf of the user
+3. **Manages authorization**: Bundles fee approval and contract invocation into a single authorization entry
+
+The contract's `forward()` function takes these parameters:
+
+- `fee_token` - Soroban token contract address for fee payment
+- `fee_amount` - Actual fee to charge
+- `max_fee_amount` - Maximum fee authorized by the user (includes slippage buffer)
+- `expiration_ledger` - Ledger number when the authorization expires
+- `target_contract` - The contract the user wants to invoke
+- `target_fn` - The function name to call
+- `target_args` - The function arguments
+- `user` - The user's account address
+- `relayer` - The relayer's account address (fee recipient)
+
+### Best Practices for Soroban Gas Abstraction
+
+1. **Use the Quote endpoint first**: Always get a fee estimate before building to show users the expected cost, including the max fee with slippage
+2. **Handle authorization expiration**: Authorization entries expire at a specific ledger. Rebuild if the authorization has expired
+3. **Validate token contract addresses**: Ensure fee tokens use valid Soroban contract addresses (`C...` format, 56 characters)
+4. **Monitor resource fees**: Soroban transactions have dynamic resource fees based on CPU instructions, storage reads/writes, and ledger entry access. The relayer applies a 15% buffer, but complex contract calls may need higher limits
+5. **Set appropriate max fees**: Configure `max_allowed_fee` per token to prevent excessive fees during network congestion
+6. **Configure the FeeForwarder address**: Ensure the correct FeeForwarder contract address is set via environment variables for each network
 
 ## Additional Resources
 

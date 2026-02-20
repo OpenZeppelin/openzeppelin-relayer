@@ -1,5 +1,9 @@
 #[cfg(test)]
 use crate::domain::transaction::stellar::StellarRelayerTransaction;
+#[cfg(test)]
+use crate::models::SignerError;
+#[cfg(test)]
+use crate::services::signer::{MockStellarSignTrait, Signer, StellarSignTrait};
 use crate::{
     jobs::MockJobProducerTrait,
     models::{
@@ -8,11 +12,10 @@ use crate::{
         TransactionRepoModel, TransactionStatus,
     },
     repositories::{MockRelayerRepository, MockTransactionCounterTrait, MockTransactionRepository},
-    services::{
-        provider::MockStellarProviderTrait, signer::MockSigner,
-        stellar_dex::MockStellarDexServiceTrait,
-    },
+    services::{provider::MockStellarProviderTrait, stellar_dex::MockStellarDexServiceTrait},
 };
+#[cfg(test)]
+use async_trait::async_trait;
 use chrono::Utc;
 use soroban_rs::xdr::{
     AccountId, Asset, BytesM, Limits, Memo, MuxedAccount, Operation, OperationBody, PaymentOp,
@@ -266,6 +269,80 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         is_canceled: Some(false),
         status_reason: None,
         delete_at: None,
+        metadata: None,
+    }
+}
+
+/// A combined mock signer that implements both `Signer` and `StellarSignTrait`
+///
+/// This struct wraps both `MockSigner` and `MockStellarSignTrait` to allow tests
+/// to set expectations on both the base `Signer` trait methods (via `signer_mock`)
+/// and the Stellar-specific methods (via `stellar_mock`).
+#[cfg(test)]
+pub struct MockStellarCombinedSigner {
+    pub signer_mock: crate::services::signer::MockSigner,
+    pub stellar_mock: MockStellarSignTrait,
+}
+
+#[cfg(test)]
+impl MockStellarCombinedSigner {
+    pub fn new() -> Self {
+        Self {
+            signer_mock: crate::services::signer::MockSigner::new(),
+            stellar_mock: MockStellarSignTrait::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Default for MockStellarCombinedSigner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for MockStellarCombinedSigner {
+    type Target = crate::services::signer::MockSigner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.signer_mock
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for MockStellarCombinedSigner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.signer_mock
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl Signer for MockStellarCombinedSigner {
+    async fn address(&self) -> Result<crate::models::Address, SignerError> {
+        self.signer_mock.address().await
+    }
+
+    async fn sign_transaction(
+        &self,
+        transaction: NetworkTransactionData,
+    ) -> Result<crate::domain::SignTransactionResponse, SignerError> {
+        self.signer_mock.sign_transaction(transaction).await
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl StellarSignTrait for MockStellarCombinedSigner {
+    async fn sign_xdr_transaction(
+        &self,
+        unsigned_xdr: &str,
+        network_passphrase: &str,
+    ) -> Result<crate::domain::SignXdrTransactionResponseStellar, SignerError> {
+        self.stellar_mock
+            .sign_xdr_transaction(unsigned_xdr, network_passphrase)
+            .await
     }
 }
 
@@ -274,7 +351,7 @@ pub struct TestMocks {
     pub relayer_repo: MockRelayerRepository,
     pub tx_repo: MockTransactionRepository,
     pub job_producer: MockJobProducerTrait,
-    pub signer: MockSigner,
+    pub signer: MockStellarCombinedSigner,
     pub counter: MockTransactionCounterTrait,
     pub dex_service: MockStellarDexServiceTrait,
 }
@@ -285,7 +362,7 @@ pub fn default_test_mocks() -> TestMocks {
         relayer_repo: MockRelayerRepository::new(),
         tx_repo: MockTransactionRepository::new(),
         job_producer: MockJobProducerTrait::new(),
-        signer: MockSigner::new(),
+        signer: MockStellarCombinedSigner::new(),
         counter: MockTransactionCounterTrait::new(),
         dex_service: MockStellarDexServiceTrait::new(),
     }
@@ -299,7 +376,7 @@ pub fn make_stellar_tx_handler(
     MockRelayerRepository,
     MockTransactionRepository,
     MockJobProducerTrait,
-    MockSigner,
+    MockStellarCombinedSigner,
     MockStellarProviderTrait,
     MockTransactionCounterTrait,
     MockStellarDexServiceTrait,

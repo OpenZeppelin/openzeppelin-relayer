@@ -979,7 +979,7 @@ mod tests {
         // Format the errors using the helper function
         let formatted = format_validation_errors(&errors);
 
-        println!("formatted: {}", formatted);
+        println!("formatted: {formatted}");
 
         // Check that messages from nested fields are correctly formatted
         assert!(formatted.contains("client_id: Client ID cannot be empty"));

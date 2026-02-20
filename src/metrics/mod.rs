@@ -128,6 +128,84 @@ lazy_static! {
         REGISTRY.register(Box::new(gauge.clone())).unwrap();
         gauge
     };
+
+    // Counter for successful transactions (Confirmed status).
+    pub static ref TRANSACTIONS_SUCCESS: CounterVec = {
+        let opts = Opts::new("transactions_success_total", "Total number of successful transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for failed transactions (Failed, Expired, Canceled statuses).
+    pub static ref TRANSACTIONS_FAILED: CounterVec = {
+        let opts = Opts::new("transactions_failed_total", "Total number of failed transactions");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type", "failure_reason"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for RPC failures during API requests (before transaction creation).
+    // This tracks failures that occur during operations like get_status, get_balance, etc.
+    // that happen before a transaction is created.
+    pub static ref API_RPC_FAILURES: CounterVec = {
+        let opts = Opts::new("api_rpc_failures_total", "Total number of RPC failures during API requests (before transaction creation)");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type", "operation_name", "error_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transaction creation (when a transaction is successfully created in the repository).
+    pub static ref TRANSACTIONS_CREATED: CounterVec = {
+        let opts = Opts::new("transactions_created_total", "Total number of transactions created");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transaction submissions (when status changes to Submitted).
+    pub static ref TRANSACTIONS_SUBMITTED: CounterVec = {
+        let opts = Opts::new("transactions_submitted_total", "Total number of transactions submitted to the network");
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Gauge for transaction status distribution (current count of transactions in each status).
+    pub static ref TRANSACTIONS_BY_STATUS: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("transactions_by_status", "Current number of transactions by status"),
+            &["relayer_id", "network_type", "status"]
+        ).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
+    };
+
+    // Histogram for transaction processing times (creation to submission).
+    pub static ref TRANSACTION_PROCESSING_TIME: HistogramVec = {
+        let histogram_opts = HistogramOpts::new("transaction_processing_seconds", "Transaction processing time in seconds")
+            .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]);
+        let histogram_vec = HistogramVec::new(histogram_opts, &["relayer_id", "network_type", "stage"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Histogram for RPC call latency.
+    pub static ref RPC_CALL_LATENCY: HistogramVec = {
+        let histogram_opts = HistogramOpts::new("rpc_call_latency_seconds", "RPC call latency in seconds")
+            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]);
+        let histogram_vec = HistogramVec::new(histogram_opts, &["relayer_id", "network_type", "operation_name"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Counter for plugin calls (tracks requests to /api/v1/plugins/{plugin_id}/call endpoints).
+    pub static ref PLUGIN_CALLS: CounterVec = {
+        let opts = Opts::new("plugin_calls_total", "Total number of plugin calls");
+        let counter_vec = CounterVec::new(opts, &["plugin_id", "method", "status"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.
@@ -364,57 +442,49 @@ mod actix_tests {
         let cpu_usage = CPU_USAGE.get();
         assert!(
             (0.0..=100.0).contains(&cpu_usage),
-            "CPU usage should be between 0-100%, got {}",
-            cpu_usage
+            "CPU usage should be between 0-100%, got {cpu_usage}"
         );
 
         let memory_usage = MEMORY_USAGE.get();
         assert!(
             memory_usage >= 0.0,
-            "Memory usage should be >= 0, got {}",
-            memory_usage
+            "Memory usage should be >= 0, got {memory_usage}"
         );
 
         let memory_percent = MEMORY_USAGE_PERCENT.get();
         assert!(
             (0.0..=100.0).contains(&memory_percent),
-            "Memory usage percentage should be between 0-100%, got {}",
-            memory_percent
+            "Memory usage percentage should be between 0-100%, got {memory_percent}"
         );
 
         let total_memory = TOTAL_MEMORY.get();
         assert!(
             total_memory > 0.0,
-            "Total memory should be > 0, got {}",
-            total_memory
+            "Total memory should be > 0, got {total_memory}"
         );
 
         let available_memory = AVAILABLE_MEMORY.get();
         assert!(
             available_memory >= 0.0,
-            "Available memory should be >= 0, got {}",
-            available_memory
+            "Available memory should be >= 0, got {available_memory}"
         );
 
         let disk_usage = DISK_USAGE.get();
         assert!(
             disk_usage >= 0.0,
-            "Disk usage should be >= 0, got {}",
-            disk_usage
+            "Disk usage should be >= 0, got {disk_usage}"
         );
 
         let disk_percent = DISK_USAGE_PERCENT.get();
         assert!(
             (0.0..=100.0).contains(&disk_percent),
-            "Disk usage percentage should be between 0-100%, got {}",
-            disk_percent
+            "Disk usage percentage should be between 0-100%, got {disk_percent}"
         );
 
         // Verify that memory usage doesn't exceed total memory
         assert!(
             memory_usage <= total_memory,
-            "Memory usage should be <= total memory, got {}",
-            memory_usage
+            "Memory usage should be <= total memory, got {memory_usage}"
         );
 
         // Verify that available memory plus used memory doesn't exceed total memory

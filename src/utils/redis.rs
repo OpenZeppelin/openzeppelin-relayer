@@ -166,49 +166,6 @@ pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<R
     }))
 }
 
-/// Initializes a Redis connection pool using deadpool-redis.
-///
-/// # Arguments
-///
-/// * `config` - The server configuration.
-///
-/// # Returns
-///
-/// A connection pool for Redis connections with health checks and timeouts.
-///
-/// # Features
-///
-/// - Connection pooling with configurable max size
-/// - Automatic health checks and connection recycling
-/// - Timeout for acquiring connections from the pool
-pub async fn initialize_redis_connection(config: &ServerConfig) -> Result<Arc<Pool>> {
-    let cfg = Config::from_url(&config.redis_url);
-
-    let pool = cfg
-        .builder()
-        .map_err(|e| eyre::eyre!("Failed to create Redis pool builder: {}", e))?
-        .max_size(config.redis_pool_max_size)
-        .wait_timeout(Some(Duration::from_millis(config.redis_pool_timeout_ms)))
-        .create_timeout(Some(Duration::from_millis(
-            config.redis_connection_timeout_ms,
-        )))
-        .recycle_timeout(Some(Duration::from_millis(
-            config.redis_connection_timeout_ms,
-        )))
-        .runtime(Runtime::Tokio1)
-        .build()
-        .map_err(|e| eyre::eyre!("Failed to build Redis pool: {}", e))?;
-
-    // Verify the pool is working by getting a connection
-    let conn = pool
-        .get()
-        .await
-        .map_err(|e| eyre::eyre!("Failed to get initial Redis connection: {}", e))?;
-    drop(conn);
-
-    Ok(Arc::new(pool))
-}
-
 /// A distributed lock implementation using Redis SET NX EX pattern.
 ///
 /// This lock is designed for distributed systems where multiple instances
@@ -681,7 +638,7 @@ mod tests {
         // Verify the lock key format: {prefix}:lock:{name}
         let prefix = "myrelayer";
         let lock_name = "transaction_cleanup";
-        let lock_key = format!("{}:lock:{}", prefix, lock_name);
+        let lock_key = format!("{prefix}:lock:{lock_name}");
         assert_eq!(lock_key, "myrelayer:lock:transaction_cleanup");
     }
 
@@ -690,7 +647,7 @@ mod tests {
         // Test with a more realistic prefix
         let prefix = "oz-relayer-prod";
         let lock_name = "transaction_cleanup";
-        let lock_key = format!("{}:lock:{}", prefix, lock_name);
+        let lock_key = format!("{prefix}:lock:{lock_name}");
         assert_eq!(lock_key, "oz-relayer-prod:lock:transaction_cleanup");
     }
 
@@ -766,7 +723,7 @@ mod tests {
             let pool = Arc::new(pool);
 
             let connections = RedisConnections::new_single_pool(pool);
-            let debug_str = format!("{:?}", connections);
+            let debug_str = format!("{connections:?}");
 
             assert!(debug_str.contains("RedisConnections"));
         }
@@ -919,7 +876,7 @@ mod tests {
             // Format: {prefix}:lock:{name}
             let prefix = "test_prefix";
             let lock_name = "cleanup";
-            let lock_key = format!("{}:lock:{}", prefix, lock_name);
+            let lock_key = format!("{prefix}:lock:{lock_name}");
 
             let lock = DistributedLock::new(conn, &lock_key, Duration::from_secs(60));
 
@@ -1021,7 +978,7 @@ mod tests {
                     .ok_or("lock held")?;
 
                 // Simulate early return (error path)
-                return Err("simulated error");
+                Err("simulated error")
 
                 // _guard is dropped here due to early return
             }

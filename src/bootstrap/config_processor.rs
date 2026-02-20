@@ -354,10 +354,12 @@ where
 /// Process a complete configuration file by initializing all repositories.
 ///
 /// This function processes the entire configuration file in the following order:
-/// 1. Process signers
-/// 2. Process notifications
-/// 3. Process networks
-/// 4. Process relayers
+/// 1. Process plugins
+/// 2. Process signers
+/// 3. Process notifications
+/// 4. Process networks
+/// 5. Process relayers
+/// 6. Process API key
 ///
 /// When using Redis storage, this function uses distributed locking to prevent race
 /// conditions when multiple instances start simultaneously (especially with
@@ -1109,7 +1111,7 @@ mod tests {
         use crate::config::network::test_utils::*;
 
         let networks = (0..10)
-            .map(|i| create_evm_network_wrapped(&format!("network-{}", i)))
+            .map(|i| create_evm_network_wrapped(&format!("network-{i}")))
             .collect();
 
         let config = Config {
@@ -1128,11 +1130,10 @@ mod tests {
         assert_eq!(stored_networks.len(), 10);
 
         for i in 0..10 {
-            let expected_name = format!("network-{}", i);
+            let expected_name = format!("network-{i}");
             assert!(
                 stored_networks.iter().any(|n| n.name == expected_name),
-                "Network {} not found",
-                expected_name
+                "Network {expected_name} not found"
             );
         }
 

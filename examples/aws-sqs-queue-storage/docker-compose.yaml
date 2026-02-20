@@ -1,0 +1,102 @@
+---
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: sqs
+      DISTRIBUTED_MODE: 'false'
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: '000000000000'
+      SQS_QUEUE_URL_PREFIX: http://localstack:4566/000000000000/relayer-
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ENDPOINT_URL_SQS: http://localstack:4566
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+      sqs-init:
+        condition: service_completed_successfully
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - awslocal sqs list-queues >/dev/null 2>&1
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - relayer-network
+    restart: on-failure:5
+  sqs-init:
+    image: amazon/aws-cli:2.17.39
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      INIT_SQS_QUEUE_TYPE: ${INIT_SQS_QUEUE_TYPE:-standard}
+    depends_on:
+      localstack:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - /scripts/init-sqs.sh
+    volumes:
+      - ./scripts/init-sqs.sh:/scripts/init-sqs.sh:ro
+    networks:
+      - relayer-network
+    restart: 'no'
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local

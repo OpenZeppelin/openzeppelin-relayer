@@ -75,6 +75,6 @@ mod tests {
             "Should return 'gasless' as enabled feature"
         );
 
-        println!("Enabled features: {:?}", features);
+        println!("Enabled features: {features:?}");
     }
 }
