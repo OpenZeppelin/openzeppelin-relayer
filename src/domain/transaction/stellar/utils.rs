@@ -1274,6 +1274,36 @@ pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtil
     }
 }
 
+/// Computes the resubmit interval with exponential backoff based on total transaction age.
+///
+/// The interval doubles each time the total age doubles:
+///   - age < base  → `None` (too early to resubmit)
+///   - age 1-2x base → interval = base  (10s)
+///   - age 2-4x base → interval = 2*base (20s)
+///   - age 4-8x base → interval = 4*base (40s)
+///   - ...capped at `max_interval`
+///
+/// Returns the backoff interval to compare against time since last submission (`sent_at`).
+pub fn compute_resubmit_backoff_interval(
+    total_age: chrono::Duration,
+    base_interval_secs: i64,
+    max_interval_secs: i64,
+) -> Option<chrono::Duration> {
+    let age_secs = total_age.num_seconds();
+
+    if age_secs < base_interval_secs {
+        return None;
+    }
+
+    // n = floor(log2(age / base)), so interval = base * 2^n
+    let ratio = age_secs / base_interval_secs; // >= 1
+    let n = (ratio as u64).ilog2(); // floor(log2(ratio))
+    let interval = base_interval_secs.saturating_mul(1_i64.wrapping_shl(n));
+    let capped = interval.min(max_interval_secs);
+
+    Some(chrono::Duration::seconds(capped))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3626,5 +3656,109 @@ mod stellar_transaction_utils_error_conversion_tests {
             }
             _ => panic!("Expected ValidationError"),
         }
+    }
+}
+
+#[cfg(test)]
+mod compute_resubmit_backoff_interval_tests {
+    use super::compute_resubmit_backoff_interval;
+    use chrono::Duration;
+
+    const BASE: i64 = 10;
+    const MAX: i64 = 120;
+
+    #[test]
+    fn returns_none_below_base() {
+        assert!(compute_resubmit_backoff_interval(Duration::seconds(0), BASE, MAX).is_none());
+        assert!(compute_resubmit_backoff_interval(Duration::seconds(5), BASE, MAX).is_none());
+        assert!(compute_resubmit_backoff_interval(Duration::seconds(9), BASE, MAX).is_none());
+    }
+
+    #[test]
+    fn base_interval_at_1x() {
+        // age 10-19s: ratio=1, log2(1)=0, interval = 10 * 2^0 = 10s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(10), BASE, MAX),
+            Some(Duration::seconds(10))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(19), BASE, MAX),
+            Some(Duration::seconds(10))
+        );
+    }
+
+    #[test]
+    fn doubles_at_2x() {
+        // age 20-39s: ratio=2-3, log2(2)=1, interval = 10 * 2^1 = 20s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(20), BASE, MAX),
+            Some(Duration::seconds(20))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(39), BASE, MAX),
+            Some(Duration::seconds(20))
+        );
+    }
+
+    #[test]
+    fn quadruples_at_4x() {
+        // age 40-79s: ratio=4-7, log2(4)=2, interval = 10 * 2^2 = 40s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(40), BASE, MAX),
+            Some(Duration::seconds(40))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(79), BASE, MAX),
+            Some(Duration::seconds(40))
+        );
+    }
+
+    #[test]
+    fn interval_at_8x() {
+        // age 80-119s: ratio=8-11, log2(8)=3, interval = 10 * 2^3 = 80s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(80), BASE, MAX),
+            Some(Duration::seconds(80))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(119), BASE, MAX),
+            Some(Duration::seconds(80))
+        );
+    }
+
+    #[test]
+    fn capped_at_max() {
+        // age 160s: ratio=16, log2(16)=4, interval = 10*16 = 160 → capped at 120s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(160), BASE, MAX),
+            Some(Duration::seconds(MAX))
+        );
+        // age 1280s: ratio=128, log2(128)=7, interval = 10*128 = 1280 → capped at 120s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(1280), BASE, MAX),
+            Some(Duration::seconds(MAX))
+        );
+    }
+
+    #[test]
+    fn works_with_different_base_and_max() {
+        // Verify the function is generic, not hardcoded to Stellar constants
+        let base = 5;
+        let max = 30;
+        // age 5-9s: interval = 5s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(5), base, max),
+            Some(Duration::seconds(5))
+        );
+        // age 10-19s: interval = 10s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(10), base, max),
+            Some(Duration::seconds(10))
+        );
+        // age 40s: interval = 40 → capped at 30s
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(40), base, max),
+            Some(Duration::seconds(30))
+        );
     }
 }
