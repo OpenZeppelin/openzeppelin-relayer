@@ -5,8 +5,9 @@
 //!
 //! ## Distributed Locking
 //!
-//! When multiple instances of the relayer service start simultaneously, this module
-//! uses distributed locking to coordinate initialization and prevent duplicate work:
+//! When multiple instances of the relayer service start simultaneously with
+//! `DISTRIBUTED_MODE` enabled, this module uses distributed locking to coordinate
+//! initialization and prevent duplicate work:
 //!
 //! - **Global lock**: A single lock is used for the entire initialization process,
 //!   ensuring only one instance initializes relayers at a time.
@@ -14,9 +15,10 @@
 //!   (within the staleness threshold) to handle rolling restarts efficiently.
 //! - **Wait for completion**: Instances that don't acquire the lock wait for the
 //!   initializing instance to complete, then proceed without re-initializing.
-//! - **In-memory fallback**: When using in-memory storage, locking is skipped since
-//!   coordination across instances is not possible or needed.
+//! - **Single-instance mode**: When `DISTRIBUTED_MODE` is disabled (default) or using
+//!   in-memory storage, locking is skipped since coordination is not needed.
 use crate::{
+    config::ServerConfig,
     domain::{get_network_relayer, Relayer},
     jobs::JobProducerTrait,
     models::{
@@ -111,16 +113,18 @@ where
 
     info!(count = relayers.len(), "Initializing relayers");
 
-    // Check if using persistent storage for distributed coordination
+    // Check if using persistent storage with distributed coordination
+    let use_lock = ServerConfig::get_distributed_mode();
     let connection_info = app_state.relayer_repository.connection_info();
 
-    match connection_info {
-        Some((conn, prefix)) => {
+    match (use_lock, connection_info) {
+        (true, Some((conn, prefix))) => {
+            // Distributed mode: use locking to coordinate across instances
             coordinate_with_distributed_lock(&relayers, &app_state, &conn, &prefix).await
         }
-        None => {
-            // In-memory mode: skip locking, initialize all relayers directly
-            info!("In-memory storage detected, initializing relayers without distributed locking");
+        _ => {
+            // Single-instance mode or in-memory storage: skip locking
+            info!("Initializing relayers without distributed locking");
             run_initialization_batch(&relayers, &app_state).await
         }
     }

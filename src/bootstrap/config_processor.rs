@@ -3,16 +3,16 @@
 //!
 //! ## Distributed Locking for Config Processing
 //!
-//! When multiple instances of the relayer service start simultaneously with Redis storage,
-//! this module uses distributed locking to coordinate config processing and prevent race
-//! conditions:
+//! When multiple instances of the relayer service start simultaneously with Redis storage
+//! and `DISTRIBUTED_MODE` is enabled, this module uses distributed locking to coordinate
+//! config processing and prevent race conditions:
 //!
 //! - **Global lock**: A single lock is used for the entire config processing,
 //!   ensuring only one instance processes the config at a time.
 //! - **Post-lock population check**: After acquiring the lock, checks if Redis is already
 //!   populated (by another instance that held the lock first), and skips if so.
-//! - **In-memory fallback**: When using in-memory storage, locking is skipped since
-//!   coordination across instances is not possible or needed.
+//! - **Single-instance mode**: When `DISTRIBUTED_MODE` is disabled (default) or using
+//!   in-memory storage, locking is skipped since coordination is not needed.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -361,9 +361,9 @@ where
 /// 5. Process relayers
 /// 6. Process API key
 ///
-/// When using Redis storage, this function uses distributed locking to prevent race
-/// conditions when multiple instances start simultaneously (especially with
-/// `RESET_STORAGE_ON_START=true`).
+/// When using Redis storage with `DISTRIBUTED_MODE` enabled, this function uses distributed
+/// locking to prevent race conditions when multiple instances start simultaneously
+/// (especially with `RESET_STORAGE_ON_START=true`).
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
@@ -386,10 +386,13 @@ where
             execute_config_processing(&config_file, &server_config, app_state).await
         }
         RepositoryStorageType::Redis => {
-            // Redis mode: use distributed locking to coordinate across instances
+            // Check if distributed locking is needed
+            let use_lock = ServerConfig::get_distributed_mode();
             let connection_info = app_state.relayer_repository.connection_info();
-            match connection_info {
-                Some((conn, prefix)) => {
+
+            match (use_lock, connection_info) {
+                (true, Some((conn, prefix))) => {
+                    // Distributed mode: use locking to coordinate across instances
                     coordinate_config_with_lock(
                         &config_file,
                         &server_config,
@@ -399,9 +402,8 @@ where
                     )
                     .await
                 }
-                None => {
-                    // Fallback: Redis configured but no connection info available (e.g., in tests)
-                    // Use the same logic as before: only process if reset flag or not populated
+                _ => {
+                    // Single-instance mode or no connection info: skip locking
                     let should_process = server_config.reset_storage_on_start
                         || !is_redis_populated(app_state).await?;
 
