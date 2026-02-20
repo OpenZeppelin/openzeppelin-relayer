@@ -13,7 +13,7 @@ use soroban_rs::xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, ChangeTrustAsset, ContractDataEntry, ContractId, Hash,
     LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation, Preconditions,
     PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint,
-    TransactionEnvelope, TransactionMeta, Uint256, VecM,
+    TransactionEnvelope, TransactionMeta, TransactionResult, Uint256, VecM,
 };
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
@@ -266,8 +266,18 @@ pub fn i64_from_u64(value: u64) -> Result<i64, RelayerError> {
     i64::try_from(value).map_err(|_| RelayerError::ProviderError("u64→i64 overflow".into()))
 }
 
+/// Decodes a base64-encoded `TransactionResult` XDR into a human-readable result code name.
+///
+/// Returns the variant name of the `TransactionResultResult` (e.g., `"TxBadSeq"`,
+/// `"TxInsufficientBalance"`, `"TxFailed"`). Returns `None` if the XDR cannot be decoded.
+pub fn decode_tx_result_code(error_result_xdr: &str) -> Option<String> {
+    TransactionResult::from_xdr_base64(error_result_xdr, Limits::none())
+        .ok()
+        .map(|r| r.result.name().to_string())
+}
+
 /// Detects if an error is due to a bad sequence number.
-/// Returns true if the error message contains indicators of sequence number mismatch.
+/// Checks both string matching on the error message and XDR decoding when available.
 pub fn is_bad_sequence_error(error_msg: &str) -> bool {
     let error_lower = error_msg.to_lowercase();
     error_lower.contains("txbadseq")
@@ -1455,6 +1465,46 @@ mod tests {
             assert!(!is_bad_sequence_error("tx_insufficient_fee"));
             assert!(!is_bad_sequence_error("bad_auth"));
             assert!(!is_bad_sequence_error(""));
+        }
+    }
+
+    mod decode_tx_result_code_tests {
+        use super::*;
+        use soroban_rs::xdr::{TransactionResult, TransactionResultResult, WriteXdr};
+
+        #[test]
+        fn test_decodes_tx_bad_seq() {
+            let result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxBadSeq,
+                ext: soroban_rs::xdr::TransactionResultExt::V0,
+            };
+            let xdr = result.to_xdr_base64(Limits::none()).unwrap();
+            assert_eq!(decode_tx_result_code(&xdr), Some("TxBadSeq".to_string()));
+        }
+
+        #[test]
+        fn test_decodes_tx_insufficient_balance() {
+            let result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxInsufficientBalance,
+                ext: soroban_rs::xdr::TransactionResultExt::V0,
+            };
+            let xdr = result.to_xdr_base64(Limits::none()).unwrap();
+            assert_eq!(
+                decode_tx_result_code(&xdr),
+                Some("TxInsufficientBalance".to_string())
+            );
+        }
+
+        #[test]
+        fn test_returns_none_for_invalid_xdr() {
+            assert_eq!(decode_tx_result_code("not-valid-xdr"), None);
+        }
+
+        #[test]
+        fn test_returns_none_for_empty_string() {
+            assert_eq!(decode_tx_result_code(""), None);
         }
     }
 
