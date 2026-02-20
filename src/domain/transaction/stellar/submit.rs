@@ -134,8 +134,15 @@ where
                     .partial_update(tx.id.clone(), update_req)
                     .await?;
 
-                // Send notification
-                self.send_transaction_update_notification(&updated_tx).await;
+                // Send notification for newly submitted transaction
+                if response.status == "PENDING" {
+                    info!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "sending transaction update notification for pending transaction"
+                    );
+                    self.send_transaction_update_notification(&updated_tx).await;
+                }
 
                 Ok(updated_tx)
             }
@@ -835,13 +842,6 @@ mod tests {
                     tx.status = upd.status.unwrap();
                     Ok::<_, RepositoryError>(tx)
                 });
-
-            // Expect notification
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .times(1)
-                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
