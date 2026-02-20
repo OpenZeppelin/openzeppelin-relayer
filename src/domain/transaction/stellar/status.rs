@@ -2235,7 +2235,7 @@ mod tests {
         async fn test_handle_submitted_state_recent_sent_at_prevents_resubmit() {
             // Transaction created 60s ago (old), but sent_at only 5s ago (recent resubmission).
             // At total_age=60s, backoff interval = 60s (base*2^2, since 60/15=4, log2(4)=2).
-            // age_since_last_submit=5s < 40s → should NOT resubmit.
+            // age_since_last_submit=5s < 60s → should NOT resubmit.
             // This verifies that sent_at being updated on resubmission correctly resets the clock.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
