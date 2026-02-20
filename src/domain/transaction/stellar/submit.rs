@@ -5,9 +5,14 @@
 use chrono::Utc;
 use tracing::{info, warn};
 
-use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{
+    is_final_state,
+    utils::{decode_tx_result_code, is_bad_sequence_error},
+    StellarRelayerTransaction,
+};
 use crate::{
     jobs::JobProducerTrait,
+    metrics::STELLAR_SUBMISSION_FAILURES,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -98,7 +103,12 @@ where
             .provider()
             .send_transaction_with_status(&tx_envelope)
             .await
-            .map_err(TransactionError::from)?;
+            .map_err(|e| {
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["provider_error", "n/a"])
+                    .inc();
+                TransactionError::from(e)
+            })?;
 
         // Handle status codes from the RPC response
         match response.status.as_str() {
@@ -148,21 +158,42 @@ where
             }
             "TRY_AGAIN_LATER" => {
                 // Transaction not queued - per acceptance criteria, mark as failed
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["try_again_later", "n/a"])
+                    .inc();
                 Err(TransactionError::UnexpectedError(
                     "Transaction not queued: TRY_AGAIN_LATER".to_string(),
                 ))
             }
             "ERROR" => {
-                // Transaction validation failed
-                let error_detail = response
-                    .error_result_xdr
-                    .unwrap_or_else(|| "No error details provided".to_string());
+                // Transaction validation failed — decode XDR for human-readable result
+                let error_xdr = response.error_result_xdr.unwrap_or_default();
+                let result_code = if error_xdr.is_empty() {
+                    None
+                } else {
+                    decode_tx_result_code(&error_xdr)
+                };
+                let result_code_label = result_code.as_deref().unwrap_or("unknown");
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["error", result_code_label])
+                    .inc();
+
+                let error_detail = if let Some(ref code) = result_code {
+                    format!("{code} (xdr: {error_xdr})")
+                } else if error_xdr.is_empty() {
+                    "No error details provided".to_string()
+                } else {
+                    error_xdr
+                };
                 Err(TransactionError::UnexpectedError(format!(
                     "Transaction submission error: {error_detail}"
                 )))
             }
             unknown => {
                 // Unknown status - treat as error
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["unknown_status", "n/a"])
+                    .inc();
                 warn!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
@@ -929,15 +960,27 @@ mod tests {
 
         #[tokio::test]
         async fn submit_transaction_error_status_fails() {
+            use soroban_rs::xdr::{
+                Limits, TransactionResult, TransactionResultExt, TransactionResultResult,
+            };
+
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
+
+            // Build a TxInsufficientFee error XDR (non-bad-sequence, so no retry path)
+            let tx_result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxInsufficientFee,
+                ext: TransactionResultExt::V0,
+            };
+            let error_xdr = tx_result.to_xdr_base64(Limits::none()).unwrap();
 
             // Provider returns ERROR status with error XDR
             let mut response = create_send_tx_response(
                 "ERROR",
                 "0101010101010101010101010101010101010101010101010101010101010101",
             );
-            response.error_result_xdr = Some("AAAAAAAAAGT////7AAAAAA==".to_string());
+            response.error_result_xdr = Some(error_xdr);
             mocks
                 .provider
                 .expect_send_transaction_with_status()
