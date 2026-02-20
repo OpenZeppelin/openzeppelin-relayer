@@ -569,7 +569,7 @@ where
                 }
 
                 // Resubmit with exponential backoff based on total transaction age.
-                // The backoff interval grows: 10s → 20s → 40s → 80s → 120s (capped).
+                // The backoff interval grows: 15s → 30s → 60s → 120s → 180s (capped).
                 let total_age = get_age_since_created(&tx)?;
                 if let Some(backoff_interval) = compute_resubmit_backoff_interval(
                     total_age,
@@ -2101,16 +2101,16 @@ mod tests {
 
         #[tokio::test]
         async fn test_handle_submitted_state_resubmits_after_timeout() {
-            // Transaction created 11s ago, sent_at also 11s ago → exceeds base interval (10s)
+            // Transaction created 16s ago, sent_at also 16s ago → exceeds base interval (15s)
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
             let mut tx = create_test_transaction(&relayer.id);
             tx.id = "tx-submitted-resubmit".to_string();
             tx.status = TransactionStatus::Submitted;
-            let eleven_seconds_ago = (Utc::now() - Duration::seconds(11)).to_rfc3339();
-            tx.created_at = eleven_seconds_ago.clone();
-            tx.sent_at = Some(eleven_seconds_ago);
+            let sixteen_seconds_ago = (Utc::now() - Duration::seconds(16)).to_rfc3339();
+            tx.created_at = sixteen_seconds_ago.clone();
+            tx.sent_at = Some(sixteen_seconds_ago);
             // Set a hash so it can query provider
             let tx_hash_bytes = [8u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
@@ -2146,16 +2146,16 @@ mod tests {
 
         #[tokio::test]
         async fn test_handle_submitted_state_backoff_increases_interval() {
-            // Transaction created 25s ago but sent_at only 15s ago.
-            // At total_age=25s, backoff interval = 20s (base*2^1, since 25/10=2, log2(2)=1).
-            // age_since_last_submit=15s < 20s → should NOT resubmit yet.
+            // Transaction created 30s ago but sent_at only 15s ago.
+            // At total_age=30s, backoff interval = 30s (base*2^1, since 30/15=2, log2(2)=1).
+            // age_since_last_submit=15s < 30s → should NOT resubmit yet.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
             let mut tx = create_test_transaction(&relayer.id);
             tx.id = "tx-submitted-backoff".to_string();
             tx.status = TransactionStatus::Submitted;
-            tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
+            tx.created_at = (Utc::now() - Duration::seconds(30)).to_rfc3339();
             tx.sent_at = Some((Utc::now() - Duration::seconds(15)).to_rfc3339());
             let tx_hash_bytes = [11u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
@@ -2173,7 +2173,7 @@ mod tests {
                     Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
                 });
 
-            // Should NOT resubmit (15s < 20s backoff interval)
+            // Should NOT resubmit (15s < 30s backoff interval)
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -2190,8 +2190,8 @@ mod tests {
         #[tokio::test]
         async fn test_handle_submitted_state_backoff_resubmits_when_interval_exceeded() {
             // Transaction created 25s ago, sent_at 21s ago.
-            // At total_age=25s, backoff interval = 20s (base*2^1).
-            // age_since_last_submit=21s > 20s → should resubmit.
+            // At total_age=25s, backoff interval = 15s (base*2^0, since 25/15=1, log2(1)=0).
+            // age_since_last_submit=21s > 15s → should resubmit.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
@@ -2216,7 +2216,7 @@ mod tests {
                     Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
                 });
 
-            // Should resubmit (21s > 20s backoff interval)
+            // Should resubmit (21s > 15s backoff interval)
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -2234,8 +2234,8 @@ mod tests {
         #[tokio::test]
         async fn test_handle_submitted_state_recent_sent_at_prevents_resubmit() {
             // Transaction created 60s ago (old), but sent_at only 5s ago (recent resubmission).
-            // At total_age=60s, backoff interval = 40s (base*2^2, since 60/10=6, log2(6)≈2).
-            // age_since_last_submit=5s < 40s → should NOT resubmit.
+            // At total_age=60s, backoff interval = 60s (base*2^2, since 60/15=4, log2(4)=2).
+            // age_since_last_submit=5s < 60s → should NOT resubmit.
             // This verifies that sent_at being updated on resubmission correctly resets the clock.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();

@@ -82,7 +82,8 @@ where
     /// Handles status codes:
     /// - PENDING: Transaction accepted for processing
     /// - DUPLICATE: Transaction already submitted (treat as success)
-    /// - TRY_AGAIN_LATER: Transaction not queued, mark as failed
+    /// - TRY_AGAIN_LATER: For already-submitted txs, return Ok (status checker will retry);
+    ///   for first-time submissions, treat as transient error
     /// - ERROR: Transaction validation failed, mark as failed
     async fn submit_core(
         &self,
@@ -147,7 +148,18 @@ where
                 Ok(updated_tx)
             }
             "TRY_AGAIN_LATER" => {
-                // Transaction not queued - per acceptance criteria, mark as failed
+                // Network is temporarily congested. For already-submitted transactions
+                // (resubmissions from status checker), this is harmless — the status
+                // checker will retry with exponential backoff on its next cycle.
+                if tx.status == TransactionStatus::Submitted {
+                    warn!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "TRY_AGAIN_LATER on resubmission, skipping — status checker will retry"
+                    );
+                    return Ok(tx);
+                }
+                // First-time submission: treat as transient error
                 Err(TransactionError::UnexpectedError(
                     "Transaction not queued: TRY_AGAIN_LATER".to_string(),
                 ))
@@ -925,6 +937,41 @@ mod tests {
             // Transaction marked as failed — no error propagated
             let failed_tx = res.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn resubmit_try_again_later_returns_ok_for_submitted_tx() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns TRY_AGAIN_LATER status
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // No partial_update, no notification, no enqueue — tx is returned as-is
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Submitted; // Already submitted (resubmission path)
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            // Should succeed without marking as failed — status checker will retry
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Submitted);
         }
 
         #[tokio::test]
