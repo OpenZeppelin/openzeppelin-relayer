@@ -497,8 +497,12 @@ class PluginAPIImpl implements PluginAPI {
       },
       getTransaction: (payload: { transactionId: string }) =>
         this.send(relayerId, 'getTransaction', payload),
-      getRelayerStatus: () =>
-        this.send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', {}),
+      getRelayerStatus: (options?: {
+        includeBalance?: boolean;
+        includePendingCount?: boolean;
+        includeLastConfirmedTx?: boolean;
+      }) =>
+        this.send<ApiResponseRelayerStatusData>(relayerId, 'getRelayerStatus', options ?? {}),
       signTransaction: (payload: SignTransactionRequest) =>
         this.send<SignTransactionResponse>(relayerId, 'signTransaction', payload),
       getRelayer: () =>

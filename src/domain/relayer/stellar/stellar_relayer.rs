@@ -37,12 +37,12 @@ use crate::{
     jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionStatusCheck},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel, NetworkRpcRequest,
-        NetworkRpcResult, NetworkTransactionRequest, NetworkType, PaginationQuery,
-        RelayerNetworkPolicy, RelayerRepoModel, RelayerStatus, RelayerStellarPolicy,
-        RepositoryError, RpcErrorCodes, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
-        StellarNetwork, StellarRpcRequest, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        GetStatusOptions, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
+        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
+        PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, RelayerStatus,
+        RelayerStellarPolicy, RepositoryError, RpcErrorCodes, StellarAllowedTokensPolicy,
+        StellarFeePaymentStrategy, StellarNetwork, StellarRpcRequest, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -585,64 +585,61 @@ where
             relayer_id = %self.relayer.id,
         )
     )]
-    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+    async fn get_status(&self, options: GetStatusOptions) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
-        let account_entry = self
-            .provider
-            .get_account(&relayer_model.address)
+        // Get sequence number from transaction counter store instead of network
+        let sequence_number = self
+            .transaction_counter_service
+            .get()
             .await
-            .map_err(|e| {
-                warn!(
-                    relayer_id = %relayer_model.id,
-                    address = %relayer_model.address,
-                    error = %e,
-                    "get_account failed in get_status (called before transaction creation)"
-                );
-                // Track RPC failure metric
-                crate::metrics::API_RPC_FAILURES
-                    .with_label_values(&[
-                        relayer_model.id.as_str(),
-                        "stellar",
-                        "get_status",
-                        "get_account_failed",
-                    ])
-                    .inc();
-                RelayerError::ProviderError(format!("Failed to get account details: {e}"))
-            })?;
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let sequence_number_str = sequence_number.to_string();
 
-        let sequence_number_str = account_entry.seq_num.0.to_string();
+        let balance = if options.include_balance {
+            Some(self.get_balance().await?.balance.to_string())
+        } else {
+            None
+        };
 
-        let balance_response = self.get_balance().await?;
-
-        // Use optimized count_by_status
-        let pending_transactions_count = self
-            .transaction_repository
-            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
-            .await
-            .map_err(RelayerError::from)?;
-
-        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
-        let last_confirmed_transaction_timestamp = self
-            .transaction_repository
-            .find_by_status_paginated(
-                &relayer_model.id,
-                &[TransactionStatus::Confirmed],
-                PaginationQuery {
-                    page: 1,
-                    per_page: 1,
-                },
-                false, // oldest_first = false means newest first
+        let pending_transactions_count = if options.include_pending_count {
+            // Use optimized count_by_status
+            Some(
+                self.transaction_repository
+                    .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
+                    .await
+                    .map_err(RelayerError::from)?,
             )
-            .await
-            .map_err(RelayerError::from)?
-            .items
-            .into_iter()
-            .next()
-            .and_then(|tx| tx.confirmed_at);
+        } else {
+            None
+        };
+
+        let last_confirmed_transaction_timestamp = if options.include_last_confirmed_tx {
+            // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+            self.transaction_repository
+                .find_by_status_paginated(
+                    &relayer_model.id,
+                    &[TransactionStatus::Confirmed],
+                    PaginationQuery {
+                        page: 1,
+                        per_page: 1,
+                    },
+                    false, // oldest_first = false means newest first
+                )
+                .await
+                .map_err(RelayerError::from)?
+                .items
+                .into_iter()
+                .next()
+                .and_then(|tx| tx.confirmed_at)
+        } else {
+            None
+        };
 
         Ok(RelayerStatus::Stellar {
-            balance: balance_response.balance.to_string(),
+            balance,
             pending_transactions_count,
             last_confirmed_transaction_timestamp,
             system_disabled: relayer_model.system_disabled,
@@ -1186,9 +1183,10 @@ mod tests {
         let mut tx_repo_mock = MockTransactionRepository::new();
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
-        let counter_mock = MockTransactionCounterServiceTrait::new();
+        let mut counter_mock = MockTransactionCounterServiceTrait::new();
 
-        provider_mock.expect_get_account().times(2).returning(|_| {
+        // Mock get_account only for get_balance (once)
+        provider_mock.expect_get_account().times(1).returning(|_| {
             Box::pin(ready(Ok(AccountEntry {
                 account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
                 balance: 10000000,
@@ -1202,6 +1200,11 @@ mod tests {
                 thresholds: Thresholds([0, 0, 0, 0]),
             })))
         });
+
+        // Mock transaction counter service for sequence number
+        counter_mock
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(12345)))));
 
         // Mock count_by_status for pending transactions count
         tx_repo_mock
@@ -1264,7 +1267,10 @@ mod tests {
         .await
         .unwrap();
 
-        let status = stellar_relayer.get_status().await.unwrap();
+        let status = stellar_relayer
+            .get_status(GetStatusOptions::default())
+            .await
+            .unwrap();
 
         match status {
             RelayerStatus::Stellar {
@@ -1275,8 +1281,8 @@ mod tests {
                 paused,
                 sequence_number,
             } => {
-                assert_eq!(balance, "10000000");
-                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(balance, Some("10000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(0));
                 assert_eq!(
                     last_confirmed_transaction_timestamp,
                     Some("2023-02-01T12:00:00Z".to_string())
@@ -1290,22 +1296,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_status_stellar_provider_error() {
+    async fn test_get_status_skip_all_optional_fields() {
         let ctx = TestCtx::default();
         ctx.setup_network().await;
         let relayer_model = ctx.relayer_model.clone();
-        let mut provider_mock = MockStellarProviderTrait::new();
+
+        // Provider mock with NO get_account expectation — must not be called
+        let provider_mock = MockStellarProviderTrait::new();
+        // Transaction repo with NO expectations — must not be called
         let tx_repo_mock = MockTransactionRepository::new();
         let relayer_repo_mock = MockRelayerRepository::new();
         let job_producer_mock = MockJobProducerTrait::new();
-        let counter_mock = MockTransactionCounterServiceTrait::new();
+        let mut counter_mock = MockTransactionCounterServiceTrait::new();
 
-        provider_mock
-            .expect_get_account()
-            .with(eq(relayer_model.address.clone()))
-            .returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("Stellar provider down".to_string())) })
-            });
+        // Sequence number is always fetched
+        counter_mock
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(99u64)))));
+
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();
 
@@ -1325,13 +1333,168 @@ mod tests {
         .await
         .unwrap();
 
-        let result = stellar_relayer.get_status().await;
+        let options = GetStatusOptions {
+            include_balance: false,
+            include_pending_count: false,
+            include_last_confirmed_tx: false,
+        };
+        let status = stellar_relayer.get_status(options).await.unwrap();
+
+        match status {
+            RelayerStatus::Stellar {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+                sequence_number,
+            } => {
+                assert_eq!(balance, None);
+                assert_eq!(pending_transactions_count, None);
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert_eq!(system_disabled, relayer_model.system_disabled);
+                assert_eq!(paused, relayer_model.paused);
+                assert_eq!(sequence_number, "99");
+            }
+            _ => panic!("Expected Stellar RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_partial_options() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
+
+        let mut provider_mock = MockStellarProviderTrait::new();
+        let mut tx_repo_mock = MockTransactionRepository::new();
+        let relayer_repo_mock = MockRelayerRepository::new();
+        let job_producer_mock = MockJobProducerTrait::new();
+        let mut counter_mock = MockTransactionCounterServiceTrait::new();
+
+        counter_mock
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(50u64)))));
+
+        // Balance requested
+        provider_mock.expect_get_account().times(1).returning(|_| {
+            Box::pin(ready(Ok(AccountEntry {
+                account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                balance: 5000000,
+                seq_num: SequenceNumber(50),
+                ext: AccountEntryExt::V0,
+                flags: 0,
+                home_domain: String32::default(),
+                inflation_dest: None,
+                num_sub_entries: 0,
+                signers: VecM::default(),
+                thresholds: Thresholds([0, 0, 0, 0]),
+            })))
+        });
+
+        // Pending count requested
+        tx_repo_mock
+            .expect_count_by_status()
+            .returning(|_, _| Ok(7u64))
+            .once();
+
+        // last_confirmed_tx NOT requested — no find_by_status_paginated expectation
+
+        let signer = Arc::new(MockStellarSignTrait::new());
+        let dex_service = create_mock_dex_service();
+
+        let stellar_relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider_mock,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo_mock),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo_mock),
+                Arc::new(counter_mock),
+                Arc::new(job_producer_mock),
+            ),
+            dex_service,
+        )
+        .await
+        .unwrap();
+
+        let options = GetStatusOptions {
+            include_balance: true,
+            include_pending_count: true,
+            include_last_confirmed_tx: false,
+        };
+        let status = stellar_relayer.get_status(options).await.unwrap();
+
+        match status {
+            RelayerStatus::Stellar {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                sequence_number,
+                ..
+            } => {
+                assert_eq!(balance, Some("5000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(7));
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert_eq!(sequence_number, "50");
+            }
+            _ => panic!("Expected Stellar RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_stellar_provider_error() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
+        let mut provider_mock = MockStellarProviderTrait::new();
+        let tx_repo_mock = MockTransactionRepository::new();
+        let relayer_repo_mock = MockRelayerRepository::new();
+        let job_producer_mock = MockJobProducerTrait::new();
+        let mut counter_mock = MockTransactionCounterServiceTrait::new();
+
+        // get_account fails — this will cause get_balance to fail
+        provider_mock
+            .expect_get_account()
+            .with(eq(relayer_model.address.clone()))
+            .returning(|_| {
+                Box::pin(async { Err(ProviderError::Other("Stellar provider down".to_string())) })
+            });
+
+        // Counter service returns a value (sequence number no longer depends on provider)
+        counter_mock
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(100)))));
+
+        let signer = Arc::new(MockStellarSignTrait::new());
+        let dex_service = create_mock_dex_service();
+
+        let stellar_relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider_mock,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo_mock),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo_mock),
+                Arc::new(counter_mock),
+                Arc::new(job_producer_mock),
+            ),
+            dex_service,
+        )
+        .await
+        .unwrap();
+
+        let result = stellar_relayer
+            .get_status(GetStatusOptions::default())
+            .await;
         assert!(result.is_err());
         match result.err().unwrap() {
             RelayerError::ProviderError(msg) => {
-                assert!(msg.contains("Failed to get account details"))
+                assert!(msg.contains("Failed to fetch account for balance"))
             }
-            _ => panic!("Expected ProviderError for get_account failure"),
+            _ => panic!("Expected ProviderError for get_balance failure"),
         }
     }
 
