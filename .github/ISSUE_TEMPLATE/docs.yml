@@ -1,7 +1,9 @@
 ---
 name: Documentation
 description: Suggest a change to our documentation
-labels: [T-documentation, S-needs-triage]
+labels:
+  - T-documentation
+  - S-needs-triage
 body:
   - type: markdown
     attributes:
