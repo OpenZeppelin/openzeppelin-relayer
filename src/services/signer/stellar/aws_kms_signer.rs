@@ -447,6 +447,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = signer
@@ -505,6 +506,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = signer
@@ -550,6 +552,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = signer

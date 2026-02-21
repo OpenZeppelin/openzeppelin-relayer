@@ -279,7 +279,8 @@ where
         })?;
 
         // Estimate fee using estimate_fee utility which handles simulation if needed
-        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
+        // Pass 0 retries since this is a pre-submission quote, not a retry
+        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None, 0)
             .await
             .map_err(crate::models::RelayerError::from)?;
 
@@ -388,7 +389,8 @@ where
         })?;
 
         // Estimate fee using estimate_fee utility which handles simulation if needed
-        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None)
+        // Pass 0 retries since this is a pre-submission quote, not a retry
+        let inner_tx_fee = estimate_fee(&envelope, &self.provider, None, 0)
             .await
             .map_err(crate::models::RelayerError::from)?;
 
@@ -1096,6 +1098,7 @@ where
             transaction_input: TransactionInput::Operations(ops.clone()),
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         // Build unsigned envelope from operations

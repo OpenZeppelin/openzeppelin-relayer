@@ -166,6 +166,7 @@ pub fn create_signing_data(
         simulation_transaction_data: None,
         signed_envelope_xdr: None,
         transaction_result_xdr: None,
+        insufficient_fee_retries: 0,
     }
 }
 
@@ -213,31 +214,33 @@ pub async fn calculate_fee_bump_required_fee<P>(
     inner_envelope: &TransactionEnvelope,
     max_fee: i64,
     provider: &P,
+    insufficient_fee_retries: u32,
 ) -> Result<u32, TransactionError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
+    use crate::domain::transaction::stellar::utils::compute_escalated_inclusion_fee;
+    let escalated_inclusion = compute_escalated_inclusion_fee(insufficient_fee_retries) as i64;
     // Check if the inner transaction already has SorobanTransactionData with resource fee.
     // This allows skipping simulation for pre-simulated signed transactions.
     if let Some(existing_resource_fee) = extract_soroban_resource_fee(inner_envelope) {
-        let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
-        let required_fee = inclusion_fee.checked_add(existing_resource_fee).ok_or_else(|| {
+        let required_fee = escalated_inclusion.checked_add(existing_resource_fee).ok_or_else(|| {
             TransactionError::ValidationError(format!(
-                "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({existing_resource_fee}) exceeds i64::MAX"
+                "Fee overflow: inclusion fee ({escalated_inclusion}) + resource fee ({existing_resource_fee}) exceeds i64::MAX"
             ))
         })?;
 
         debug!(
             "Using existing resource fee from inner transaction. \
-             Inclusion fee: {}, Resource fee: {}, Total: {}",
-            inclusion_fee, existing_resource_fee, required_fee
+             Escalated inclusion fee: {}, Resource fee: {}, Required: {}",
+            escalated_inclusion, existing_resource_fee, required_fee
         );
 
-        // Validate max_fee covers the existing fee
+        // Validate max_fee covers the required fee
         if max_fee < required_fee {
             return Err(TransactionError::ValidationError(format!(
                 "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} \
-                 (inclusion: {inclusion_fee} + resource: {existing_resource_fee})"
+                 (escalated inclusion: {escalated_inclusion} + resource: {existing_resource_fee})"
             )));
         }
 
@@ -251,20 +254,20 @@ where
         match simulate_if_needed(inner_envelope, provider).await? {
             Some(sim_resp) => {
                 // Soroban transactions always have exactly one operation
-                let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+                let escalated_inclusion_u64 = escalated_inclusion as u64;
                 let resource_fee = sim_resp.min_resource_fee;
-                let required_fee = inclusion_fee + resource_fee;
+                let required_fee = escalated_inclusion_u64 + resource_fee;
 
                 debug!(
-                    "Simulation complete. Inclusion fee: {}, Resource fee: {}, Total: {}",
-                    inclusion_fee, resource_fee, required_fee
+                    "Simulation complete. Escalated inclusion fee: {}, Resource fee: {}, Required: {}",
+                    escalated_inclusion_u64, resource_fee, required_fee
                 );
 
                 // Ensure max_fee covers the required amount
                 if (max_fee as u64) < required_fee {
                     return Err(TransactionError::ValidationError(
                         format!(
-                            "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} (inclusion: {inclusion_fee} + resource: {resource_fee})"
+                            "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} (escalated inclusion: {escalated_inclusion_u64} + resource: {resource_fee})"
                         )
                     ));
                 }
@@ -741,7 +744,7 @@ mod calculate_fee_bump_required_fee_tests {
         let provider = MockStellarProviderTrait::new();
 
         let max_fee = 100000i64;
-        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider, 0).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), max_fee as u32);
@@ -760,7 +763,7 @@ mod calculate_fee_bump_required_fee_tests {
         // required = 100 + 50000 = 50100
         let max_fee = 40000i64; // Less than required
 
-        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider, 0).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -777,7 +780,48 @@ mod calculate_fee_bump_required_fee_tests {
         let provider = MockStellarProviderTrait::new();
 
         let max_fee = 100000i64;
-        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider, 0).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), max_fee as u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_with_escalation_validates_against_max_fee() {
+        // Create a Soroban transaction with existing resource fee
+        let resource_fee = 50000i64;
+        let envelope = create_soroban_envelope_with_existing_data(resource_fee);
+
+        let provider = MockStellarProviderTrait::new();
+
+        // With retries=2, escalated inclusion = 100 * 10^2 = 10,000
+        // required = 10,000 + 50,000 = 60,000
+        // max_fee must cover required fee
+        let max_fee = 55000i64; // Less than required (60,000)
+
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider, 2).await;
+
+        // Should fail because max_fee < escalated required fee
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, TransactionError::ValidationError(msg) if msg.contains("insufficient"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_no_escalation_on_first_attempt() {
+        // Create a Soroban transaction with existing resource fee
+        let resource_fee = 50000i64;
+        let envelope = create_soroban_envelope_with_existing_data(resource_fee);
+
+        let provider = MockStellarProviderTrait::new();
+
+        // With retries=0, escalated inclusion = 100, resource_fee = 50000, required = 50100
+        // No escalation on first attempt
+        let max_fee = 100000i64;
+
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider, 0).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), max_fee as u32);
