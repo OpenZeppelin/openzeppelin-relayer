@@ -71,13 +71,13 @@ pub const STELLAR_RESEND_TIMEOUT_SECONDS: i64 = 30;
 pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 
 /// Base interval (seconds) for resubmitting a Submitted transaction.
-/// Stellar Core retries internally for ~3 ledgers (~15s). We start resubmitting at 10s
+/// Stellar Core retries internally for ~3 ledgers (~15s). We start resubmitting at 15s
 /// to ensure the transaction is back in the mempool before Core's window closes.
-pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 10;
+pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 15;
 
 /// Maximum resubmit interval (seconds) to cap exponential backoff.
 /// Prevents excessively long gaps between resubmissions.
-pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 120;
+pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 180;
 
 /// Get resend timeout duration for stuck Sent transactions
 pub fn get_stellar_resend_timeout() -> Duration {
