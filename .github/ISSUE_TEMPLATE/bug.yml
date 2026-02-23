@@ -1,13 +1,14 @@
 ---
 name: Bug Report
 description: Create a bug report
-labels: [T-bug, S-needs-triage]
+labels:
+  - T-bug
+  - S-needs-triage
 body:
   - type: markdown
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report! Please provide as much detail as possible.
-
         If you believe you have found a vulnerability, please provide details [here](mailto:security@openzeppelin.com) instead.
   - type: textarea
     id: what-happened
@@ -15,7 +16,6 @@ body:
       label: Describe the bug
       description: |
         A clear and concise description of what the bug is.
-
         If the bug is in a crate you are using (i.e. you are not running the standard `openzeppelin-relayer` binary) please mention that as well.
     validations:
       required: true
@@ -23,11 +23,9 @@ body:
     id: reproduction-steps
     attributes:
       label: Steps to reproduce
-      description: Please provide any steps you think might be relevant to reproduce
-        the bug.
+      description: Please provide any steps you think might be relevant to reproduce the bug.
       placeholder: |
         Steps to reproduce:
-
         1. Start '...'
         2. Then '...'
         3. Check '...'
