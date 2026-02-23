@@ -389,6 +389,29 @@ When these fields are present, the x402 Facilitator plugin routes settlement thr
 
 For more details on the Channels service, see the [Stellar Channels Guide](/relayer/guides/stellar-channels-guide) and the [Channels Plugin documentation](/relayer/plugins/channels).
 
+### Adding Trustlines for Token Support
+
+<Callout>
+  This is only needed if the relayer address needs to hold tokens like USDC. If
+  the relayer is only used for transaction submission and does not receive or
+  hold the asset, no trustline is required.
+</Callout>
+
+Before a Stellar account can hold or receive tokens like USDC, it must establish a **trustline** to the token's contract. You can create a trustline using [Stellar Laboratory](https://laboratory.stellar.org/) to build a `Change Trust` transaction, then submit the XDR via the relayer:
+
+```bash
+POST /api/v1/relayers/{relayer-id}/transactions
+```
+
+```json
+{
+  "params": {
+    "network": "testnet",
+    "transaction_xdr": "<XDR_VALUE>"
+  }
+}
+```
+
 ## How It Works
 
 ### Verification Flow
