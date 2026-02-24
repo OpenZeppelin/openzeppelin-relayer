@@ -67,7 +67,13 @@ where
     }
 
     // Step 3: Calculate the required fee (may include simulation for Soroban)
-    let required_fee = calculate_fee_bump_required_fee(&inner_envelope, max_fee, provider).await?;
+    let required_fee = calculate_fee_bump_required_fee(
+        &inner_envelope,
+        max_fee,
+        provider,
+        stellar_data.insufficient_fee_retries,
+    )
+    .await?;
 
     // Step 4: Build the fee-bump envelope (relayer pays XLM fee)
     let fee_bump_envelope =
@@ -227,6 +233,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -258,6 +265,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -286,6 +294,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let result = extract_inner_transaction(&stellar_data);
@@ -748,6 +757,7 @@ mod signed_xdr_tests {
                 },
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             };
 
             let result = process_fee_bump(
@@ -862,6 +872,7 @@ mod signed_xdr_tests {
                 },
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             };
 
             let result = process_fee_bump(
@@ -996,6 +1007,7 @@ mod signed_xdr_tests {
                 },
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             };
 
             let result = process_fee_bump(
@@ -1100,6 +1112,7 @@ mod signed_xdr_tests {
                 },
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             };
 
             let result = process_fee_bump(
@@ -1236,6 +1249,7 @@ mod signed_xdr_tests {
                 },
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             };
 
             let result = process_fee_bump(

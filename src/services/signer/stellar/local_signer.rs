@@ -243,6 +243,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
         let response = signer
             .sign_transaction(NetworkTransactionData::Stellar(tx_data))
@@ -305,6 +306,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let response = signer
@@ -389,6 +391,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let response = signer

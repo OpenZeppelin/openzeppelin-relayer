@@ -603,6 +603,8 @@ pub struct StellarTransactionData {
     pub transaction_input: TransactionInput,
     pub signed_envelope_xdr: Option<String>,
     pub transaction_result_xdr: Option<String>,
+    #[serde(default)]
+    pub insufficient_fee_retries: u32,
 }
 
 impl StellarTransactionData {
@@ -610,7 +612,7 @@ impl StellarTransactionData {
     /// that are populated during the prepare and submit phases.
     ///
     /// Fields preserved (from initial creation):
-    /// - source_account, network_passphrase, memo, valid_until, transaction_input
+    /// - source_account, network_passphrase, memo, valid_until, transaction_input, insufficient_fee_retries
     ///
     /// Fields reset to None/empty:
     /// - fee, sequence_number, signatures, signed_envelope_xdr, hash, simulation_transaction_data
@@ -841,8 +843,10 @@ impl StellarTransactionData {
     ) -> Result<Self, SignerError> {
         use tracing::info;
 
-        // Update fee based on simulation (using soroban-helpers formula)
-        let inclusion_fee = operations_count * STELLAR_DEFAULT_TRANSACTION_FEE as u64;
+        // Update fee based on simulation: escalated inclusion fee + resource fee
+        use crate::domain::transaction::stellar::utils::compute_escalated_inclusion_fee;
+        let inclusion_fee = operations_count
+            * compute_escalated_inclusion_fee(self.insufficient_fee_retries) as u64;
         let resource_fee = sim_response.min_resource_fee;
 
         let updated_fee = u32::try_from(inclusion_fee + resource_fee)
@@ -989,6 +993,7 @@ impl
                     transaction_input,
                     signed_envelope_xdr: None,
                     transaction_result_xdr: None,
+                    insufficient_fee_retries: 0,
                 };
 
                 Ok(Self {
@@ -1235,6 +1240,7 @@ mod tests {
             }]),
             signed_envelope_xdr: Some("signed-xdr".to_string()),
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let reset_data = stellar_data.clone().reset_to_pre_prepare_state();
@@ -1262,6 +1268,35 @@ mod tests {
     }
 
     #[test]
+    fn test_reset_to_pre_prepare_preserves_insufficient_fee_retries() {
+        let stellar_data = StellarTransactionData {
+            source_account: "GTEST".to_string(),
+            fee: Some(100),
+            sequence_number: Some(42),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test Network".to_string(),
+            signatures: vec![],
+            hash: Some("test-hash".to_string()),
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::Operations(vec![]),
+            signed_envelope_xdr: Some("signed-xdr".to_string()),
+            transaction_result_xdr: None,
+            insufficient_fee_retries: 2, // Non-zero value should be preserved
+        };
+
+        let reset_data = stellar_data.reset_to_pre_prepare_state();
+
+        // insufficient_fee_retries should be preserved across reset
+        assert_eq!(reset_data.insufficient_fee_retries, 2);
+        // Other fields should be reset
+        assert_eq!(reset_data.fee, None);
+        assert_eq!(reset_data.sequence_number, None);
+        assert!(reset_data.signatures.is_empty());
+        assert_eq!(reset_data.hash, None);
+    }
+
+    #[test]
     fn test_transaction_repo_model_create_reset_update_request() {
         let stellar_data = StellarTransactionData {
             source_account: "GTEST".to_string(),
@@ -1276,6 +1311,7 @@ mod tests {
             transaction_input: TransactionInput::Operations(vec![]),
             signed_envelope_xdr: Some("signed-xdr".to_string()),
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         let tx = TransactionRepoModel {
@@ -1558,6 +1594,7 @@ mod tests {
             }]),
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
         let network_data = NetworkTransactionData::Stellar(stellar_tx_data.clone());
 
@@ -1647,6 +1684,7 @@ mod tests {
             }]),
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         }
     }
 
@@ -2302,6 +2340,7 @@ mod tests {
             }]),
             signed_envelope_xdr: Some("signed-xdr-data".to_string()),
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         };
 
         // Serialize to JSON

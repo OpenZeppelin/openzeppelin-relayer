@@ -297,6 +297,7 @@ mod tests {
             transaction_input: TransactionInput::Operations(create_test_operations()),
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         }
     }
 
@@ -332,6 +333,7 @@ mod tests {
             transaction_input: TransactionInput::UnsignedXdr(xdr_string),
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         }
     }
 

@@ -273,6 +273,33 @@ pub fn is_bad_sequence_error(error_msg: &str) -> bool {
     error_lower.contains("txbadseq")
 }
 
+/// Detects if an error is due to an insufficient fee.
+/// Returns true if the error message contains indicators of insufficient fee.
+pub fn is_insufficient_fee_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+    error_lower.contains("txinsufficientfee")
+}
+
+/// Decodes a Stellar TransactionResult XDR (base64) and returns a human-readable result code name.
+/// This is needed because the RPC ERROR status returns raw XDR instead of human-readable error names.
+pub fn decode_transaction_result_code(xdr_base64: &str) -> Option<String> {
+    use soroban_rs::xdr::{Limits, ReadXdr, TransactionResult};
+    let result = TransactionResult::from_xdr_base64(xdr_base64, Limits::none()).ok()?;
+    Some(format!("{:?}", result.result.discriminant()))
+}
+
+/// Computes the escalated inclusion fee based on retry count.
+/// - First attempt (retries=0): returns STELLAR_DEFAULT_TRANSACTION_FEE (100 stroops)
+/// - Each retry multiplies by STELLAR_INCLUSION_FEE_ESCALATION_FACTOR (10x):
+///   100 → 1,000 → 10,000 → 100,000 stroops
+pub fn compute_escalated_inclusion_fee(insufficient_fee_retries: u32) -> u32 {
+    STELLAR_DEFAULT_TRANSACTION_FEE.saturating_mul(
+        crate::constants::STELLAR_INCLUSION_FEE_ESCALATION_FACTOR
+            .checked_pow(insufficient_fee_retries)
+            .unwrap_or(u32::MAX),
+    )
+}
+
 /// Fetches the current sequence number from the blockchain and calculates the next usable sequence.
 /// This is a shared helper that can be used by both stellar_relayer and stellar_transaction.
 ///
@@ -847,6 +874,7 @@ pub fn estimate_base_fee(num_operations: usize) -> u64 {
 /// * `envelope` - The transaction envelope to estimate fees for
 /// * `provider` - Stellar provider for simulation (required if simulation is needed)
 /// * `operations_override` - Optional override for operations count (useful when operations will be added, e.g., +1 for fee payment)
+/// * `insufficient_fee_retries` - Number of fee retry attempts (0 = first attempt, no escalation)
 ///
 /// # Returns
 /// Estimated fee in stroops (XLM)
@@ -854,6 +882,7 @@ pub async fn estimate_fee<P>(
     envelope: &TransactionEnvelope,
     provider: &P,
     operations_override: Option<usize>,
+    insufficient_fee_retries: u32,
 ) -> Result<u64, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
@@ -884,13 +913,16 @@ where
         }
 
         // Use min_resource_fee from simulation (this includes all fees for Soroban operations)
-        // If operations_override is provided, we add the base fee for additional operations
+        // Escalate only the inclusion fee for retries; resource fee from simulation is accurate
         let resource_fee = simulation_result.min_resource_fee as u64;
-        let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
-        let required_fee = inclusion_fee + resource_fee;
+        let escalated_inclusion = compute_escalated_inclusion_fee(insufficient_fee_retries) as u64;
+        let escalated_fee = escalated_inclusion + resource_fee;
 
-        debug!("Simulation returned fee: {} stroops", required_fee);
-        Ok(required_fee)
+        debug!(
+            "Simulation returned resource fee: {} stroops, escalated inclusion fee: {} stroops, total: {} stroops",
+            resource_fee, escalated_inclusion, escalated_fee
+        );
+        Ok(escalated_fee)
     } else {
         // No simulation needed, count operations and estimate base fee
         let num_operations = if let Some(override_count) = operations_override {
@@ -904,12 +936,15 @@ where
             operations.len()
         };
 
-        let fee = estimate_base_fee(num_operations);
+        // For classic transactions, fee = escalated_inclusion_fee * num_operations
+        let escalated_inclusion = compute_escalated_inclusion_fee(insufficient_fee_retries) as u64;
+        let escalated_fee = escalated_inclusion * num_operations as u64;
+
         debug!(
-            "No simulation needed, estimated fee from {} operations: {} stroops",
-            num_operations, fee
+            "No simulation needed, {} operations × {} stroops inclusion fee = {} stroops total",
+            num_operations, escalated_inclusion, escalated_fee
         );
-        Ok(fee)
+        Ok(escalated_fee)
     }
 }
 
@@ -1458,6 +1493,71 @@ mod tests {
         }
     }
 
+    mod is_insufficient_fee_error_tests {
+        use super::*;
+
+        #[test]
+        fn test_detects_txinsufficientfee() {
+            assert!(is_insufficient_fee_error("TxInsufficientFee"));
+            assert!(is_insufficient_fee_error("txinsufficientfee"));
+            assert!(is_insufficient_fee_error(
+                "Transaction submission failed: TxInsufficientFee"
+            ));
+            assert!(is_insufficient_fee_error("Error: TXINSUFFICIENTFEE"));
+        }
+
+        #[test]
+        fn test_returns_false_for_other_errors() {
+            assert!(!is_insufficient_fee_error("some other error"));
+            assert!(!is_insufficient_fee_error("TxBadSeq"));
+            assert!(!is_insufficient_fee_error("network timeout"));
+            assert!(!is_insufficient_fee_error(""));
+        }
+    }
+
+    mod compute_escalated_inclusion_fee_tests {
+        use super::*;
+
+        #[test]
+        fn test_first_attempt_returns_default() {
+            assert_eq!(compute_escalated_inclusion_fee(0), 100);
+        }
+
+        #[test]
+        fn test_first_retry() {
+            assert_eq!(compute_escalated_inclusion_fee(1), 1_000);
+        }
+
+        #[test]
+        fn test_second_retry() {
+            assert_eq!(compute_escalated_inclusion_fee(2), 10_000);
+        }
+
+        #[test]
+        fn test_third_retry() {
+            assert_eq!(compute_escalated_inclusion_fee(3), 100_000);
+        }
+
+        #[test]
+        fn test_overflow_saturates() {
+            assert_eq!(compute_escalated_inclusion_fee(u32::MAX), u32::MAX);
+        }
+    }
+
+    mod decode_transaction_result_code_tests {
+        use super::*;
+
+        #[test]
+        fn test_decode_bad_seq_xdr() {
+            // AAAAAAAAAGT////7AAAAAA== decodes to txBAD_SEQ
+            let result = decode_transaction_result_code("AAAAAAAAAGT////7AAAAAA==");
+            assert!(result.is_some());
+            let code = result.unwrap();
+            println!("Decoded result code: {code}");
+            assert!(code.contains("BadSeq"), "Expected BadSeq, got: {code}");
+        }
+    }
+
     mod status_check_utils_tests {
         use crate::models::{
             NetworkTransactionData, StellarTransactionData, TransactionError, TransactionInput,
@@ -1486,6 +1586,7 @@ mod tests {
                 transaction_input: TransactionInput::Operations(vec![]),
                 signed_envelope_xdr: None,
                 transaction_result_xdr: None,
+                insufficient_fee_retries: 0,
             });
             tx
         }
