@@ -158,7 +158,7 @@ The plugin requires at least one Stellar relayer configured for transaction subm
 - **Network**: Use `testnet` for testing or `mainnet` for production
 - **Signers**: Each relayer references a signer by `signer_id`; signers are defined separately with keystore paths
 - **Keystore files**: Create keystore files for each account; see the [OpenZeppelin Relayer documentation](https://docs.openzeppelin.com/relayer) for key management
-- **Assets**: Configure the contract addresses of assets you want to accept payments in (for example, a USDC contract address)
+- **Assets**: Configure the contract addresses of assets you want to accept payments in. The address `CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA` used throughout this guide is the [USDC token contract on Stellar testnet](https://stellar.expert/explorer/testnet/contract/CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA). For mainnet, use the corresponding mainnet USDC contract address
 
 ### Channel Service Integration (Optional)
 
@@ -224,6 +224,7 @@ The plugin implements the API defined by the x402 v2 spec, making it compatible 
 To use OpenZeppelin Relayer and its x402-facilitator plugin with x402-express (and similar packages), point the facilitator to your Relayer plugin URL and pass the Relayer API key via `createAuthHeaders`:
 
 **.env**
+
 ```text
 STELLAR_ADDRESS=
 FACILITATOR_URL=http://localhost:8080/api/v1/plugins/x402-facilitator/call
@@ -250,12 +251,15 @@ if (!facilitatorUrl) {
   console.error("❌ FACILITATOR_URL environment variable is required");
   process.exit(1);
 }
-const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl, createAuthHeaders: async () => ({
-  // Use your Relayer API key for the plugin
-  verify: { Authorization: "Bearer RELAYER_API_KEY" },
-  settle: { Authorization: "Bearer RELAYER_API_KEY" },
-  supported: { Authorization: "Bearer RELAYER_API_KEY" },
-})});
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: facilitatorUrl,
+  createAuthHeaders: async () => ({
+    // Use your Relayer API key for the plugin
+    verify: { Authorization: "Bearer RELAYER_API_KEY" },
+    settle: { Authorization: "Bearer RELAYER_API_KEY" },
+    supported: { Authorization: "Bearer RELAYER_API_KEY" },
+  }),
+});
 
 const app = express();
 
@@ -275,9 +279,10 @@ app.use(
         mimeType: "application/json",
       },
     },
-    new x402ResourceServer(facilitatorClient)
-      .register("stellar:testnet", new ExactStellarScheme())
-
+    new x402ResourceServer(facilitatorClient).register(
+      "stellar:testnet",
+      new ExactStellarScheme(),
+    ),
   ),
 );
 
@@ -302,6 +307,110 @@ Set up an Express server with x402 payment middleware. For detailed instructions
 ### Client Setup (Fetch)
 
 Make requests to x402-protected endpoints using the fetch client. For detailed instructions, see the [x402 Fetch client guide](https://github.com/coinbase/x402/blob/main/examples/typescript/clients/advanced/README.md).
+
+### x402 with Stellar Channels Service
+
+For high-throughput x402 payment settlement, you can connect the x402 Facilitator plugin with the [OpenZeppelin Stellar Channels Service](/relayer/guides/stellar-channels-guide). The Channels service provides managed infrastructure for parallel transaction submission on Stellar, handling fee management and sequence number coordination automatically.
+
+**Benefits of using Channels with x402:**
+
+- **Parallel settlement**: Multiple x402 payments can be settled concurrently using a pool of channel accounts
+- **Automatic fee management**: The Channels service pays transaction fees on your behalf
+- **Zero infrastructure overhead**: No need to manage channel accounts or fund accounts yourself
+- **Higher throughput**: Avoids sequence number conflicts that can occur when settling many payments through a single relayer account
+
+To connect the x402 Facilitator plugin with the Channels service, add the `channel_service_api_url` and `channel_service_api_key` fields to your relayer configuration. Below is a full configuration example:
+
+```json
+{
+  "relayers": [
+    {
+      "id": "x402-test-relayer",
+      "name": "X402 Test Relayer",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "local-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer"
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "x402-facilitator",
+      "path": "x402-facilitator/index.ts",
+      "emit_logs": false,
+      "emit_traces": false,
+      "raw_response": true,
+      "forward_logs": true,
+      "allow_get_invocation": true,
+      "timeout": 30,
+      "config": {
+        "networks": [
+          {
+            "network": "stellar:testnet",
+            "type": "stellar",
+            "relayer_id": "x402-test-relayer",
+            "assets": [
+              "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+            ],
+            "channel_service_api_url": "https://channels.openzeppelin.com/testnet",
+            "channel_service_api_key": "CHANNELS_API_KEY"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+**Key configuration fields:**
+
+- **`channel_service_api_url`**: The URL of the Channels service. Use `https://channels.openzeppelin.com/testnet` for testnet or the appropriate endpoint for your environment.
+- **`channel_service_api_key`**: Your API key for the Channels service. See [Get Your API Key](/relayer/guides/stellar-channels-guide#1-get-your-api-key) for instructions on generating one.
+
+When these fields are present, the x402 Facilitator plugin routes settlement through the Channels service instead of submitting transactions directly via the relayer. The plugin sends the Soroban function XDR and authorization entries to the Channels service, which handles transaction building, simulation, and submission using its pool of channel accounts.
+
+For more details on the Channels service, see the [Stellar Channels Guide](/relayer/guides/stellar-channels-guide) and the [Channels Plugin documentation](/relayer/plugins/channels).
+
+### Adding Trustlines for Token Support
+
+<Callout>
+  This is only needed if the relayer address needs to hold tokens like USDC. If
+  the relayer is only used for transaction submission and does not receive or
+  hold the asset, no trustline is required.
+</Callout>
+
+Before a Stellar account can hold or receive tokens like USDC, it must establish a **trustline** to the token's contract. You can create a trustline using [Stellar Laboratory](https://laboratory.stellar.org/) to build a `Change Trust` transaction, then submit the XDR via the relayer:
+
+```bash
+POST /api/v1/relayers/{relayer-id}/transactions
+```
+
+```json
+{
+  "params": {
+    "network": "testnet",
+    "transaction_xdr": "<XDR_VALUE>"
+  }
+}
+```
 
 ## How It Works
 
