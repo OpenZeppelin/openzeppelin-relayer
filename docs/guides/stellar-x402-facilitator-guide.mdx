@@ -353,10 +353,10 @@ To connect the x402 Facilitator plugin with the Channels service, add the `chann
   "networks": "./config/networks",
   "plugins": [
     {
-      "id": "x402",
-      "path": "x402/index.ts",
-      "emit_logs": true,
-      "emit_traces": true,
+      "id": "x402-facilitator",
+      "path": "x402-facilitator/index.ts",
+      "emit_logs": false,
+      "emit_traces": false,
       "raw_response": true,
       "forward_logs": true,
       "allow_get_invocation": true,
@@ -370,7 +370,7 @@ To connect the x402 Facilitator plugin with the Channels service, add the `chann
             "assets": [
               "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
             ],
-            "channel_service_api_url": "https://channels-stg.openzeppelin.com",
+            "channel_service_api_url": "https://channels.openzeppelin.com/testnet",
             "channel_service_api_key": "CHANNELS_API_KEY"
           }
         ]
@@ -382,7 +382,7 @@ To connect the x402 Facilitator plugin with the Channels service, add the `chann
 
 **Key configuration fields:**
 
-- **`channel_service_api_url`**: The URL of the Channels service. Use `https://channels-stg.openzeppelin.com` for testnet or the appropriate endpoint for your environment.
+- **`channel_service_api_url`**: The URL of the Channels service. Use `https://channels.openzeppelin.com/testnet` for testnet or the appropriate endpoint for your environment.
 - **`channel_service_api_key`**: Your API key for the Channels service. See [Get Your API Key](/relayer/guides/stellar-channels-guide#1-get-your-api-key) for instructions on generating one.
 
 When these fields are present, the x402 Facilitator plugin routes settlement through the Channels service instead of submitting transactions directly via the relayer. The plugin sends the Soroban function XDR and authorization entries to the Channels service, which handles transaction building, simulation, and submission using its pool of channel accounts.
