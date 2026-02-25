@@ -137,7 +137,8 @@ where
 /// 2. Try to acquire global lock
 /// 3. If lock acquired: initialize all relayers and record completion time
 /// 4. If lock held by another instance: wait for completion
-/// 5. If lock error: proceed without coordination (graceful degradation)
+/// 5. If wait times out: recheck state and attempt recovery (lock holder may have crashed)
+/// 6. If lock error: proceed without coordination (graceful degradation)
 async fn coordinate_with_distributed_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayers: &[RelayerRepoModel],
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -180,10 +181,29 @@ where
 
     let lock_result = lock.try_acquire().await;
 
-    // Handle lock held by another instance (early return)
+    // Handle lock held by another instance
     if matches!(&lock_result, Ok(None)) {
         info!("Another instance is initializing relayers, waiting for completion");
-        return wait_for_initialization_complete(conn, prefix).await;
+        let completed = wait_for_initialization_complete(conn, prefix).await?;
+
+        if completed {
+            return Ok(());
+        }
+
+        // Timeout reached — the lock holder may have crashed without completing.
+        // Recheck: was initialization completed in the final moments?
+        warn!("Timeout waiting for initialization, rechecking state");
+
+        if is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS)
+            .await
+            .unwrap_or(false)
+        {
+            info!("Initialization completed during timeout window");
+            return Ok(());
+        }
+
+        // Not completed. Try to acquire the lock and take over initialization.
+        return recover_after_timeout(relayers, app_state, conn, prefix).await;
     }
 
     // Handle lock error - graceful degradation (early return)
@@ -221,9 +241,9 @@ where
 /// Waits for another instance to complete initialization.
 ///
 /// Polls periodically until:
-/// - Initialization is completed (detected via recent completion timestamp)
-/// - Timeout is reached (proceeds anyway)
-async fn wait_for_initialization_complete(conn: &Arc<Pool>, prefix: &str) -> Result<()> {
+/// - Initialization is completed (detected via recent completion timestamp) → returns `Ok(true)`
+/// - Timeout is reached without completion detected → returns `Ok(false)`
+async fn wait_for_initialization_complete(conn: &Arc<Pool>, prefix: &str) -> Result<bool> {
     let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
     let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
 
@@ -237,9 +257,89 @@ async fn wait_for_initialization_complete(conn: &Arc<Pool>, prefix: &str) -> Res
         poll_interval,
         "initialization",
     )
-    .await?;
+    .await
+}
 
-    Ok(())
+/// Attempts to recover after a wait timeout by acquiring the lock and initializing.
+///
+/// This handles the case where the lock holder crashed or errored without completing
+/// initialization. After timeout:
+/// - If the lock can be acquired (previous holder's TTL expired): take over and initialize
+/// - If the lock is still held (another instance is legitimately running): wait one more
+///   bounded period for completion, then initialize as last resort
+/// - If Redis errors: graceful degradation (initialize without coordination)
+async fn recover_after_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    relayers: &[RelayerRepoModel],
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{GLOBAL_INIT_LOCK_NAME}");
+    let recovery_lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match recovery_lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            // Lock expired (holder crashed) — we take over
+            warn!(
+                count = relayers.len(),
+                "Previous lock holder appears to have crashed, taking over initialization"
+            );
+            let result = run_initialization_batch(relayers, app_state).await;
+            if result.is_ok() {
+                if let Err(e) = set_global_init_completed(conn, prefix).await {
+                    warn!(error = %e, "Failed to record initialization completion time");
+                }
+            }
+            drop(guard);
+            result
+        }
+        Ok(None) => {
+            // Lock still held — another instance is legitimately running.
+            // Wait one more bounded period for completion instead of failing.
+            warn!("Lock still held by another instance after timeout, waiting for completion");
+            let completed = wait_for_initialization_complete(conn, prefix).await?;
+
+            if completed {
+                info!("Initialization completed by another instance during extended wait");
+                Ok(())
+            } else {
+                // Extended wait also timed out (~260s total). Proceed with initialization
+                // as a last resort rather than failing — duplicate side effects (notifications,
+                // jobs) are a minor cost compared to no instance initializing at all.
+                warn!("Extended wait also timed out, proceeding with initialization");
+                let result = run_initialization_batch(relayers, app_state).await;
+                if result.is_ok() {
+                    if let Err(e) = set_global_init_completed(conn, prefix).await {
+                        warn!(error = %e, "Failed to record initialization completion time");
+                    }
+                }
+                result
+            }
+        }
+        Err(e) => {
+            // Redis error — graceful degradation
+            warn!(
+                error = %e,
+                "Failed to check lock after timeout, attempting initialization without coordination"
+            );
+            run_initialization_batch(relayers, app_state).await
+        }
+    }
 }
 
 /// Runs the batch initialization of all relayers concurrently.
