@@ -13,13 +13,20 @@ ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig
 
 WORKDIR /usr/app
 
+# Optional: set to "redis-tls-native" or "redis-tls-rustls" to enable Redis TLS support
+ARG CARGO_FEATURES=""
+
 # Copy
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/app/target \
-    cargo install --root /usr/app --path . --debug --locked
+    if [ -n "$CARGO_FEATURES" ]; then \
+      cargo install --root /usr/app --path . --debug --locked --features "$CARGO_FEATURES"; \
+    else \
+      cargo install --root /usr/app --path . --debug --locked; \
+    fi
 
 # Setting up build directories
 FROM cgr.dev/chainguard/wolfi-base

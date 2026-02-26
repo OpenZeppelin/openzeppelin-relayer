@@ -53,6 +53,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------- |
 | [`basic-example`](./examples/basic-example/)                                         | Simple setup with Redis                                  |
 | [`redis-storage`](./examples/redis-storage/)                                         | Simple setup with Redis for storage                      |
+| [`redis-tls`](./examples/redis-tls/)                                                 | Redis with TLS encrypted connections                     |
 | [`basic-example-logging`](./examples/basic-example-logging/)                         | Configuration with file-based logging                    |
 | [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics                |
 | [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                 |

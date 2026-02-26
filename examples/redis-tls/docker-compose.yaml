@@ -1,0 +1,80 @@
+---
+version: '3.9'
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+      args:
+        CARGO_FEATURES: redis-tls-native
+    ports:
+      - 8080:8080/tcp
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+    environment:
+      # Note the "rediss://" scheme (double s) for TLS connections
+      REDIS_URL: rediss://redis:6380
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      REPOSITORY_STORAGE_TYPE: ${REPOSITORY_STORAGE_TYPE}
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
+      # Trust the self-signed CA certificate
+      SSL_CERT_FILE: /app/certs/ca.crt
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+      - ./certs:/app/certs:ro
+    depends_on:
+      - redis
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    ports:
+      - 6380:6380/tcp
+    volumes:
+      - redis_data:/data
+      - ./certs:/tls:ro
+    command:
+      - redis-server
+      - --tls-port
+      - '6380'
+      - --port
+      - '0'
+      - --tls-cert-file
+      - /tls/redis.crt
+      - --tls-key-file
+      - /tls/redis.key
+      - --tls-ca-cert-file
+      - /tls/ca.crt
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+    restart: on-failure:5
+networks:
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE
