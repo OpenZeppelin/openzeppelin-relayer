@@ -78,7 +78,3 @@ secrets:
     environment: WEBHOOK_SIGNING_KEY
   keystore_passphrase:
     environment: KEYSTORE_PASSPHRASE
-  repository_storage_type:
-    environment: REPOSITORY_STORAGE_TYPE
-  storage_encryption_key:
-    environment: STORAGE_ENCRYPTION_KEY

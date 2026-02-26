@@ -32,7 +32,8 @@ openssl x509 -req -sha256 \
 
 rm -f "$CERT_DIR/redis.csr" "$CERT_DIR/ca.srl"
 
-chmod 644 "$CERT_DIR"/*.crt "$CERT_DIR"/*.key
+chmod 644 "$CERT_DIR"/*.crt
+chmod 600 "$CERT_DIR"/*.key
 
 echo "Certificates generated in $CERT_DIR/"
 echo "  ca.crt     - CA certificate"
