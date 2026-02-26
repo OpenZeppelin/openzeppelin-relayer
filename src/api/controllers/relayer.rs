@@ -22,11 +22,12 @@ use crate::{
         transaction::request::{
             SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
         },
-        ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
-        NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
-        PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
-        RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
-        TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
+        ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, GetStatusOptions,
+        NetworkRepoModel, NetworkTransactionRequest, NetworkType, NotificationRepoModel,
+        PaginationMeta, PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel,
+        RelayerRepoUpdater, RelayerResponse, Signer as SignerDomainModel, SignerRepoModel,
+        ThinDataAppState, TransactionRepoModel, TransactionResponse, TransactionStatus,
+        UpdateRelayerRequestRaw,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -353,6 +354,7 @@ where
 /// The status of the specified relayer.
 pub async fn get_relayer_status<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
+    options: GetStatusOptions,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -368,7 +370,7 @@ where
 {
     let relayer = get_network_relayer(relayer_id, &state).await?;
 
-    let status = relayer.get_status().await?;
+    let status = relayer.get_status(options).await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(status)))
 }

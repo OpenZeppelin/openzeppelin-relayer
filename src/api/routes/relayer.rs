@@ -61,13 +61,39 @@ async fn delete_relayer(
     relayer::delete_relayer(relayer_id.into_inner(), data).await
 }
 
+/// Query parameters for the relayer status endpoint.
+#[derive(Debug, Deserialize)]
+pub struct StatusQuery {
+    #[serde(default = "default_true")]
+    pub include_balance: bool,
+    #[serde(default = "default_true")]
+    pub include_pending_count: bool,
+    #[serde(default = "default_true")]
+    pub include_last_confirmed_tx: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Fetches the current status of a specific relayer.
 #[get("/relayers/{relayer_id}/status")]
 async fn get_relayer_status(
     relayer_id: web::Path<String>,
+    query: web::Query<StatusQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::get_relayer_status(relayer_id.into_inner(), data).await
+    let q = query.into_inner();
+    relayer::get_relayer_status(
+        relayer_id.into_inner(),
+        crate::models::GetStatusOptions {
+            include_balance: q.include_balance,
+            include_pending_count: q.include_pending_count,
+            include_last_confirmed_tx: q.include_last_confirmed_tx,
+        },
+        data,
+    )
+    .await
 }
 
 /// Retrieves the balance of a specific relayer.
@@ -556,5 +582,56 @@ mod tests {
         assert_ne!(resp.status(), StatusCode::NOT_FOUND);
 
         Ok(())
+    }
+
+    #[actix_web::test]
+    async fn test_status_query_defaults() {
+        // Empty JSON object should default all fields to true
+        let query: StatusQuery = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(query.include_balance);
+        assert!(query.include_pending_count);
+        assert!(query.include_last_confirmed_tx);
+    }
+
+    #[actix_web::test]
+    async fn test_status_query_all_false() {
+        let query: StatusQuery = serde_json::from_value(serde_json::json!({
+            "include_balance": false,
+            "include_pending_count": false,
+            "include_last_confirmed_tx": false,
+        }))
+        .unwrap();
+        assert!(!query.include_balance);
+        assert!(!query.include_pending_count);
+        assert!(!query.include_last_confirmed_tx);
+    }
+
+    #[actix_web::test]
+    async fn test_status_query_partial() {
+        // Only override one param, others should default to true
+        let query: StatusQuery = serde_json::from_value(serde_json::json!({
+            "include_balance": false,
+        }))
+        .unwrap();
+        assert!(!query.include_balance);
+        assert!(query.include_pending_count);
+        assert!(query.include_last_confirmed_tx);
+    }
+
+    #[actix_web::test]
+    async fn test_status_route_accepts_query_params() {
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(get_test_app_state().await))
+                .configure(init),
+        )
+        .await;
+
+        // With query params — route should still be registered (not 404)
+        let req = test::TestRequest::get()
+            .uri("/relayers/test-id/status?include_balance=false&include_pending_count=false")
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
