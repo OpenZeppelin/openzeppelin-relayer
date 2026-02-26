@@ -103,6 +103,60 @@ STORAGE_ENCRYPTION_KEY=your-encryption-key-here
 
 ## Security Considerations
 
+### Redis TLS (Encrypted Connections)
+
+For production deployments, especially with cloud-managed Redis services (AWS ElastiCache, Azure Cache for Redis, etc.), TLS encryption is strongly recommended to protect data in transit.
+
+#### Enabling TLS
+
+TLS support is provided through optional Cargo feature flags. Enable the appropriate feature when building:
+
+```bash
+# Using native-tls (recommended for most deployments, uses system certificates)
+cargo build --release --features redis-tls-native
+
+# Using rustls (pure Rust, no system OpenSSL dependency)
+cargo build --release --features redis-tls-rustls
+```
+
+#### Using TLS Connections
+
+Once built with TLS support, use the `rediss://` URI scheme (note the double `s`) instead of `redis://`:
+
+```bash
+# TLS connection
+REDIS_URL=rediss://my-cluster.xxx.cache.amazonaws.com:6380
+
+# TLS with authentication
+REDIS_URL=rediss://:your-auth-token@my-cluster.xxx.cache.amazonaws.com:6380
+
+# TLS with read replicas
+REDIS_URL=rediss://my-cluster.xxx.cache.amazonaws.com:6380
+REDIS_READER_URL=rediss://my-cluster-ro.xxx.cache.amazonaws.com:6380
+```
+
+<Callout type='warn'>
+
+
+Without a TLS feature enabled, connections using the `rediss://` scheme will fail at runtime. Make sure to build with either `redis-tls-native` or `redis-tls-rustls`.
+
+</Callout>
+
+#### Docker with TLS
+
+When using Docker, pass the feature flag as a build argument:
+
+```bash
+docker build --build-arg CARGO_FEATURES=redis-tls-native -f Dockerfile.production .
+```
+
+#### Choosing a TLS Backend
+
+| Feature | Backend | When to use |
+| --- | --- | --- |
+| `redis-tls-native` | System native TLS (OpenSSL/Schannel/Security.framework) | Most production deployments, AWS ElastiCache, system certificate store |
+| `redis-tls-rustls` | rustls (pure Rust) | When avoiding OpenSSL dependency, minimal container images |
+
 ### Redis Security
 
 <Callout type='warn'>
@@ -110,8 +164,9 @@ STORAGE_ENCRYPTION_KEY=your-encryption-key-here
 
 When using Redis storage in production:
 
+* ***Use encryption in transit***: Build with a TLS feature and use `rediss://` URIs
 * ***Use encryption at rest***: Always set `STORAGE_ENCRYPTION_KEY`
-* ***Secure Redis access***: Use Redis AUTH, TLS, and network security
+* ***Secure Redis access***: Use Redis AUTH and network security
 * ***Network isolation***: Deploy Redis in a private network
 * ***Regular backups***: Implement Redis backup strategy
 * ***Monitor access***: Log and monitor Redis access patterns

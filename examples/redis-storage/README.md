@@ -117,3 +117,7 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 ### Transaction Expiration from Storage
 
 In order to clean up space used by transactions, transactions are deleted after 4 hours by default once they reach their final state. In cases when they should be kept in storage for a longer time, this setting can be overridden by setting the `TRANSACTION_EXPIRATION_HOURS` environment variable.
+
+### Security Note
+
+For production deployments, consider using Redis over TLS to encrypt data in transit. See the [`redis-tls`](../redis-tls/) example for configuration details.
