@@ -154,6 +154,9 @@ where
                 // transaction alive. The status checker will handle retries:
                 // - Submitted txs: resubmitted with exponential backoff
                 // - Sent txs: re-enqueued via handle_sent_state
+                crate::metrics::STELLAR_TRY_AGAIN_LATER
+                    .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
+                    .inc();
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
@@ -917,6 +920,70 @@ mod tests {
             // Transaction stays in Sent — status checker will re-enqueue submission
             let returned_tx = res.unwrap();
             assert_eq!(returned_tx.status, TransactionStatus::Sent);
+        }
+
+        #[tokio::test]
+        async fn submit_try_again_later_then_status_checker_reenqueues_submit() {
+            let relayer = create_test_relayer();
+
+            // submission returns TRY_AGAIN_LATER, transaction remains Sent.
+            let mut submit_mocks = default_test_mocks();
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            submit_mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .times(1)
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+            submit_mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
+                .times(1)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.sent_at = upd.sent_at.clone();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            let submit_handler = make_stellar_tx_handler(relayer.clone(), submit_mocks);
+            let mut sent_tx = create_test_transaction(&relayer.id);
+            sent_tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = sent_tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let mut returned_tx = submit_handler
+                .submit_transaction_impl(sent_tx)
+                .await
+                .unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert!(returned_tx.sent_at.is_some());
+
+            // status check sees stale Sent tx and re-enqueues submit job.
+            returned_tx.sent_at = Some((Utc::now() - chrono::Duration::seconds(31)).to_rfc3339());
+
+            let mut status_mocks = default_test_mocks();
+            status_mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let status_handler = make_stellar_tx_handler(relayer.clone(), status_mocks);
+            let status_result = status_handler
+                .handle_transaction_status_impl(returned_tx, None)
+                .await
+                .unwrap();
+            assert_eq!(status_result.status, TransactionStatus::Sent);
         }
 
         #[tokio::test]
