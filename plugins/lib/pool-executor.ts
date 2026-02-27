@@ -690,37 +690,19 @@ function safeStringify(value: unknown): string {
 }
 
 /**
- * Creates a console-like object that captures logs with lazy stringification.
- * Stringification is deferred until logs are accessed to reduce overhead.
+ * Creates a console-like object that captures logs with eager stringification.
+ * Args are stringified immediately to ensure the resulting LogEntry objects are
+ * plain data that can be transferred across worker threads via structuredClone.
+ * Storing raw args (lazy) would cause DataCloneError if a plugin logs
+ * non-cloneable objects like fetch Response, Streams, or class instances.
  */
 function createPluginConsole(logs: LogEntry[]): Console {
   const log = (level: LogEntry['level']) => (...args: any[]) => {
-    // Store raw args, stringify lazily when accessed
-    const entry: any = {
-      level,
-      _args: args, // Store raw args
-      _stringified: false,
-      _message: '',
-    };
+    const message = args.map((arg: any) =>
+      typeof arg === 'object' ? safeStringify(arg) : String(arg)
+    ).join(' ');
 
-    // Lazy getter for message
-    Object.defineProperty(entry, 'message', {
-      get() {
-        if (!this._stringified) {
-          this._message = this._args.map((arg: any) =>
-            typeof arg === 'object' ? safeStringify(arg) : String(arg)
-          ).join(' ');
-          this._stringified = true;
-          // Clear raw args to free memory
-          delete this._args;
-        }
-        return this._message;
-      },
-      enumerable: true,
-      configurable: true,
-    });
-
-    logs.push(entry);
+    logs.push({ level, message });
   };
 
   return {
