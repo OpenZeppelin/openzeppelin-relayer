@@ -38,14 +38,14 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Get changed files
         id: changed-files-yaml
-        uses: tj-actions/changed-files@e0021407031f5be11a464abee9a0776171c79891  # v47.0.1
+        uses: tj-actions/changed-files@7dee1b0c1557f278e5c7dc244927139d78c0e22a  # v47.0.4
         with:
           files_yaml: |
             code:
@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-22.04-oz-8core
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Failed
@@ -90,7 +90,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -103,7 +103,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack
-        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
+        uses: taiki-e/install-action@68675c5a5f1a6950c3975d33f3ae0ef155e5bf3d  # v2.68.15
         with:
           tool: cargo-hack
 
@@ -117,7 +117,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -140,7 +140,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -164,13 +164,13 @@ jobs:
           | sarif-fmt
         continue-on-error: true
       - name: upload sarif artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: clippy-results.sarif
           path: clippy-results.sarif
           retention-days: 1
       - name: Upload
-        uses: github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30  # v3.29.5
+        uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v3.29.5
         with:
           sarif_file: clippy-results.sarif
           wait-for-processing: true
@@ -186,7 +186,7 @@ jobs:
     runs-on: ubuntu-22.04-oz-8core
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -224,7 +224,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack and cargo-llvm-cov
-        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
+        uses: taiki-e/install-action@68675c5a5f1a6950c3975d33f3ae0ef155e5bf3d  # v2.68.15
         with:
           tool: cargo-hack,cargo-llvm-cov
       - name: Run Developer Tests (excluding AI) and Generate Coverage Report
@@ -273,7 +273,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -311,7 +311,7 @@ jobs:
       - name: Get cache-hit output
         run: 'echo "Cache hit >>>>>: ${{ steps.init.outputs.cache-hit }}"'
       - name: Install cargo hack and cargo-llvm-cov
-        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
+        uses: taiki-e/install-action@68675c5a5f1a6950c3975d33f3ae0ef155e5bf3d  # v2.68.15
         with:
           tool: cargo-hack,cargo-llvm-cov
       - name: Run Properties Tests and Generate Coverage Report
@@ -339,7 +339,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b  # v2.15.0
         with:
           egress-policy: audit
       - name: Checkout Code
@@ -347,7 +347,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
       - name: Build local container
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           tags: openzeppelin-relayer-dev:${{ github.sha }}
           push: false
@@ -355,7 +355,7 @@ jobs:
           file: Dockerfile.development
           platforms: linux/amd64
       - name: Scan image
-        uses: anchore/scan-action@8d2fce09422cd6037e577f4130e9b925e9a37175  # v7.3.1
+        uses: anchore/scan-action@7037fa011853d5a11690026fb85feee79f4c946c  # v7.3.2
         with:
           image: openzeppelin-relayer-dev:${{ github.sha }}
           fail-build: true
