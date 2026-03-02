@@ -236,10 +236,6 @@ pub struct SharedSocketService {
     shutdown_tx: watch::Sender<bool>,
     /// Semaphore for connection limiting (prevents race conditions)
     connection_semaphore: Arc<Semaphore>,
-    /// Connection idle timeout
-    idle_timeout: Duration,
-    /// Read timeout per line
-    read_timeout: Duration,
 }
 
 impl SharedSocketService {
@@ -252,8 +248,6 @@ impl SharedSocketService {
 
         // Use centralized config
         let config = get_config();
-        let idle_timeout = Duration::from_secs(config.socket_idle_timeout_secs);
-        let read_timeout = Duration::from_secs(config.socket_read_timeout_secs);
         let max_connections = config.socket_max_connections;
 
         let executions: Arc<SccHashMap<String, ExecutionContext>> = Arc::new(SccHashMap::new());
@@ -297,8 +291,6 @@ impl SharedSocketService {
             started: AtomicBool::new(false),
             shutdown_tx,
             connection_semaphore: Arc::new(Semaphore::new(max_connections)),
-            idle_timeout,
-            read_timeout,
         })
     }
 
@@ -429,8 +421,6 @@ impl SharedSocketService {
         let socket_path = self.socket_path.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let connection_semaphore = self.connection_semaphore.clone();
-        let idle_timeout = self.idle_timeout;
-        let read_timeout = self.read_timeout;
 
         debug!(
             "Shared socket service: starting listener on {}",
@@ -466,13 +456,11 @@ impl SharedSocketService {
                                             // Permit held until task completes (auto-released on drop)
                                             let _permit = permit;
 
-                                            let result = Self::handle_connection_with_timeout(
+                                            let result = Self::handle_connection(
                                                 stream,
                                                 relayer_api_clone,
                                                 state_clone,
                                                 executions_clone,
-                                                idle_timeout,
-                                                read_timeout,
                                             )
                                             .await;
 
@@ -506,47 +494,11 @@ impl SharedSocketService {
         Ok(())
     }
 
-    /// Handle connection with overall idle timeout
-    #[allow(clippy::type_complexity)]
-    async fn handle_connection_with_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-        stream: UnixStream,
-        relayer_api: Arc<RelayerApi>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-        executions: Arc<SccHashMap<String, ExecutionContext>>,
-        idle_timeout: Duration,
-        read_timeout: Duration,
-    ) -> Result<(), PluginError>
-    where
-        J: JobProducerTrait + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        TR: TransactionRepository
-            + Repository<TransactionRepoModel, String>
-            + Send
-            + Sync
-            + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-    {
-        // Wrap the entire connection handling with an idle timeout
-        match tokio::time::timeout(
-            idle_timeout,
-            Self::handle_connection(stream, relayer_api, state, executions, read_timeout),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                debug!("Connection idle timeout reached");
-                Ok(())
-            }
-        }
-    }
-
-    /// Handle a connection from a plugin
+    /// Handle a connection from a plugin.
+    ///
+    /// The inactivity timeout resets on every message — no hard wall-clock cap.
+    /// Connections stay alive as long as they're active, which is essential for
+    /// reused/pooled sockets and plugins making external calls.
     ///
     /// Security: The first message must be a Register message. Once registered,
     /// the connection is "tagged" with that execution_id and cannot be changed.
@@ -557,7 +509,6 @@ impl SharedSocketService {
         relayer_api: Arc<RelayerApi>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
         executions: Arc<SccHashMap<String, ExecutionContext>>,
-        read_timeout: Duration,
     ) -> Result<(), PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -586,17 +537,29 @@ impl SharedSocketService {
         // Once set, this cannot be changed for the lifetime of the connection
         let mut bound_execution_id: Option<String> = None;
 
+        // Safety timeout: reap connections that are silent for longer than the maximum
+        // plugin execution timeout + margin. This prevents permit exhaustion from stuck
+        // or rogue clients. Not configurable — it's derived from DEFAULT_PLUGIN_TIMEOUT_SECONDS
+        // so it can never desync with execution timeouts.
+        let safety_timeout =
+            Duration::from_secs(crate::constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60);
+
         loop {
-            // Read line with timeout to prevent hanging connections
-            let line = match tokio::time::timeout(read_timeout, reader.next_line()).await {
+            // Read next line with safety timeout. In normal operation the client sends
+            // messages or closes the socket (EOF) well within this window. The timeout
+            // only fires for truly orphaned connections (stuck event loop, rogue client).
+            let line = match tokio::time::timeout(safety_timeout, reader.next_line()).await {
                 Ok(Ok(Some(line))) => line,
-                Ok(Ok(None)) => break, // EOF
+                Ok(Ok(None)) => break, // EOF — client closed connection
                 Ok(Err(e)) => {
                     warn!("Error reading from connection: {}", e);
                     break;
                 }
                 Err(_) => {
-                    debug!("Read timeout on connection");
+                    debug!(
+                        "Connection safety timeout reached ({}s with no message)",
+                        safety_timeout.as_secs()
+                    );
                     break;
                 }
             };
@@ -1259,11 +1222,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_idle_timeout() {
+    async fn test_connection_stays_alive_within_safety_timeout() {
         let temp_dir = tempdir().unwrap();
-        let socket_path = temp_dir.path().join("shared_idle_timeout.sock");
+        let socket_path = temp_dir.path().join("shared_safety.sock");
 
-        // Create service with short idle timeout for testing
         let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
         let state = create_mock_app_state(None, None, None, None, None, None).await;
 
@@ -1273,7 +1235,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execution_id = "test-exec-idle".to_string();
+        let execution_id = "test-exec-safety".to_string();
         let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1290,27 +1252,28 @@ mod tests {
             .unwrap();
         client.flush().await.unwrap();
 
-        // Wait longer than idle timeout (configured in service)
-        // Note: idle_timeout is from config, but we can test that connection stays alive
-        // within a reasonable time
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Wait well below the safety timeout (DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60s).
+        // Connection must stay alive — the safety timeout only fires for truly stuck clients.
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Connection should still be alive if we're within timeout
-        // Send a Shutdown message to verify connection is still up
+        // Connection should still be alive — send a Shutdown message to verify
         let shutdown_msg = PluginMessage::Shutdown;
         let write_result = client
             .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
             .await;
 
-        assert!(write_result.is_ok(), "Connection should still be alive");
+        assert!(
+            write_result.is_ok(),
+            "Connection should still be alive within safety timeout"
+        );
 
         service.shutdown().await;
     }
 
     #[tokio::test]
-    async fn test_read_timeout_handling() {
+    async fn test_idle_connection_cleaned_up_by_safety_timeout() {
         let temp_dir = tempdir().unwrap();
-        let socket_path = temp_dir.path().join("shared_read_timeout.sock");
+        let socket_path = temp_dir.path().join("shared_safety_timeout.sock");
 
         let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
         let state = create_mock_app_state(None, None, None, None, None, None).await;
@@ -1321,7 +1284,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execution_id = "test-exec-read-timeout".to_string();
+        let execution_id = "test-exec-safety-timeout".to_string();
         let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1338,13 +1301,13 @@ mod tests {
             .unwrap();
         client.flush().await.unwrap();
 
-        // Don't send anything else - connection should be cleaned up after read timeout
-        // Read timeout is configured in service (from config)
+        // Don't send anything else - connection will eventually be reaped
+        // by the safety timeout (DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60s)
 
-        // Wait a bit (but not as long as full timeout)
+        // Wait a bit - connection should still be alive well within safety timeout
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Connection should still be valid for a short time
+        // Connection should still be valid (safety timeout is ~360s)
         drop(client);
 
         service.shutdown().await;
