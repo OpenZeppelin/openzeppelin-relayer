@@ -12,7 +12,8 @@ use crate::{
     domain::{
         stellar::i64_from_u64,
         xdr_utils::{
-            extract_soroban_resource_fee, update_xdr_fee, update_xdr_sequence, xdr_needs_simulation,
+            extract_operations, extract_soroban_resource_fee, update_xdr_fee, update_xdr_sequence,
+            xdr_needs_simulation,
         },
         SignTransactionResponse,
     },
@@ -205,10 +206,16 @@ pub async fn ensure_minimum_fee(
 
 /// Calculate the required fee for a fee-bump transaction.
 ///
-/// For Soroban transactions, this includes both the inclusion fee and resource fee.
+/// Per CAP-0015, a fee-bump transaction has an effective number of operations
+/// equal to `inner_num_ops + 1`. The fee-bump fee must satisfy:
+///   `fee_bump_fee / (inner_num_ops + 1) >= inner_fee / inner_num_ops`
+///
+/// For Soroban transactions (always 1 operation), this means the fee-bump fee
+/// must be at least `2 * inner_fee`.
+///
 /// If the inner transaction already has SorobanTransactionData with a resource fee,
 /// that fee is used instead of re-simulating (useful for pre-simulated signed transactions).
-/// For regular transactions, it uses the provided max_fee.
+/// For regular transactions, it uses the provided max_fee scaled by the operation count.
 pub async fn calculate_fee_bump_required_fee<P>(
     inner_envelope: &TransactionEnvelope,
     max_fee: i64,
@@ -217,31 +224,57 @@ pub async fn calculate_fee_bump_required_fee<P>(
 where
     P: StellarProviderTrait + Send + Sync,
 {
+    // CAP-0015: fee-bump effective num_ops = inner_num_ops + 1
+    let inner_num_ops = extract_operations(inner_envelope)
+        .map(|ops| ops.len() as i64)
+        .unwrap_or(1)
+        .max(1);
+    let fee_bump_num_ops = inner_num_ops.checked_add(1).ok_or_else(|| {
+        TransactionError::ValidationError(format!(
+            "Operation count overflow: inner_num_ops ({inner_num_ops}) + 1 exceeds i64::MAX"
+        ))
+    })?;
+
     // Check if the inner transaction already has SorobanTransactionData with resource fee.
     // This allows skipping simulation for pre-simulated signed transactions.
     if let Some(existing_resource_fee) = extract_soroban_resource_fee(inner_envelope) {
         let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
-        let required_fee = inclusion_fee.checked_add(existing_resource_fee).ok_or_else(|| {
+        let inner_fee = inclusion_fee.checked_add(existing_resource_fee).ok_or_else(|| {
             TransactionError::ValidationError(format!(
                 "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({existing_resource_fee}) exceeds i64::MAX"
             ))
         })?;
 
+        // Scale fee for fee-bump using ceil division to satisfy CAP-0015 inequality.
+        let required_fee = scale_fee_for_fee_bump(inner_fee, inner_num_ops, fee_bump_num_ops)?;
+
         debug!(
             "Using existing resource fee from inner transaction. \
-             Inclusion fee: {}, Resource fee: {}, Total: {}",
-            inclusion_fee, existing_resource_fee, required_fee
+             Inclusion fee: {}, Resource fee: {}, Inner fee: {}, \
+             Fee-bump num_ops: {} (inner: {}), Required fee-bump fee: {}",
+            inclusion_fee,
+            existing_resource_fee,
+            inner_fee,
+            fee_bump_num_ops,
+            inner_num_ops,
+            required_fee
         );
 
-        // Validate max_fee covers the existing fee
+        // Validate max_fee covers the required fee-bump fee
         if max_fee < required_fee {
-            return Err(TransactionError::ValidationError(format!(
-                "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} \
-                 (inclusion: {inclusion_fee} + resource: {existing_resource_fee})"
-            )));
+            // Use required_fee instead of max_fee when max_fee is insufficient
+            // The plugin's max_fee was calculated for the inner tx, not the fee-bump
+            debug!(
+                "max_fee ({max_fee}) is below required fee-bump fee ({required_fee}), using required fee"
+            );
         }
 
-        return Ok(max_fee as u32);
+        return u32::try_from(required_fee.max(max_fee)).map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Fee conversion overflow: required fee {} exceeds u32::MAX",
+                required_fee.max(max_fee)
+            ))
+        });
     }
 
     // Check if the inner transaction needs simulation (Soroban operations)
@@ -250,37 +283,101 @@ where
 
         match simulate_if_needed(inner_envelope, provider).await? {
             Some(sim_resp) => {
-                // Soroban transactions always have exactly one operation
-                let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as u64;
-                let resource_fee = sim_resp.min_resource_fee;
-                let required_fee = inclusion_fee + resource_fee;
+                let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
+                let resource_fee = i64::try_from(sim_resp.min_resource_fee).map_err(|_| {
+                    TransactionError::ValidationError(format!(
+                        "Resource fee conversion overflow: min_resource_fee ({}) exceeds i64::MAX",
+                        sim_resp.min_resource_fee
+                    ))
+                })?;
+                let inner_fee = inclusion_fee.checked_add(resource_fee).ok_or_else(|| {
+                    TransactionError::ValidationError(format!(
+                        "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({resource_fee}) exceeds i64::MAX"
+                    ))
+                })?;
+
+                // Scale for fee-bump num_ops (CAP-0015).
+                let required_fee =
+                    scale_fee_for_fee_bump(inner_fee, inner_num_ops, fee_bump_num_ops)?;
 
                 debug!(
-                    "Simulation complete. Inclusion fee: {}, Resource fee: {}, Total: {}",
-                    inclusion_fee, resource_fee, required_fee
+                    "Simulation complete. Inclusion fee: {}, Resource fee: {}, Inner fee: {}, \
+                     Fee-bump num_ops: {} (inner: {}), Required fee-bump fee: {}",
+                    inclusion_fee,
+                    resource_fee,
+                    inner_fee,
+                    fee_bump_num_ops,
+                    inner_num_ops,
+                    required_fee
                 );
 
-                // Ensure max_fee covers the required amount
-                if (max_fee as u64) < required_fee {
-                    return Err(TransactionError::ValidationError(
-                        format!(
-                            "max_fee ({max_fee}) is insufficient. Required fee: {required_fee} (inclusion: {inclusion_fee} + resource: {resource_fee})"
-                        )
-                    ));
-                }
-
-                // Use max_fee but ensure it's at least the required amount
-                Ok(max_fee as u32)
+                u32::try_from(required_fee.max(max_fee)).map_err(|_| {
+                    TransactionError::ValidationError(format!(
+                        "Fee conversion overflow: required fee {} exceeds u32::MAX",
+                        required_fee.max(max_fee)
+                    ))
+                })
             }
             None => {
-                // No simulation needed, use max_fee
-                Ok(max_fee as u32)
+                // No simulation needed, scale max_fee for fee-bump
+                let required_fee =
+                    scale_fee_for_fee_bump(max_fee, inner_num_ops, fee_bump_num_ops)?;
+                u32::try_from(required_fee).map_err(|_| {
+                    TransactionError::ValidationError(format!(
+                        "Fee conversion overflow: required fee {required_fee} exceeds u32::MAX"
+                    ))
+                })
             }
         }
     } else {
-        // No simulation needed, use max_fee
-        Ok(max_fee as u32)
+        // No simulation needed, scale max_fee for fee-bump
+        let required_fee = scale_fee_for_fee_bump(max_fee, inner_num_ops, fee_bump_num_ops)?;
+        u32::try_from(required_fee).map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Fee conversion overflow: required fee {required_fee} exceeds u32::MAX"
+            ))
+        })
     }
+}
+
+/// Scale inner fee for fee-bump operation count using ceil division:
+/// `ceil(inner_fee * fee_bump_num_ops / inner_num_ops)`.
+fn scale_fee_for_fee_bump(
+    inner_fee: i64,
+    inner_num_ops: i64,
+    fee_bump_num_ops: i64,
+) -> Result<i64, TransactionError> {
+    if inner_num_ops <= 0 || fee_bump_num_ops <= 0 {
+        return Err(TransactionError::ValidationError(format!(
+            "Invalid operation counts: inner_num_ops={inner_num_ops}, fee_bump_num_ops={fee_bump_num_ops}"
+        )));
+    }
+    if inner_fee < 0 {
+        return Err(TransactionError::ValidationError(format!(
+            "Invalid inner fee: {inner_fee} (must be non-negative)"
+        )));
+    }
+
+    // Ceil division: ceil(a / b) = (a + b - 1) / b for positive integers.
+    let numerator = inner_fee
+        .checked_mul(fee_bump_num_ops)
+        .ok_or_else(|| {
+            TransactionError::ValidationError(format!(
+                "Fee overflow computing fee-bump required fee for {inner_fee} * {fee_bump_num_ops}"
+            ))
+        })?
+        .checked_add(inner_num_ops - 1)
+        .ok_or_else(|| {
+            TransactionError::ValidationError(format!(
+                "Fee overflow computing ceil adjustment for numerator + ({inner_num_ops} - 1)"
+            ))
+        })?;
+
+    numerator.checked_div(inner_num_ops).ok_or_else(|| {
+        TransactionError::ValidationError(format!(
+            "Division error computing fee-bump required fee for numerator {numerator} / {inner_num_ops}"
+        ))
+    })
 }
 
 // Additional helper methods for transaction preparation
@@ -644,6 +741,7 @@ mod send_submit_transaction_job_tests {
 #[cfg(test)]
 mod calculate_fee_bump_required_fee_tests {
     use super::*;
+    use crate::models::TransactionError;
     use crate::services::provider::MockStellarProviderTrait;
     use soroban_rs::xdr::{
         Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerFootprint, Memo,
@@ -740,33 +838,38 @@ mod calculate_fee_bump_required_fee_tests {
         // no expectation is set
         let provider = MockStellarProviderTrait::new();
 
-        let max_fee = 100000i64;
+        // inner_fee = 100 (inclusion) + 50000 (resource) = 50100
+        // CAP-0015: fee_bump_num_ops = 1 + 1 = 2
+        // required_fee = 50100 * 2 / 1 = 100200
+        let max_fee = 200000i64;
         let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
 
         assert!(result.is_ok());
+        // Should return required_fee (100200) since max_fee (200000) > required_fee
+        // max(required_fee, max_fee) = max(100200, 200000) = 200000
         assert_eq!(result.unwrap(), max_fee as u32);
     }
 
     #[tokio::test]
-    async fn test_calculate_fee_bump_validates_max_fee_with_existing_data() {
-        // Create a Soroban transaction envelope with existing SorobanTransactionData
+    async fn test_calculate_fee_bump_accounts_for_cap0015_num_ops() {
+        // Verify that fee-bump fee is scaled by (inner_ops + 1) / inner_ops per CAP-0015
         let resource_fee = 50000i64;
         let envelope = create_soroban_envelope_with_existing_data(resource_fee);
 
         let provider = MockStellarProviderTrait::new();
 
-        // max_fee is less than required (inclusion_fee + resource_fee)
-        // inclusion_fee = 100 (STELLAR_DEFAULT_TRANSACTION_FEE)
-        // required = 100 + 50000 = 50100
-        let max_fee = 40000i64; // Less than required
+        // inner_fee = 100 + 50000 = 50100 (for 1 Soroban operation)
+        // CAP-0015: fee_bump_num_ops = 1 + 1 = 2
+        // required_fee = 50100 * 2 / 1 = 100200
+        // Plugin sends max_fee based on inner fee calculation (doesn't know about +1)
+        let max_fee = 50100i64; // Same as inner_fee
 
         let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
 
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            matches!(err, TransactionError::ValidationError(msg) if msg.contains("insufficient"))
-        );
+        // Should succeed with the properly scaled fee, not error
+        assert!(result.is_ok());
+        // Fee should be doubled for 1-op Soroban tx
+        assert_eq!(result.unwrap(), 100200u32);
     }
 
     #[tokio::test]
@@ -776,10 +879,30 @@ mod calculate_fee_bump_required_fee_tests {
 
         let provider = MockStellarProviderTrait::new();
 
+        // No soroban data, no simulation needed.
+        // max_fee is scaled by fee_bump_num_ops / inner_num_ops.
+        // The envelope has 0 ops but we clamp to 1, so fee_bump_num_ops = 2.
+        // required = 100000 * 2 / 1 = 200000
         let max_fee = 100000i64;
         let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), max_fee as u32);
+        assert_eq!(result.unwrap(), 200000u32);
+    }
+
+    #[test]
+    fn test_scale_fee_for_fee_bump_uses_ceil_division() {
+        // ceil(101 * 3 / 2) = ceil(303 / 2) = 152
+        let scaled = scale_fee_for_fee_bump(101, 2, 3).unwrap();
+        assert_eq!(scaled, 152);
+    }
+
+    #[test]
+    fn test_scale_fee_for_fee_bump_rejects_invalid_inputs() {
+        let err = scale_fee_for_fee_bump(-1, 1, 2).unwrap_err();
+        assert!(matches!(err, TransactionError::ValidationError(_)));
+
+        let err = scale_fee_for_fee_bump(100, 0, 1).unwrap_err();
+        assert!(matches!(err, TransactionError::ValidationError(_)));
     }
 }
