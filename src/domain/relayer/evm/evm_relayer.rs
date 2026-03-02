@@ -42,10 +42,10 @@ use crate::{
     },
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        PaginationQuery, RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes,
-        TransactionRepoModel, TransactionStatus,
+        EvmNetwork, GetStatusOptions, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse,
+        NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, PaginationQuery, RelayerRepoModel, RelayerStatus, RepositoryError,
+        RpcErrorCodes, TransactionRepoModel, TransactionStatus,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -360,7 +360,7 @@ where
             relayer_id = %self.relayer.id,
         )
     )]
-    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
+    async fn get_status(&self, options: GetStatusOptions) -> Result<RelayerStatus, RelayerError> {
         let relayer_model = &self.relayer;
 
         // Get nonce from transaction counter store instead of network
@@ -373,36 +373,48 @@ where
             .unwrap_or(0);
         let nonce_str = nonce.to_string();
 
-        let balance_response = self.get_balance().await?;
+        let balance = if options.include_balance {
+            Some(self.get_balance().await?.balance.to_string())
+        } else {
+            None
+        };
 
-        // Use optimized count_by_status
-        let pending_transactions_count = self
-            .transaction_repository
-            .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
-            .await
-            .map_err(RelayerError::from)?;
-
-        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
-        let last_confirmed_transaction_timestamp = self
-            .transaction_repository
-            .find_by_status_paginated(
-                &relayer_model.id,
-                &[TransactionStatus::Confirmed],
-                PaginationQuery {
-                    page: 1,
-                    per_page: 1,
-                },
-                false, // oldest_first = false means newest first
+        let pending_transactions_count = if options.include_pending_count {
+            // Use optimized count_by_status
+            Some(
+                self.transaction_repository
+                    .count_by_status(&relayer_model.id, PENDING_TRANSACTION_STATUSES)
+                    .await
+                    .map_err(RelayerError::from)?,
             )
-            .await
-            .map_err(RelayerError::from)?
-            .items
-            .into_iter()
-            .next()
-            .and_then(|tx| tx.confirmed_at);
+        } else {
+            None
+        };
+
+        let last_confirmed_transaction_timestamp = if options.include_last_confirmed_tx {
+            // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+            self.transaction_repository
+                .find_by_status_paginated(
+                    &relayer_model.id,
+                    &[TransactionStatus::Confirmed],
+                    PaginationQuery {
+                        page: 1,
+                        per_page: 1,
+                    },
+                    false, // oldest_first = false means newest first
+                )
+                .await
+                .map_err(RelayerError::from)?
+                .items
+                .into_iter()
+                .next()
+                .and_then(|tx| tx.confirmed_at)
+        } else {
+            None
+        };
 
         Ok(RelayerStatus::Evm {
-            balance: balance_response.balance.to_string(),
+            balance,
             pending_transactions_count,
             last_confirmed_transaction_timestamp,
             system_disabled: relayer_model.system_disabled,
@@ -1231,7 +1243,10 @@ mod tests {
         )
         .unwrap();
 
-        let status = relayer.get_status().await.unwrap();
+        let status = relayer
+            .get_status(GetStatusOptions::default())
+            .await
+            .unwrap();
 
         match status {
             RelayerStatus::Evm {
@@ -1242,8 +1257,8 @@ mod tests {
                 paused,
                 nonce,
             } => {
-                assert_eq!(balance, "1000000000000000000");
-                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(balance, Some("1000000000000000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(0));
                 assert_eq!(
                     last_confirmed_transaction_timestamp,
                     Some("2023-01-01T12:00:00Z".to_string())
@@ -1251,6 +1266,130 @@ mod tests {
                 assert_eq!(system_disabled, relayer_model.system_disabled);
                 assert_eq!(paused, relayer_model.paused);
                 assert_eq!(nonce, "10");
+            }
+            _ => panic!("Expected EVM RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_skip_all_optional_fields() {
+        let (provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Only the counter is needed (nonce is always fetched)
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(10u64)))))
+            .once();
+
+        // No expectations on provider.get_balance, tx_repo.count_by_status,
+        // or tx_repo.find_by_status_paginated — mockall will panic if called.
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let options = GetStatusOptions {
+            include_balance: false,
+            include_pending_count: false,
+            include_last_confirmed_tx: false,
+        };
+        let status = relayer.get_status(options).await.unwrap();
+
+        match status {
+            RelayerStatus::Evm {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+                nonce,
+            } => {
+                assert_eq!(balance, None);
+                assert_eq!(pending_transactions_count, None);
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert_eq!(system_disabled, relayer_model.system_disabled);
+                assert_eq!(paused, relayer_model.paused);
+                assert_eq!(nonce, "10");
+            }
+            _ => panic!("Expected EVM RelayerStatus"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_partial_options() {
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(5u64)))))
+            .once();
+
+        // Balance requested
+        provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(2000000000000000000u64)))))
+            .once();
+
+        // Pending count requested
+        tx_repo
+            .expect_count_by_status()
+            .returning(|_, _| Ok(3u64))
+            .once();
+
+        // last_confirmed_tx NOT requested — no find_by_status_paginated expectation
+
+        let relayer = EvmRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let options = GetStatusOptions {
+            include_balance: true,
+            include_pending_count: true,
+            include_last_confirmed_tx: false,
+        };
+        let status = relayer.get_status(options).await.unwrap();
+
+        match status {
+            RelayerStatus::Evm {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                nonce,
+                ..
+            } => {
+                assert_eq!(balance, Some("2000000000000000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(3));
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert_eq!(nonce, "5");
             }
             _ => panic!("Expected EVM RelayerStatus"),
         }
@@ -1318,7 +1457,10 @@ mod tests {
         .unwrap();
 
         // Should succeed with nonce defaulting to 0 when counter returns None
-        let status = relayer.get_status().await.unwrap();
+        let status = relayer
+            .get_status(GetStatusOptions::default())
+            .await
+            .unwrap();
         match status {
             RelayerStatus::Evm { nonce, .. } => {
                 assert_eq!(nonce, "0");
@@ -1376,7 +1518,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = relayer.get_status().await;
+        let result = relayer.get_status(GetStatusOptions::default()).await;
         assert!(result.is_err());
         match result.err().unwrap() {
             // Remember our From<RepositoryError> for RelayerError maps to NetworkConfiguration
@@ -1458,7 +1600,10 @@ mod tests {
         )
         .unwrap();
 
-        let status = relayer.get_status().await.unwrap();
+        let status = relayer
+            .get_status(GetStatusOptions::default())
+            .await
+            .unwrap();
         match status {
             RelayerStatus::Evm {
                 balance,
@@ -1468,8 +1613,8 @@ mod tests {
                 paused,
                 nonce,
             } => {
-                assert_eq!(balance, "1000000000000000000");
-                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(balance, Some("1000000000000000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(0));
                 assert_eq!(last_confirmed_transaction_timestamp, None);
                 assert_eq!(system_disabled, relayer_model.system_disabled);
                 assert_eq!(paused, relayer_model.paused);

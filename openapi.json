@@ -2795,6 +2795,33 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "include_balance",
+            "in": "query",
+            "description": "Whether to include balance (default: true)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_pending_count",
+            "in": "query",
+            "description": "Whether to include pending transaction count (default: true)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "include_last_confirmed_tx",
+            "in": "query",
+            "description": "Whether to include last confirmed transaction timestamp (default: true)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -5143,8 +5170,6 @@
               {
                 "type": "object",
                 "required": [
-                  "balance",
-                  "pending_transactions_count",
                   "system_disabled",
                   "paused",
                   "nonce",
@@ -5152,7 +5177,10 @@
                 ],
                 "properties": {
                   "balance": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "last_confirmed_transaction_timestamp": {
                     "type": [
@@ -5173,7 +5201,10 @@
                     "type": "boolean"
                   },
                   "pending_transactions_count": {
-                    "type": "integer",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
                     "format": "int64",
                     "minimum": 0
                   },
@@ -5185,8 +5216,6 @@
               {
                 "type": "object",
                 "required": [
-                  "balance",
-                  "pending_transactions_count",
                   "system_disabled",
                   "paused",
                   "sequence_number",
@@ -5194,7 +5223,10 @@
                 ],
                 "properties": {
                   "balance": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "last_confirmed_transaction_timestamp": {
                     "type": [
@@ -5212,7 +5244,10 @@
                     "type": "boolean"
                   },
                   "pending_transactions_count": {
-                    "type": "integer",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
                     "format": "int64",
                     "minimum": 0
                   },
@@ -5227,15 +5262,16 @@
               {
                 "type": "object",
                 "required": [
-                  "balance",
-                  "pending_transactions_count",
                   "system_disabled",
                   "paused",
                   "network_type"
                 ],
                 "properties": {
                   "balance": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "last_confirmed_transaction_timestamp": {
                     "type": [
@@ -5253,7 +5289,10 @@
                     "type": "boolean"
                   },
                   "pending_transactions_count": {
-                    "type": "integer",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
                     "format": "int64",
                     "minimum": 0
                   },
@@ -8014,8 +8053,6 @@
           {
             "type": "object",
             "required": [
-              "balance",
-              "pending_transactions_count",
               "system_disabled",
               "paused",
               "nonce",
@@ -8023,7 +8060,10 @@
             ],
             "properties": {
               "balance": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "last_confirmed_transaction_timestamp": {
                 "type": [
@@ -8044,7 +8084,10 @@
                 "type": "boolean"
               },
               "pending_transactions_count": {
-                "type": "integer",
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int64",
                 "minimum": 0
               },
@@ -8056,8 +8099,6 @@
           {
             "type": "object",
             "required": [
-              "balance",
-              "pending_transactions_count",
               "system_disabled",
               "paused",
               "sequence_number",
@@ -8065,7 +8106,10 @@
             ],
             "properties": {
               "balance": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "last_confirmed_transaction_timestamp": {
                 "type": [
@@ -8083,7 +8127,10 @@
                 "type": "boolean"
               },
               "pending_transactions_count": {
-                "type": "integer",
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int64",
                 "minimum": 0
               },
@@ -8098,15 +8145,16 @@
           {
             "type": "object",
             "required": [
-              "balance",
-              "pending_transactions_count",
               "system_disabled",
               "paused",
               "network_type"
             ],
             "properties": {
               "balance": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "last_confirmed_transaction_timestamp": {
                 "type": [
@@ -8124,7 +8172,10 @@
                 "type": "boolean"
               },
               "pending_transactions_count": {
-                "type": "integer",
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int64",
                 "minimum": 0
               },

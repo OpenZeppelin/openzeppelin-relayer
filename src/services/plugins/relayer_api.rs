@@ -11,9 +11,9 @@ use crate::domain::{
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
-    convert_to_internal_rpc_request, AppState, JsonRpcRequest, NetworkRepoModel, NetworkRpcRequest,
-    NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
-    ThinDataAppState, TransactionRepoModel, TransactionResponse,
+    convert_to_internal_rpc_request, AppState, GetStatusOptions, JsonRpcRequest, NetworkRepoModel,
+    NetworkRpcRequest, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
+    SignerRepoModel, ThinDataAppState, TransactionRepoModel, TransactionResponse,
 };
 use crate::observability::request_id::set_request_id;
 use crate::repositories::{
@@ -371,12 +371,30 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
+        let options = GetStatusOptions {
+            include_balance: request
+                .payload
+                .get("includeBalance")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            include_pending_count: request
+                .payload
+                .get("includePendingCount")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            include_last_confirmed_tx: request
+                .payload
+                .get("includeLastConfirmedTx")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        };
+
         let network_relayer = get_network_relayer(request.relayer_id.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
         let status = network_relayer
-            .get_status()
+            .get_status(options)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
