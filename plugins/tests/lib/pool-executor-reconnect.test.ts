@@ -48,9 +48,6 @@ describe('PluginAPIImpl mid-execution reconnect', () => {
   });
 
   it('reconnects transparently when socket closes between API calls', async () => {
-    // Track which connection each request arrives on
-    let destroyFirstConnection: (() => void) | null = null;
-
     await new Promise<void>((resolve) => {
       server = net.createServer((conn) => {
         connectionCount++;
@@ -71,27 +68,26 @@ describe('PluginAPIImpl mid-execution reconnect', () => {
                 requestId: req.requestId,
                 result: { method: req.method, connection: currentConn },
               }) + '\n';
-              conn.write(response);
+              conn.write(response, () => {
+                // Destroy connection 1 right after the first response is flushed.
+                // This deterministically triggers the reconnect path.
+                if (currentConn === 1) {
+                  conn.destroy();
+                }
+              });
             } catch {
               // ignore
             }
           }
         });
-
-        // Expose a way to destroy connection 1 from the plugin code
-        if (currentConn === 1) {
-          destroyFirstConnection = () => conn.destroy();
-        }
       });
       server.listen(socketPath, () => resolve());
     });
 
     const { default: executePlugin } = await import('../../lib/pool-executor');
 
-    // Plugin makes first call, then we destroy the connection externally,
-    // then makes a second call which must succeed via reconnection.
-    // We use the 'signalClose' method as a trigger — after first call resolves,
-    // the server destroys connection 1.
+    // Plugin makes two API calls. The server destroys connection 1 right after
+    // flushing the first response. The second call must reconnect transparently.
     const pluginCode = `
       module.exports.handler = async function(ctx) {
         const relayer = ctx.api.useRelayer('test-relayer');
@@ -109,25 +105,7 @@ describe('PluginAPIImpl mid-execution reconnect', () => {
       };
     `;
 
-    // Destroy connection 1 after the first response is sent.
-    // We need to wait for the server to have the connection reference.
-    const originalExecute = executePlugin;
-
-    // Intercept: after short delay, destroy connection 1
-    setTimeout(() => {
-      // Poll until destroyFirstConnection is available
-      const checkInterval = setInterval(() => {
-        if (destroyFirstConnection) {
-          // Wait a bit after first response for client to receive it
-          setTimeout(() => {
-            destroyFirstConnection!();
-          }, 20);
-          clearInterval(checkInterval);
-        }
-      }, 10);
-    }, 50);
-
-    const result = await originalExecute({
+    const result = await executePlugin({
       taskId: 'reconnect-test',
       pluginId: 'test-plugin',
       compiledCode: pluginCode,

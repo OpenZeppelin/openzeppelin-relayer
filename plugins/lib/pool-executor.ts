@@ -323,27 +323,36 @@ class PluginAPIImpl implements PluginAPI {
   }
 
   /**
-   * Handle socket error - reject pending requests and reset connection state
+   * Handle socket error - reject pending requests and reset connection state.
+   * Only clears connectionPromise for post-connection failures (transparent reconnect).
+   * During connectWithRetry(), the retry loop owns connectionPromise — clearing it here
+   * would allow a concurrent send() to start a duplicate retry loop.
    */
   private handleSocketError(error: Error): void {
     this.rejectAllPending(error);
-    // Reset connection state to force reconnection on next call
+    const wasConnected = this.connected;
     this.connected = false;
-    this.connectionPromise = null;
     this.socket = null;
-    this.socketBuffer = ''; // Clear any partial data in buffer
+    this.socketBuffer = '';
+    if (wasConnected) {
+      this.connectionPromise = null;
+    }
   }
 
   /**
    * Handle socket close - reject pending requests and reset connection state.
-   * The next API call will transparently reconnect with a fresh socket.
+   * Same guard as handleSocketError: only clear connectionPromise after a
+   * successful connection was lost, not during retry attempts.
    */
   private handleSocketClose(): void {
+    const wasConnected = this.connected;
     this.connected = false;
     this.rejectAllPending(new Error('Socket closed by server'));
-    this.connectionPromise = null;
     this.socket = null;
     this.socketBuffer = '';
+    if (wasConnected) {
+      this.connectionPromise = null;
+    }
   }
 
   /**
