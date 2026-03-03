@@ -955,4 +955,300 @@ mod calculate_fee_bump_required_fee_tests {
         let err = scale_fee_for_fee_bump(100, 0, 1).unwrap_err();
         assert!(matches!(err, TransactionError::ValidationError(_)));
     }
+
+    /// Creates a Soroban transaction envelope WITHOUT existing SorobanTransactionData.
+    /// Has an InvokeHostFunction operation so `xdr_needs_simulation` returns true,
+    /// but uses `TransactionExt::V0` so `extract_soroban_resource_fee` returns None.
+    fn create_soroban_envelope_without_existing_data(fee: u32) -> TransactionEnvelope {
+        let pk = PublicKey([0; 32]);
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let invoke_op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
+                        [0u8; 32],
+                    ))),
+                    function_name: "test".try_into().unwrap(),
+                    args: vec![].try_into().unwrap(),
+                }),
+                auth: vec![].try_into().unwrap(),
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: source,
+            fee,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: vec![invoke_op].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_simulates_when_no_existing_soroban_data() {
+        // Soroban op present but no SorobanTransactionData (V0 ext)
+        // → extract_soroban_resource_fee returns None, enters simulation path
+        let envelope = create_soroban_envelope_without_existing_data(100);
+
+        assert!(xdr_needs_simulation(&envelope).unwrap());
+        assert!(extract_soroban_resource_fee(&envelope).is_none());
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 50000,
+                    ..Default::default()
+                })))
+            });
+
+        // inner_tx_fee = 100
+        // computed_fee = 100 (inclusion) + 50000 (resource) = 50100
+        // inner_fee = max(100, 50100) = 50100
+        // CAP-0015: fee_bump_num_ops = 1 + 1 = 2
+        // required_fee = 50100 * 2 / 1 = 100200
+        let max_fee = 200_000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        // max(100200, 200000) = 200000
+        assert_eq!(result.unwrap(), 200_000u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_simulation_uses_inner_tx_fee_when_higher() {
+        // Envelope with a high fee that exceeds the simulated fee
+        let envelope = create_soroban_envelope_without_existing_data(70_000);
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 30_000,
+                    ..Default::default()
+                })))
+            });
+
+        // inner_tx_fee = 70000
+        // computed_fee = 100 + 30000 = 30100
+        // inner_fee = max(70000, 30100) = 70000
+        // required_fee = 70000 * 2 / 1 = 140000
+        let max_fee = 50_000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        // max(140000, 50000) = 140000
+        assert_eq!(result.unwrap(), 140_000u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_simulation_required_fee_less_than_max_fee() {
+        // Simulation returns a small resource fee, so required_fee < max_fee
+        let envelope = create_soroban_envelope_without_existing_data(100);
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 5_000,
+                    ..Default::default()
+                })))
+            });
+
+        // inner_tx_fee = 100
+        // computed_fee = 100 + 5000 = 5100
+        // inner_fee = max(100, 5100) = 5100
+        // required_fee = 5100 * 2 / 1 = 10200
+        let max_fee = 500_000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        // max(10200, 500000) = 500000
+        assert_eq!(result.unwrap(), 500_000u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_simulation_failure_propagates_error() {
+        let envelope = create_soroban_envelope_without_existing_data(100);
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: Some("Insufficient resources for operation".to_string()),
+                    min_resource_fee: 0,
+                    ..Default::default()
+                })))
+            });
+
+        let max_fee = 200_000i64;
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::SimulationFailed(msg) => {
+                assert!(msg.contains("Insufficient resources"));
+            }
+            other => panic!("Expected SimulationFailed, got: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod simulate_if_needed_tests {
+    use super::*;
+    use crate::services::provider::MockStellarProviderTrait;
+    use soroban_rs::xdr::{
+        Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount,
+        Operation, OperationBody, ScAddress, SequenceNumber, Transaction, TransactionV1Envelope,
+        Uint256, VecM,
+    };
+    use stellar_strkey::ed25519::PublicKey;
+
+    fn create_non_soroban_envelope() -> TransactionEnvelope {
+        let pk = PublicKey([0; 32]);
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let payment_op = Operation {
+            source_account: None,
+            body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                destination: MuxedAccount::Ed25519(Uint256([0; 32])),
+                asset: soroban_rs::xdr::Asset::Native,
+                amount: 1_000_000,
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: vec![payment_op].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    fn create_soroban_envelope() -> TransactionEnvelope {
+        let pk = PublicKey([0; 32]);
+        let source = MuxedAccount::Ed25519(Uint256(pk.0));
+
+        let invoke_op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
+                        [0u8; 32],
+                    ))),
+                    function_name: "test".try_into().unwrap(),
+                    args: vec![].try_into().unwrap(),
+                }),
+                auth: vec![].try_into().unwrap(),
+            }),
+        };
+
+        let tx = Transaction {
+            source_account: source,
+            fee: 100,
+            seq_num: SequenceNumber(1),
+            cond: soroban_rs::xdr::Preconditions::None,
+            memo: Memo::None,
+            operations: vec![invoke_op].try_into().unwrap(),
+            ext: soroban_rs::xdr::TransactionExt::V0,
+        };
+
+        TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx,
+            signatures: VecM::default(),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_returns_none_for_non_soroban_transaction() {
+        let envelope = create_non_soroban_envelope();
+
+        // Provider should NOT be called; no expectations set → panics if called
+        let provider = MockStellarProviderTrait::new();
+
+        let result = simulate_if_needed(&envelope, &provider).await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_returns_response_on_successful_simulation() {
+        let envelope = create_soroban_envelope();
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: None,
+                    min_resource_fee: 42_000,
+                    ..Default::default()
+                })))
+            });
+
+        let result = simulate_if_needed(&envelope, &provider).await;
+
+        assert!(result.is_ok());
+        let resp = result.unwrap().expect("Expected Some(response)");
+        assert_eq!(resp.min_resource_fee, 42_000);
+        assert!(resp.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_returns_error_on_simulation_failure() {
+        let envelope = create_soroban_envelope();
+
+        let mut provider = MockStellarProviderTrait::new();
+        provider
+            .expect_simulate_transaction_envelope()
+            .times(1)
+            .returning(|_| {
+                Box::pin(std::future::ready(Ok(SimulateTransactionResponse {
+                    error: Some("tx simulation failed".to_string()),
+                    min_resource_fee: 0,
+                    ..Default::default()
+                })))
+            });
+
+        let result = simulate_if_needed(&envelope, &provider).await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TransactionError::SimulationFailed(msg) => {
+                assert_eq!(msg, "tx simulation failed");
+            }
+            other => panic!("Expected SimulationFailed, got: {other:?}"),
+        }
+    }
 }
