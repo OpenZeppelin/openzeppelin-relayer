@@ -204,10 +204,10 @@ fn forward_logs_to_tracing(plugin_id: &str, logs: &[LogEntry], request_id: &str)
                 tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Info | LogLevel::Log => {
-                tracing::info!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Debug => {
-                tracing::debug!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
+                tracing::warn!(target: "plugin", plugin_id = %plugin_id, request_id = %request_id, "{}", entry.message)
             }
             LogLevel::Result => {}
         }
