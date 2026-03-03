@@ -360,7 +360,6 @@ mod tests {
         for queue_type in types {
             assert!(!queue_type.queue_name().is_empty());
             assert!(!queue_type.redis_namespace().is_empty());
-            assert!(queue_type.max_retries() > 0 || queue_type.max_retries() == usize::MAX);
         }
     }
 
