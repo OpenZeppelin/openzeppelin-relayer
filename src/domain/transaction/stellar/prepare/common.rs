@@ -235,26 +235,40 @@ where
         ))
     })?;
 
+    // Read the actual fee from the inner transaction envelope.
+    // This is the authoritative fee for CAP-0015 calculations because it reflects
+    // what the Stellar SDK's assembleTransaction() set (inclusionFee + simulation.minResourceFee),
+    // which can differ from sorobanData.resourceFee (the base resource cost without padding).
+    let inner_tx_fee = match inner_envelope {
+        TransactionEnvelope::TxV0(e) => e.tx.fee as i64,
+        TransactionEnvelope::Tx(e) => e.tx.fee as i64,
+        TransactionEnvelope::TxFeeBump(fb) => {
+            let soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner) = &fb.tx.inner_tx;
+            inner.tx.fee as i64
+        }
+    };
+
     // Check if the inner transaction already has SorobanTransactionData with resource fee.
     // This allows skipping simulation for pre-simulated signed transactions.
     if let Some(existing_resource_fee) = extract_soroban_resource_fee(inner_envelope) {
+        // Use the MAX of actual inner tx fee and computed fee (inclusion + sorobanData.resourceFee).
+        // - inner_tx_fee: satisfies CAP-0015 (Stellar validates against actual envelope fee)
+        // - computed_fee: ensures resource costs are covered
+        // The Stellar SDK's assembleTransaction() sets tx.fee = inclusionFee + simulation.minResourceFee,
+        // where minResourceFee can be significantly larger than sorobanData.resourceFee.
         let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
-        let inner_fee = inclusion_fee.checked_add(existing_resource_fee).ok_or_else(|| {
-            TransactionError::ValidationError(format!(
-                "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({existing_resource_fee}) exceeds i64::MAX"
-            ))
-        })?;
-
-        // Scale fee for fee-bump using ceil division to satisfy CAP-0015 inequality.
-        let required_fee = scale_fee_for_fee_bump(inner_fee, inner_num_ops, fee_bump_num_ops)?;
+        let computed_fee = inclusion_fee.saturating_add(existing_resource_fee);
+        let effective_inner_fee = inner_tx_fee.max(computed_fee);
+        let required_fee =
+            scale_fee_for_fee_bump(effective_inner_fee, inner_num_ops, fee_bump_num_ops)?;
 
         debug!(
-            "Using existing resource fee from inner transaction. \
-             Inclusion fee: {}, Resource fee: {}, Inner fee: {}, \
+            "Using inner transaction fee for fee-bump calculation. \
+             Inner tx fee: {}, Computed fee (inclusion+resource): {}, Effective inner fee: {}, \
              Fee-bump num_ops: {} (inner: {}), Required fee-bump fee: {}",
-            inclusion_fee,
-            existing_resource_fee,
-            inner_fee,
+            inner_tx_fee,
+            computed_fee,
+            effective_inner_fee,
             fee_bump_num_ops,
             inner_num_ops,
             required_fee
@@ -290,21 +304,25 @@ where
                         sim_resp.min_resource_fee
                     ))
                 })?;
-                let inner_fee = inclusion_fee.checked_add(resource_fee).ok_or_else(|| {
+                let computed_fee = inclusion_fee.checked_add(resource_fee).ok_or_else(|| {
                     TransactionError::ValidationError(format!(
                         "Fee overflow: inclusion fee ({inclusion_fee}) + resource fee ({resource_fee}) exceeds i64::MAX"
                     ))
                 })?;
+
+                // Use the higher of the actual inner tx fee and the simulated fee.
+                // The actual envelope fee may differ from simulation (e.g., different inclusion fee).
+                let inner_fee = inner_tx_fee.max(computed_fee);
 
                 // Scale for fee-bump num_ops (CAP-0015).
                 let required_fee =
                     scale_fee_for_fee_bump(inner_fee, inner_num_ops, fee_bump_num_ops)?;
 
                 debug!(
-                    "Simulation complete. Inclusion fee: {}, Resource fee: {}, Inner fee: {}, \
+                    "Simulation complete. Inner tx fee: {}, Simulated fee: {}, Effective inner fee: {}, \
                      Fee-bump num_ops: {} (inner: {}), Required fee-bump fee: {}",
-                    inclusion_fee,
-                    resource_fee,
+                    inner_tx_fee,
+                    computed_fee,
                     inner_fee,
                     fee_bump_num_ops,
                     inner_num_ops,
@@ -870,6 +888,38 @@ mod calculate_fee_bump_required_fee_tests {
         assert!(result.is_ok());
         // Fee should be doubled for 1-op Soroban tx
         assert_eq!(result.unwrap(), 100200u32);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_fee_bump_uses_actual_inner_tx_fee_when_higher_than_resource_fee() {
+        // Reproduces the real-world bug: Stellar SDK's assembleTransaction() sets
+        // tx.fee = inclusionFee + simulation.minResourceFee, where minResourceFee
+        // can be much larger than sorobanData.resourceFee. The fee-bump must be
+        // computed from the actual inner tx fee, not from sorobanData.resourceFee.
+        let resource_fee = 33048i64; // sorobanData.resourceFee (base cost)
+
+        // Create envelope but override tx.fee to simulate assembleTransaction() behavior
+        // where tx.fee = 100 + simulation.minResourceFee (66096) = 66196
+        // while sorobanData.resourceFee remains at 33048
+        let mut envelope = create_soroban_envelope_with_existing_data(resource_fee);
+        match &mut envelope {
+            TransactionEnvelope::Tx(ref mut e) => {
+                e.tx.fee = 66196; // Real-world fee from assembleTransaction
+            }
+            _ => panic!("Expected Tx envelope"),
+        }
+
+        let provider = MockStellarProviderTrait::new();
+
+        // Old behavior (bug): inner_fee = 100 + 33048 = 33148, required = 66296
+        // New behavior (fix): inner_fee = max(66196, 33148) = 66196, required = 132392
+        let max_fee = 33251i64; // What channels plugin sends as max_fee
+
+        let result = calculate_fee_bump_required_fee(&envelope, max_fee, &provider).await;
+
+        assert!(result.is_ok());
+        // Fee-bump must be 2x the actual inner tx fee, not 2x of (100 + sorobanData.resourceFee)
+        assert_eq!(result.unwrap(), 132392u32); // 66196 * 2
     }
 
     #[tokio::test]
