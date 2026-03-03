@@ -240,6 +240,7 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
+        warn!("handle_send_transaction request: {:?}", request.clone());
         let relayer_repo_model = get_relayer_by_id(request.relayer_id.clone(), state)
             .await
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
@@ -419,6 +420,10 @@ impl RelayerApi {
         PR: PluginRepositoryTrait + Send + Sync + 'static,
         AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
     {
+        warn!(
+            "handle_sign_transaction payload: {:?}",
+            request.payload.clone()
+        );
         let sign_request: SignTransactionRequest = serde_json::from_value(request.payload)
             .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
@@ -433,6 +438,8 @@ impl RelayerApi {
 
         let result =
             serde_json::to_value(response).map_err(|e| PluginError::RelayerError(e.to_string()))?;
+
+        warn!("handle_sign_transaction result: {:?}", result);
 
         Ok(Response {
             request_id: request.request_id,
