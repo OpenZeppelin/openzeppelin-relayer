@@ -25,7 +25,7 @@ use actix_web::web;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use strum::Display;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 #[cfg(test)]
 use mockall::automock;
@@ -527,8 +527,11 @@ impl RelayerApi {
 
         // Use the network type from relayer_repo_model to parse the request with correct type context
         let network_rpc_request: JsonRpcRequest<NetworkRpcRequest> =
-            convert_to_internal_rpc_request(request.payload, &relayer_repo_model.network_type)
-                .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
+            convert_to_internal_rpc_request(
+                request.payload.clone(),
+                &relayer_repo_model.network_type,
+            )
+            .map_err(|e| PluginError::InvalidPayload(e.to_string()))?;
 
         let result = network_relayer.rpc(network_rpc_request).await;
 
@@ -536,6 +539,10 @@ impl RelayerApi {
             Ok(json_rpc_response) => {
                 let result_value = serde_json::to_value(json_rpc_response)
                     .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+                warn!(
+                    "RPC result: {:?} payload: {:?}",
+                    result_value, request.payload
+                );
                 Ok(Response {
                     request_id: request.request_id,
                     result: Some(result_value),
