@@ -226,27 +226,65 @@ class PluginAPIImpl implements PluginAPI {
 
   /**
    * Ensure socket is connected. Always creates a fresh socket per execution.
-   * Uses connectionPromise to prevent duplicate connects within the same execution.
+   * Retries with exponential backoff on ECONNREFUSED (listen backlog full).
    */
   private async ensureConnected(): Promise<void> {
     if (this.connected) return;
 
     if (!this.connectionPromise) {
-      this.socket = net.createConnection(this.socketPath);
-
-      this.setupSocketHandlers(this.socket);
-
-      this.connectionPromise = new Promise((resolve, reject) => {
-        this.socket!.once('connect', () => {
-          this.connected = true;
-          resolve();
-        });
-
-        this.socket!.once('error', reject);
-      });
+      this.connectionPromise = this.connectWithRetry();
     }
 
     await this.connectionPromise;
+  }
+
+  /**
+   * Attempt to connect with retries on ECONNREFUSED.
+   * Under high concurrency the OS listen backlog can fill up, causing transient
+   * ECONNREFUSED errors. A short retry with jittered backoff resolves this.
+   */
+  private async connectWithRetry(): Promise<void> {
+    const maxRetries = 3;
+    const baseDelayMs = 10;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        await this.attemptConnect();
+        return;
+      } catch (err: any) {
+        const isRetryable = err?.code === 'ECONNREFUSED' || err?.code === 'ENOBUFS';
+        if (!isRetryable || attempt === maxRetries) {
+          throw err;
+        }
+        // Exponential backoff with jitter: 10-20ms, 20-40ms, 40-80ms, ...
+        const delay = baseDelayMs * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  /**
+   * Single connection attempt. Creates a fresh socket and waits for 'connect' or 'error'.
+   */
+  private attemptConnect(): Promise<void> {
+    // Clean up any leftover socket from a failed attempt
+    if (this.socket) {
+      this.removeSocketHandlers(this.socket);
+      this.socket.destroy();
+      this.socket = null;
+    }
+
+    this.socket = net.createConnection(this.socketPath);
+    this.setupSocketHandlers(this.socket);
+
+    return new Promise((resolve, reject) => {
+      this.socket!.once('connect', () => {
+        this.connected = true;
+        resolve();
+      });
+
+      this.socket!.once('error', reject);
+    });
   }
 
   /**
@@ -693,13 +731,28 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
         errorCode = err.code;
       }
 
+      // Sanitize internal socket/connection errors — don't leak paths or internals
+      if (err.code === 'ECONNREFUSED' || err.code === 'ENOBUFS') {
+        errorCode = 'SERVICE_UNAVAILABLE';
+        errorMessage = 'Plugin service temporarily unavailable, please retry';
+        errorStatus = 503;
+      } else if (err.code === 'ESOCKETCLOSED' || err.message?.includes('Socket closed')) {
+        errorCode = 'SERVICE_UNAVAILABLE';
+        errorMessage = 'Plugin service connection lost, please retry';
+        errorStatus = 503;
+      } else if (err.message?.includes('Socket became unavailable')) {
+        errorCode = 'SERVICE_UNAVAILABLE';
+        errorMessage = 'Plugin service temporarily unavailable, please retry';
+        errorStatus = 503;
+      }
+
       // Capture any additional details
       if (err.details) {
         errorDetails = err.details;
       }
 
-      // Use status if provided
-      if (typeof err.status === 'number') {
+      // Use status if provided (but not for sanitized errors)
+      if (typeof err.status === 'number' && errorStatus === 500) {
         errorStatus = err.status;
       }
     }
