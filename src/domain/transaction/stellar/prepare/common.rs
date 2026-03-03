@@ -255,9 +255,10 @@ where
         // - inner_tx_fee: satisfies CAP-0015 (Stellar validates against actual envelope fee)
         // - computed_fee: ensures resource costs are covered
         // The Stellar SDK's assembleTransaction() sets tx.fee = inclusionFee + simulation.minResourceFee,
-        // where minResourceFee can be significantly larger than sorobanData.resourceFee.
-        let inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
-        let computed_fee = inclusion_fee.saturating_add(existing_resource_fee);
+        // where minResourceFee can be significantly larger (It is typically 2x sorobanData.resourceFee
+        // because Stellar applies a multiplier for safety margin) than sorobanData.resourceFee.
+        let default_inclusion_fee = STELLAR_DEFAULT_TRANSACTION_FEE as i64;
+        let computed_fee = default_inclusion_fee.saturating_add(existing_resource_fee);
         let effective_inner_fee = inner_tx_fee.max(computed_fee);
         let required_fee =
             scale_fee_for_fee_bump(effective_inner_fee, inner_num_ops, fee_bump_num_ops)?;
