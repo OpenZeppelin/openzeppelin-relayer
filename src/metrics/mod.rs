@@ -206,6 +206,17 @@ lazy_static! {
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
+
+    // Counter for Stellar submit responses with TRY_AGAIN_LATER status.
+    pub static ref STELLAR_TRY_AGAIN_LATER: CounterVec = {
+        let opts = Opts::new(
+            "stellar_try_again_later_total",
+            "Total number of Stellar transaction submit responses with TRY_AGAIN_LATER"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "tx_status"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
 }
 
 /// Gather all metrics and encode into the provided format.

@@ -257,392 +257,6 @@ describe('ScriptCache logic', () => {
   });
 });
 
-describe('SocketPool logic', () => {
-  class MockSocketPool {
-    private available: any[] = [];
-    private readonly maxSize = 5;
-
-    acquire(socketPath: string): any | null {
-      const socket = this.available.pop();
-      if (socket && socket.writable && !socket.destroyed) {
-        return socket;
-      }
-      return null;
-    }
-
-    release(socket: any): void {
-      if (socket.writable && !socket.destroyed && this.available.length < this.maxSize) {
-        this.available.push(socket);
-      } else if (socket.destroy) {
-        socket.destroy();
-      }
-    }
-
-    clear(): void {
-      for (const socket of this.available) {
-        if (socket.destroy) socket.destroy();
-      }
-      this.available = [];
-    }
-
-    size(): number {
-      return this.available.length;
-    }
-  }
-
-  it('should return null when pool is empty', () => {
-    const pool = new MockSocketPool();
-    const socket = pool.acquire('/tmp/test.sock');
-
-    expect(socket).toBeNull();
-  });
-
-  it('should reuse healthy socket from pool', () => {
-    const pool = new MockSocketPool();
-    const mockSocket = {
-      writable: true,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(mockSocket);
-    expect(pool.size()).toBe(1);
-
-    const reused = pool.acquire('/tmp/test.sock');
-    expect(reused).toBe(mockSocket);
-    expect(pool.size()).toBe(0);
-  });
-
-  it('should destroy unhealthy socket instead of pooling', () => {
-    const pool = new MockSocketPool();
-    const mockSocket = {
-      writable: false,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(mockSocket);
-
-    expect(mockSocket.destroy).toHaveBeenCalled();
-    expect(pool.size()).toBe(0);
-  });
-
-  it('should not exceed max pool size', () => {
-    const pool = new MockSocketPool();
-
-    for (let i = 0; i < 10; i++) {
-      pool.release({
-        writable: true,
-        destroyed: false,
-        destroy: jest.fn(),
-      });
-    }
-
-    expect(pool.size()).toBe(5); // Max size is 5
-  });
-
-  it('should destroy all sockets on clear', () => {
-    const pool = new MockSocketPool();
-    const sockets = [];
-
-    for (let i = 0; i < 5; i++) {
-      const socket = {
-        writable: true,
-        destroyed: false,
-        destroy: jest.fn(),
-      };
-      sockets.push(socket);
-      pool.release(socket);
-    }
-
-    pool.clear();
-
-    expect(pool.size()).toBe(0);
-    for (const socket of sockets) {
-      expect(socket.destroy).toHaveBeenCalled();
-    }
-  });
-
-  it('should skip destroyed sockets during reuse', () => {
-    const pool = new MockSocketPool();
-    const mockSocket = {
-      writable: true,
-      destroyed: true, // Already destroyed
-      destroy: jest.fn(),
-    };
-
-    pool.release(mockSocket);
-    const reused = pool.acquire('/tmp/test.sock');
-
-    expect(reused).toBeNull(); // Should not return destroyed socket
-  });
-});
-
-describe('SocketClosedError', () => {
-  // Replicate the error class for testing
-  class SocketClosedError extends Error {
-    code: string;
-    constructor(message: string) {
-      super(message);
-      this.name = 'SocketClosedError';
-      this.code = 'ESOCKETCLOSED';
-    }
-  }
-
-  it('should have correct name', () => {
-    const error = new SocketClosedError('test message');
-    expect(error.name).toBe('SocketClosedError');
-  });
-
-  it('should have ESOCKETCLOSED code', () => {
-    const error = new SocketClosedError('test message');
-    expect(error.code).toBe('ESOCKETCLOSED');
-  });
-
-  it('should preserve message', () => {
-    const error = new SocketClosedError('Connection lifetime exceeded');
-    expect(error.message).toBe('Connection lifetime exceeded');
-  });
-
-  it('should be instanceof Error', () => {
-    const error = new SocketClosedError('test');
-    expect(error).toBeInstanceOf(Error);
-  });
-
-  it('should have stack trace', () => {
-    const error = new SocketClosedError('test');
-    expect(error.stack).toBeDefined();
-    expect(error.stack).toContain('SocketClosedError');
-  });
-});
-
-describe('Retry logic for connection errors', () => {
-  // Simulates the retry logic in sendWithRetry
-  function isRetryableError(error: any): boolean {
-    return (
-      error.code === 'EPIPE' ||
-      error.code === 'ECONNRESET' ||
-      error.code === 'ESOCKETCLOSED'
-    );
-  }
-
-  it('should identify EPIPE as retryable', () => {
-    const error: any = new Error('broken pipe');
-    error.code = 'EPIPE';
-    expect(isRetryableError(error)).toBe(true);
-  });
-
-  it('should identify ECONNRESET as retryable', () => {
-    const error: any = new Error('connection reset');
-    error.code = 'ECONNRESET';
-    expect(isRetryableError(error)).toBe(true);
-  });
-
-  it('should identify ESOCKETCLOSED as retryable', () => {
-    const error: any = new Error('socket closed');
-    error.code = 'ESOCKETCLOSED';
-    expect(isRetryableError(error)).toBe(true);
-  });
-
-  it('should not retry generic errors', () => {
-    const error = new Error('generic error');
-    expect(isRetryableError(error)).toBe(false);
-  });
-
-  it('should not retry timeout errors', () => {
-    const error: any = new Error('timeout');
-    error.code = 'ETIMEDOUT';
-    expect(isRetryableError(error)).toBe(false);
-  });
-
-  it('should not retry errors without code', () => {
-    const error = new Error('no code');
-    expect(isRetryableError(error)).toBe(false);
-  });
-});
-
-describe('Age-based socket eviction', () => {
-  const MAX_SOCKET_AGE_MS = 50_000; // 50 seconds, matching production code
-
-  interface PooledSocket {
-    socket: { writable: boolean; destroyed: boolean; destroy: () => void };
-    createdAt: number;
-  }
-
-  function shouldEvictSocket(pooled: PooledSocket, now: number): boolean {
-    const age = now - pooled.createdAt;
-    return age > MAX_SOCKET_AGE_MS;
-  }
-
-  it('should not evict fresh socket', () => {
-    const now = Date.now();
-    const pooled: PooledSocket = {
-      socket: { writable: true, destroyed: false, destroy: jest.fn() },
-      createdAt: now - 10_000, // 10 seconds old
-    };
-    expect(shouldEvictSocket(pooled, now)).toBe(false);
-  });
-
-  it('should evict socket older than 50 seconds', () => {
-    const now = Date.now();
-    const pooled: PooledSocket = {
-      socket: { writable: true, destroyed: false, destroy: jest.fn() },
-      createdAt: now - 51_000, // 51 seconds old
-    };
-    expect(shouldEvictSocket(pooled, now)).toBe(true);
-  });
-
-  it('should not evict socket exactly at 50 seconds', () => {
-    const now = Date.now();
-    const pooled: PooledSocket = {
-      socket: { writable: true, destroyed: false, destroy: jest.fn() },
-      createdAt: now - 50_000, // exactly 50 seconds
-    };
-    expect(shouldEvictSocket(pooled, now)).toBe(false);
-  });
-
-  it('should evict socket at 55 seconds (within danger zone)', () => {
-    const now = Date.now();
-    const pooled: PooledSocket = {
-      socket: { writable: true, destroyed: false, destroy: jest.fn() },
-      createdAt: now - 55_000, // 55 seconds old
-    };
-    expect(shouldEvictSocket(pooled, now)).toBe(true);
-  });
-
-  it('should provide 10 second safety margin before Rust 60s timeout', () => {
-    // Rust kills connections at 60s, we evict at 50s = 10s safety margin
-    const RUST_TIMEOUT = 60_000;
-    const SAFETY_MARGIN = RUST_TIMEOUT - MAX_SOCKET_AGE_MS;
-    expect(SAFETY_MARGIN).toBe(10_000);
-  });
-});
-
-describe('Socket pool with age tracking', () => {
-  class MockSocketPoolWithAge {
-    private available: { socket: any; createdAt: number }[] = [];
-    private readonly maxSize = 5;
-    private readonly maxSocketAgeMs = 50_000;
-
-    acquire(): { socket: any; createdAt: number } | null {
-      const now = Date.now();
-
-      while (this.available.length > 0) {
-        const pooled = this.available.pop()!;
-        const age = now - pooled.createdAt;
-
-        // Discard old sockets
-        if (age > this.maxSocketAgeMs) {
-          pooled.socket.destroy();
-          continue;
-        }
-
-        if (pooled.socket.writable && !pooled.socket.destroyed) {
-          return pooled;
-        }
-
-        pooled.socket.destroy();
-      }
-
-      return null;
-    }
-
-    release(socket: any, createdAt: number): void {
-      const now = Date.now();
-      const age = now - createdAt;
-
-      if (
-        age > this.maxSocketAgeMs ||
-        !socket.writable ||
-        socket.destroyed ||
-        this.available.length >= this.maxSize
-      ) {
-        socket.destroy();
-        return;
-      }
-
-      this.available.push({ socket, createdAt });
-    }
-
-    size(): number {
-      return this.available.length;
-    }
-  }
-
-  it('should reject old socket on acquire', () => {
-    const pool = new MockSocketPoolWithAge();
-    const oldCreatedAt = Date.now() - 55_000; // 55 seconds ago
-
-    const oldSocket = {
-      writable: true,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(oldSocket, oldCreatedAt);
-
-    // Simulate time passing
-    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 1);
-
-    const acquired = pool.acquire();
-    expect(acquired).toBeNull();
-    expect(oldSocket.destroy).toHaveBeenCalled();
-
-    jest.restoreAllMocks();
-  });
-
-  it('should accept fresh socket on acquire', () => {
-    const pool = new MockSocketPoolWithAge();
-    const freshCreatedAt = Date.now() - 10_000; // 10 seconds ago
-
-    const freshSocket = {
-      writable: true,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(freshSocket, freshCreatedAt);
-    const acquired = pool.acquire();
-
-    expect(acquired).not.toBeNull();
-    expect(acquired?.socket).toBe(freshSocket);
-    expect(acquired?.createdAt).toBe(freshCreatedAt);
-  });
-
-  it('should not pool socket that is too old on release', () => {
-    const pool = new MockSocketPoolWithAge();
-    const oldCreatedAt = Date.now() - 55_000;
-
-    const socket = {
-      writable: true,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(socket, oldCreatedAt);
-
-    expect(pool.size()).toBe(0);
-    expect(socket.destroy).toHaveBeenCalled();
-  });
-
-  it('should track createdAt through acquire/release cycle', () => {
-    const pool = new MockSocketPoolWithAge();
-    const originalCreatedAt = Date.now() - 20_000; // 20 seconds ago
-
-    const socket = {
-      writable: true,
-      destroyed: false,
-      destroy: jest.fn(),
-    };
-
-    pool.release(socket, originalCreatedAt);
-    const acquired = pool.acquire();
-
-    // createdAt should be preserved (not reset)
-    expect(acquired?.createdAt).toBe(originalCreatedAt);
-  });
-});
-
 describe('PluginAPIImpl socket handling', () => {
   class MockPluginAPIImpl {
     private socket: any = null;
@@ -650,7 +264,6 @@ describe('PluginAPIImpl socket handling', () => {
     private connected = false;
     private connectionPromise: Promise<void> | null = null;
     private socketPath: string;
-    private socketCreatedAt: number = 0;
     private readonly maxPendingRequests = 100;
 
     constructor(socketPath: string) {
@@ -666,9 +279,8 @@ describe('PluginAPIImpl socket handling', () => {
     }
 
     private async connect(): Promise<void> {
-      // Simulate connection
+      // Per-execution: always create a fresh socket
       this.socket = { writable: true, destroyed: false };
-      this.socketCreatedAt = Date.now();
       this.connected = true;
     }
 
@@ -683,11 +295,7 @@ describe('PluginAPIImpl socket handling', () => {
       this.connected = false;
       this.connectionPromise = null;
       this.socket = null;
-      // Use SocketClosedError-like error
-      const error: any = new Error('Socket closed by server (connection lifetime exceeded)');
-      error.code = 'ESOCKETCLOSED';
-      error.name = 'SocketClosedError';
-      this.rejectAllPending(error);
+      this.rejectAllPending(new Error('Socket closed by server'));
     }
 
     private rejectAllPending(error: Error): void {
@@ -702,6 +310,12 @@ describe('PluginAPIImpl socket handling', () => {
         throw new Error(
           `Too many concurrent API requests (max ${this.maxPendingRequests})`
         );
+      }
+
+      // Reconnect if socket was lost between calls
+      if (!this.socket) {
+        this.connected = false;
+        this.connectionPromise = null;
       }
 
       await this.ensureConnected();
@@ -728,10 +342,6 @@ describe('PluginAPIImpl socket handling', () => {
     isConnected(): boolean {
       return this.connected;
     }
-
-    getSocketCreatedAt(): number {
-      return this.socketCreatedAt;
-    }
   }
 
   it('should establish connection on first request', async () => {
@@ -744,7 +354,7 @@ describe('PluginAPIImpl socket handling', () => {
     expect(api.isConnected()).toBe(true);
   });
 
-  it('should reuse existing connection', async () => {
+  it('should reuse existing connection within same execution', async () => {
     const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
@@ -802,7 +412,7 @@ describe('PluginAPIImpl socket handling', () => {
     expect(api.isConnected()).toBe(true);
   });
 
-  it('should reject with ESOCKETCLOSED code on socket close', async () => {
+  it('should reject pending requests on socket close', async () => {
     const api = new MockPluginAPIImpl('/tmp/test.sock');
 
     await api.send('method1', {});
@@ -819,23 +429,22 @@ describe('PluginAPIImpl socket handling', () => {
       await pendingPromise;
       fail('Should have rejected');
     } catch (error: any) {
-      expect(error.code).toBe('ESOCKETCLOSED');
-      expect(error.name).toBe('SocketClosedError');
-      expect(error.message).toContain('connection lifetime exceeded');
+      expect(error.message).toContain('Socket closed by server');
     }
   });
 
-  it('should track socket creation time', async () => {
+  it('should reconnect transparently if socket becomes null between calls', async () => {
     const api = new MockPluginAPIImpl('/tmp/test.sock');
-    const beforeConnect = Date.now();
 
     await api.send('method1', {});
+    expect(api.isConnected()).toBe(true);
 
-    const afterConnect = Date.now();
-    const socketCreatedAt = api.getSocketCreatedAt();
+    // Simulate socket becoming null (e.g., error handler nullified it)
+    (api as any).socket = null;
 
-    expect(socketCreatedAt).toBeGreaterThanOrEqual(beforeConnect);
-    expect(socketCreatedAt).toBeLessThanOrEqual(afterConnect);
+    // Next send should reconnect
+    await api.send('method2', {});
+    expect(api.isConnected()).toBe(true);
   });
 });
 

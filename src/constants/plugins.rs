@@ -94,16 +94,6 @@ pub const DEFAULT_POOL_CONNECT_RETRIES: usize = 15;
 // Controls the Unix socket for plugin ↔ relayer communication.
 // =============================================================================
 
-/// Idle timeout for plugin connections (seconds).
-/// Env: PLUGIN_SOCKET_IDLE_TIMEOUT_SECS
-/// Connections idle longer than this are closed.
-pub const DEFAULT_SOCKET_IDLE_TIMEOUT_SECS: u64 = 60;
-
-/// Read timeout per line from plugins (seconds).
-/// Env: PLUGIN_SOCKET_READ_TIMEOUT_SECS
-/// Time to wait for a complete message from a plugin.
-pub const DEFAULT_SOCKET_READ_TIMEOUT_SECS: u64 = 30;
-
 /// Maximum concurrent plugin connections to the relayer.
 /// Env: PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS
 /// Should be >= PLUGIN_POOL_MAX_CONNECTIONS.
