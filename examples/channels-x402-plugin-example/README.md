@@ -1,15 +1,15 @@
-# OpenZeppelin Relayer — Channels Plugin Example
+# OpenZeppelin Relayer — Channels x402 Plugin Example
 
 Run the Channels plugin with OpenZeppelin Relayer to enable parallel transaction submission on Stellar using channel accounts with fee bumping. The plugin handles fees, sequence numbers, simulation, and retries automatically.
 
-For x402-specific Channels setups with a dedicated secondary fund relayer, use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
+This example includes an optional second fund relayer, `x402-channels-fund`, for x402 traffic. When the plugin receives a request with `x402: true`, it can use that dedicated fund relayer through `X402_FUND_RELAYER_ID` while continuing to share the same channel account pool.
 
 ## Quick Start
 
 ```bash
 # Clone and navigate to this example:
 git clone https://github.com/OpenZeppelin/openzeppelin-relayer
-cd openzeppelin-relayer/examples/channels-plugin-example
+cd openzeppelin-relayer/examples/channels-x402-plugin-example
 
 # Then follow the Setup steps below
 ```
@@ -37,7 +37,7 @@ All configurations are pre-set for testnet use.
 Install and build the Channels plugin:
 
 ```bash
-# From this directory (examples/channels-plugin-example)
+# From this directory (examples/channels-x402-plugin-example)
 cd channel
 pnpm install
 pnpm run build
@@ -49,9 +49,10 @@ cd ..
 The Channels plugin requires two types of keys:
 
 - **Fund account**: Pays transaction fees and holds funds
+- **x402 fund account**: Optional dedicated fund account for requests submitted with `x402: true`
 - **Channel accounts**: Manage sequence numbers for parallel transactions (at least 2 recommended)
 
-From this directory (`examples/channels-plugin-example`), run these commands:
+From this directory (`examples/channels-x402-plugin-example`), run these commands:
 
 #### Create Channel accounts
 
@@ -66,6 +67,12 @@ cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
   --filename channels-fund.json
+
+# Create x402 fund account (used only when x402=true)
+cargo run --example create_key -- \
+  --password YOUR_PASSWORD \
+  --output-dir config/keys \
+  --filename x402-channels-fund.json
 
 # Create first channel account
 cargo run --example create_key -- \
@@ -97,6 +104,7 @@ Create `.env` in this directory:
 ```env
 REDIS_URL=redis://redis:6379
 KEYSTORE_PASSPHRASE_FUND=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_X402_FUND=YOUR_PASSWORD
 KEYSTORE_PASSPHRASE_CHANNEL_001=YOUR_PASSWORD
 KEYSTORE_PASSPHRASE_CHANNEL_002=YOUR_PASSWORD
 WEBHOOK_SIGNING_KEY=<webhook_key_from_above>
@@ -105,6 +113,7 @@ API_KEY=<api_key_from_above>
 STELLAR_NETWORK=testnet
 PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
 FUND_RELAYER_ID=channels-fund
+X402_FUND_RELAYER_ID=x402-channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
 # Fee Tracking (optional)
@@ -122,8 +131,8 @@ The Channels plugin and relayer configurations are already set up for testnet. T
 
 **`config/config.json`** (pre-configured):
 
-- Three relayers defined: `channels-fund`, `channel-001`, `channel-002`
-- The fund relayer has `concurrent_transactions: true` enabled in policies to allow parallel processing
+- Four relayers defined: `channels-fund`, `x402-channels-fund`, `channel-001`, `channel-002`
+- Both fund relayers have `concurrent_transactions: true` enabled in policies to allow parallel processing
 - Corresponding signers pointing to the key files you'll create
 - Plugin registered as `channels`
 
@@ -133,8 +142,19 @@ Channels is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
 - `FUND_RELAYER_ID=channels-fund` - ID of the fund relayer
+- `X402_FUND_RELAYER_ID=x402-channels-fund` - Optional ID of the dedicated x402 fund relayer
 - `PLUGIN_ADMIN_SECRET` - Admin secret for Channels operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
+
+### x402 fund relayer behavior
+
+The plugin only switches the fund relayer for x402 traffic. It does not create a separate channel pool automatically.
+
+- Standard requests use `FUND_RELAYER_ID`
+- Requests with `x402: true` use `X402_FUND_RELAYER_ID`
+- Channel accounts such as `channel-001` and `channel-002` remain shared unless you explicitly build a separate channel service deployment
+
+This means `x402-channels-fund` must be a real relayer in `config/config.json` with its own signer and funded Stellar account, but you do not need separate `x402-channel-*` accounts for the default setup.
 
 ### 4. (Optional) Configure Webhooks
 
@@ -166,6 +186,7 @@ The relayer will start and display the public addresses for your accounts in the
 
 ```bash
 relayer-1  | Syncing sequence for relayer: channels-fund (GCP7KWGZCDDVBFKANDJTA74H2HSORV34SMSQIPGZ3PK7V6OHKCFGRTF6)
+relayer-1  | Syncing sequence for relayer: x402-channels-fund (GD...EXAMPLE)
 relayer-1  | Syncing sequence for relayer: channel-001 (GCWFXU6HZNHLTXMHWZRPXYBZFOODJYRDZXFOPMUQN4S2JJGEZA2ZHA4B)
 relayer-1  | Syncing sequence for relayer: channel-002 (GA7IXWK3VKF25JOXJZZ7XMFB3A3IPM5A66MW5DJ6FPOIWME4F66UK4HL)
 ```
@@ -177,6 +198,7 @@ In a new terminal, copy the addresses from the logs above and fund them:
 ```bash
 # Replace with your actual addresses from the logs
 curl "https://friendbot.stellar.org?addr=YOUR_FUND_ADDRESS"        # fund account
+curl "https://friendbot.stellar.org?addr=YOUR_X402_FUND_ADDRESS"   # x402 fund account
 curl "https://friendbot.stellar.org?addr=YOUR_CHANNEL_001_ADDRESS"  # channel-001
 curl "https://friendbot.stellar.org?addr=YOUR_CHANNEL_002_ADDRESS"  # channel-002
 ```
@@ -267,8 +289,24 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - `xdr`: Complete signed transaction envelope XDR (not fee-bump)
 - `func`: Soroban host function XDR
 - `auth`: Array of authorization entry XDRs
+- `x402`: Optional boolean. When `true`, fee bumping uses `X402_FUND_RELAYER_ID` instead of `FUND_RELAYER_ID`
 
 > Use either `xdr` OR `func`+`auth`, not both
+
+#### Option 3: x402-funded request
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "params": {
+      "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
+      "auth": ["AAAACAAAAAEAAAA..."],
+      "x402": true
+    }
+  }'
+```
 
 **Response (HTTP 200):**
 
@@ -590,7 +628,7 @@ This example uses multiple Stellar accounts (fund account + channel accounts) wi
 
 ### Common issues
 
-- **Plugin not found**: Verify the plugin `id` and `path` in `examples/channels-plugin-example/config/config.json`.
+- **Plugin not found**: Verify the plugin `id` and `path` in `examples/channels-x402-plugin-example/config/config.json`.
 - **Missing Channels config**: Ensure required environment variables are set in `.env` and that channel accounts are configured via the Management API.
 - **API authentication**: Ensure the `Authorization` header is present and the `API_KEY` is set in `.env`.
 - **Webhook not received**: Ensure the `notifications[0].url` is set to a reachable URL.
