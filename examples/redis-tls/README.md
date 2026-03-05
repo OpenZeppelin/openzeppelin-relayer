@@ -96,6 +96,8 @@ args:
   CARGO_FEATURES: redis-tls-rustls
 ```
 
+> **Note:** The Docker Compose walkthrough in this example is tailored to the `redis-tls-native` backend and relies on `SSL_CERT_FILE` to trust the self-signed CA. When using `redis-tls-rustls` with self-signed certificates, additional steps are required to add the CA to the container's trust store (e.g., baking the CA certificate into the image or mounting it with the appropriate rustls configuration). The `rustls` + self-signed workflow is not covered by this example. For cloud-managed Redis (AWS ElastiCache, etc.), either backend works out of the box since the provider's certificates are already trusted.
+
 ## Production: Cloud-Managed Redis
 
 For cloud-managed Redis with TLS, no certificate generation is needed — the cloud provider handles certificates. Simply use the `rediss://` URI scheme:

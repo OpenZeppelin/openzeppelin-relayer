@@ -57,6 +57,8 @@ services:
       - /tls/redis.key
       - --tls-ca-cert-file
       - /tls/ca.crt
+      - --tls-auth-clients
+      - 'no'
       - --appendonly
       - 'yes'
       - --save

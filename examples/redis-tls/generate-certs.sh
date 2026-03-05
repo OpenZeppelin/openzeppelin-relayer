@@ -2,7 +2,7 @@
 # Generate self-signed TLS certificates for Redis
 # These are for local development/testing only — do NOT use in production.
 
-set -e
+set -euo pipefail
 
 CERT_DIR="$(cd "$(dirname "$0")" && pwd)/certs"
 mkdir -p "$CERT_DIR"
@@ -22,15 +22,21 @@ openssl req -new -sha256 \
   -subj "/CN=redis" \
   -out "$CERT_DIR/redis.csr"
 
+# Create extensions file with SAN for hostname verification
+cat > "$CERT_DIR/redis.ext" <<EOF
+subjectAltName=DNS:redis,DNS:localhost
+EOF
+
 openssl x509 -req -sha256 \
   -in "$CERT_DIR/redis.csr" \
   -CA "$CERT_DIR/ca.crt" \
   -CAkey "$CERT_DIR/ca.key" \
   -CAcreateserial \
   -days 365 \
+  -extfile "$CERT_DIR/redis.ext" \
   -out "$CERT_DIR/redis.crt"
 
-rm -f "$CERT_DIR/redis.csr" "$CERT_DIR/ca.srl"
+rm -f "$CERT_DIR/redis.csr" "$CERT_DIR/redis.ext" "$CERT_DIR/ca.srl"
 
 chmod 644 "$CERT_DIR"/*.crt
 chmod 600 "$CERT_DIR"/*.key

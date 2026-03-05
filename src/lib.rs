@@ -23,6 +23,12 @@
 //! - `services`: Core business logic and blockchain interaction
 //! - `utils`: Common utilities and helper functions
 
+#[cfg(all(feature = "redis-tls-native", feature = "redis-tls-rustls"))]
+compile_error!(
+    "Features `redis-tls-native` and `redis-tls-rustls` are mutually exclusive. \
+     Please enable only one."
+);
+
 pub mod api;
 pub mod bootstrap;
 pub mod config;
