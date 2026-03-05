@@ -5,8 +5,7 @@ use tracing::info;
 
 use super::common::{get_next_sequence, sign_stellar_transaction, simulate_if_needed};
 use crate::{
-    constants::STELLAR_DEFAULT_TRANSACTION_FEE,
-    domain::extract_operations,
+    domain::{extract_operations, transaction::stellar::utils::compute_escalated_inclusion_fee},
     models::{
         RelayerStellarPolicy, StellarFeePaymentStrategy, StellarTransactionData, TransactionError,
         TransactionRepoModel,
@@ -97,9 +96,11 @@ where
                 })?
         }
         None => {
-            // For non-simulated transactions, ensure fee is set to default
+            // For non-simulated transactions, use escalated inclusion fee
             let op_count = extract_operations(&unsigned_env)?.len() as u32;
-            let fee = STELLAR_DEFAULT_TRANSACTION_FEE * op_count;
+            let inclusion_fee =
+                compute_escalated_inclusion_fee(stellar_data.insufficient_fee_retries);
+            let fee = inclusion_fee.saturating_mul(op_count);
             stellar_data.with_fee(fee)
         }
     };
@@ -171,6 +172,7 @@ mod tests {
             simulation_transaction_data: None,
             signed_envelope_xdr: None,
             transaction_result_xdr: None,
+            insufficient_fee_retries: 0,
         }
     }
 

@@ -999,11 +999,14 @@ impl StellarTransactionValidator {
 
         // Calculate required XLM fee using estimate_fee (handles Soroban transactions correctly)
 
-        let mut required_xlm_fee = estimate_fee(envelope, provider, None).await.map_err(|e| {
-            StellarTransactionValidationError::ValidationError(format!(
-                "Failed to estimate fee: {e}",
-            ))
-        })?;
+        let mut required_xlm_fee =
+            estimate_fee(envelope, provider, None, 0)
+                .await
+                .map_err(|e| {
+                    StellarTransactionValidationError::ValidationError(format!(
+                        "Failed to estimate fee: {e}",
+                    ))
+                })?;
 
         let is_soroban = xdr_needs_simulation(envelope).unwrap_or(false);
         if !is_soroban {
