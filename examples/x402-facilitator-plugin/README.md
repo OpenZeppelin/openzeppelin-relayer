@@ -2,6 +2,10 @@
 
 Run the x402 Facilitator plugin with OpenZeppelin Relayer to enable payment verification and settlement for x402 payments on Stellar. The plugin verifies payment payloads, validates authorization, and settles transactions via the relayer or an optional channel service.
 
+This example now includes a second Stellar relayer, `x402-channels-fund`, to mirror the new Channels service flow where `fundRelayerId` selects a dedicated fund relayer. The allowed fund relayer IDs are configured via `ALLOWED_FUND_RELAYER_IDS` in the Channels service.
+
+If you want a companion Channels setup that already includes the dedicated x402 fund relayer, use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
+
 ## Quick Start
 
 ```bash
@@ -59,7 +63,8 @@ cd ..
 
 The x402 Facilitator plugin requires relayer keys for submitting transactions:
 
-- **Relayer account**: Pays transaction fees and submits transactions
+- **Relayer account**: Pays transaction fees and submits transactions for direct settlement
+- **x402 fund account**: Optional dedicated fund relayer used by the Channels service when requests include `fundRelayerId`
 
 From this directory (`examples/x402-facilitator-plugin`), run these commands.
 
@@ -76,6 +81,17 @@ cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
   --filename local-signer.json
+```
+
+#### Create x402 fund account
+
+```bash
+# Replace YOUR_X402_PASSWORD with a second strong password
+# This signer backs the dedicated x402 fund relayer used by the Channels service
+cargo run --example create_key -- \
+  --password YOUR_X402_PASSWORD \
+  --output-dir config/keys \
+  --filename x402-fund-signer.json
 ```
 
 #### Generate API credentials
@@ -96,13 +112,14 @@ cp .env.example .env
 ```env
 REDIS_URL=redis://redis:6379
 KEYSTORE_PASSPHRASE=YOUR_PASSWORD
+KEYSTORE_PASSPHRASE_X402_FUND=YOUR_X402_PASSWORD
 API_KEY=<api_key_from_above>
 ```
 
 ### 3. Configure Plugin
 
 The `config/config.json` file already contains the relayer and plugin definitions.
-The x402 facilitator plugin is configured for the `stellar-example` relayer on the Stellar testnet with USDC support.
+The x402 facilitator plugin is configured for the `stellar-example` relayer on the Stellar testnet with USDC support, and includes an additional `x402-channels-fund` relayer that can be referenced by the Channels service through `ALLOWED_FUND_RELAYER_IDS`.
 
 ```json
 {
@@ -118,6 +135,19 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
         "fee_payment_strategy": "relayer",
         "min_balance": 0
       }
+    },
+    {
+      "id": "x402-channels-fund",
+      "name": "x402 Channel Fund",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "x402-fund-signer",
+      "policies": {
+        "concurrent_transactions": true,
+        "fee_payment_strategy": "relayer",
+        "min_balance": 0
+      }
     }
   ],
   "notifications": [],
@@ -130,6 +160,17 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
         "passphrase": {
           "type": "env",
           "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    },
+    {
+      "id": "x402-fund-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/x402-fund-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE_X402_FUND"
         }
       }
     }
@@ -171,6 +212,35 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
   - `assets`: Array of supported asset contract addresses
   - `channel_service_api_url` (optional): Channel service API URL for settlement
   - `channel_service_api_key` (optional): Channel service API key
+  - `channel_service_fund_relayer_address` (optional): on-chain address of the dedicated x402 fund relayer used by the Channels service
+
+### Using the Channels service for x402 settlement
+
+If you connect this facilitator to the Channels service, there are two separate pieces of configuration:
+
+1. In the Channels service environment, set `ALLOWED_FUND_RELAYER_IDS=x402-channels-fund` so requests with `fundRelayerId: "x402-channels-fund"` use the dedicated fund relayer.
+2. In this facilitator plugin config, add `channel_service_api_url`, `channel_service_api_key`, and preferably `channel_service_fund_relayer_address` under the relevant network entry.
+
+Example network entry when using the Channels service:
+
+```json
+{
+  "network": "stellar:testnet",
+  "type": "stellar",
+  "relayer_id": "stellar-example",
+  "assets": [
+    "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+  ],
+  "channel_service_api_url": "https://channels.openzeppelin.com/testnet",
+  "channel_service_api_key": "YOUR_CHANNELS_API_KEY",
+  "channel_service_fund_relayer_id": "x402-channels-fund",
+  "channel_service_fund_relayer_address": "G..."
+}
+```
+
+The facilitator still uses `relayer_id` for direct settlement and fallback behavior. The dedicated `x402-channels-fund` relayer is for the Channels service to consume, not for the facilitator to call directly.
+
+For production, the `x402-fund-signer` is a good candidate for `aws_kms`, `google_cloud_kms`, or another managed signer. This example keeps both signers local so it stays runnable out of the box.
 
 
 ### 4. Start the Service and Get Account Addresses
@@ -179,20 +249,26 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
 docker compose up
 ```
 
-Once the relayer is running, retrieve the relayer address via:
+Once the relayer is running, retrieve the relayer addresses via:
 
 ```bash
 curl -X GET http://localhost:8080/api/v1/relayers/stellar-example \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
+```bash
+curl -X GET http://localhost:8080/api/v1/relayers/x402-channels-fund \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
 ### 5. Fund Your Account on Testnet
 
-In a new terminal, copy the address from the logs above and fund it:
+In a new terminal, copy the addresses from the logs above and fund them:
 
 ```bash
-# Replace with your actual address from the logs
+# Replace with your actual addresses from the logs
 curl "https://friendbot.stellar.org?addr=YOUR_RELAYER_ADDRESS"
+curl "https://friendbot.stellar.org?addr=YOUR_X402_FUND_RELAYER_ADDRESS"
 ```
 
 ## Usage
