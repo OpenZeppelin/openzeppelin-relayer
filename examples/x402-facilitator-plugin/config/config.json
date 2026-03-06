@@ -13,7 +13,7 @@
       }
     },
     {
-      "id": "x402-channel-fund",
+      "id": "x402-channels-fund",
       "name": "x402 Channel Fund",
       "network": "testnet",
       "paused": false,

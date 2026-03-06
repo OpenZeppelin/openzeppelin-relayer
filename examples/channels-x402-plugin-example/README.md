@@ -2,7 +2,7 @@
 
 Run the Channels plugin with OpenZeppelin Relayer to enable parallel transaction submission on Stellar using channel accounts with fee bumping. The plugin handles fees, sequence numbers, simulation, and retries automatically.
 
-This example includes an optional second fund relayer, `x402-channels-fund`, for x402 traffic. When the plugin receives a request with `x402: true`, it can use that dedicated fund relayer through `X402_FUND_RELAYER_ID` while continuing to share the same channel account pool.
+This example includes an optional second fund relayer, `x402-channels-fund`, for x402 traffic. When the plugin receives a request with `fundRelayerId: "x402-channels-fund"`, it uses that dedicated fund relayer while continuing to share the same channel account pool. The allowed fund relayer IDs are configured via `ALLOWED_FUND_RELAYER_IDS`.
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ cd ..
 The Channels plugin requires two types of keys:
 
 - **Fund account**: Pays transaction fees and holds funds
-- **x402 fund account**: Optional dedicated fund account for requests submitted with `x402: true`
+- **x402 fund account**: Optional dedicated fund account for requests submitted with `fundRelayerId`
 - **Channel accounts**: Manage sequence numbers for parallel transactions (at least 2 recommended)
 
 From this directory (`examples/channels-x402-plugin-example`), run these commands:
@@ -68,7 +68,7 @@ cargo run --example create_key -- \
   --output-dir config/keys \
   --filename channels-fund.json
 
-# Create x402 fund account (used only when x402=true)
+# Create x402 fund account (used when fundRelayerId is specified)
 cargo run --example create_key -- \
   --password YOUR_PASSWORD \
   --output-dir config/keys \
@@ -113,7 +113,7 @@ API_KEY=<api_key_from_above>
 STELLAR_NETWORK=testnet
 PLUGIN_ADMIN_SECRET=<admin_secret_for_channels_mgmt_api>
 FUND_RELAYER_ID=channels-fund
-X402_FUND_RELAYER_ID=x402-channels-fund
+ALLOWED_FUND_RELAYER_IDS=x402-channels-fund
 LOCK_TTL_SECONDS=30
 LOG_LEVEL=info
 # Fee Tracking (optional)
@@ -142,16 +142,16 @@ Channels is configured through environment variables in your `.env` file:
 
 - `STELLAR_NETWORK=testnet` - Sets the Stellar network
 - `FUND_RELAYER_ID=channels-fund` - ID of the fund relayer
-- `X402_FUND_RELAYER_ID=x402-channels-fund` - Optional ID of the dedicated x402 fund relayer
+- `ALLOWED_FUND_RELAYER_IDS=x402-channels-fund` - Comma-separated list of allowed alternative fund relayer IDs
 - `PLUGIN_ADMIN_SECRET` - Admin secret for Channels operations
 - `LOCK_TTL_SECONDS=30` - Lock timeout for sequence management
 
-### x402 fund relayer behavior
+### Alternative fund relayer behavior
 
-The plugin only switches the fund relayer for x402 traffic. It does not create a separate channel pool automatically.
+The plugin can switch the fund relayer based on the `fundRelayerId` parameter. It does not create a separate channel pool automatically.
 
 - Standard requests use `FUND_RELAYER_ID`
-- Requests with `x402: true` use `X402_FUND_RELAYER_ID`
+- Requests with `fundRelayerId: "x402-channels-fund"` use the specified fund relayer (must be in `ALLOWED_FUND_RELAYER_IDS`)
 - Channel accounts such as `channel-001` and `channel-002` remain shared unless you explicitly build a separate channel service deployment
 
 This means `x402-channels-fund` must be a real relayer in `config/config.json` with its own signer and funded Stellar account, but you do not need separate `x402-channel-*` accounts for the default setup.
@@ -289,11 +289,11 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
 - `xdr`: Complete signed transaction envelope XDR (not fee-bump)
 - `func`: Soroban host function XDR
 - `auth`: Array of authorization entry XDRs
-- `x402`: Optional boolean. When `true`, fee bumping uses `X402_FUND_RELAYER_ID` instead of `FUND_RELAYER_ID`
+- `fundRelayerId`: Optional string. When set, fee bumping uses the specified fund relayer instead of `FUND_RELAYER_ID` (must be in `ALLOWED_FUND_RELAYER_IDS`)
 
 > Use either `xdr` OR `func`+`auth`, not both
 
-#### Option 3: x402-funded request
+#### Option 3: Alternative fund relayer request
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
@@ -303,7 +303,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
     "params": {
       "func": "AAAABAAAAAEAAAAGc3ltYm9s...",
       "auth": ["AAAACAAAAAEAAAA..."],
-      "x402": true
+      "fundRelayerId": "x402-channels-fund"
     }
   }'
 ```

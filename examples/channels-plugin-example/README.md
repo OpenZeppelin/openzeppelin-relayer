@@ -2,7 +2,7 @@
 
 Run the Channels plugin with OpenZeppelin Relayer to enable parallel transaction submission on Stellar using channel accounts with fee bumping. The plugin handles fees, sequence numbers, simulation, and retries automatically.
 
-For x402-specific Channels setups with a dedicated secondary fund relayer, use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
+For setups with a dedicated secondary fund relayer (e.g., for x402), use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
 
 ## Quick Start
 

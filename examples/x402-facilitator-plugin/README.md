@@ -2,7 +2,7 @@
 
 Run the x402 Facilitator plugin with OpenZeppelin Relayer to enable payment verification and settlement for x402 payments on Stellar. The plugin verifies payment payloads, validates authorization, and settles transactions via the relayer or an optional channel service.
 
-This example now includes a second Stellar relayer, `x402-channel-fund`, to mirror the new Channels service flow where `x402: true` selects a dedicated fund relayer through `X402_FUND_RELAYER_ID`.
+This example now includes a second Stellar relayer, `x402-channels-fund`, to mirror the new Channels service flow where `fundRelayerId` selects a dedicated fund relayer. The allowed fund relayer IDs are configured via `ALLOWED_FUND_RELAYER_IDS` in the Channels service.
 
 If you want a companion Channels setup that already includes the dedicated x402 fund relayer, use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
 
@@ -64,7 +64,7 @@ cd ..
 The x402 Facilitator plugin requires relayer keys for submitting transactions:
 
 - **Relayer account**: Pays transaction fees and submits transactions for direct settlement
-- **x402 fund account**: Optional dedicated fund relayer used by the Channels service when requests are sent with `x402: true`
+- **x402 fund account**: Optional dedicated fund relayer used by the Channels service when requests include `fundRelayerId`
 
 From this directory (`examples/x402-facilitator-plugin`), run these commands.
 
@@ -119,7 +119,7 @@ API_KEY=<api_key_from_above>
 ### 3. Configure Plugin
 
 The `config/config.json` file already contains the relayer and plugin definitions.
-The x402 facilitator plugin is configured for the `stellar-example` relayer on the Stellar testnet with USDC support, and includes an additional `x402-channel-fund` relayer that can be referenced by the Channels service through `X402_FUND_RELAYER_ID`.
+The x402 facilitator plugin is configured for the `stellar-example` relayer on the Stellar testnet with USDC support, and includes an additional `x402-channels-fund` relayer that can be referenced by the Channels service through `ALLOWED_FUND_RELAYER_IDS`.
 
 ```json
 {
@@ -137,7 +137,7 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
       }
     },
     {
-      "id": "x402-channel-fund",
+      "id": "x402-channels-fund",
       "name": "x402 Channel Fund",
       "network": "testnet",
       "paused": false,
@@ -218,7 +218,7 @@ The x402 facilitator plugin is configured for the `stellar-example` relayer on t
 
 If you connect this facilitator to the Channels service, there are two separate pieces of configuration:
 
-1. In the Channels service environment, set `X402_FUND_RELAYER_ID=x402-channel-fund` so requests with `x402: true` use the dedicated fund relayer.
+1. In the Channels service environment, set `ALLOWED_FUND_RELAYER_IDS=x402-channels-fund` so requests with `fundRelayerId: "x402-channels-fund"` use the dedicated fund relayer.
 2. In this facilitator plugin config, add `channel_service_api_url`, `channel_service_api_key`, and preferably `channel_service_fund_relayer_address` under the relevant network entry.
 
 Example network entry when using the Channels service:
@@ -233,11 +233,12 @@ Example network entry when using the Channels service:
   ],
   "channel_service_api_url": "https://channels.openzeppelin.com/testnet",
   "channel_service_api_key": "YOUR_CHANNELS_API_KEY",
+  "channel_service_fund_relayer_id": "x402-channels-fund",
   "channel_service_fund_relayer_address": "G..."
 }
 ```
 
-The facilitator still uses `relayer_id` for direct settlement and fallback behavior. The dedicated `x402-channel-fund` relayer is for the Channels service to consume, not for the facilitator to call directly.
+The facilitator still uses `relayer_id` for direct settlement and fallback behavior. The dedicated `x402-channels-fund` relayer is for the Channels service to consume, not for the facilitator to call directly.
 
 For production, the `x402-fund-signer` is a good candidate for `aws_kms`, `google_cloud_kms`, or another managed signer. This example keeps both signers local so it stays runnable out of the box.
 
@@ -256,7 +257,7 @@ curl -X GET http://localhost:8080/api/v1/relayers/stellar-example \
 ```
 
 ```bash
-curl -X GET http://localhost:8080/api/v1/relayers/x402-channel-fund \
+curl -X GET http://localhost:8080/api/v1/relayers/x402-channels-fund \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
