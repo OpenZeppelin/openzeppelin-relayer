@@ -11,10 +11,11 @@ use super::{
     StellarRelayerTransaction,
 };
 use crate::{
+    constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionMetadata,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{
@@ -191,15 +192,39 @@ where
                     .as_deref()
                     .is_some_and(is_insufficient_fee_error)
                 {
+                    let insufficient_fee_retries = tx
+                        .metadata
+                        .as_ref()
+                        .map_or(0, |metadata| metadata.insufficient_fee_retries)
+                        .saturating_add(1);
+
+                    if insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                        return Err(TransactionError::UnexpectedError(format!(
+                            "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+                        )));
+                    }
+
                     debug!(
                         tx_id = %tx.id,
                         relayer_id = %tx.relayer_id,
                         status = ?tx.status,
+                        insufficient_fee_retries,
                         result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
                     let update_req = TransactionUpdateRequest {
                         sent_at: Some(Utc::now().to_rfc3339()),
+                        metadata: Some(TransactionMetadata {
+                            consecutive_failures: tx
+                                .metadata
+                                .as_ref()
+                                .map_or(0, |metadata| metadata.consecutive_failures),
+                            total_failures: tx
+                                .metadata
+                                .as_ref()
+                                .map_or(0, |metadata| metadata.total_failures),
+                            insufficient_fee_retries,
+                        }),
                         ..Default::default()
                     };
                     let updated_tx = self
@@ -1155,11 +1180,19 @@ mod tests {
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
-                .returning(|id, _upd| {
+                .withf(|_, upd| {
+                    upd.sent_at.is_some()
+                        && upd.status.is_none()
+                        && upd
+                            .metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.insufficient_fee_retries == 1)
+                })
+                .returning(|id, upd| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
+                    tx.metadata = upd.metadata;
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1176,6 +1209,89 @@ mod tests {
             // Transaction stays alive — status checker will retry
             let returned_tx = res.unwrap();
             assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(1)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_exceeding_retry_limit_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.status == Some(TransactionStatus::Failed)
+                        && upd.status_reason.as_ref().is_some_and(|reason| {
+                            reason.contains("insufficient fee retry limit exceeded (2)")
+                        })
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.status_reason = upd.status_reason;
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
+                ..Default::default()
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            assert!(
+                failed_tx.status_reason.as_ref().is_some_and(
+                    |reason| reason.contains("insufficient fee retry limit exceeded (2)")
+                )
+            );
         }
 
         #[tokio::test]
