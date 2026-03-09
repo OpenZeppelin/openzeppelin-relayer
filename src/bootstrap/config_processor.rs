@@ -30,8 +30,9 @@ use crate::{
     },
     services::signer::{Signer as SignerService, SignerFactory},
     utils::{
-        poll_until, DistributedLock, BOOTSTRAP_LOCK_TTL_SECS, LOCK_POLL_INTERVAL_MS,
-        LOCK_WAIT_MAX_SECS,
+        is_config_processing_completed, poll_until, set_config_processing_completed,
+        set_config_processing_in_progress, DistributedLock, BOOTSTRAP_LOCK_TTL_SECS,
+        LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
     },
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
@@ -423,8 +424,8 @@ where
 ///
 /// Flow:
 /// 1. Try to acquire global lock for config processing
-/// 2. If lock acquired: check if Redis is populated, process if not
-/// 3. If lock held: wait for it to be released, then check if populated
+/// 2. If lock acquired: check for an explicit completion marker, process if needed
+/// 3. If lock held: wait for the completion marker to appear
 async fn coordinate_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
@@ -455,7 +456,9 @@ where
             // We got the lock - check if we need to process
             info!("Acquired config processing lock");
 
-            let result = process_if_needed_after_lock(config_file, server_config, app_state).await;
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
 
             drop(guard); // Release lock
             result
@@ -463,7 +466,7 @@ where
         Ok(None) => {
             // Lock held by another instance - wait for it to complete
             info!("Another instance is processing config, waiting for completion");
-            wait_for_config_processing_complete(app_state).await
+            wait_for_config_processing_complete(conn, prefix).await
         }
         Err(e) => {
             // Lock error - graceful degradation, proceed without lock
@@ -478,12 +481,13 @@ where
 
 /// Process config after successfully acquiring the lock.
 ///
-/// Checks if Redis is already populated (by a previous run or another instance)
-/// and only processes if needed.
+/// Checks if config processing was already completed and only processes if needed.
 async fn process_if_needed_after_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
 ) -> Result<()>
 where
     J: JobProducerTrait + Send + Sync + 'static,
@@ -496,46 +500,35 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    // Check population status AFTER acquiring lock
-    let is_populated = is_redis_populated(app_state).await?;
+    let already_completed = is_config_processing_completed(conn, prefix).await?;
 
     if server_config.reset_storage_on_start {
         // With reset flag: always reset and process (we have the lock)
-        execute_config_processing(config_file, server_config, app_state).await
-    } else if is_populated {
-        // No reset flag and already populated: skip
-        info!("Redis already populated, skipping config file processing");
+        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
+            .await
+    } else if already_completed {
+        // No reset flag and already completed: skip
+        info!("Config processing already completed, skipping config file processing");
         Ok(())
     } else {
-        // No reset flag and not populated: process
-        execute_config_processing(config_file, server_config, app_state).await
+        // No reset flag and not completed: process
+        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
+            .await
     }
 }
 
 /// Waits for another instance to complete config processing.
 ///
-/// Polls periodically until Redis is populated or timeout is reached.
-async fn wait_for_config_processing_complete<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<()>
-where
-    J: JobProducerTrait + Send + Sync + 'static,
-    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
-    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-    TCR: TransactionCounterTrait + Send + Sync + 'static,
-    PR: PluginRepositoryTrait + Send + Sync + 'static,
-    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-{
+/// Polls periodically until the explicit completion marker is set or timeout is reached.
+async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> Result<()> {
     let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
     let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
 
-    let app_state = app_state.clone();
+    let conn = conn.clone();
+    let prefix = prefix.to_string();
 
     let completed = poll_until(
-        || is_redis_populated(&app_state),
+        || is_config_processing_completed(&conn, &prefix),
         max_wait,
         poll_interval,
         "config processing",
@@ -553,6 +546,36 @@ where
 }
 
 /// Internal function that performs the actual config processing.
+async fn execute_config_processing_with_marker<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    set_config_processing_in_progress(conn, prefix).await?;
+
+    let result = execute_config_processing(config_file, server_config, app_state).await;
+
+    if result.is_ok() {
+        set_config_processing_completed(conn, prefix).await?;
+    }
+
+    result
+}
+
+/// Internal function that performs the actual config processing work.
 async fn execute_config_processing<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,

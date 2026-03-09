@@ -405,6 +405,106 @@ const RELAYER_SYNC_META_KEY: &str = "relayer_sync_meta";
 /// The hash field for global initialization completion timestamp.
 const GLOBAL_INIT_FIELD: &str = "global:init_completed";
 
+/// The Redis hash key suffix for storing bootstrap process metadata.
+const BOOTSTRAP_META_KEY: &str = "bootstrap_meta";
+
+/// Hash field storing config processing status.
+const CONFIG_PROCESSING_STATUS_FIELD: &str = "config_processing:status";
+
+/// Hash field storing config processing start timestamp.
+const CONFIG_PROCESSING_STARTED_AT_FIELD: &str = "config_processing:started_at";
+
+/// Hash field storing config processing completion timestamp.
+const CONFIG_PROCESSING_COMPLETED_AT_FIELD: &str = "config_processing:completed_at";
+
+const CONFIG_PROCESSING_STATUS_IN_PROGRESS: &str = "in_progress";
+const CONFIG_PROCESSING_STATUS_COMPLETED: &str = "completed";
+
+/// Marks config processing as in progress.
+///
+/// This explicit marker is used by distributed bootstrap coordination so
+/// waiters do not infer completion from partially written repository state.
+pub async fn set_config_processing_in_progress(pool: &Arc<Pool>, prefix: &str) -> Result<()> {
+    use chrono::Utc;
+    use redis::AsyncCommands;
+
+    let mut conn = pool.get().await?;
+    let hash_key = format!("{prefix}:{BOOTSTRAP_META_KEY}");
+    let timestamp = Utc::now().timestamp();
+
+    conn.hset_multiple::<_, _, _, ()>(
+        &hash_key,
+        &[
+            (
+                CONFIG_PROCESSING_STATUS_FIELD,
+                CONFIG_PROCESSING_STATUS_IN_PROGRESS,
+            ),
+            (CONFIG_PROCESSING_STARTED_AT_FIELD, &timestamp.to_string()),
+        ],
+    )
+    .await
+    .map_err(|e| eyre::eyre!("Failed to set config processing in progress: {}", e))?;
+
+    conn.hdel::<_, _, ()>(&hash_key, CONFIG_PROCESSING_COMPLETED_AT_FIELD)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to clear config processing completion time: {}", e))?;
+
+    debug!(
+        timestamp = %timestamp,
+        "recorded config processing in-progress marker"
+    );
+
+    Ok(())
+}
+
+/// Marks config processing as completed.
+pub async fn set_config_processing_completed(pool: &Arc<Pool>, prefix: &str) -> Result<()> {
+    use chrono::Utc;
+    use redis::AsyncCommands;
+
+    let mut conn = pool.get().await?;
+    let hash_key = format!("{prefix}:{BOOTSTRAP_META_KEY}");
+    let timestamp = Utc::now().timestamp();
+
+    conn.hset_multiple::<_, _, _, ()>(
+        &hash_key,
+        &[
+            (
+                CONFIG_PROCESSING_STATUS_FIELD,
+                CONFIG_PROCESSING_STATUS_COMPLETED,
+            ),
+            (CONFIG_PROCESSING_COMPLETED_AT_FIELD, &timestamp.to_string()),
+        ],
+    )
+    .await
+    .map_err(|e| eyre::eyre!("Failed to set config processing completed: {}", e))?;
+
+    debug!(
+        timestamp = %timestamp,
+        "recorded config processing completed marker"
+    );
+
+    Ok(())
+}
+
+/// Returns whether config processing has been explicitly marked as completed.
+pub async fn is_config_processing_completed(pool: &Arc<Pool>, prefix: &str) -> Result<bool> {
+    use redis::AsyncCommands;
+
+    let mut conn = pool.get().await?;
+    let hash_key = format!("{prefix}:{BOOTSTRAP_META_KEY}");
+
+    let status: Option<String> = conn
+        .hget(&hash_key, CONFIG_PROCESSING_STATUS_FIELD)
+        .await
+        .map_err(|e| eyre::eyre!("Failed to get config processing status: {}", e))?;
+
+    Ok(matches!(
+        status.as_deref(),
+        Some(CONFIG_PROCESSING_STATUS_COMPLETED)
+    ))
+}
+
 /// Sets the last sync timestamp for a relayer to the current time.
 ///
 /// This should be called after a relayer has been successfully initialized
@@ -1630,6 +1730,71 @@ mod tests {
             // Cleanup
             let mut conn_clone = conn.get().await.expect("Failed to get connection");
             let hash_key = format!("{prefix}:relayer_sync_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        // =====================================================================
+        // Config Processing Marker Tests
+        // =====================================================================
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_config_processing_in_progress_is_not_completed() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_config_processing_in_progress";
+
+            set_config_processing_in_progress(&conn, prefix)
+                .await
+                .expect("Should set in-progress marker");
+
+            let completed = is_config_processing_completed(&conn, prefix)
+                .await
+                .expect("Should read config processing status");
+
+            assert!(
+                !completed,
+                "In-progress config processing must not be treated as completed"
+            );
+
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{prefix}:bootstrap_meta");
+            let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
+                .await
+                .expect("Cleanup failed");
+        }
+
+        #[tokio::test]
+        #[ignore] // Requires running Redis instance
+        async fn test_config_processing_completed_requires_explicit_completion_marker() {
+            let conn = create_test_redis_connection()
+                .await
+                .expect("Redis connection required for this test");
+
+            let prefix = "test_config_processing_completed";
+
+            set_config_processing_in_progress(&conn, prefix)
+                .await
+                .expect("Should set in-progress marker");
+            set_config_processing_completed(&conn, prefix)
+                .await
+                .expect("Should set completed marker");
+
+            let completed = is_config_processing_completed(&conn, prefix)
+                .await
+                .expect("Should read config processing status");
+
+            assert!(
+                completed,
+                "Completed config processing must require the explicit completion marker"
+            );
+
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{prefix}:bootstrap_meta");
             let _: () = redis::AsyncCommands::del(&mut conn_clone, &hash_key)
                 .await
                 .expect("Cleanup failed");
