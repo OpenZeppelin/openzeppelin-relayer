@@ -273,6 +273,13 @@ pub fn is_bad_sequence_error(error_msg: &str) -> bool {
     error_lower.contains("txbadseq")
 }
 
+/// Detects if an error is due to an insufficient fee.
+/// Returns true if the error message contains indicators of insufficient fee.
+pub fn is_insufficient_fee_error(error_msg: &str) -> bool {
+    let error_lower = error_msg.to_lowercase();
+    error_lower.contains("txinsufficientfee") || error_lower.contains("tx_insufficient_fee")
+}
+
 /// Fetches the current sequence number from the blockchain and calculates the next usable sequence.
 /// This is a shared helper that can be used by both stellar_relayer and stellar_transaction.
 ///
@@ -1455,6 +1462,35 @@ mod tests {
             assert!(!is_bad_sequence_error("tx_insufficient_fee"));
             assert!(!is_bad_sequence_error("bad_auth"));
             assert!(!is_bad_sequence_error(""));
+        }
+    }
+
+    mod is_insufficient_fee_error_tests {
+        use super::*;
+
+        #[test]
+        fn test_detects_txinsufficientfee() {
+            assert!(is_insufficient_fee_error(
+                "Transaction submission error: txInsufficientFee"
+            ));
+            assert!(is_insufficient_fee_error("Error: txInsufficientFee"));
+            assert!(is_insufficient_fee_error("txinsufficientfee"));
+            assert!(is_insufficient_fee_error("TXINSUFFICIENTFEE"));
+        }
+
+        #[test]
+        fn test_detects_tx_insufficient_fee_snake_case() {
+            assert!(is_insufficient_fee_error("tx_insufficient_fee"));
+            assert!(is_insufficient_fee_error("Error: TX_INSUFFICIENT_FEE"));
+        }
+
+        #[test]
+        fn test_returns_false_for_other_errors() {
+            assert!(!is_insufficient_fee_error("network timeout"));
+            assert!(!is_insufficient_fee_error("txbadseq"));
+            assert!(!is_insufficient_fee_error("insufficient balance"));
+            assert!(!is_insufficient_fee_error("bad_auth"));
+            assert!(!is_insufficient_fee_error(""));
         }
     }
 
