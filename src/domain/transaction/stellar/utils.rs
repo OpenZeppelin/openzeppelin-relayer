@@ -287,6 +287,7 @@ pub fn decode_transaction_result_code(xdr_base64: &str) -> Option<String> {
 /// Detects if a decoded transaction result code indicates an insufficient fee.
 pub fn is_insufficient_fee_error(result_code: &str) -> bool {
     result_code.eq_ignore_ascii_case("TxInsufficientFee")
+        || result_code.eq_ignore_ascii_case("tx_insufficient_fee")
 }
 
 /// Fetches the current sequence number from the blockchain and calculates the next usable sequence.
