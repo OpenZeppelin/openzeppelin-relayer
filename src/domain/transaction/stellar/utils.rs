@@ -1500,7 +1500,6 @@ mod tests {
         #[test]
         fn test_decodes_insufficient_fee_result_xdr() {
             let result_code = decode_transaction_result_code("AAAAAAAAY/n////3AAAAAA==").unwrap();
-            println!("DEBUG LINE 1504: result_code: {:?}", result_code);
             assert_eq!(result_code, "TxInsufficientFee");
         }
 
