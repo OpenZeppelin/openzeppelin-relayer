@@ -426,6 +426,7 @@ where
 /// 1. Try to acquire global lock for config processing
 /// 2. If lock acquired: check for an explicit completion marker, process if needed
 /// 3. If lock held: wait for the completion marker to appear
+/// 4. If wait times out: recheck state and attempt takeover after lock expiry
 async fn coordinate_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: &Config,
     server_config: &ServerConfig,
@@ -466,7 +467,30 @@ where
         Ok(None) => {
             // Lock held by another instance - wait for it to complete
             info!("Another instance is processing config, waiting for completion");
-            wait_for_config_processing_complete(conn, prefix).await
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                return Ok(());
+            }
+
+            warn!("Timeout waiting for config processing, rechecking state");
+
+            if is_config_processing_completed(conn, prefix)
+                .await
+                .unwrap_or(false)
+            {
+                info!("Config processing completed during timeout window");
+                return Ok(());
+            }
+
+            recover_config_processing_after_timeout(
+                config_file,
+                server_config,
+                app_state,
+                conn,
+                prefix,
+            )
+            .await
         }
         Err(e) => {
             // Lock error - graceful degradation, proceed without lock
@@ -520,7 +544,7 @@ where
 /// Waits for another instance to complete config processing.
 ///
 /// Polls periodically until the explicit completion marker is set or timeout is reached.
-async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> Result<()> {
+async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> Result<bool> {
     let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
     let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
 
@@ -535,14 +559,63 @@ async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> 
     )
     .await?;
 
-    if !completed {
-        return Err(eyre::eyre!(
-            "Timed out waiting for config processing to complete after {} seconds",
-            LOCK_WAIT_MAX_SECS
-        ));
-    }
+    Ok(completed)
+}
 
-    Ok(())
+/// Attempts to recover config processing after a wait timeout.
+///
+/// This is the config-processing analogue to relayer initialization recovery:
+/// if the original lock holder died after setting the in-progress marker but
+/// before completion, a waiting instance should take over once the lock TTL
+/// expires instead of failing the whole rollout.
+async fn recover_config_processing_after_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let recovery_lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match recovery_lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            warn!("Previous config-processing lock holder appears to have crashed, taking over");
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
+            drop(guard);
+            result
+        }
+        Ok(None) => {
+            warn!("Config-processing lock still held after timeout");
+            Err(eyre::eyre!(
+                "Timed out waiting for config processing and could not acquire recovery lock"
+            ))
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to acquire recovery lock for config processing"
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Internal function that performs the actual config processing.
