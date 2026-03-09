@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use super::{
     is_final_state,
-    utils::{is_bad_sequence_error, is_insufficient_fee_error},
+    utils::{decode_transaction_result_code, is_bad_sequence_error, is_insufficient_fee_error},
     StellarRelayerTransaction,
 };
 use crate::{
@@ -182,15 +182,20 @@ where
                 let error_detail = response
                     .error_result_xdr
                     .unwrap_or_else(|| "No error details provided".to_string());
+                let decoded_result_code = decode_transaction_result_code(&error_detail);
 
                 // Insufficient fee is a transient condition (network fee spike).
                 // Treat like TRY_AGAIN_LATER: update sent_at and let the status
                 // checker retry with exponential backoff.
-                if is_insufficient_fee_error(&error_detail) {
+                if decoded_result_code
+                    .as_deref()
+                    .is_some_and(is_insufficient_fee_error)
+                {
                     debug!(
                         tx_id = %tx.id,
                         relayer_id = %tx.relayer_id,
                         status = ?tx.status,
+                        result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
                     let update_req = TransactionUpdateRequest {
@@ -205,7 +210,8 @@ where
                 }
 
                 Err(TransactionError::UnexpectedError(format!(
-                    "Transaction submission error: {error_detail}"
+                    "Transaction submission error: {}",
+                    decoded_result_code.unwrap_or(error_detail)
                 )))
             }
             unknown => {
@@ -1070,7 +1076,7 @@ mod tests {
                 "ERROR",
                 "0101010101010101010101010101010101010101010101010101010101010101",
             );
-            response.error_result_xdr = Some("AAAAAAAAAGT////7AAAAAA==".to_string());
+            response.error_result_xdr = Some("not-base64".to_string());
             mocks
                 .provider
                 .expect_send_transaction_with_status()
@@ -1136,7 +1142,7 @@ mod tests {
                 "ERROR",
                 "0101010101010101010101010101010101010101010101010101010101010101",
             );
-            response.error_result_xdr = Some("tx_insufficient_fee".to_string());
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
             mocks
                 .provider
                 .expect_send_transaction_with_status()
@@ -1182,7 +1188,7 @@ mod tests {
                 "ERROR",
                 "0101010101010101010101010101010101010101010101010101010101010101",
             );
-            response.error_result_xdr = Some("txBadAuth".to_string());
+            response.error_result_xdr = Some("AAAAAAAAA/v////6AAAAAA==".to_string());
             mocks
                 .provider
                 .expect_send_transaction_with_status()
