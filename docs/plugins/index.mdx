@@ -784,8 +784,6 @@ export PLUGIN_POOL_MAX_QUEUE_SIZE=10000
 | `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Workload-based (500-1000ms) | Wait time when queue is full |
 | `PLUGIN_POOL_CONNECT_RETRIES` | 15 | - | Retry attempts when connecting |
 | `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | - | Timeout for pool requests |
-| `PLUGIN_SOCKET_IDLE_TIMEOUT_SECS` | 60 | - | Close idle connections after |
-| `PLUGIN_SOCKET_READ_TIMEOUT_SECS` | 30 | - | Read timeout per message |
 | `PLUGIN_POOL_WORKERS` | auto | CPU cores | Queue processing workers |
 | `PLUGIN_POOL_SOCKET_BACKLOG` | 2048 | `MAX_CONCURRENCY` | Socket connection backlog |
 | **Node.js Side** ||||
@@ -833,7 +831,7 @@ This ensures requests have sufficient time to queue during traffic spikes while 
 #### Timeout Alignment
 
 <Callout type="warn">
-Timeouts must be aligned! If your plugin takes up to 120s, set these accordingly.
+Timeouts must be aligned! If your plugin takes up to 120s, set the pool request timeout accordingly.
 </Callout>
 
 ```bash
@@ -841,7 +839,6 @@ Timeouts must be aligned! If your plugin takes up to 120s, set these accordingly
 
 # Environment should match:
 export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
-export PLUGIN_SOCKET_IDLE_TIMEOUT_SECS=180  # 1.5x plugin timeout
 ```
 
 #### Health & Recovery

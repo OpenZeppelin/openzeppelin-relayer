@@ -236,10 +236,6 @@ pub struct SharedSocketService {
     shutdown_tx: watch::Sender<bool>,
     /// Semaphore for connection limiting (prevents race conditions)
     connection_semaphore: Arc<Semaphore>,
-    /// Connection idle timeout
-    idle_timeout: Duration,
-    /// Read timeout per line
-    read_timeout: Duration,
 }
 
 impl SharedSocketService {
@@ -252,8 +248,6 @@ impl SharedSocketService {
 
         // Use centralized config
         let config = get_config();
-        let idle_timeout = Duration::from_secs(config.socket_idle_timeout_secs);
-        let read_timeout = Duration::from_secs(config.socket_read_timeout_secs);
         let max_connections = config.socket_max_connections;
 
         let executions: Arc<SccHashMap<String, ExecutionContext>> = Arc::new(SccHashMap::new());
@@ -297,8 +291,6 @@ impl SharedSocketService {
             started: AtomicBool::new(false),
             shutdown_tx,
             connection_semaphore: Arc::new(Semaphore::new(max_connections)),
-            idle_timeout,
-            read_timeout,
         })
     }
 
@@ -429,8 +421,6 @@ impl SharedSocketService {
         let socket_path = self.socket_path.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let connection_semaphore = self.connection_semaphore.clone();
-        let idle_timeout = self.idle_timeout;
-        let read_timeout = self.read_timeout;
 
         debug!(
             "Shared socket service: starting listener on {}",
@@ -466,13 +456,11 @@ impl SharedSocketService {
                                             // Permit held until task completes (auto-released on drop)
                                             let _permit = permit;
 
-                                            let result = Self::handle_connection_with_timeout(
+                                            let result = Self::handle_connection(
                                                 stream,
                                                 relayer_api_clone,
                                                 state_clone,
                                                 executions_clone,
-                                                idle_timeout,
-                                                read_timeout,
                                             )
                                             .await;
 
@@ -506,47 +494,11 @@ impl SharedSocketService {
         Ok(())
     }
 
-    /// Handle connection with overall idle timeout
-    #[allow(clippy::type_complexity)]
-    async fn handle_connection_with_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
-        stream: UnixStream,
-        relayer_api: Arc<RelayerApi>,
-        state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
-        executions: Arc<SccHashMap<String, ExecutionContext>>,
-        idle_timeout: Duration,
-        read_timeout: Duration,
-    ) -> Result<(), PluginError>
-    where
-        J: JobProducerTrait + Send + Sync + 'static,
-        RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
-        TR: TransactionRepository
-            + Repository<TransactionRepoModel, String>
-            + Send
-            + Sync
-            + 'static,
-        NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
-        NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
-        SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
-        TCR: TransactionCounterTrait + Send + Sync + 'static,
-        PR: PluginRepositoryTrait + Send + Sync + 'static,
-        AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
-    {
-        // Wrap the entire connection handling with an idle timeout
-        match tokio::time::timeout(
-            idle_timeout,
-            Self::handle_connection(stream, relayer_api, state, executions, read_timeout),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                debug!("Connection idle timeout reached");
-                Ok(())
-            }
-        }
-    }
-
-    /// Handle a connection from a plugin
+    /// Handle a connection from a plugin.
+    ///
+    /// The inactivity timeout resets on every message — no hard wall-clock cap.
+    /// Connections stay alive as long as they're active, which is essential for
+    /// reused/pooled sockets and plugins making external calls.
     ///
     /// Security: The first message must be a Register message. Once registered,
     /// the connection is "tagged" with that execution_id and cannot be changed.
@@ -557,7 +509,6 @@ impl SharedSocketService {
         relayer_api: Arc<RelayerApi>,
         state: Arc<ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>>,
         executions: Arc<SccHashMap<String, ExecutionContext>>,
-        read_timeout: Duration,
     ) -> Result<(), PluginError>
     where
         J: JobProducerTrait + Send + Sync + 'static,
@@ -586,17 +537,29 @@ impl SharedSocketService {
         // Once set, this cannot be changed for the lifetime of the connection
         let mut bound_execution_id: Option<String> = None;
 
+        // Safety timeout: reap connections that are silent for longer than the maximum
+        // plugin execution timeout + margin. This prevents permit exhaustion from stuck
+        // or rogue clients. Not configurable — it's derived from DEFAULT_PLUGIN_TIMEOUT_SECONDS
+        // so it can never desync with execution timeouts.
+        let safety_timeout =
+            Duration::from_secs(crate::constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60);
+
         loop {
-            // Read line with timeout to prevent hanging connections
-            let line = match tokio::time::timeout(read_timeout, reader.next_line()).await {
+            // Read next line with safety timeout. In normal operation the client sends
+            // messages or closes the socket (EOF) well within this window. The timeout
+            // only fires for truly orphaned connections (stuck event loop, rogue client).
+            let line = match tokio::time::timeout(safety_timeout, reader.next_line()).await {
                 Ok(Ok(Some(line))) => line,
-                Ok(Ok(None)) => break, // EOF
+                Ok(Ok(None)) => break, // EOF — client closed connection
                 Ok(Err(e)) => {
                     warn!("Error reading from connection: {}", e);
                     break;
                 }
                 Err(_) => {
-                    debug!("Read timeout on connection");
+                    debug!(
+                        "Connection safety timeout reached ({}s with no message)",
+                        safety_timeout.as_secs()
+                    );
                     break;
                 }
             };
@@ -935,6 +898,8 @@ mod tests {
             _ => panic!("Expected ApiResponse, got {response:?}"),
         }
 
+        drop(reader);
+        drop(_w);
         service.shutdown().await;
     }
 
@@ -988,6 +953,8 @@ mod tests {
         // Should either get an error or EOF (0 bytes)
         assert!(result.is_err() || result.unwrap() == 0);
 
+        drop(reader);
+        drop(_w);
         service.shutdown().await;
     }
 
@@ -1040,6 +1007,8 @@ mod tests {
         // The important thing is we got a response in the correct format
         assert!(response.result.is_some() || response.error.is_some());
 
+        drop(reader);
+        drop(_w);
         service.shutdown().await;
     }
 
@@ -1179,6 +1148,8 @@ mod tests {
         // Should get EOF (connection closed)
         assert!(result.is_err() || result.unwrap() == 0);
 
+        drop(reader);
+        drop(_w);
         service.shutdown().await;
     }
 
@@ -1220,6 +1191,8 @@ mod tests {
 
         assert!(result.is_err() || result.unwrap() == 0);
 
+        drop(reader);
+        drop(_w);
         service.shutdown().await;
     }
 
@@ -1255,15 +1228,15 @@ mod tests {
         let after_connect = service.connection_semaphore.available_permits();
         assert!(after_connect < initial_permits);
 
+        drop(_client);
         service.shutdown().await;
     }
 
     #[tokio::test]
-    async fn test_idle_timeout() {
+    async fn test_connection_stays_alive_within_safety_timeout() {
         let temp_dir = tempdir().unwrap();
-        let socket_path = temp_dir.path().join("shared_idle_timeout.sock");
+        let socket_path = temp_dir.path().join("shared_safety.sock");
 
-        // Create service with short idle timeout for testing
         let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
         let state = create_mock_app_state(None, None, None, None, None, None).await;
 
@@ -1273,7 +1246,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execution_id = "test-exec-idle".to_string();
+        let execution_id = "test-exec-safety".to_string();
         let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1290,27 +1263,29 @@ mod tests {
             .unwrap();
         client.flush().await.unwrap();
 
-        // Wait longer than idle timeout (configured in service)
-        // Note: idle_timeout is from config, but we can test that connection stays alive
-        // within a reasonable time
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Wait well below the safety timeout (DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60s).
+        // Connection must stay alive — the safety timeout only fires for truly stuck clients.
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Connection should still be alive if we're within timeout
-        // Send a Shutdown message to verify connection is still up
+        // Connection should still be alive — send a Shutdown message to verify
         let shutdown_msg = PluginMessage::Shutdown;
         let write_result = client
             .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
             .await;
 
-        assert!(write_result.is_ok(), "Connection should still be alive");
+        assert!(
+            write_result.is_ok(),
+            "Connection should still be alive within safety timeout"
+        );
 
+        drop(client);
         service.shutdown().await;
     }
 
     #[tokio::test]
-    async fn test_read_timeout_handling() {
+    async fn test_idle_connection_cleaned_up_by_safety_timeout() {
         let temp_dir = tempdir().unwrap();
-        let socket_path = temp_dir.path().join("shared_read_timeout.sock");
+        let socket_path = temp_dir.path().join("shared_safety_timeout.sock");
 
         let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
         let state = create_mock_app_state(None, None, None, None, None, None).await;
@@ -1321,7 +1296,7 @@ mod tests {
             .await
             .unwrap();
 
-        let execution_id = "test-exec-read-timeout".to_string();
+        let execution_id = "test-exec-safety-timeout".to_string();
         let _guard = service.register_execution(execution_id.clone(), true).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1338,13 +1313,13 @@ mod tests {
             .unwrap();
         client.flush().await.unwrap();
 
-        // Don't send anything else - connection should be cleaned up after read timeout
-        // Read timeout is configured in service (from config)
+        // Don't send anything else - connection will eventually be reaped
+        // by the safety timeout (DEFAULT_PLUGIN_TIMEOUT_SECONDS + 60s)
 
-        // Wait a bit (but not as long as full timeout)
+        // Wait a bit - connection should still be alive well within safety timeout
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        // Connection should still be valid for a short time
+        // Connection should still be valid (safety timeout is ~360s)
         drop(client);
 
         service.shutdown().await;
@@ -1411,6 +1386,8 @@ mod tests {
             }
         }
 
+        drop(reader);
+        drop(w);
         service.shutdown().await;
     }
 
@@ -1496,6 +1473,7 @@ mod tests {
             "Connection should still be alive after malformed JSON"
         );
 
+        drop(client);
         service.shutdown().await;
     }
 
@@ -1554,6 +1532,7 @@ mod tests {
 
         assert!(write_result.is_ok());
 
+        drop(client);
         service.shutdown().await;
     }
 
@@ -1673,6 +1652,470 @@ mod tests {
         let path1 = svc1.socket_path();
         let path2 = svc2.socket_path();
         assert_eq!(path1, path2);
+    }
+
+    #[tokio::test]
+    async fn test_available_connection_slots_and_active_count() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_slots.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let max_connections = get_config().socket_max_connections;
+
+        // Before any connections
+        assert_eq!(service.available_connection_slots(), max_connections);
+        assert_eq!(service.active_connection_count(), 0);
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Connect a client
+        let _client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(service.available_connection_slots() < max_connections);
+        assert!(service.active_connection_count() > 0);
+
+        drop(_client);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_start_called_twice_is_idempotent() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_double_start.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let thin = Arc::new(web::ThinData(state));
+
+        // First start should succeed
+        service.clone().start(thin.clone()).await.unwrap();
+
+        // Second start should also succeed (early return)
+        service.clone().start(thin).await.unwrap();
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_traces_discarded_when_emit_traces_false() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_no_traces.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-no-trace".to_string();
+        // Register with emit_traces=false
+        let guard = service
+            .register_execution(execution_id.clone(), false)
+            .await;
+        assert_eq!(service.registered_executions_count().await, 1);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send trace (should be silently discarded)
+        let trace = PluginMessage::Trace {
+            trace: serde_json::json!({"event": "should_be_discarded"}),
+        };
+        client
+            .write_all((serde_json::to_string(&trace).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Shutdown
+        let shutdown_msg = PluginMessage::Shutdown;
+        client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        drop(client);
+
+        // Connection should be fully drained (permit returned).
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if service.active_connection_count() == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Connection should close promptly when traces are disabled");
+
+        // Guard with emit_traces=false should return None
+        assert!(guard.into_receiver().is_none());
+        assert_eq!(service.registered_executions_count().await, 0);
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_legacy_protocol_without_http_request_id() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_legacy_no_http_id.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        // Use request_id as the execution_id (fallback path)
+        let request_id = "legacy-fallback-id".to_string();
+        let _guard = service.register_execution(request_id.clone(), true).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Send legacy Request with http_request_id = None
+        // The handler falls back to request_id for execution binding
+        let legacy_request = crate::services::plugins::relayer_api::Request {
+            request_id: request_id.clone(),
+            relayer_id: "relayer-1".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+            http_request_id: None,
+        };
+        let legacy_json = serde_json::to_string(&legacy_request).unwrap() + "\n";
+        client.write_all(legacy_json.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        // Read legacy Response
+        let (r, _w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+
+        let response: crate::services::plugins::relayer_api::Response =
+            serde_json::from_str(&response_line).unwrap();
+        assert_eq!(response.request_id, request_id);
+        assert!(response.result.is_some() || response.error.is_some());
+
+        drop(reader);
+        drop(_w);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_legacy_protocol_with_unknown_execution_id() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_legacy_unknown.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        // Do NOT register any execution — the legacy handler should still process
+        // the request but log a debug warning about unknown execution_id
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Send legacy Request with unknown execution_id
+        let legacy_request = crate::services::plugins::relayer_api::Request {
+            request_id: "unknown-req".to_string(),
+            relayer_id: "relayer-1".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+            http_request_id: Some("nonexistent-exec-id".to_string()),
+        };
+        let legacy_json = serde_json::to_string(&legacy_request).unwrap() + "\n";
+        client.write_all(legacy_json.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        // Should still get a response (legacy path processes even without binding)
+        let (r, _w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+
+        let response: crate::services::plugins::relayer_api::Response =
+            serde_json::from_str(&response_line).unwrap();
+        assert_eq!(response.request_id, "unknown-req");
+
+        drop(reader);
+        drop(_w);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_legacy_unparsable_message() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_legacy_unparse.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-legacy-unparse".to_string();
+        let _guard = service.register_execution(execution_id.clone(), true).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register first
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send JSON without "type" field AND not a valid legacy Request
+        // This hits the fallback warn! at line 732
+        client.write_all(b"{\"foo\": \"bar\"}\n").await.unwrap();
+        client.flush().await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Connection should still be alive
+        let shutdown_msg = PluginMessage::Shutdown;
+        let write_result = client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await;
+
+        assert!(
+            write_result.is_ok(),
+            "Connection should still be alive after unparsable legacy message"
+        );
+
+        drop(client);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_invalid_plugin_message_type() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_invalid_type.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-invalid-type".to_string();
+        let _guard = service.register_execution(execution_id.clone(), true).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register first
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send JSON with "type" field but not a valid PluginMessage variant
+        // This hits the `Err(e)` branch at line 584-586
+        client
+            .write_all(b"{\"type\": \"nonexistent_type\", \"data\": \"foo\"}\n")
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        // Send a valid request after invalid message.
+        // If we get ApiResponse, the connection stayed alive and parsing recovered.
+        let api_request = PluginMessage::ApiRequest {
+            request_id: "req-after-invalid".to_string(),
+            relayer_id: "relayer-1".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
+            payload: serde_json::json!({}),
+        };
+        client
+            .write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let (r, mut w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut response_line = String::new();
+        tokio::time::timeout(Duration::from_secs(1), reader.read_line(&mut response_line))
+            .await
+            .expect("Timed out waiting for ApiResponse")
+            .unwrap();
+
+        let response: PluginMessage = serde_json::from_str(&response_line).unwrap();
+        match response {
+            PluginMessage::ApiResponse { request_id, .. } => {
+                assert_eq!(request_id, "req-after-invalid");
+            }
+            _ => panic!("Expected ApiResponse after invalid plugin message"),
+        }
+
+        let shutdown_msg = PluginMessage::Shutdown;
+        w.write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        w.flush().await.unwrap();
+
+        drop(reader);
+        drop(w);
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_service_drop_sends_shutdown() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_drop.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        // Subscribe before dropping so we can observe Drop-triggered shutdown signal.
+        let mut shutdown_rx = service.shutdown_tx.subscribe();
+
+        // Drop should send shutdown signal.
+        drop(service);
+
+        tokio::time::timeout(Duration::from_secs(1), shutdown_rx.changed())
+            .await
+            .expect("Timed out waiting for shutdown signal from Drop")
+            .unwrap();
+        assert!(
+            *shutdown_rx.borrow(),
+            "Drop should broadcast shutdown=true to listeners"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trace_channel_closed_before_send() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_trace_closed.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-trace-closed".to_string();
+        let guard = service.register_execution(execution_id.clone(), true).await;
+
+        // Consume and drop the receiver immediately — channel is now closed
+        let rx = guard.into_receiver();
+        assert!(rx.is_some());
+        drop(rx);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // Register
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Send trace
+        let trace = PluginMessage::Trace {
+            trace: serde_json::json!({"event": "will_be_lost"}),
+        };
+        client
+            .write_all((serde_json::to_string(&trace).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Shutdown
+        let shutdown_msg = PluginMessage::Shutdown;
+        client
+            .write_all((serde_json::to_string(&shutdown_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        drop(client);
+
+        // Handler should not get stuck trying to send traces to a closed channel.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if service.active_connection_count() == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Connection should close even when trace receiver is dropped");
+
+        service.shutdown().await;
     }
 
     #[tokio::test]

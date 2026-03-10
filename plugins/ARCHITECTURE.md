@@ -173,8 +173,6 @@ Per-request socket at `/tmp/relayer-shared-{uuid}.sock` for plugin API calls.
 | `PLUGIN_POOL_IDLE_TIMEOUT` | 60000 | Worker idle timeout (ms) |
 | `PLUGIN_POOL_SOCKET_BACKLOG` | max(concurrency, 2048) | Socket backlog size |
 | `PLUGIN_POOL_HEALTH_CHECK_INTERVAL_SECS` | 5 | Health check frequency |
-| `PLUGIN_SOCKET_IDLE_TIMEOUT_SECS` | 60 | Shared socket idle timeout |
-| `PLUGIN_SOCKET_READ_TIMEOUT_SECS` | 30 | Shared socket read timeout |
 
 ## Health & Recovery
 

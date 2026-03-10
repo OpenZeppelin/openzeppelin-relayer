@@ -273,6 +273,23 @@ pub fn is_bad_sequence_error(error_msg: &str) -> bool {
     error_lower.contains("txbadseq")
 }
 
+/// Decodes a Stellar `TransactionResult` XDR payload and returns the result code name.
+///
+/// The RPC `sendTransaction` ERROR response exposes `errorResultXdr` as base64-encoded XDR,
+/// so callers must decode it before checking for specific result codes.
+pub fn decode_transaction_result_code(xdr_base64: &str) -> Option<String> {
+    use soroban_rs::xdr::{Limits, TransactionResult};
+
+    let result = TransactionResult::from_xdr_base64(xdr_base64, Limits::none()).ok()?;
+    Some(result.result.name().to_string())
+}
+
+/// Detects if a decoded transaction result code indicates an insufficient fee.
+pub fn is_insufficient_fee_error(result_code: &str) -> bool {
+    result_code.eq_ignore_ascii_case("TxInsufficientFee")
+        || result_code.eq_ignore_ascii_case("tx_insufficient_fee")
+}
+
 /// Fetches the current sequence number from the blockchain and calculates the next usable sequence.
 /// This is a shared helper that can be used by both stellar_relayer and stellar_transaction.
 ///
@@ -1455,6 +1472,41 @@ mod tests {
             assert!(!is_bad_sequence_error("tx_insufficient_fee"));
             assert!(!is_bad_sequence_error("bad_auth"));
             assert!(!is_bad_sequence_error(""));
+        }
+    }
+
+    mod is_insufficient_fee_error_tests {
+        use super::*;
+
+        #[test]
+        fn test_detects_txinsufficientfee() {
+            assert!(is_insufficient_fee_error("TxInsufficientFee"));
+            assert!(is_insufficient_fee_error("txinsufficientfee"));
+            assert!(is_insufficient_fee_error("TXINSUFFICIENTFEE"));
+        }
+
+        #[test]
+        fn test_returns_false_for_other_errors() {
+            assert!(!is_insufficient_fee_error("network timeout"));
+            assert!(!is_insufficient_fee_error("TxBadSeq"));
+            assert!(!is_insufficient_fee_error("TxInsufficientBalance"));
+            assert!(!is_insufficient_fee_error("TxBadAuth"));
+            assert!(!is_insufficient_fee_error(""));
+        }
+    }
+
+    mod decode_transaction_result_code_tests {
+        use super::*;
+
+        #[test]
+        fn test_decodes_insufficient_fee_result_xdr() {
+            let result_code = decode_transaction_result_code("AAAAAAAAY/n////3AAAAAA==").unwrap();
+            assert_eq!(result_code, "TxInsufficientFee");
+        }
+
+        #[test]
+        fn test_returns_none_for_invalid_xdr() {
+            assert!(decode_transaction_result_code("not-base64").is_none());
         }
     }
 
