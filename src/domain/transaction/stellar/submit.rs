@@ -89,7 +89,8 @@ where
     /// - DUPLICATE: Transaction already submitted (treat as success)
     /// - TRY_AGAIN_LATER: Network congested but tx is valid — update sent_at and return Ok
     ///   (status checker will retry with exponential backoff)
-    /// - ERROR: Transaction validation failed, mark as failed
+    /// - ERROR: Transaction validation failed, mark as failed, except for insufficient fee errors
+    ///   (insufficient fee errors are treated as TRY_AGAIN_LATER)
     async fn submit_core(
         &self,
         tx: TransactionRepoModel,
