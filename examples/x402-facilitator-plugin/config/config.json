@@ -11,19 +11,6 @@
         "fee_payment_strategy": "relayer",
         "min_balance": 0
       }
-    },
-    {
-      "id": "x402-channels-fund",
-      "name": "x402 Channel Fund",
-      "network": "testnet",
-      "paused": false,
-      "network_type": "stellar",
-      "signer_id": "x402-fund-signer",
-      "policies": {
-        "concurrent_transactions": true,
-        "fee_payment_strategy": "relayer",
-        "min_balance": 0
-      }
     }
   ],
   "notifications": [],
@@ -36,17 +23,6 @@
         "passphrase": {
           "type": "env",
           "value": "KEYSTORE_PASSPHRASE"
-        }
-      }
-    },
-    {
-      "id": "x402-fund-signer",
-      "type": "local",
-      "config": {
-        "path": "config/keys/x402-fund-signer.json",
-        "passphrase": {
-          "type": "env",
-          "value": "KEYSTORE_PASSPHRASE_X402_FUND"
         }
       }
     }

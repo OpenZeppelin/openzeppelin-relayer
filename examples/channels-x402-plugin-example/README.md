@@ -225,7 +225,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
       "management": {
         "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["channel-0001", "channel-0002"]
+        "relayerIds": ["channel-001", "channel-002"]
       }
     }
   }'
@@ -239,7 +239,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   "data": {
     "result": {
       "ok": true,
-      "appliedRelayerIds": ["channel-0001", "channel-0002"]
+      "appliedRelayerIds": ["channel-001", "channel-002"]
     }
   },
   "error": null
@@ -396,7 +396,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
       "management": {
         "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["channel-0001", "channel-0002"]
+        "relayerIds": ["channel-001", "channel-002"]
       }
     }
   }'
@@ -636,7 +636,7 @@ This example uses multiple Stellar accounts (fund account + channel accounts) wi
 ### View logs
 
 ```bash
-docker compose -f examples/channels-plugin-example/docker-compose.yaml logs -f relayer
+docker compose -f examples/channels-x402-plugin-example/docker-compose.yaml logs -f relayer
 ```
 
 ## Docker notes

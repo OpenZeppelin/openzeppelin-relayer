@@ -16,7 +16,6 @@ services:
       RATE_LIMIT_BURST: 50
       API_KEY: ${API_KEY}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
-      KEYSTORE_PASSPHRASE_X402_FUND: ${KEYSTORE_PASSPHRASE_X402_FUND}
     security_opt:
       - no-new-privileges
     networks:
