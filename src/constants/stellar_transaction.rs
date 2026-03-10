@@ -75,6 +75,9 @@ pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 /// to ensure the transaction is back in the mempool before Core's window closes.
 pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 15;
 
+/// Maximum number of times a Stellar submission may be retried after an insufficient-fee error.
+pub const STELLAR_INSUFFICIENT_FEE_MAX_RETRIES: u32 = 2;
+
 /// Maximum resubmit interval (seconds) to cap exponential backoff.
 /// Prevents excessively long gaps between resubmissions.
 pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 180;
