@@ -400,7 +400,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mocks::mockutils::create_mock_relayer;
+    use crate::{
+        jobs::MockJobProducerTrait,
+        models::{AppState, RepositoryError},
+        repositories::{
+            ApiKeyRepositoryStorage, MockRelayerRepository, NetworkRepositoryStorage,
+            NotificationRepositoryStorage, PluginRepositoryStorage, SignerRepositoryStorage,
+            TransactionCounterRepositoryStorage, TransactionRepositoryStorage,
+        },
+        utils::mocks::mockutils::{create_mock_app_state, create_mock_relayer},
+    };
+    use actix_web::web::ThinData;
+    use std::sync::Arc;
+
+    fn create_app_state_with_mock_relayer_repo(
+        mock_relayer_repo: MockRelayerRepository,
+    ) -> AppState<
+        MockJobProducerTrait,
+        MockRelayerRepository,
+        TransactionRepositoryStorage,
+        NetworkRepositoryStorage,
+        NotificationRepositoryStorage,
+        SignerRepositoryStorage,
+        TransactionCounterRepositoryStorage,
+        PluginRepositoryStorage,
+        ApiKeyRepositoryStorage,
+    > {
+        AppState {
+            relayer_repository: Arc::new(mock_relayer_repo),
+            transaction_repository: Arc::new(TransactionRepositoryStorage::new_in_memory()),
+            signer_repository: Arc::new(SignerRepositoryStorage::new_in_memory()),
+            notification_repository: Arc::new(NotificationRepositoryStorage::new_in_memory()),
+            network_repository: Arc::new(NetworkRepositoryStorage::new_in_memory()),
+            transaction_counter_store: Arc::new(
+                TransactionCounterRepositoryStorage::new_in_memory(),
+            ),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
+            api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+        }
+    }
 
     #[test]
     fn test_get_relayer_ids_with_empty_list() {
@@ -768,9 +807,6 @@ mod tests {
     // wait_for_initialization_complete, and initialize_relayers
     // ============================================================================
 
-    use crate::utils::mocks::mockutils::create_mock_app_state;
-    use actix_web::web::ThinData;
-
     /// Helper to create a Redis connection pool for integration tests.
     async fn create_test_redis_pool() -> Option<Arc<Pool>> {
         let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
@@ -782,6 +818,18 @@ mod tests {
             .build()
             .ok()?;
         Some(Arc::new(pool))
+    }
+
+    fn create_unreachable_redis_pool() -> Arc<Pool> {
+        let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:1");
+        let pool = cfg
+            .builder()
+            .expect("should create deadpool builder")
+            .max_size(1)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("should build deadpool");
+        Arc::new(pool)
     }
 
     // --- Tests for run_initialization_batch ---
@@ -834,6 +882,96 @@ mod tests {
             err_str.contains("Failed to initialize"),
             "Error should mention initialization failure"
         );
+    }
+
+    #[tokio::test]
+    async fn test_run_initialization_batch_reports_each_failed_relayer_id() {
+        let relayers = vec![
+            create_mock_relayer("batch-relayer-1".to_string(), false),
+            create_mock_relayer("batch-relayer-2".to_string(), false),
+        ];
+
+        let app_state =
+            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+
+        let result = run_initialization_batch(&relayers, &thin_state).await;
+
+        assert!(result.is_err(), "Should fail due to missing signers");
+
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to initialize 2 relayer(s)"));
+        assert!(err.contains("batch-relayer-1"));
+        assert!(err.contains("batch-relayer-2"));
+    }
+
+    // --- Tests for recover_after_timeout ---
+
+    #[tokio::test]
+    async fn test_recover_after_timeout_gracefully_degrades_when_redis_errors() {
+        let relayers = vec![create_mock_relayer(
+            "recovery-error-relayer".to_string(),
+            false,
+        )];
+        let app_state =
+            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+        let unreachable_pool = create_unreachable_redis_pool();
+
+        let result =
+            recover_after_timeout(&relayers, &thin_state, &unreachable_pool, "recover_err").await;
+
+        assert!(result.is_err(), "Should fall back to initialization batch");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to initialize"));
+        assert!(err.contains("recovery-error-relayer"));
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires running Redis instance
+    async fn test_recover_after_timeout_acquires_lock_and_attempts_initialization() {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let relayers = vec![create_mock_relayer(
+            "recovery-lock-relayer".to_string(),
+            false,
+        )];
+        let app_state =
+            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+        let prefix = "test_recover_after_timeout_acquire";
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let lock_key = format!("{prefix}:lock:{GLOBAL_INIT_LOCK_NAME}");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
+
+        let result = recover_after_timeout(&relayers, &thin_state, &conn, prefix).await;
+
+        assert!(
+            result.is_err(),
+            "Should attempt initialization after taking over the lock"
+        );
+
+        let is_recent = is_global_init_recently_completed(&conn, prefix, 300)
+            .await
+            .expect("Should check completion");
+        assert!(
+            !is_recent,
+            "Should not record completion time when initialization fails"
+        );
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let hash_key = format!("{prefix}:relayer_sync_meta");
+            let lock_key = format!("{prefix}:lock:{GLOBAL_INIT_LOCK_NAME}");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+        }
     }
 
     // --- Tests for coordinate_with_distributed_lock (requires Redis) ---
@@ -1013,5 +1151,48 @@ mod tests {
             result.is_err(),
             "Should fail due to missing signer configuration"
         );
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_returns_error_when_relayer_is_missing() {
+        let app_state = create_mock_app_state(None, None, None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+
+        let result = initialize_relayer("missing-relayer".to_string(), thin_state).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing-relayer"));
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayer_returns_error_when_signer_is_missing() {
+        let relayers = vec![create_mock_relayer("signerless-relayer".to_string(), false)];
+        let app_state = create_mock_app_state(None, Some(relayers), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+
+        let result = initialize_relayer("signerless-relayer".to_string(), thin_state).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("test"));
+    }
+
+    #[tokio::test]
+    async fn test_initialize_relayers_propagates_list_all_error() {
+        let mut mock_relayer_repo = MockRelayerRepository::new();
+        mock_relayer_repo.expect_list_all().times(1).returning(|| {
+            Err(RepositoryError::ConnectionError(
+                "relayer repository unavailable".to_string(),
+            ))
+        });
+
+        let thin_state = ThinData(create_app_state_with_mock_relayer_repo(mock_relayer_repo));
+
+        let result = initialize_relayers(thin_state).await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("relayer repository unavailable"));
     }
 }
