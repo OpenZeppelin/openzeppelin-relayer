@@ -544,9 +544,16 @@ impl PoolManager {
 
         // Add buffer so the Node.js timeout fires first with a structured response;
         // this Rust timeout is a backstop if the Node.js process hangs.
-        let timeout =
-            timeout_secs.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS) + PLUGIN_TIMEOUT_BUFFER_SECONDS;
-        let response = conn.send_request_with_timeout(&request, timeout).await?;
+        let configured_timeout = timeout_secs.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS);
+        let backstop_timeout = configured_timeout + PLUGIN_TIMEOUT_BUFFER_SECONDS;
+        let response = conn
+            .send_request_with_timeout(&request, backstop_timeout)
+            .await
+            .map_err(|e| match e {
+                // Report the user-configured timeout, not the internal backstop value
+                PluginError::ScriptTimeout(_) => PluginError::ScriptTimeout(configured_timeout),
+                other => other,
+            })?;
 
         // Use extracted parsing function for cleaner code and testability
         Self::parse_pool_response(response)
@@ -992,11 +999,13 @@ impl PoolManager {
                                 "Plugin queue is over 50% capacity"
                             );
                         }
-                        // Add timeout to response_rx to prevent hung requests if worker crashes
+                        // Add timeout to response_rx to prevent hung requests if worker crashes.
+                        // Must exceed the Rust backstop (T + PLUGIN_TIMEOUT_BUFFER_SECONDS)
+                        // so the inner timeout layers fire first.
                         let response_timeout = timeout_secs
                             .map(Duration::from_secs)
                             .unwrap_or(Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS))
-                            + Duration::from_secs(5); // Add 5s buffer for queue processing
+                            + Duration::from_secs(PLUGIN_TIMEOUT_BUFFER_SECONDS + 1);
 
                         match tokio::time::timeout(response_timeout, response_rx).await {
                             Ok(Ok(result)) => result,
@@ -1019,11 +1028,11 @@ impl PoolManager {
                                     queue_len = queue_len,
                                     "Request queued after waiting for queue space"
                                 );
-                                // Add timeout to response_rx to prevent hung requests if worker crashes
+                                // Must exceed the Rust backstop (T + PLUGIN_TIMEOUT_BUFFER_SECONDS)
                                 let response_timeout = timeout_secs
                                     .map(Duration::from_secs)
                                     .unwrap_or(Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS))
-                                    + Duration::from_secs(5); // Add 5s buffer for queue processing
+                                    + Duration::from_secs(PLUGIN_TIMEOUT_BUFFER_SECONDS + 1);
 
                                 match tokio::time::timeout(response_timeout, response_rx).await {
                                     Ok(Ok(result)) => result,
@@ -1107,10 +1116,8 @@ impl PoolManager {
                 let error_str = other.to_string();
                 let lower = error_str.to_lowercase();
 
-                // Plugin/handler timeouts surfaced as strings (from Node.js side)
-                if lower.contains("handler timed out")
-                    || (lower.contains("plugin") && lower.contains("timed out"))
-                {
+                // Node.js handler timeout surfaced as a string error
+                if lower.contains("handler timed out") {
                     return false;
                 }
 
@@ -1789,12 +1796,12 @@ mod tests {
     }
 
     #[test]
-    fn test_is_dead_server_error_excludes_plugin_timeouts_with_connection() {
-        // Plugin timeout should NOT be detected even if it mentions connection
+    fn test_is_dead_server_error_detects_connection_timeout_in_plugin_error() {
+        // "connection timed out" inside PluginExecutionError is an infrastructure failure
+        // (Rust couldn't connect to the pool server), not a plugin execution timeout.
         let plugin_timeout =
             PluginError::PluginExecutionError("plugin connection timed out".to_string());
-        // This contains both "plugin" and "timed out" so it's excluded
-        assert!(!PoolManager::is_dead_server_error(&plugin_timeout));
+        assert!(PoolManager::is_dead_server_error(&plugin_timeout));
     }
 
     #[test]
@@ -2827,17 +2834,11 @@ mod tests {
 
     #[test]
     fn test_is_dead_server_error_with_connection_timeout_in_plugin_error() {
-        // Note: When "connection timed out" is wrapped in PluginExecutionError,
-        // the Display output includes "Plugin" which triggers the exclusion
-        // for (plugin + timed out). This is expected behavior to prevent
-        // plugin execution timeouts from triggering restarts.
+        // "connection timed out" is an infrastructure failure regardless of which
+        // PluginError variant wraps it — the pool server is unreachable.
         let err = PluginError::PluginExecutionError("connection timed out".to_string());
-        // The error string becomes something like "Plugin execution error: connection timed out"
-        // which contains "plugin" AND "timed out", so it's excluded
-        assert!(!PoolManager::is_dead_server_error(&err));
+        assert!(PoolManager::is_dead_server_error(&err));
 
-        // SocketError doesn't add "Plugin" to the display, so connection issues there
-        // would be detected correctly
         let err = PluginError::SocketError("connect timed out".to_string());
         assert!(PoolManager::is_dead_server_error(&err));
     }

@@ -844,12 +844,13 @@ For request handling, ensure the HTTP request timeout is large enough:
 ```
 
 ```bash
-# 2. HTTP request timeout (must be >= plugin timeout)
-export REQUEST_TIMEOUT_SECONDS=120
+# 2. HTTP request timeout (must be strictly greater than plugin timeout)
+# The internal timeout hierarchy adds up to 4s of buffer, so allow at least 5s extra
+export REQUEST_TIMEOUT_SECONDS=125
 ```
 
 <Callout type="warn">
-Ensure `REQUEST_TIMEOUT_SECONDS` is **at least as large** as your longest plugin `timeout`. If it's shorter, Actix will close the HTTP connection while the plugin is still running, causing `write EPIPE` errors.
+`REQUEST_TIMEOUT_SECONDS` should be **at least 5 seconds greater** than your longest plugin `timeout` (e.g., plugin timeout of 120s → `REQUEST_TIMEOUT_SECONDS=125`). Internally, the system adds a 4s buffer across its timeout layers; if the HTTP timeout is shorter than plugin timeout + 5s, Actix may close the connection while cleanup is in progress, causing `write EPIPE` errors.
 </Callout>
 
 #### Health & Recovery
@@ -892,11 +893,11 @@ export PLUGIN_POOL_CONNECT_RETRIES=20
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `write EPIPE` / `Uncaught exception: Error: write EPIPE` | HTTP timeout while plugin still running | Set `REQUEST_TIMEOUT_SECONDS` >= your plugin `timeout` in config.json |
+| `write EPIPE` / `Uncaught exception: Error: write EPIPE` | HTTP timeout while plugin still running | Set `REQUEST_TIMEOUT_SECONDS` at least 5s greater than your longest plugin `timeout` in config.json |
 | `Plugin execution queue is full` | More requests than queue can hold | Increase `PLUGIN_POOL_MAX_QUEUE_SIZE` and `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` |
 | `Connection limit reached` | Too many concurrent plugin connections | Increase `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` |
 | `Failed to connect to pool after N attempts` | Pool server overwhelmed | Increase `PLUGIN_POOL_CONNECT_RETRIES` and `PLUGIN_POOL_MAX_CONNECTIONS` |
-| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) and ensure `REQUEST_TIMEOUT_SECONDS` >= that value |
+| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) and ensure `REQUEST_TIMEOUT_SECONDS` is at least 5s greater |
 | `All connection permits exhausted` | Connection pool at capacity | Increase `PLUGIN_POOL_MAX_CONNECTIONS` |
 | `FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory` | Worker heap too small | Increase `PLUGIN_WORKER_HEAP_MB` or reduce `PLUGIN_POOL_CONCURRENT_TASKS` |
 | `Pool server crashed and restarting` | Memory pressure or GC issues | Check logs for heap usage; reduce `PLUGIN_MAX_CONCURRENCY` or increase system RAM |

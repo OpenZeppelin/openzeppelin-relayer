@@ -2198,4 +2198,45 @@ mod tests {
         // After guards are consumed via into_receiver, counter should be decremented
         assert_eq!(service.registered_executions_count().await, 0);
     }
+
+    // =========================================================================
+    // log_socket_write_error tests
+    // =========================================================================
+
+    #[test]
+    fn test_log_socket_write_error_broken_pipe_does_not_panic() {
+        // BrokenPipe is expected during timeout teardown → should log at DEBUG, not WARN
+        let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Broken pipe");
+        log_socket_write_error("API response", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_connection_reset_does_not_panic() {
+        // ConnectionReset is expected during timeout teardown → should log at DEBUG, not WARN
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Connection reset");
+        log_socket_write_error("API response flush", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_other_errors_do_not_panic() {
+        // Other IO errors (e.g., PermissionDenied) → should log at WARN
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied");
+        log_socket_write_error("response", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_unexpected_eof() {
+        let err = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected eof");
+        log_socket_write_error("response flush", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_context_strings() {
+        // Verify all 4 context strings used in production don't cause issues
+        let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "os error 32");
+        log_socket_write_error("API response", &err);
+        log_socket_write_error("API response flush", &err);
+        log_socket_write_error("response", &err);
+        log_socket_write_error("response flush", &err);
+    }
 }

@@ -16,10 +16,12 @@
 /// Override in config.json per-plugin: `"timeout": 60`
 pub const DEFAULT_PLUGIN_TIMEOUT_SECONDS: u64 = 300; // 5 minutes
 
-/// Extra seconds added to the Rust-side timeout so the Node.js plugin timeout
-/// fires first and returns a structured `{code: "TIMEOUT", status: 504}` response.
-/// The Rust timeout acts as a backstop in case the Node.js process hangs.
-pub const PLUGIN_TIMEOUT_BUFFER_SECONDS: u64 = 2;
+/// Extra seconds added to the Rust-side timeout so both Node.js timeout layers
+/// fire first. The timeout hierarchy for a plugin with timeout T is:
+///   1. Handler (pool-executor.ts):    T      — structured TIMEOUT response
+///   2. Worker-pool safety net:        T + 2s — catches stuck workers
+///   3. Rust backstop (this buffer):   T + 4s — catches hung Node.js process
+pub const PLUGIN_TIMEOUT_BUFFER_SECONDS: u64 = 4;
 
 /// Timeout for admin pool requests (precompile, cache, invalidate) in seconds.
 /// These are fast operations that don't need the full plugin timeout.

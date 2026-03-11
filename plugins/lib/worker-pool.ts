@@ -795,9 +795,16 @@ export class WorkerPoolManager {
     // Track per-plugin execution (bounded to prevent memory leak)
     incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
 
-    // Use task timeout to prevent permanently stuck workers
-    // This is a safety net beyond the handler-level timeout in pool-executor
-    const taskTimeout = this.options.taskTimeout;
+    // Use per-request timeout + buffer to prevent permanently stuck workers.
+    // This is a safety net beyond the handler-level timeout in pool-executor.
+    // Must derive from the actual request timeout, not a fixed default,
+    // otherwise plugins with timeouts > DEFAULT_PLUGIN_TIMEOUT_MS get cut off.
+    //
+    // Timeout hierarchy (e.g., for a 600s plugin):
+    //   1. Handler (pool-executor.ts):    600s  — structured TIMEOUT response
+    //   2. Worker-pool safety net (here): 602s  — catches stuck workers
+    //   3. Rust backstop (pool_executor): 604s  — catches hung Node.js process
+    const taskTimeout = (request.timeout ?? DEFAULT_PLUGIN_TIMEOUT_MS) + 2000;
     let timeoutId: NodeJS.Timeout | undefined;
 
     try {
