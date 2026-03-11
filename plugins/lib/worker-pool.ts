@@ -51,8 +51,6 @@ export interface WorkerPoolOptions {
   concurrentTasksPerWorker?: number;
   /** Idle timeout before shutting down excess workers (ms) */
   idleTimeout?: number;
-  /** Task-level timeout to prevent stuck workers (ms). Defaults to execution timeout + 5s buffer. */
-  taskTimeout?: number;
 }
 
 /**
@@ -104,15 +102,11 @@ export interface PluginExecutionResult {
   logs: LogEntry[];
 }
 
-// Task timeout includes a 5s buffer over execution timeout for cleanup overhead
-const DEFAULT_TASK_TIMEOUT = DEFAULT_PLUGIN_TIMEOUT_MS + 5000;
-
 const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
   minThreads: DEFAULT_POOL_MIN_THREADS,
   maxThreads: Math.max(os.cpus().length, DEFAULT_POOL_MAX_THREADS_FLOOR),
   concurrentTasksPerWorker: DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
   idleTimeout: DEFAULT_POOL_IDLE_TIMEOUT_MS,
-  taskTimeout: DEFAULT_TASK_TIMEOUT,
 };
 
 /**
@@ -795,15 +789,12 @@ export class WorkerPoolManager {
     // Track per-plugin execution (bounded to prevent memory leak)
     incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
 
-    // Use per-request timeout + buffer to prevent permanently stuck workers.
-    // This is a safety net beyond the handler-level timeout in pool-executor.
-    // Must derive from the actual request timeout, not a fixed default,
-    // otherwise plugins with timeouts > DEFAULT_PLUGIN_TIMEOUT_MS get cut off.
-    //
-    // Timeout hierarchy (e.g., for a 600s plugin):
-    //   1. Handler (pool-executor.ts):    600s  — structured TIMEOUT response
-    //   2. Worker-pool safety net (here): 602s  — catches stuck workers
-    //   3. Rust backstop (pool_executor): 604s  — catches hung Node.js process
+    // Per-request timeout + 2s buffer as worker-pool safety net.
+    // Derived from the actual plugin timeout so every layer in the hierarchy
+    // uses the same base value:
+    //   1. Handler (pool-executor.ts):    T      — structured TIMEOUT response
+    //   2. Worker-pool safety net (here): T + 2s — catches stuck workers
+    //   3. Rust backstop (pool_executor): T + 4s — catches hung Node.js process
     const taskTimeout = (request.timeout ?? DEFAULT_PLUGIN_TIMEOUT_MS) + 2000;
     let timeoutId: NodeJS.Timeout | undefined;
 

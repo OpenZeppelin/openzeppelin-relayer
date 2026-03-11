@@ -550,8 +550,12 @@ impl PoolManager {
             .send_request_with_timeout(&request, backstop_timeout)
             .await
             .map_err(|e| match e {
-                // Report the user-configured timeout, not the internal backstop value
-                PluginError::ScriptTimeout(_) => PluginError::ScriptTimeout(configured_timeout),
+                // The connection layer returns a generic SocketError for timeouts.
+                // Translate to ScriptTimeout here where we know it's a plugin execution,
+                // reporting the user-configured timeout (not the internal backstop value).
+                PluginError::SocketError(ref msg) if msg.contains("timed out") => {
+                    PluginError::ScriptTimeout(configured_timeout)
+                }
                 other => other,
             })?;
 
