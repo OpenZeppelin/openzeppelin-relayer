@@ -548,16 +548,7 @@ impl PoolManager {
         let backstop_timeout = configured_timeout + PLUGIN_TIMEOUT_BUFFER_SECONDS;
         let response = conn
             .send_request_with_timeout(&request, backstop_timeout)
-            .await
-            .map_err(|e| match e {
-                // The connection layer returns a generic SocketError for timeouts.
-                // Translate to ScriptTimeout here where we know it's a plugin execution,
-                // reporting the user-configured timeout (not the internal backstop value).
-                PluginError::SocketError(ref msg) if msg.contains("timed out") => {
-                    PluginError::ScriptTimeout(configured_timeout)
-                }
-                other => other,
-            })?;
+            .await?;
 
         // Use extracted parsing function for cleaner code and testability
         Self::parse_pool_response(response)
@@ -1115,6 +1106,13 @@ impl PoolManager {
             PluginError::ScriptTimeout(_) => false,
             // Handler errors are structured plugin failures, not infrastructure issues
             PluginError::HandlerError(_) => false,
+            // Rust-side request timeout is the transport backstop firing because the
+            // pool server stopped responding. This should trigger recovery.
+            PluginError::SocketError(msg)
+                if msg.to_lowercase().contains("request timed out after") =>
+            {
+                true
+            }
             // For everything else, check the error message for dead-server patterns
             other => {
                 let error_str = other.to_string();
@@ -2844,6 +2842,12 @@ mod tests {
         assert!(PoolManager::is_dead_server_error(&err));
 
         let err = PluginError::SocketError("connect timed out".to_string());
+        assert!(PoolManager::is_dead_server_error(&err));
+    }
+
+    #[test]
+    fn test_is_dead_server_error_with_request_timeout_socket_error() {
+        let err = PluginError::SocketError("Request timed out after 304 seconds".to_string());
         assert!(PoolManager::is_dead_server_error(&err));
     }
 
