@@ -145,6 +145,23 @@ use tracing::{debug, info, warn};
 
 use super::PluginError;
 
+/// Log socket write errors at the appropriate level.
+/// Broken pipe and connection reset are expected when a plugin times out
+/// while an RPC call is still in-flight, so they're logged at DEBUG.
+fn log_socket_write_error(context: &str, error: &std::io::Error) {
+    match error.kind() {
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset => {
+            debug!(
+                "Failed to write {}: {} (plugin likely timed out)",
+                context, error
+            );
+        }
+        _ => {
+            warn!("Failed to write {}: {}", context, error);
+        }
+    }
+}
+
 /// Unified message protocol for bidirectional communication
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -654,12 +671,12 @@ impl SharedSocketService {
                             + "\n";
 
                         if let Err(e) = w.write_all(response_str.as_bytes()).await {
-                            warn!("Failed to write API response: {}", e);
+                            log_socket_write_error("API response", &e);
                             break;
                         }
 
                         if let Err(e) = w.flush().await {
-                            warn!("Failed to flush API response: {}", e);
+                            log_socket_write_error("API response flush", &e);
                             break;
                         }
                     }
@@ -720,12 +737,12 @@ impl SharedSocketService {
                         + "\n";
 
                     if let Err(e) = w.write_all(response_str.as_bytes()).await {
-                        warn!("Failed to write response: {}", e);
+                        log_socket_write_error("response", &e);
                         break;
                     }
 
                     if let Err(e) = w.flush().await {
-                        warn!("Failed to flush response: {}", e);
+                        log_socket_write_error("response flush", &e);
                         break;
                     }
                 } else {

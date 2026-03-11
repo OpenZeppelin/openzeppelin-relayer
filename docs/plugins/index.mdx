@@ -783,7 +783,6 @@ export PLUGIN_POOL_MAX_QUEUE_SIZE=10000
 | `PLUGIN_POOL_MAX_QUEUE_SIZE` | 4096 | `MAX_CONCURRENCY × 2` | Max queued requests |
 | `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Workload-based (500-1000ms) | Wait time when queue is full |
 | `PLUGIN_POOL_CONNECT_RETRIES` | 15 | - | Retry attempts when connecting |
-| `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | - | Timeout for pool requests |
 | `PLUGIN_POOL_WORKERS` | auto | CPU cores | Queue processing workers |
 | `PLUGIN_POOL_SOCKET_BACKLOG` | 2048 | `MAX_CONCURRENCY` | Socket connection backlog |
 | **Node.js Side** ||||
@@ -830,16 +829,28 @@ This ensures requests have sufficient time to queue during traffic spikes while 
 
 #### Timeout Alignment
 
-<Callout type="warn">
-Timeouts must be aligned! If your plugin takes up to 120s, set the pool request timeout accordingly.
-</Callout>
+Plugin execution timeouts are derived from each plugin's `timeout` in `config.json` (default 300s). The only fixed internal timeout is for admin operations (`precompile`, `cache`, `invalidate`), which use 30s because they are expected to be fast.
+
+For request handling, ensure the HTTP request timeout is large enough:
+
+```json
+// 1. Plugin execution timeout (in config.json)
+{
+  "plugins": [{
+    "id": "my-plugin",
+    "timeout": 120
+  }]
+}
+```
 
 ```bash
-# In config.json: "timeout": 120
-
-# Environment should match:
-export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+# 2. HTTP request timeout (must be >= plugin timeout)
+export REQUEST_TIMEOUT_SECONDS=120
 ```
+
+<Callout type="warn">
+Ensure `REQUEST_TIMEOUT_SECONDS` is **at least as large** as your longest plugin `timeout`. If it's shorter, Actix will close the HTTP connection while the plugin is still running, causing `write EPIPE` errors.
+</Callout>
 
 #### Health & Recovery
 
@@ -868,14 +879,12 @@ export PLUGIN_MAX_CONCURRENCY=1000
 
 ```bash
 export PLUGIN_MAX_CONCURRENCY=3000
-export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=60
 ```
 
 #### Extreme Load (5000+ concurrent requests)
 
 ```bash
 export PLUGIN_MAX_CONCURRENCY=8000
-export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
 export PLUGIN_POOL_CONNECT_RETRIES=20
 ```
 
@@ -883,10 +892,11 @@ export PLUGIN_POOL_CONNECT_RETRIES=20
 
 | Error | Cause | Solution |
 |-------|-------|----------|
+| `write EPIPE` / `Uncaught exception: Error: write EPIPE` | HTTP timeout while plugin still running | Set `REQUEST_TIMEOUT_SECONDS` >= your plugin `timeout` in config.json |
 | `Plugin execution queue is full` | More requests than queue can hold | Increase `PLUGIN_POOL_MAX_QUEUE_SIZE` and `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` |
 | `Connection limit reached` | Too many concurrent plugin connections | Increase `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` |
 | `Failed to connect to pool after N attempts` | Pool server overwhelmed | Increase `PLUGIN_POOL_CONNECT_RETRIES` and `PLUGIN_POOL_MAX_CONNECTIONS` |
-| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) |
+| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) and ensure `REQUEST_TIMEOUT_SECONDS` >= that value |
 | `All connection permits exhausted` | Connection pool at capacity | Increase `PLUGIN_POOL_MAX_CONNECTIONS` |
 | `FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory` | Worker heap too small | Increase `PLUGIN_WORKER_HEAP_MB` or reduce `PLUGIN_POOL_CONCURRENT_TASKS` |
 | `Pool server crashed and restarting` | Memory pressure or GC issues | Check logs for heap usage; reduce `PLUGIN_MAX_CONCURRENCY` or increase system RAM |

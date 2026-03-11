@@ -34,7 +34,7 @@ import type { PluginHeaders } from './plugin';
 import {
   DEFAULT_POOL_MIN_THREADS,
   DEFAULT_POOL_IDLE_TIMEOUT_MS,
-  DEFAULT_POOL_EXECUTION_TIMEOUT_MS,
+  DEFAULT_PLUGIN_TIMEOUT_MS,
   DEFAULT_POOL_MAX_THREADS_FLOOR,
   DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
 } from './constants';
@@ -104,10 +104,8 @@ export interface PluginExecutionResult {
   logs: LogEntry[];
 }
 
-const DEFAULT_TIMEOUT = DEFAULT_POOL_EXECUTION_TIMEOUT_MS;
-
 // Task timeout includes a 5s buffer over execution timeout for cleanup overhead
-const DEFAULT_TASK_TIMEOUT = DEFAULT_TIMEOUT + 5000;
+const DEFAULT_TASK_TIMEOUT = DEFAULT_PLUGIN_TIMEOUT_MS + 5000;
 
 const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
   minThreads: DEFAULT_POOL_MIN_THREADS,
@@ -787,7 +785,7 @@ export class WorkerPoolManager {
       headers: request.headers,
       socketPath: request.socketPath,
       httpRequestId: request.httpRequestId,
-      timeout: request.timeout ?? DEFAULT_TIMEOUT,
+      timeout: request.timeout ?? DEFAULT_PLUGIN_TIMEOUT_MS,
       route: request.route,
       config: request.config,
       method: request.method,

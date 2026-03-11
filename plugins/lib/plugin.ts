@@ -43,7 +43,7 @@ import {
 import { DefaultPluginKVStore } from './kv';
 import { LogInterceptor } from './logger';
 import type { PluginKVStore } from './kv';
-import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
+import { SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 import net from 'node:net';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -655,8 +655,8 @@ export class DefaultPluginAPI implements PluginAPI {
       // Set up timeout to prevent hanging forever
       timeoutId = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
-      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+        reject(new Error(`Socket request '${method}' timed out after ${SOCKET_REQUEST_TIMEOUT_MS}ms`));
+      }, SOCKET_REQUEST_TIMEOUT_MS);
 
       // Wrap resolvers to clear timeout on completion
       this.pending.set(requestId, {

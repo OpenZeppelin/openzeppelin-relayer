@@ -16,6 +16,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::constants::{
+    ADMIN_REQUEST_TIMEOUT_SECS, DEFAULT_PLUGIN_TIMEOUT_SECONDS, PLUGIN_TIMEOUT_BUFFER_SECONDS,
+};
+
 use super::config::get_config;
 use super::connection::{ConnectionPool, PoolConnection};
 use super::health::{
@@ -538,7 +542,10 @@ impl PoolManager {
             query,
         }));
 
-        let timeout = timeout_secs.unwrap_or(get_config().pool_request_timeout_secs);
+        // Add buffer so the Node.js timeout fires first with a structured response;
+        // this Rust timeout is a backstop if the Node.js process hangs.
+        let timeout =
+            timeout_secs.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS) + PLUGIN_TIMEOUT_BUFFER_SECONDS;
         let response = conn.send_request_with_timeout(&request, timeout).await?;
 
         // Use extracted parsing function for cleaner code and testability
@@ -859,8 +866,7 @@ impl PoolManager {
         query: Option<serde_json::Value>,
     ) -> Result<ScriptResult, PluginError> {
         let rid = http_request_id.as_deref().unwrap_or("unknown");
-        let effective_timeout =
-            timeout_secs.unwrap_or_else(|| get_config().pool_request_timeout_secs);
+        let effective_timeout = timeout_secs.unwrap_or(DEFAULT_PLUGIN_TIMEOUT_SECONDS);
         tracing::debug!(
             plugin_id = %plugin_id,
             http_request_id = %rid,
@@ -989,7 +995,7 @@ impl PoolManager {
                         // Add timeout to response_rx to prevent hung requests if worker crashes
                         let response_timeout = timeout_secs
                             .map(Duration::from_secs)
-                            .unwrap_or(Duration::from_secs(get_config().pool_request_timeout_secs))
+                            .unwrap_or(Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS))
                             + Duration::from_secs(5); // Add 5s buffer for queue processing
 
                         match tokio::time::timeout(response_timeout, response_rx).await {
@@ -1014,10 +1020,10 @@ impl PoolManager {
                                     "Request queued after waiting for queue space"
                                 );
                                 // Add timeout to response_rx to prevent hung requests if worker crashes
-                                let response_timeout =
-                                    timeout_secs.map(Duration::from_secs).unwrap_or(
-                                        Duration::from_secs(get_config().pool_request_timeout_secs),
-                                    ) + Duration::from_secs(5); // Add 5s buffer for queue processing
+                                let response_timeout = timeout_secs
+                                    .map(Duration::from_secs)
+                                    .unwrap_or(Duration::from_secs(DEFAULT_PLUGIN_TIMEOUT_SECONDS))
+                                    + Duration::from_secs(5); // Add 5s buffer for queue processing
 
                                 match tokio::time::timeout(response_timeout, response_rx).await {
                                     Ok(Ok(result)) => result,
@@ -1087,18 +1093,30 @@ impl PoolManager {
         }
     }
 
-    /// Check if an error indicates the pool server is dead and needs restart
+    /// Check if an error indicates the pool server is dead and needs restart.
+    /// Timeouts and handler/plugin errors are NOT dead-server indicators —
+    /// they mean the server processed the request but the plugin failed.
     pub fn is_dead_server_error(err: &PluginError) -> bool {
-        let error_str = err.to_string();
-        let lower = error_str.to_lowercase();
+        match err {
+            // Timeouts mean the server is alive but the plugin took too long
+            PluginError::ScriptTimeout(_) => false,
+            // Handler errors are structured plugin failures, not infrastructure issues
+            PluginError::HandlerError(_) => false,
+            // For everything else, check the error message for dead-server patterns
+            other => {
+                let error_str = other.to_string();
+                let lower = error_str.to_lowercase();
 
-        if lower.contains("handler timed out")
-            || (lower.contains("plugin") && lower.contains("timed out"))
-        {
-            return false;
+                // Plugin/handler timeouts surfaced as strings (from Node.js side)
+                if lower.contains("handler timed out")
+                    || (lower.contains("plugin") && lower.contains("timed out"))
+                {
+                    return false;
+                }
+
+                DeadServerIndicator::from_error_str(&error_str).is_some()
+            }
         }
-
-        DeadServerIndicator::from_error_str(&error_str).is_some()
     }
 
     /// Precompile a plugin
@@ -1120,7 +1138,7 @@ impl PoolManager {
         };
 
         let response = conn
-            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .send_request_with_timeout(&request, ADMIN_REQUEST_TIMEOUT_SECS)
             .await?;
 
         if response.success {
@@ -1162,7 +1180,7 @@ impl PoolManager {
         };
 
         let response = conn
-            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .send_request_with_timeout(&request, ADMIN_REQUEST_TIMEOUT_SECS)
             .await?;
 
         if response.success {
@@ -1192,7 +1210,7 @@ impl PoolManager {
         };
 
         let _ = conn
-            .send_request_with_timeout(&request, get_config().pool_request_timeout_secs)
+            .send_request_with_timeout(&request, ADMIN_REQUEST_TIMEOUT_SECS)
             .await?;
         Ok(())
     }
@@ -1837,7 +1855,10 @@ mod tests {
 
     #[test]
     fn test_is_dead_server_error_with_handler_error_type() {
-        // HandlerError type should also be checked
+        // HandlerError means Node.js responded with a structured error —
+        // the pool server is alive, so this is never a dead-server indicator,
+        // even if the message contains patterns like "Connection refused"
+        // (which would be from the plugin's own code, not infrastructure).
         let handler_payload = PluginHandlerPayload {
             message: "Connection refused".to_string(),
             status: 500,
@@ -1847,9 +1868,7 @@ mod tests {
             traces: None,
         };
         let err = PluginError::HandlerError(Box::new(handler_payload));
-        // The error message contains "Connection refused" but it's wrapped differently
-        // This tests that we check the string representation
-        assert!(PoolManager::is_dead_server_error(&err));
+        assert!(!PoolManager::is_dead_server_error(&err));
     }
 
     // ============================================

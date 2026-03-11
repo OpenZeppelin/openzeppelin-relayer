@@ -22,8 +22,8 @@ const MAX_SOURCE_SIZE = 5 * 1024 * 1024;
 /** Maximum compiled code size (10MB) */
 const MAX_COMPILED_SIZE = 10 * 1024 * 1024;
 
-/** Default compilation timeout (30 seconds) */
-const DEFAULT_COMPILE_TIMEOUT_MS = 30000;
+/** Compilation timeout (ms). Compilation is a fast operation similar to admin requests. */
+const DEFAULT_COMPILE_TIMEOUT_MS = 30000; // 30 seconds
 
 /** Maximum concurrent compilations in batch mode */
 const MAX_CONCURRENT_COMPILATIONS = 10;
