@@ -2,6 +2,8 @@
 
 Run the Channels plugin with OpenZeppelin Relayer to enable parallel transaction submission on Stellar using channel accounts with fee bumping. The plugin handles fees, sequence numbers, simulation, and retries automatically.
 
+For setups with a dedicated secondary fund relayer (e.g., for x402), use [examples/channels-x402-plugin-example](../channels-x402-plugin-example/).
+
 ## Quick Start
 
 ```bash
@@ -121,7 +123,7 @@ The Channels plugin and relayer configurations are already set up for testnet. T
 **`config/config.json`** (pre-configured):
 
 - Three relayers defined: `channels-fund`, `channel-001`, `channel-002`
-- The Fund relayer has `concurrent_transactions: true` enabled in policies to allow parallel processing
+- The fund relayer has `concurrent_transactions: true` enabled in policies to allow parallel processing
 - Corresponding signers pointing to the key files you'll create
 - Plugin registered as `channels`
 
@@ -162,7 +164,7 @@ docker compose up
 
 The relayer will start and display the public addresses for your accounts in the logs:
 
-```
+```bash
 relayer-1  | Syncing sequence for relayer: channels-fund (GCP7KWGZCDDVBFKANDJTA74H2HSORV34SMSQIPGZ3PK7V6OHKCFGRTF6)
 relayer-1  | Syncing sequence for relayer: channel-001 (GCWFXU6HZNHLTXMHWZRPXYBZFOODJYRDZXFOPMUQN4S2JJGEZA2ZHA4B)
 relayer-1  | Syncing sequence for relayer: channel-002 (GA7IXWK3VKF25JOXJZZ7XMFB3A3IPM5A66MW5DJ6FPOIWME4F66UK4HL)
@@ -201,7 +203,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
       "management": {
         "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["channel-0001", "channel-0002", "channel-0003"]
+        "relayerIds": ["channel-0001", "channel-0002"]
       }
     }
   }'
@@ -215,7 +217,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
   "data": {
     "result": {
       "ok": true,
-      "appliedRelayerIds": ["channel-0001", "channel-0002", "channel-0003"]
+      "appliedRelayerIds": ["channel-0001", "channel-0002"]
     }
   },
   "error": null
@@ -356,7 +358,7 @@ curl -X POST http://localhost:8080/api/v1/plugins/channels/call \
       "management": {
         "action": "setChannelAccounts",
         "adminSecret": "YOUR_ADMIN_SECRET",
-        "relayerIds": ["channel-0001", "channel-0002", "channel-0003"]
+        "relayerIds": ["channel-0001", "channel-0002"]
       }
     }
   }'

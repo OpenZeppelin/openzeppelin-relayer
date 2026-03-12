@@ -1,0 +1,8 @@
+# Generated TLS certificates (use generate-certs.sh to create)
+certs/
+
+# Environment file
+.env
+
+# Generated signer keys
+config/keys/

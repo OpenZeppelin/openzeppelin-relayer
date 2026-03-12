@@ -63,6 +63,9 @@ pub struct TransactionMetadata {
     pub consecutive_failures: u32,
     #[serde(default)]
     pub total_failures: u32,
+    /// Number of submission retries triggered by Stellar insufficient-fee errors
+    #[serde(default)]
+    pub insufficient_fee_retries: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
