@@ -330,14 +330,14 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
             .await?;
         let plugin_list_key = self.api_key_list_key();
 
-        debug!("Checking if API key entries exist");
+        debug!("Checking if plugin entries exist");
 
         let exists: bool = conn
             .exists(&plugin_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "has_entries_check"))?;
 
-        debug!("API key entries exist: {}", exists);
+        debug!("Plugin entries exist: {}", exists);
         Ok(exists)
     }
 
@@ -345,18 +345,18 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         let mut conn = self
             .get_connection(self.connections.primary(), "drop_all_entries")
             .await?;
-        let api_key_list_key = self.api_key_list_key();
+        let plugin_list_key = self.api_key_list_key();
 
-        debug!("Dropping all API key entries");
+        debug!("Dropping all plugin entries");
 
-        // Get all API key IDs first
-        let api_key_ids: Vec<String> = conn
-            .smembers(&api_key_list_key)
+        // Get all plugin IDs first
+        let plugin_ids: Vec<String> = conn
+            .smembers(&plugin_list_key)
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_get_ids"))?;
 
-        if api_key_ids.is_empty() {
-            debug!("No API key entries to drop");
+        if plugin_ids.is_empty() {
+            debug!("No plugin entries to drop");
             return Ok(());
         }
 
@@ -364,20 +364,20 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
         let mut pipe = redis::pipe();
         pipe.atomic();
 
-        // Delete all individual API key entries
-        for api_key_id in &api_key_ids {
-            let api_key_key = self.api_key_key(api_key_id);
-            pipe.del(&api_key_key);
+        // Delete all individual plugin entries
+        for plugin_id in &plugin_ids {
+            let plugin_key = self.api_key_key(plugin_id);
+            pipe.del(&plugin_key);
         }
 
-        // Delete the API key list key
-        pipe.del(&api_key_list_key);
+        // Delete the plugin list key
+        pipe.del(&plugin_list_key);
 
         pipe.exec_async(&mut conn)
             .await
             .map_err(|e| self.map_redis_error(e, "drop_all_entries_pipeline"))?;
 
-        debug!("Dropped {} API key entries", api_key_ids.len());
+        debug!("Dropped {} plugin entries", plugin_ids.len());
         Ok(())
     }
 }

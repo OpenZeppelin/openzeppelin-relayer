@@ -560,10 +560,6 @@ impl RelayerRepository for RedisRelayerRepository {
     fn is_persistent_storage(&self) -> bool {
         true
     }
-
-    fn connection_info(&self) -> Option<(Arc<deadpool_redis::Pool>, String)> {
-        Some((self.connections.primary().clone(), self.key_prefix.clone()))
-    }
 }
 
 #[cfg(test)]
