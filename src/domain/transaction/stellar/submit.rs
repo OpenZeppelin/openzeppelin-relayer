@@ -13,6 +13,7 @@ use super::{
 use crate::{
     constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
+    metrics::STELLAR_SUBMISSION_FAILURES,
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionMetadata,
         TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
@@ -105,7 +106,12 @@ where
             .provider()
             .send_transaction_with_status(&tx_envelope)
             .await
-            .map_err(TransactionError::from)?;
+            .map_err(|e| {
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["provider_error", "n/a"])
+                    .inc();
+                TransactionError::from(e)
+            })?;
 
         // Handle status codes from the RPC response
         match response.status.as_str() {
@@ -200,6 +206,9 @@ where
                         .saturating_add(1);
 
                     if insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                        STELLAR_SUBMISSION_FAILURES
+                            .with_label_values(&["error", "tx_insufficient_fee"])
+                            .inc();
                         return Err(TransactionError::UnexpectedError(format!(
                             "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
                         )));
@@ -234,7 +243,12 @@ where
                         .await?;
                     return Ok(updated_tx);
                 }
-
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&[
+                        "error",
+                        decoded_result_code.as_deref().unwrap_or("unknown"),
+                    ])
+                    .inc();
                 Err(TransactionError::UnexpectedError(format!(
                     "Transaction submission error: {}",
                     decoded_result_code.unwrap_or(error_detail)
@@ -242,6 +256,9 @@ where
             }
             unknown => {
                 // Unknown status - treat as error
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["unknown_status", "n/a"])
+                    .inc();
                 warn!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,

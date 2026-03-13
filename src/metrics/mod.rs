@@ -199,6 +199,15 @@ lazy_static! {
         histogram_vec
     };
 
+    // Counter for Stellar transaction submission failures with decoded result codes.
+    pub static ref STELLAR_SUBMISSION_FAILURES: CounterVec = {
+        let opts = Opts::new("stellar_submission_failures_total",
+            "Stellar transaction submission failures by status and result code");
+        let counter_vec = CounterVec::new(opts, &["submit_status", "result_code"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
     // Counter for plugin calls (tracks requests to /api/v1/plugins/{plugin_id}/call endpoints).
     pub static ref PLUGIN_CALLS: CounterVec = {
         let opts = Opts::new("plugin_calls_total", "Total number of plugin calls");
