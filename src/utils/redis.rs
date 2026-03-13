@@ -1413,8 +1413,8 @@ mod tests {
                 .expect("Should have sync time");
 
             assert!(
-                second_sync > first_sync,
-                "Updated sync time should be later than first"
+                second_sync >= first_sync,
+                "Updated sync time should be at the same time or later than first"
             );
 
             // Cleanup

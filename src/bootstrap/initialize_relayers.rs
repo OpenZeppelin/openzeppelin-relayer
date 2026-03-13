@@ -30,8 +30,9 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     utils::{
-        is_global_init_recently_completed, poll_until, set_global_init_completed, DistributedLock,
-        BOOTSTRAP_LOCK_TTL_SECS, LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
+        is_global_init_recently_completed, is_relayer_recently_synced, poll_until,
+        set_global_init_completed, set_relayer_last_sync, DistributedLock, BOOTSTRAP_LOCK_TTL_SECS,
+        LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
     },
 };
 use color_eyre::{eyre::WrapErr, Result};
@@ -156,8 +157,8 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    // Step 1: Check if recently completed
-    match is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS).await {
+    // Step 1: Check if recently completed for this exact relayer set
+    match was_relayer_set_recently_initialized(conn, prefix, relayers).await {
         Ok(true) => {
             info!("Initialization recently completed by another instance, skipping");
             return Ok(());
@@ -219,6 +220,15 @@ where
         Ok(None) => unreachable!(), // Already handled above
     };
 
+    if was_relayer_set_recently_initialized(conn, prefix, relayers)
+        .await
+        .unwrap_or(false)
+    {
+        info!("Initialization completed while waiting for the lock, skipping");
+        drop(guard);
+        return Ok(());
+    }
+
     // Lock acquired - proceed with initialization
     info!(
         count = relayers.len(),
@@ -227,15 +237,46 @@ where
 
     let result = run_initialization_batch(relayers, app_state).await;
 
-    // Record completion time only on success
     if result.is_ok() {
-        if let Err(e) = set_global_init_completed(conn, prefix).await {
+        if let Err(e) = record_relayer_initialization_completion(conn, prefix, relayers).await {
             warn!(error = %e, "Failed to record initialization completion time");
         }
     }
 
     drop(guard);
     result
+}
+
+async fn was_relayer_set_recently_initialized(
+    conn: &Arc<Pool>,
+    prefix: &str,
+    relayers: &[RelayerRepoModel],
+) -> Result<bool> {
+    if !is_global_init_recently_completed(conn, prefix, INIT_STALENESS_THRESHOLD_SECS).await? {
+        return Ok(false);
+    }
+
+    for relayer in relayers {
+        if !is_relayer_recently_synced(conn, prefix, &relayer.id, INIT_STALENESS_THRESHOLD_SECS)
+            .await?
+        {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+async fn record_relayer_initialization_completion(
+    conn: &Arc<Pool>,
+    prefix: &str,
+    relayers: &[RelayerRepoModel],
+) -> Result<()> {
+    for relayer in relayers {
+        set_relayer_last_sync(conn, prefix, &relayer.id).await?;
+    }
+
+    set_global_init_completed(conn, prefix).await
 }
 
 /// Waits for another instance to complete initialization.
@@ -301,7 +342,9 @@ where
             );
             let result = run_initialization_batch(relayers, app_state).await;
             if result.is_ok() {
-                if let Err(e) = set_global_init_completed(conn, prefix).await {
+                if let Err(e) =
+                    record_relayer_initialization_completion(conn, prefix, relayers).await
+                {
                     warn!(error = %e, "Failed to record initialization completion time");
                 }
             }
@@ -324,7 +367,9 @@ where
                 warn!("Extended wait also timed out, proceeding with initialization");
                 let result = run_initialization_batch(relayers, app_state).await;
                 if result.is_ok() {
-                    if let Err(e) = set_global_init_completed(conn, prefix).await {
+                    if let Err(e) =
+                        record_relayer_initialization_completion(conn, prefix, relayers).await
+                    {
                         warn!(error = %e, "Failed to record initialization completion time");
                     }
                 }
@@ -993,7 +1038,10 @@ mod tests {
 
         let prefix = "test_global_skip_recent";
 
-        // Set completion time to simulate recent initialization
+        // Set completion markers to simulate recent initialization of this relayer set
+        set_relayer_last_sync(&conn, prefix, &relayers[0].id)
+            .await
+            .expect("Should set relayer sync time");
         set_global_init_completed(&conn, prefix)
             .await
             .expect("Should set completion time");
@@ -1010,6 +1058,39 @@ mod tests {
         // Cleanup
         let mut conn_clone = conn.get().await.expect("Failed to get connection");
         let hash_key = format!("{}:relayer_sync_meta", prefix);
+        let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires running Redis instance
+    async fn test_coordinate_with_distributed_lock_does_not_skip_without_relayer_sync_markers() {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+
+        let relayers = vec![create_mock_relayer(
+            "global-lock-no-sync-relayer".to_string(),
+            false,
+        )];
+        let app_state =
+            create_mock_app_state(None, Some(relayers.clone()), None, None, None, None).await;
+        let thin_state = ThinData(app_state);
+
+        let prefix = "test_global_skip_without_relayer_sync";
+
+        set_global_init_completed(&conn, prefix)
+            .await
+            .expect("Should set completion time");
+
+        let result = coordinate_with_distributed_lock(&relayers, &thin_state, &conn, prefix).await;
+
+        assert!(
+            result.is_err(),
+            "Should not skip initialization when relayer sync markers are missing"
+        );
+
+        let mut conn_clone = conn.get().await.expect("Failed to get connection");
+        let hash_key = format!("{prefix}:relayer_sync_meta");
         let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &hash_key).await;
     }
 
@@ -1099,6 +1180,9 @@ mod tests {
         let prefix_for_task = prefix.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
+            set_relayer_last_sync(&conn_for_task, &prefix_for_task, "wait-relayer")
+                .await
+                .expect("Should set relayer sync");
             set_global_init_completed(&conn_for_task, &prefix_for_task)
                 .await
                 .expect("Should set completion");
