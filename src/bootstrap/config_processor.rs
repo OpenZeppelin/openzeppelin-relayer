@@ -1,6 +1,20 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
+//!
+//! ## Distributed Locking for Config Processing
+//!
+//! When multiple instances of the relayer service start simultaneously with Redis storage
+//! and `DISTRIBUTED_MODE` is enabled, this module uses distributed locking to coordinate
+//! config processing and prevent race conditions:
+//!
+//! - **Global lock**: A single lock is used for the entire config processing,
+//!   ensuring only one instance processes the config at a time.
+//! - **Post-lock population check**: After acquiring the lock, checks if Redis is already
+//!   populated (by another instance that held the lock first), and skips if so.
+//! - **Single-instance mode**: When `DISTRIBUTED_MODE` is disabled (default) or using
+//!   in-memory storage, locking is skipped since coordination is not needed.
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
@@ -15,10 +29,19 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer as SignerService, SignerFactory},
+    utils::{
+        is_config_processing_completed, poll_until, set_config_processing_completed,
+        set_config_processing_in_progress, DistributedLock, BOOTSTRAP_LOCK_TTL_SECS,
+        LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
+    },
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
+use deadpool_redis::Pool;
 use futures::future::try_join_all;
-use tracing::info;
+use tracing::{info, warn};
+
+/// Lock name for config processing lock.
+const CONFIG_PROCESSING_LOCK_NAME: &str = "config_processing";
 
 async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     server_config: &ServerConfig,
@@ -322,6 +345,10 @@ where
         return Ok(true);
     }
 
+    if app_state.api_key_repository.has_entries().await? {
+        return Ok(true);
+    }
+
     Ok(false)
 }
 
@@ -334,6 +361,10 @@ where
 /// 4. Process networks
 /// 5. Process relayers
 /// 6. Process API key
+///
+/// When using Redis storage with `DISTRIBUTED_MODE` enabled, this function uses distributed
+/// locking to prevent race conditions when multiple instances start simultaneously
+/// (especially with `RESET_STORAGE_ON_START=true`).
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
@@ -350,18 +381,300 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let should_process_config_file = match server_config.repository_storage_type {
-        RepositoryStorageType::InMemory => true,
-        RepositoryStorageType::Redis => {
-            server_config.reset_storage_on_start || !is_redis_populated(app_state).await?
+    match server_config.repository_storage_type {
+        RepositoryStorageType::InMemory => {
+            // In-memory mode: no locking needed, process directly
+            execute_config_processing(&config_file, &server_config, app_state).await
         }
-    };
+        RepositoryStorageType::Redis => {
+            // Check if distributed locking is needed
+            let use_lock = ServerConfig::get_distributed_mode();
+            let connection_info = app_state.relayer_repository.connection_info();
 
-    if !should_process_config_file {
-        info!("Skipping config file processing");
-        return Ok(());
+            match (use_lock, connection_info) {
+                (true, Some((conn, prefix))) => {
+                    // Distributed mode: use locking to coordinate across instances
+                    coordinate_config_with_lock(
+                        &config_file,
+                        &server_config,
+                        app_state,
+                        &conn,
+                        &prefix,
+                    )
+                    .await
+                }
+                _ => {
+                    // Single-instance mode or no connection info: skip locking
+                    let should_process = server_config.reset_storage_on_start
+                        || !is_redis_populated(app_state).await?;
+
+                    if should_process {
+                        execute_config_processing(&config_file, &server_config, app_state).await
+                    } else {
+                        info!("Skipping config file processing - Redis already populated");
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Process config file with distributed locking for Redis storage.
+///
+/// Flow:
+/// 1. Try to acquire global lock for config processing
+/// 2. If lock acquired: check for an explicit completion marker, process if needed
+/// 3. If lock held: wait for the completion marker to appear
+/// 4. If wait times out: recheck state and attempt takeover after lock expiry
+async fn coordinate_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            // We got the lock - check if we need to process
+            info!("Acquired config processing lock");
+
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
+
+            drop(guard); // Release lock
+            result
+        }
+        Ok(None) => {
+            // Lock held by another instance - wait for it to complete
+            info!("Another instance is processing config, waiting for completion");
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                return Ok(());
+            }
+
+            warn!("Timeout waiting for config processing, rechecking state");
+
+            if is_config_processing_completed(conn, prefix)
+                .await
+                .unwrap_or(false)
+            {
+                info!("Config processing completed during timeout window");
+                return Ok(());
+            }
+
+            recover_config_processing_after_timeout(
+                config_file,
+                server_config,
+                app_state,
+                conn,
+                prefix,
+            )
+            .await
+        }
+        Err(e) => {
+            // Lock error - graceful degradation, proceed without lock
+            warn!(
+                error = %e,
+                "Failed to acquire config processing lock, proceeding without coordination"
+            );
+            execute_config_processing(config_file, server_config, app_state).await
+        }
+    }
+}
+
+/// Process config after successfully acquiring the lock.
+///
+/// Checks if config processing was already completed and only processes if needed.
+async fn process_if_needed_after_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let already_completed = is_config_processing_completed(conn, prefix).await?;
+
+    if server_config.reset_storage_on_start {
+        // With reset flag: always reset and process (we have the lock)
+        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
+            .await
+    } else if already_completed {
+        // No reset flag and already completed: skip
+        info!("Config processing already completed, skipping config file processing");
+        Ok(())
+    } else {
+        // No reset flag and not completed: process
+        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
+            .await
+    }
+}
+
+/// Waits for another instance to complete config processing.
+///
+/// Polls periodically until the explicit completion marker is set or timeout is reached.
+async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> Result<bool> {
+    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
+    let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
+
+    let conn = conn.clone();
+    let prefix = prefix.to_string();
+
+    let completed = poll_until(
+        || is_config_processing_completed(&conn, &prefix),
+        max_wait,
+        poll_interval,
+        "config processing",
+    )
+    .await?;
+
+    Ok(completed)
+}
+
+/// Attempts to recover config processing after a wait timeout.
+///
+/// This is the config-processing analogue to relayer initialization recovery:
+/// if the original lock holder died after setting the in-progress marker but
+/// before completion, a waiting instance should take over once the lock TTL
+/// expires instead of failing the whole rollout.
+async fn recover_config_processing_after_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let recovery_lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match recovery_lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            warn!("Previous config-processing lock holder appears to have crashed, taking over");
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
+            drop(guard);
+            result
+        }
+        Ok(None) => {
+            // Another instance may still be processing config.
+            // Wait one more bounded period for the explicit completion marker
+            // before giving up on this instance.
+            warn!("Config-processing lock still held after timeout, waiting again for completion");
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                info!("Config processing completed by another instance during extended wait");
+                Ok(())
+            } else {
+                Err(eyre::eyre!(
+                    "Timed out waiting for config processing and could not acquire recovery lock"
+                ))
+            }
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to acquire recovery lock for config processing"
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Internal function that performs the actual config processing.
+async fn execute_config_processing_with_marker<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    set_config_processing_in_progress(conn, prefix).await?;
+
+    let result = execute_config_processing(config_file, server_config, app_state).await;
+
+    if result.is_ok() {
+        set_config_processing_completed(conn, prefix).await?;
     }
 
+    result
+}
+
+/// Internal function that performs the actual config processing work.
+async fn execute_config_processing<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
     if server_config.reset_storage_on_start {
         info!("Resetting storage on start due to server config flag RESET_STORAGE_ON_START = true");
         app_state.relayer_repository.drop_all_entries().await?;
@@ -373,15 +686,14 @@ where
         app_state.api_key_repository.drop_all_entries().await?;
     }
 
-    if should_process_config_file {
-        info!("Processing config file");
-        process_plugins(&config_file, app_state).await?;
-        process_signers(&config_file, app_state).await?;
-        process_notifications(&config_file, app_state).await?;
-        process_networks(&config_file, app_state).await?;
-        process_relayers(&config_file, app_state).await?;
-        process_api_key(&server_config, app_state).await?;
-    }
+    info!("Processing config file");
+    process_plugins(config_file, app_state).await?;
+    process_signers(config_file, app_state).await?;
+    process_notifications(config_file, app_state).await?;
+    process_networks(config_file, app_state).await?;
+    process_relayers(config_file, app_state).await?;
+    process_api_key(server_config, app_state).await?;
+
     Ok(())
 }
 
@@ -1527,6 +1839,18 @@ mod tests {
         }
     }
 
+    async fn create_test_redis_pool() -> Option<Arc<Pool>> {
+        let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
+        let pool = cfg
+            .builder()
+            .ok()?
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .ok()?;
+        Some(Arc::new(pool))
+    }
+
     // Helper function to create minimal test config
     fn create_minimal_test_config() -> Config {
         Config {
@@ -1728,5 +2052,71 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_recover_config_processing_after_timeout_waits_for_extended_completion() {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let prefix = "test_config_recovery_extended_wait";
+        let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+        let bootstrap_meta_key = format!("{prefix}:bootstrap_meta");
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        let config = create_minimal_test_config();
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+        let app_state = ThinData(create_test_app_state());
+
+        let lock = DistributedLock::new(
+            conn.clone(),
+            &lock_key,
+            Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+        );
+        let guard = lock
+            .try_acquire()
+            .await
+            .expect("Should acquire lock")
+            .expect("Lock should be available");
+
+        let conn_for_task = conn.clone();
+        let prefix_for_task = prefix.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            set_config_processing_completed(&conn_for_task, &prefix_for_task)
+                .await
+                .expect("Should set config processing completed");
+            guard.release().await.expect("Should release lock");
+        });
+
+        let result = recover_config_processing_after_timeout(
+            &config,
+            &server_config,
+            &app_state,
+            &conn,
+            prefix,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Should succeed when completion is observed during extended wait: {:?}",
+            result
+        );
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
     }
 }
