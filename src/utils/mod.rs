@@ -8,9 +8,6 @@ pub use key::*;
 mod auth;
 pub use auth::*;
 
-mod polling;
-pub use polling::*;
-
 mod time;
 pub use time::*;
 
