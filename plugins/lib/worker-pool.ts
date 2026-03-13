@@ -34,7 +34,7 @@ import type { PluginHeaders } from './plugin';
 import {
   DEFAULT_POOL_MIN_THREADS,
   DEFAULT_POOL_IDLE_TIMEOUT_MS,
-  DEFAULT_POOL_EXECUTION_TIMEOUT_MS,
+  DEFAULT_PLUGIN_TIMEOUT_MS,
   DEFAULT_POOL_MAX_THREADS_FLOOR,
   DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
 } from './constants';
@@ -51,8 +51,6 @@ export interface WorkerPoolOptions {
   concurrentTasksPerWorker?: number;
   /** Idle timeout before shutting down excess workers (ms) */
   idleTimeout?: number;
-  /** Task-level timeout to prevent stuck workers (ms). Defaults to execution timeout + 5s buffer. */
-  taskTimeout?: number;
 }
 
 /**
@@ -104,17 +102,11 @@ export interface PluginExecutionResult {
   logs: LogEntry[];
 }
 
-const DEFAULT_TIMEOUT = DEFAULT_POOL_EXECUTION_TIMEOUT_MS;
-
-// Task timeout includes a 5s buffer over execution timeout for cleanup overhead
-const DEFAULT_TASK_TIMEOUT = DEFAULT_TIMEOUT + 5000;
-
 const DEFAULT_OPTIONS: Required<WorkerPoolOptions> = {
   minThreads: DEFAULT_POOL_MIN_THREADS,
   maxThreads: Math.max(os.cpus().length, DEFAULT_POOL_MAX_THREADS_FLOOR),
   concurrentTasksPerWorker: DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
   idleTimeout: DEFAULT_POOL_IDLE_TIMEOUT_MS,
-  taskTimeout: DEFAULT_TASK_TIMEOUT,
 };
 
 /**
@@ -787,7 +779,7 @@ export class WorkerPoolManager {
       headers: request.headers,
       socketPath: request.socketPath,
       httpRequestId: request.httpRequestId,
-      timeout: request.timeout ?? DEFAULT_TIMEOUT,
+      timeout: request.timeout ?? DEFAULT_PLUGIN_TIMEOUT_MS,
       route: request.route,
       config: request.config,
       method: request.method,
@@ -797,9 +789,13 @@ export class WorkerPoolManager {
     // Track per-plugin execution (bounded to prevent memory leak)
     incrementBoundedMap(this.metrics.pluginExecutions, request.pluginId, MAX_METRICS_ENTRIES);
 
-    // Use task timeout to prevent permanently stuck workers
-    // This is a safety net beyond the handler-level timeout in pool-executor
-    const taskTimeout = this.options.taskTimeout;
+    // Per-request timeout + 2s buffer as worker-pool safety net.
+    // Derived from the actual plugin timeout so every layer in the hierarchy
+    // uses the same base value:
+    //   1. Handler (pool-executor.ts):    T      — structured TIMEOUT response
+    //   2. Worker-pool safety net (here): T + 2s — catches stuck workers
+    //   3. Rust backstop (pool_executor): T + 4s — catches hung Node.js process
+    const taskTimeout = (request.timeout ?? DEFAULT_PLUGIN_TIMEOUT_MS) + 2000;
     let timeoutId: NodeJS.Timeout | undefined;
 
     try {

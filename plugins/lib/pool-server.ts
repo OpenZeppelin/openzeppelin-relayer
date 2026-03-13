@@ -444,6 +444,23 @@ class PoolServer {
     const clientId = Math.random().toString(36).substring(7);
     debug(`[${clientId}] Client connected`);
 
+    /** Write to socket, silently handling EPIPE/ECONNRESET from disconnected clients */
+    const safeWrite = (data: string): void => {
+      if (!socket.writable) {
+        debug(`[${clientId}] Socket no longer writable, discarding response`);
+        return;
+      }
+      try {
+        socket.write(data);
+      } catch (err: any) {
+        if (err.code === 'EPIPE' || err.code === 'ECONNRESET') {
+          debug(`[${clientId}] Client disconnected during write (${err.code})`);
+        } else {
+          console.error(`[pool-server] [${clientId}] Write error:`, err);
+        }
+      }
+    };
+
     // Enable keep-alive to prevent connection drops
     socket.setKeepAlive(true, 30000); // 30 second keep-alive probe
     socket.setNoDelay(true); // Disable Nagle's algorithm for lower latency
@@ -473,12 +490,7 @@ class PoolServer {
             debug('Processing message type:', message.type);
             const response = await this.handleMessage(message);
             debug('Sending response for task:', response.taskId);
-            // Check if socket is still writable before writing
-            if (socket.writable) {
-              socket.write(JSON.stringify(response) + '\n');
-            } else {
-              debug('Socket no longer writable, discarding response');
-            }
+            safeWrite(JSON.stringify(response) + '\n');
           } catch (err) {
             const error = err as Error;
             debug('Error handling message:', error);
@@ -490,9 +502,7 @@ class PoolServer {
                 code: 'PARSE_ERROR',
               },
             };
-            if (socket.writable) {
-              socket.write(JSON.stringify(response) + '\n');
-            }
+            safeWrite(JSON.stringify(response) + '\n');
           }
         }
       })();
@@ -533,16 +543,15 @@ class PoolServer {
           success: false,
           error: { message: 'Internal queue processing error', code: 'QUEUE_ERROR' },
         };
-        if (socket.writable) {
-          socket.write(JSON.stringify(response) + '\n');
-        }
+        safeWrite(JSON.stringify(response) + '\n');
       });
     };
 
     const errorHandler = (err: Error): void => {
-      // Connection resets are normal during shutdown, don't log as errors
-      if ((err as any).code === 'ECONNRESET') {
-        debug(`[${clientId}] Connection reset`);
+      // Connection resets and broken pipes are normal during shutdown or when clients disconnect
+      const errorCode = (err as any).code;
+      if (errorCode === 'ECONNRESET' || errorCode === 'EPIPE') {
+        debug(`[${clientId}] Connection closed (${errorCode})`);
       } else {
         console.error(`[pool-server] [${clientId}] Socket error:`, err.message);
       }
@@ -1033,8 +1042,16 @@ async function main(): Promise<void> {
 
   memoryMonitor.start();
 
-  // Handle uncaught exceptions to prevent silent crashes
+  // Handle uncaught exceptions to prevent silent crashes.
+  // EPIPE/ECONNRESET are expected when a plugin times out while an API call
+  // is in-flight — the Rust side closes the socket, and the plugin's pending
+  // write surfaces as an uncaught error. These should not kill the server.
   process.on('uncaughtException', async (err) => {
+    const code = (err as any).code;
+    if (code === 'EPIPE' || code === 'ECONNRESET') {
+      debug(`[pool-server] Ignoring expected socket error in uncaughtException: ${code}`);
+      return;
+    }
     console.error('[pool-server] Uncaught exception:', err);
     try {
       await server.stop();
@@ -1045,6 +1062,11 @@ async function main(): Promise<void> {
   });
 
   process.on('unhandledRejection', async (reason, promise) => {
+    const code = (reason as any)?.code;
+    if (code === 'EPIPE' || code === 'ECONNRESET') {
+      debug(`[pool-server] Ignoring expected socket error in unhandledRejection: ${code}`);
+      return;
+    }
     console.error('[pool-server] Unhandled rejection at:', promise, 'reason:', reason);
     try {
       await server.stop();

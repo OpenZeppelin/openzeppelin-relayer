@@ -21,7 +21,7 @@ import {
   TransactionStatus,
   pluginError,
 } from '@openzeppelin/relayer-sdk';
-import { DEFAULT_SOCKET_REQUEST_TIMEOUT_MS } from './constants';
+import { SOCKET_REQUEST_TIMEOUT_MS } from './constants';
 
 /**
  * Function Cache - Caches compiled plugin factory functions.
@@ -499,8 +499,8 @@ class PluginAPIImpl implements PluginAPI {
 
       timeoutId = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error(`Socket request '${method}' timed out after ${DEFAULT_SOCKET_REQUEST_TIMEOUT_MS}ms`));
-      }, DEFAULT_SOCKET_REQUEST_TIMEOUT_MS);
+        reject(new Error(`Socket request '${method}' timed out after ${SOCKET_REQUEST_TIMEOUT_MS}ms`));
+      }, SOCKET_REQUEST_TIMEOUT_MS);
 
       this.pending.set(requestId, {
         resolve: (value) => {
