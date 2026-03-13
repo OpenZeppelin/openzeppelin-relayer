@@ -603,10 +603,20 @@ where
             result
         }
         Ok(None) => {
-            warn!("Config-processing lock still held after timeout");
-            Err(eyre::eyre!(
-                "Timed out waiting for config processing and could not acquire recovery lock"
-            ))
+            // Another instance may still be processing config.
+            // Wait one more bounded period for the explicit completion marker
+            // before giving up on this instance.
+            warn!("Config-processing lock still held after timeout, waiting again for completion");
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                info!("Config processing completed by another instance during extended wait");
+                Ok(())
+            } else {
+                Err(eyre::eyre!(
+                    "Timed out waiting for config processing and could not acquire recovery lock"
+                ))
+            }
         }
         Err(e) => {
             warn!(
@@ -1829,6 +1839,18 @@ mod tests {
         }
     }
 
+    async fn create_test_redis_pool() -> Option<Arc<Pool>> {
+        let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
+        let pool = cfg
+            .builder()
+            .ok()?
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .ok()?;
+        Some(Arc::new(pool))
+    }
+
     // Helper function to create minimal test config
     fn create_minimal_test_config() -> Config {
         Config {
@@ -2030,5 +2052,71 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_recover_config_processing_after_timeout_waits_for_extended_completion() {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let prefix = "test_config_recovery_extended_wait";
+        let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+        let bootstrap_meta_key = format!("{prefix}:bootstrap_meta");
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        let config = create_minimal_test_config();
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+        let app_state = ThinData(create_test_app_state());
+
+        let lock = DistributedLock::new(
+            conn.clone(),
+            &lock_key,
+            Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+        );
+        let guard = lock
+            .try_acquire()
+            .await
+            .expect("Should acquire lock")
+            .expect("Lock should be available");
+
+        let conn_for_task = conn.clone();
+        let prefix_for_task = prefix.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            set_config_processing_completed(&conn_for_task, &prefix_for_task)
+                .await
+                .expect("Should set config processing completed");
+            guard.release().await.expect("Should release lock");
+        });
+
+        let result = recover_config_processing_after_timeout(
+            &config,
+            &server_config,
+            &app_state,
+            &conn,
+            prefix,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Should succeed when completion is observed during extended wait: {:?}",
+            result
+        );
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
     }
 }
