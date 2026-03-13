@@ -43,6 +43,13 @@ use tracing::{info, warn};
 /// Lock name for config processing lock.
 const CONFIG_PROCESSING_LOCK_NAME: &str = "config_processing";
 
+#[derive(Debug, PartialEq, Eq)]
+enum ConfigBootstrapState {
+    Empty,
+    Complete,
+    Incomplete { missing: Vec<String> },
+}
+
 async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     server_config: &ServerConfig,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -303,13 +310,10 @@ where
     Ok(())
 }
 
-/// Check if Redis database is populated with existing configuration data.
-///
-/// This function checks if any of the main repository list keys exist in Redis.
-/// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn validate_config_bootstrap_state<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<bool>
+) -> Result<ConfigBootstrapState>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -321,35 +325,66 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    if app_state.relayer_repository.has_entries().await? {
-        return Ok(true);
+    let mut missing = Vec::new();
+    let relayer_has_entries = app_state.relayer_repository.has_entries().await?;
+    let signer_has_entries = app_state.signer_repository.has_entries().await?;
+    let notification_has_entries = app_state.notification_repository.has_entries().await?;
+    let network_has_entries = app_state.network_repository.has_entries().await?;
+    let plugin_has_entries = app_state.plugin_repository.has_entries().await?;
+    let api_key_has_entries = app_state.api_key_repository.has_entries().await?;
+
+    let has_any_entries = relayer_has_entries
+        || signer_has_entries
+        || notification_has_entries
+        || network_has_entries
+        || plugin_has_entries
+        || api_key_has_entries;
+
+    if !has_any_entries {
+        return Ok(ConfigBootstrapState::Empty);
     }
 
-    if app_state.transaction_repository.has_entries().await? {
-        return Ok(true);
+    if config_file
+        .plugins
+        .as_ref()
+        .is_some_and(|plugins| !plugins.is_empty())
+        && !plugin_has_entries
+    {
+        missing.push("plugin repository".to_string());
     }
 
-    if app_state.signer_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.signers.is_empty() && !signer_has_entries {
+        missing.push("signer repository".to_string());
     }
 
-    if app_state.notification_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.notifications.is_empty() && !notification_has_entries {
+        missing.push("notification repository".to_string());
     }
 
-    if app_state.network_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.networks.is_empty() && !network_has_entries {
+        missing.push("network repository".to_string());
     }
 
-    if app_state.plugin_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.relayers.is_empty() && !relayer_has_entries {
+        missing.push("relayer repository".to_string());
     }
 
-    if app_state.api_key_repository.has_entries().await? {
-        return Ok(true);
+    if !api_key_has_entries {
+        missing.push("api key repository".to_string());
     }
 
-    Ok(false)
+    if missing.is_empty() {
+        Ok(ConfigBootstrapState::Complete)
+    } else {
+        Ok(ConfigBootstrapState::Incomplete { missing })
+    }
+}
+
+fn format_incomplete_bootstrap_error(missing: &[String]) -> Report {
+    eyre::eyre!(
+        "Redis contains incomplete bootstrap-managed config state without completion marker (missing: {})",
+        missing.join(", ")
+    )
 }
 
 /// Process a complete configuration file by initializing all repositories.
@@ -404,15 +439,25 @@ where
                     .await
                 }
                 _ => {
-                    // Single-instance mode or no connection info: skip locking
-                    let should_process = server_config.reset_storage_on_start
-                        || !is_redis_populated(app_state).await?;
+                    // Single-instance mode or no connection info: validate state directly.
+                    if server_config.reset_storage_on_start {
+                        return execute_config_processing(&config_file, &server_config, app_state)
+                            .await;
+                    }
 
-                    if should_process {
-                        execute_config_processing(&config_file, &server_config, app_state).await
-                    } else {
-                        info!("Skipping config file processing - Redis already populated");
-                        Ok(())
+                    match validate_config_bootstrap_state(&config_file, app_state).await? {
+                        ConfigBootstrapState::Empty => {
+                            execute_config_processing(&config_file, &server_config, app_state).await
+                        }
+                        ConfigBootstrapState::Complete => {
+                            info!(
+                                "Skipping config file processing - bootstrap-managed Redis state is complete"
+                            );
+                            Ok(())
+                        }
+                        ConfigBootstrapState::Incomplete { missing } => {
+                            Err(format_incomplete_bootstrap_error(&missing))
+                        }
                     }
                 }
             }
@@ -492,14 +537,10 @@ where
             )
             .await
         }
-        Err(e) => {
-            // Lock error - graceful degradation, proceed without lock
-            warn!(
-                error = %e,
-                "Failed to acquire config processing lock, proceeding without coordination"
-            );
-            execute_config_processing(config_file, server_config, app_state).await
-        }
+        Err(e) => Err(eyre::eyre!(
+            "Failed to acquire config processing lock in distributed mode: {}",
+            e
+        )),
     }
 }
 
@@ -526,7 +567,7 @@ where
 {
     let already_completed = is_config_processing_completed(conn, prefix).await?;
     let in_progress = is_config_processing_in_progress(conn, prefix).await?;
-    let redis_populated = is_redis_populated(app_state).await?;
+    let bootstrap_state = validate_config_bootstrap_state(config_file, app_state).await?;
 
     if server_config.reset_storage_on_start {
         // With reset flag: always reset and process (we have the lock)
@@ -536,17 +577,34 @@ where
         // No reset flag and already completed: skip
         info!("Config processing already completed, skipping config file processing");
         Ok(())
-    } else if redis_populated && !in_progress {
-        // Redis already contains config data but predates explicit bootstrap markers.
-        // Backfill the completion marker so rolling restarts do not reprocess config.
-        info!("Redis is already populated without bootstrap markers, skipping config processing");
-        set_config_processing_completed(conn, prefix).await?;
-        Ok(())
     } else {
-        // No reset flag and not completed: process. This includes crash recovery when
-        // an in-progress marker is present without a completion marker.
-        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
-            .await
+        match bootstrap_state {
+            ConfigBootstrapState::Empty => {
+                execute_config_processing_with_marker(
+                    config_file,
+                    server_config,
+                    app_state,
+                    conn,
+                    prefix,
+                )
+                .await
+            }
+            ConfigBootstrapState::Complete if !in_progress => {
+                info!(
+                    "Bootstrap-managed Redis state is complete without marker, backfilling completion marker"
+                );
+                set_config_processing_completed(conn, prefix).await?;
+                Ok(())
+            }
+            ConfigBootstrapState::Complete => {
+                info!("Bootstrap-managed Redis state is complete, restoring completion marker");
+                set_config_processing_completed(conn, prefix).await?;
+                Ok(())
+            }
+            ConfigBootstrapState::Incomplete { missing } => {
+                Err(format_incomplete_bootstrap_error(&missing))
+            }
+        }
     }
 }
 
@@ -730,8 +788,7 @@ mod tests {
             TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::{
-            create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,
-            create_test_server_config,
+            create_mock_relayer, create_mock_signer, create_test_server_config,
         },
     };
     use actix_web::web::ThinData;
@@ -1648,194 +1705,6 @@ mod tests {
         assert_eq!(model.id, "gcp-kms-signer");
     }
 
-    #[tokio::test]
-    async fn test_is_redis_populated_empty_repositories() -> Result<()> {
-        // Create fresh app state with all empty repositories
-        let app_state = ThinData(create_test_app_state());
-
-        // All repositories should be empty
-        assert!(!app_state.relayer_repository.has_entries().await?);
-        assert!(!app_state.transaction_repository.has_entries().await?);
-        assert!(!app_state.signer_repository.has_entries().await?);
-        assert!(!app_state.notification_repository.has_entries().await?);
-        assert!(!app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return false when all repositories are empty
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false when all repositories are empty");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_relayer_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a relayer to the repository
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        app_state.relayer_repository.create(relayer).await?;
-
-        // Verify relayer repository has entries
-        assert!(app_state.relayer_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when relayer repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_transaction_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a transaction to the repository
-        let transaction = TransactionRepoModel::default();
-        app_state.transaction_repository.create(transaction).await?;
-
-        // Verify transaction repository has entries
-        assert!(app_state.transaction_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when transaction repository has entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_signer_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a signer to the repository
-        let signer = create_mock_signer();
-        app_state.signer_repository.create(signer).await?;
-
-        // Verify signer repository has entries
-        assert!(app_state.signer_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when signer repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_notification_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a notification to the repository
-        let notification = create_mock_notification("test-notification".to_string());
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-
-        // Verify notification repository has entries
-        assert!(app_state.notification_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when notification repository has entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_network_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a network to the repository
-        let network = create_mock_network();
-        app_state.network_repository.create(network).await?;
-
-        // Verify network repository has entries
-        assert!(app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when network repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_multiple_repositories_have_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add entries to multiple repositories
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let signer = create_mock_signer();
-        let notification = create_mock_notification("test-notification".to_string());
-        let network = create_mock_network();
-
-        app_state.relayer_repository.create(relayer).await?;
-        app_state.signer_repository.create(signer).await?;
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-        app_state.network_repository.create(network).await?;
-
-        // Verify multiple repositories have entries
-        assert!(app_state.relayer_repository.has_entries().await?);
-        assert!(app_state.signer_repository.has_entries().await?);
-        assert!(app_state.notification_repository.has_entries().await?);
-        assert!(app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when multiple repositories have entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_comprehensive_scenario() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Test 1: Start with all empty repositories
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false when all repositories are empty");
-
-        // Test 2: Add entry to one repository
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        app_state.relayer_repository.create(relayer).await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding one entry");
-
-        // Test 3: Clear all repositories
-        app_state.relayer_repository.drop_all_entries().await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false after clearing all repositories");
-
-        // Test 4: Add entries to different repositories and verify each time
-        let signer = create_mock_signer();
-        app_state.signer_repository.create(signer).await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding signer");
-
-        let notification = create_mock_notification("test-notification".to_string());
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding notification");
-
-        Ok(())
-    }
-
     // Helper function to create test server config with specific settings
     fn create_test_server_config_with_settings(
         storage_type: RepositoryStorageType,
@@ -1946,7 +1815,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ai_process_config_file_skips_when_redis_populated() -> Result<()> {
+    async fn test_validate_config_bootstrap_state_empty() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        assert_eq!(state, ConfigBootstrapState::Empty);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validate_config_bootstrap_state_complete_without_marker() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+
+        process_plugins(&config, &app_state).await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        assert_eq!(state, ConfigBootstrapState::Complete);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validate_config_bootstrap_state_incomplete_without_marker() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+
+        process_plugins(&config, &app_state).await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        match state {
+            ConfigBootstrapState::Incomplete { missing } => {
+                assert!(missing.iter().any(|entry| entry == "relayer repository"));
+                assert!(missing.iter().any(|entry| entry == "api key repository"));
+            }
+            other => panic!("Expected incomplete bootstrap state, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_config_file_errors_when_redis_bootstrap_state_is_incomplete() -> Result<()>
+    {
         let config = create_minimal_test_config();
         let server_config = Arc::new(create_test_server_config_with_settings(
             RepositoryStorageType::Redis,
@@ -1960,18 +1884,19 @@ mod tests {
             .create(create_mock_relayer("existing-relayer".to_string(), false))
             .await?;
 
-        process_config_file(config, server_config, &app_state).await?;
-
-        let stored_relayers = app_state.relayer_repository.list_all().await?;
-        assert_eq!(stored_relayers.len(), 1);
-        assert_eq!(stored_relayers[0].id, "existing-relayer");
+        let err = process_config_file(config, server_config, &app_state)
+            .await
+            .expect_err("partial bootstrap state should fail closed");
+        assert!(err
+            .to_string()
+            .contains("incomplete bootstrap-managed config state"));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_should_not_process_config_file_redis_storage_populated_repositories() -> Result<()>
-    {
+    async fn test_should_error_for_partial_config_file_redis_storage_populated_repositories(
+    ) -> Result<()> {
         let config = create_minimal_test_config();
         let server_config = Arc::new(create_test_server_config_with_settings(
             RepositoryStorageType::Redis,
@@ -1998,25 +1923,13 @@ mod tests {
         assert!(app_state1.relayer_repository.has_entries().await?);
         assert!(!app_state1.signer_repository.has_entries().await?);
 
-        // Process config file - should NOT process because Redis is populated
-        process_config_file(config, server_config, &app_state2).await?;
+        let err = process_config_file(config, server_config, &app_state2)
+            .await
+            .expect_err("partial bootstrap state should fail closed");
+        assert!(err
+            .to_string()
+            .contains("incomplete bootstrap-managed config state"));
 
-        let relayer_from_config = app_state2
-            .relayer_repository
-            .get_by_id("test-relayer-1".to_string())
-            .await;
-        assert!(
-            relayer_from_config.is_err(),
-            "Relayer from config should not be found"
-        );
-
-        let existing_relayer = app_state2
-            .relayer_repository
-            .get_by_id("existing-relayer".to_string())
-            .await?;
-        assert_eq!(existing_relayer.id, "existing-relayer");
-
-        // The test passes if no errors occurred, which means the decision logic worked
         Ok(())
     }
 
@@ -2084,16 +1997,17 @@ mod tests {
             create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
         let app_state = ThinData(create_test_app_state());
 
-        app_state
-            .relayer_repository
-            .create(create_mock_relayer("existing-relayer".to_string(), false))
-            .await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
 
         process_if_needed_after_lock(&config, &server_config, &app_state, &conn, prefix).await?;
 
         let stored_relayers = app_state.relayer_repository.list_all().await?;
         assert_eq!(stored_relayers.len(), 1);
-        assert_eq!(stored_relayers[0].id, "existing-relayer");
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
         assert!(is_config_processing_completed(&conn, prefix).await?);
 
         {
@@ -2126,16 +2040,18 @@ mod tests {
             create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
         let app_state = ThinData(create_test_app_state());
 
-        app_state
-            .relayer_repository
-            .create(create_mock_relayer("existing-relayer".to_string(), false))
-            .await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
         set_config_processing_in_progress(&conn, prefix).await?;
 
         process_if_needed_after_lock(&config, &server_config, &app_state, &conn, prefix).await?;
 
         let stored_relayers = app_state.relayer_repository.list_all().await?;
-        assert_eq!(stored_relayers.len(), 2);
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
         assert!(is_config_processing_completed(&conn, prefix).await?);
 
         {
