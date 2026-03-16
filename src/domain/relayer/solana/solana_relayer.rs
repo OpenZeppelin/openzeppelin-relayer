@@ -21,9 +21,9 @@ use crate::models::transaction::request::{
     SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
 };
 use crate::models::{
-    DeletePendingTransactionsResponse, JsonRpcRequest, JsonRpcResponse, NetworkRpcRequest,
-    NetworkRpcResult, NetworkTransactionRequest, RelayerStatus, RepositoryError, RpcErrorCodes,
-    SolanaRpcRequest, SolanaRpcResult, SolanaSignAndSendTransactionRequestParams,
+    DeletePendingTransactionsResponse, GetStatusOptions, JsonRpcRequest, JsonRpcResponse,
+    NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, RelayerStatus, RepositoryError,
+    RpcErrorCodes, SolanaRpcRequest, SolanaRpcResult, SolanaSignAndSendTransactionRequestParams,
     SolanaSignTransactionRequestParams, SponsoredTransactionBuildResponse,
     SponsoredTransactionQuoteResponse,
 };
@@ -1024,38 +1024,50 @@ where
             relayer_id = %self.relayer.id,
         )
     )]
-    async fn get_status(&self) -> Result<RelayerStatus, RelayerError> {
-        let address = &self.relayer.address;
-        let balance = self.provider.get_balance(address).await?;
+    async fn get_status(&self, options: GetStatusOptions) -> Result<RelayerStatus, RelayerError> {
+        let balance = if options.include_balance {
+            let address = &self.relayer.address;
+            Some((self.provider.get_balance(address).await? as u128).to_string())
+        } else {
+            None
+        };
 
-        // Use optimized count_by_status
-        let pending_transactions_count = self
-            .transaction_repository
-            .count_by_status(&self.relayer.id, PENDING_TRANSACTION_STATUSES)
-            .await
-            .map_err(RelayerError::from)?;
-
-        // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
-        let last_confirmed_transaction_timestamp = self
-            .transaction_repository
-            .find_by_status_paginated(
-                &self.relayer.id,
-                &[TransactionStatus::Confirmed],
-                PaginationQuery {
-                    page: 1,
-                    per_page: 1,
-                },
-                false, // oldest_first = false means newest first
+        let pending_transactions_count = if options.include_pending_count {
+            // Use optimized count_by_status
+            Some(
+                self.transaction_repository
+                    .count_by_status(&self.relayer.id, PENDING_TRANSACTION_STATUSES)
+                    .await
+                    .map_err(RelayerError::from)?,
             )
-            .await
-            .map_err(RelayerError::from)?
-            .items
-            .into_iter()
-            .next()
-            .and_then(|tx| tx.confirmed_at);
+        } else {
+            None
+        };
+
+        let last_confirmed_transaction_timestamp = if options.include_last_confirmed_tx {
+            // Use find_by_status_paginated to get the latest confirmed transaction (newest first)
+            self.transaction_repository
+                .find_by_status_paginated(
+                    &self.relayer.id,
+                    &[TransactionStatus::Confirmed],
+                    PaginationQuery {
+                        page: 1,
+                        per_page: 1,
+                    },
+                    false, // oldest_first = false means newest first
+                )
+                .await
+                .map_err(RelayerError::from)?
+                .items
+                .into_iter()
+                .next()
+                .and_then(|tx| tx.confirmed_at)
+        } else {
+            None
+        };
 
         Ok(RelayerStatus::Solana {
-            balance: (balance as u128).to_string(),
+            balance,
             pending_transactions_count,
             last_confirmed_transaction_timestamp,
             system_disabled: self.relayer.system_disabled,
@@ -2735,7 +2747,7 @@ mod tests {
 
         let solana_relayer = ctx.into_relayer().await;
 
-        let result = solana_relayer.get_status().await;
+        let result = solana_relayer.get_status(GetStatusOptions::default()).await;
         assert!(result.is_ok());
         let status = result.unwrap();
 
@@ -2746,9 +2758,95 @@ mod tests {
                 last_confirmed_transaction_timestamp,
                 ..
             } => {
-                assert_eq!(balance, "1000000");
-                assert_eq!(pending_transactions_count, 2);
+                assert_eq!(balance, Some("1000000".to_string()));
+                assert_eq!(pending_transactions_count, Some(2));
                 assert!(last_confirmed_transaction_timestamp.is_some());
+            }
+            _ => panic!("Expected Solana status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_skip_all_optional_fields() {
+        // No mock expectations on provider or tx_repo — they must not be called
+        let ctx = TestCtx::default();
+        let solana_relayer = ctx.into_relayer().await;
+
+        let options = GetStatusOptions {
+            include_balance: false,
+            include_pending_count: false,
+            include_last_confirmed_tx: false,
+        };
+        let result = solana_relayer.get_status(options).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                system_disabled,
+                paused,
+            } => {
+                assert_eq!(balance, None);
+                assert_eq!(pending_transactions_count, None);
+                assert_eq!(last_confirmed_transaction_timestamp, None);
+                assert!(!system_disabled);
+                assert!(!paused);
+            }
+            _ => panic!("Expected Solana status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_status_partial_options() {
+        let mut raw_provider = MockSolanaProviderTrait::new();
+        let mut tx_repo = MockTransactionRepository::new();
+
+        // Only balance requested
+        raw_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(500000) }));
+
+        // pending_count NOT requested — no count_by_status expectation
+
+        // last_confirmed_tx requested
+        tx_repo
+            .expect_find_by_status_paginated()
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
+        let ctx = TestCtx {
+            tx_repo: Arc::new(tx_repo),
+            provider: Arc::new(raw_provider),
+            ..Default::default()
+        };
+        let solana_relayer = ctx.into_relayer().await;
+
+        let options = GetStatusOptions {
+            include_balance: true,
+            include_pending_count: false,
+            include_last_confirmed_tx: true,
+        };
+        let result = solana_relayer.get_status(options).await;
+        assert!(result.is_ok());
+
+        match result.unwrap() {
+            RelayerStatus::Solana {
+                balance,
+                pending_transactions_count,
+                last_confirmed_transaction_timestamp,
+                ..
+            } => {
+                assert_eq!(balance, Some("500000".to_string()));
+                assert_eq!(pending_transactions_count, None);
+                assert_eq!(last_confirmed_transaction_timestamp, None); // no confirmed txs
             }
             _ => panic!("Expected Solana status"),
         }
@@ -2772,7 +2870,7 @@ mod tests {
 
         let solana_relayer = ctx.into_relayer().await;
 
-        let result = solana_relayer.get_status().await;
+        let result = solana_relayer.get_status(GetStatusOptions::default()).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             RelayerError::UnderlyingSolanaProvider(err) => {
@@ -2832,7 +2930,7 @@ mod tests {
 
         let solana_relayer = ctx.into_relayer().await;
 
-        let result = solana_relayer.get_status().await;
+        let result = solana_relayer.get_status(GetStatusOptions::default()).await;
         assert!(result.is_ok());
         let status = result.unwrap();
 
@@ -2843,8 +2941,8 @@ mod tests {
                 last_confirmed_transaction_timestamp,
                 ..
             } => {
-                assert_eq!(balance, "500000");
-                assert_eq!(pending_transactions_count, 0);
+                assert_eq!(balance, Some("500000".to_string()));
+                assert_eq!(pending_transactions_count, Some(0));
                 assert!(last_confirmed_transaction_timestamp.is_none());
             }
             _ => panic!("Expected Solana status"),

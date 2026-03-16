@@ -373,7 +373,10 @@ fn doc_delete_relayer() {}
         ("bearer_auth" = [])
     ),
     params(
-        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
+        ("include_balance" = Option<bool>, Query, description = "Whether to include balance (default: true)"),
+        ("include_pending_count" = Option<bool>, Query, description = "Whether to include pending transaction count (default: true)"),
+        ("include_last_confirmed_tx" = Option<bool>, Query, description = "Whether to include last confirmed transaction timestamp (default: true)")
     ),
     responses(
         (status = 200, description = "Relayer status retrieved successfully", body = ApiResponse<RelayerStatus>),
