@@ -360,6 +360,23 @@ impl<R: PluginRunnerTrait> PluginService<R> {
 
                     PluginCallResult::Handler(failure)
                 }
+                PluginError::ScriptTimeout(secs) => {
+                    let message = format!("Plugin execution timed out after {secs} seconds");
+                    tracing::warn!(
+                        timeout_secs = secs,
+                        plugin_id = %plugin.id,
+                        "Plugin execution timed out"
+                    );
+                    PluginCallResult::Handler(PluginHandlerResponse {
+                        status: 504,
+                        message,
+                        error: PluginHandlerError {
+                            code: Some("TIMEOUT".to_string()),
+                            details: None,
+                        },
+                        metadata: None,
+                    })
+                }
                 other => {
                     // This is an actual execution/infrastructure failure
                     tracing::error!("Plugin execution failed: {:?}", other);
@@ -1391,5 +1408,59 @@ mod tests {
             captured.is_none(),
             "headers_json should be None when no headers provided"
         );
+    }
+
+    #[tokio::test]
+    async fn test_call_plugin_script_timeout_returns_504() {
+        let plugin = PluginModel {
+            id: "test-plugin".to_string(),
+            path: "test-path".to_string(),
+            timeout: Duration::from_secs(3),
+            emit_logs: false,
+            emit_traces: false,
+            raw_response: false,
+            allow_get_invocation: false,
+            config: None,
+            forward_logs: false,
+        };
+        let app_state =
+            create_mock_app_state(None, None, None, None, Some(vec![plugin.clone()]), None).await;
+
+        let mut plugin_runner = MockPluginRunnerTrait::default();
+
+        plugin_runner
+            .expect_run::<MockJobProducerTrait, RelayerRepositoryStorage, TransactionRepositoryStorage, NetworkRepositoryStorage, NotificationRepositoryStorage, SignerRepositoryStorage, TransactionCounterRepositoryStorage, PluginRepositoryStorage, ApiKeyRepositoryStorage>()
+            .returning(|_, _, _, _, _, _, _, _, _, _, _, _, _| {
+                Err(PluginError::ScriptTimeout(3))
+            });
+
+        let plugin_service = PluginService::<MockPluginRunnerTrait>::new(plugin_runner);
+        let outcome = plugin_service
+            .call_plugin(
+                plugin,
+                PluginCallRequest {
+                    params: serde_json::Value::Null,
+                    headers: None,
+                    route: None,
+                    method: Some("POST".to_string()),
+                    query: None,
+                },
+                Arc::new(web::ThinData(app_state)),
+            )
+            .await;
+
+        match outcome {
+            PluginCallResult::Handler(response) => {
+                assert_eq!(response.status, 504);
+                assert_eq!(
+                    response.message,
+                    "Plugin execution timed out after 3 seconds"
+                );
+                assert_eq!(response.error.code, Some("TIMEOUT".to_string()));
+                assert!(response.error.details.is_none());
+                assert!(response.metadata.is_none());
+            }
+            _ => panic!("Expected Handler result with 504 status for ScriptTimeout"),
+        }
     }
 }

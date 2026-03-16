@@ -168,7 +168,6 @@ Per-request socket at `/tmp/relayer-shared-{uuid}.sock` for plugin API calls.
 |----------|---------|-------------|
 | `PLUGIN_POOL_WORKERS` | 0 (auto) | Rust queue worker threads |
 | `PLUGIN_POOL_CONNECT_RETRIES` | 15 | Connection retry attempts |
-| `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | Per-request timeout |
 | `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Queue wait timeout (auto-scales to 1000) |
 | `PLUGIN_POOL_IDLE_TIMEOUT` | 60000 | Worker idle timeout (ms) |
 | `PLUGIN_POOL_SOCKET_BACKLOG` | max(concurrency, 2048) | Socket backlog size |

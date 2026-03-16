@@ -527,10 +527,12 @@ mod signed_xdr_tests {
 
             // Verify it's a fee-bump envelope
             if let Ok(envelope) = envelope_result {
-                assert!(
-                    matches!(envelope, TransactionEnvelope::TxFeeBump(_)),
-                    "Should be a fee-bump envelope"
-                );
+                match envelope {
+                    TransactionEnvelope::TxFeeBump(fee_bump) => {
+                        assert_eq!(fee_bump.tx.fee, 2_000_000);
+                    }
+                    _ => panic!("Should be a fee-bump envelope"),
+                }
             }
         } else {
             panic!("Expected Stellar transaction data");

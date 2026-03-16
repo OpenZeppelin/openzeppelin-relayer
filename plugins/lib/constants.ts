@@ -28,8 +28,16 @@ export const DEFAULT_POOL_IDLE_TIMEOUT_MS = 60000;
 /** Socket backlog for high concurrency */
 export const DEFAULT_POOL_SOCKET_BACKLOG = 2048;
 
-/** Default execution timeout (ms) */
-export const DEFAULT_POOL_EXECUTION_TIMEOUT_MS = 30000;
+/**
+ * Per-API-call socket timeout (ms). This is the timeout for individual
+ * relayer API calls within a plugin (e.g., sendTransaction, getTransaction).
+ * Short timeout since it's just a socket round-trip to the Rust relayer.
+ */
+export const SOCKET_REQUEST_TIMEOUT_MS = 30000; // 30 seconds
 
-/** Default per-request timeout for socket communication (ms) */
-export const DEFAULT_SOCKET_REQUEST_TIMEOUT_MS = 30000;
+/**
+ * Default plugin execution timeout (ms). Matches DEFAULT_PLUGIN_TIMEOUT_SECONDS
+ * (300s) in Rust. In production, Rust sends the per-plugin timeout with each request,
+ * so this is only a fallback for standalone testing.
+ */
+export const DEFAULT_PLUGIN_TIMEOUT_MS = 300000; // 5 minutes
