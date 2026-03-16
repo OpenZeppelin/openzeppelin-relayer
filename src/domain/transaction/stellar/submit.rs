@@ -1044,11 +1044,19 @@ mod tests {
             assert!(returned_tx.sent_at.is_some());
 
             // status check sees stale Sent tx and re-enqueues submit job.
-            // Both created_at and sent_at must exceed the base resubmit interval (15s)
-            // for the backoff logic to trigger.
-            let stale_time = (Utc::now() - chrono::Duration::seconds(16)).to_rfc3339();
-            returned_tx.created_at = stale_time.clone();
-            returned_tx.sent_at = Some(stale_time);
+            // Both created_at and sent_at must exceed the base resubmit interval
+            // for the backoff logic to trigger. created_at is set earlier than sent_at
+            // to match real-world invariants (transaction is created before being sent).
+            use crate::constants::STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS;
+            let buffer = 2;
+            let created_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + buffer))
+            .to_rfc3339();
+            let sent_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + 1))
+            .to_rfc3339();
+            returned_tx.created_at = created_at;
+            returned_tx.sent_at = Some(sent_at);
 
             let mut status_mocks = default_test_mocks();
             status_mocks
