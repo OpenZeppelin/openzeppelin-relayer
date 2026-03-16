@@ -7,6 +7,8 @@ rust-version = "1.88"         #MSRV
 [features]
 default = []
 integration-tests = []
+redis-tls-native = ["redis/tls-native-tls", "redis/tokio-native-tls-comp"]
+redis-tls-rustls = ["redis/tls-rustls", "redis/tokio-rustls-comp"]
 
 [profile.release]
 opt-level = 0

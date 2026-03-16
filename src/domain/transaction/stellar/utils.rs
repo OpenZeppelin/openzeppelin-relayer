@@ -13,7 +13,7 @@ use soroban_rs::xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, ChangeTrustAsset, ContractDataEntry, ContractId, Hash,
     LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation, Preconditions,
     PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint,
-    TransactionEnvelope, TransactionMeta, Uint256, VecM,
+    TransactionEnvelope, TransactionMeta, TransactionResult, Uint256, VecM,
 };
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
@@ -266,11 +266,38 @@ pub fn i64_from_u64(value: u64) -> Result<i64, RelayerError> {
     i64::try_from(value).map_err(|_| RelayerError::ProviderError("u64→i64 overflow".into()))
 }
 
+/// Decodes a base64-encoded `TransactionResult` XDR into a human-readable result code name.
+///
+/// Returns the variant name of the `TransactionResultResult` (e.g., `"TxBadSeq"`,
+/// `"TxInsufficientBalance"`, `"TxFailed"`). Returns `None` if the XDR cannot be decoded.
+pub fn decode_tx_result_code(error_result_xdr: &str) -> Option<String> {
+    TransactionResult::from_xdr_base64(error_result_xdr, Limits::none())
+        .ok()
+        .map(|r| r.result.name().to_string())
+}
+
 /// Detects if an error is due to a bad sequence number.
-/// Returns true if the error message contains indicators of sequence number mismatch.
+/// Checks both string matching on the error message and XDR decoding when available.
 pub fn is_bad_sequence_error(error_msg: &str) -> bool {
     let error_lower = error_msg.to_lowercase();
     error_lower.contains("txbadseq")
+}
+
+/// Decodes a Stellar `TransactionResult` XDR payload and returns the result code name.
+///
+/// The RPC `sendTransaction` ERROR response exposes `errorResultXdr` as base64-encoded XDR,
+/// so callers must decode it before checking for specific result codes.
+pub fn decode_transaction_result_code(xdr_base64: &str) -> Option<String> {
+    use soroban_rs::xdr::{Limits, TransactionResult};
+
+    let result = TransactionResult::from_xdr_base64(xdr_base64, Limits::none()).ok()?;
+    Some(result.result.name().to_string())
+}
+
+/// Detects if a decoded transaction result code indicates an insufficient fee.
+pub fn is_insufficient_fee_error(result_code: &str) -> bool {
+    result_code.eq_ignore_ascii_case("TxInsufficientFee")
+        || result_code.eq_ignore_ascii_case("tx_insufficient_fee")
 }
 
 /// Fetches the current sequence number from the blockchain and calculates the next usable sequence.
@@ -1455,6 +1482,81 @@ mod tests {
             assert!(!is_bad_sequence_error("tx_insufficient_fee"));
             assert!(!is_bad_sequence_error("bad_auth"));
             assert!(!is_bad_sequence_error(""));
+        }
+    }
+
+    mod decode_tx_result_code_tests {
+        use super::*;
+        use soroban_rs::xdr::{TransactionResult, TransactionResultResult, WriteXdr};
+
+        #[test]
+        fn test_decodes_tx_bad_seq() {
+            let result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxBadSeq,
+                ext: soroban_rs::xdr::TransactionResultExt::V0,
+            };
+            let xdr = result.to_xdr_base64(Limits::none()).unwrap();
+            assert_eq!(decode_tx_result_code(&xdr), Some("TxBadSeq".to_string()));
+        }
+
+        #[test]
+        fn test_decodes_tx_insufficient_balance() {
+            let result = TransactionResult {
+                fee_charged: 100,
+                result: TransactionResultResult::TxInsufficientBalance,
+                ext: soroban_rs::xdr::TransactionResultExt::V0,
+            };
+            let xdr = result.to_xdr_base64(Limits::none()).unwrap();
+            assert_eq!(
+                decode_tx_result_code(&xdr),
+                Some("TxInsufficientBalance".to_string())
+            );
+        }
+
+        #[test]
+        fn test_returns_none_for_invalid_xdr() {
+            assert_eq!(decode_tx_result_code("not-valid-xdr"), None);
+        }
+
+        #[test]
+        fn test_returns_none_for_empty_string() {
+            assert_eq!(decode_tx_result_code(""), None);
+        }
+    }
+
+    mod is_insufficient_fee_error_tests {
+        use super::*;
+
+        #[test]
+        fn test_detects_txinsufficientfee() {
+            assert!(is_insufficient_fee_error("TxInsufficientFee"));
+            assert!(is_insufficient_fee_error("txinsufficientfee"));
+            assert!(is_insufficient_fee_error("TXINSUFFICIENTFEE"));
+        }
+
+        #[test]
+        fn test_returns_false_for_other_errors() {
+            assert!(!is_insufficient_fee_error("network timeout"));
+            assert!(!is_insufficient_fee_error("TxBadSeq"));
+            assert!(!is_insufficient_fee_error("TxInsufficientBalance"));
+            assert!(!is_insufficient_fee_error("TxBadAuth"));
+            assert!(!is_insufficient_fee_error(""));
+        }
+    }
+
+    mod decode_transaction_result_code_tests {
+        use super::*;
+
+        #[test]
+        fn test_decodes_insufficient_fee_result_xdr() {
+            let result_code = decode_transaction_result_code("AAAAAAAAY/n////3AAAAAA==").unwrap();
+            assert_eq!(result_code, "TxInsufficientFee");
+        }
+
+        #[test]
+        fn test_returns_none_for_invalid_xdr() {
+            assert!(decode_transaction_result_code("not-base64").is_none());
         }
     }
 

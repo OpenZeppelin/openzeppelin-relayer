@@ -1,7 +1,8 @@
 {
-  "name": "channels-plugin-example",
+  "name": "channels-x402-plugin-example",
   "version": "1.0.0",
-  "description": "Example for Channels plugin",
+  "private": true,
+  "description": "Example for Channels plugin with X402",
   "main": "index.js",
   "scripts": {
     "test": "jest",
@@ -13,7 +14,7 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "@openzeppelin/relayer-plugin-channels": "^0.17.0",
+    "@openzeppelin/relayer-plugin-channels": "^0.16.0",
     "@openzeppelin/relayer-sdk": "^1.10.0"
   },
   "devDependencies": {

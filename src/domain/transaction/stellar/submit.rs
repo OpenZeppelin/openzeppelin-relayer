@@ -5,12 +5,18 @@
 use chrono::Utc;
 use tracing::{debug, info, warn};
 
-use super::{is_final_state, utils::is_bad_sequence_error, StellarRelayerTransaction};
+use super::{
+    is_final_state,
+    utils::{decode_transaction_result_code, is_bad_sequence_error, is_insufficient_fee_error},
+    StellarRelayerTransaction,
+};
 use crate::{
+    constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
+    metrics::STELLAR_SUBMISSION_FAILURES,
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionMetadata,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{
@@ -84,7 +90,8 @@ where
     /// - DUPLICATE: Transaction already submitted (treat as success)
     /// - TRY_AGAIN_LATER: Network congested but tx is valid — update sent_at and return Ok
     ///   (status checker will retry with exponential backoff)
-    /// - ERROR: Transaction validation failed, mark as failed
+    /// - ERROR: Transaction validation failed, mark as failed, except for insufficient fee errors
+    ///   (insufficient fee errors are treated as TRY_AGAIN_LATER)
     async fn submit_core(
         &self,
         tx: TransactionRepoModel,
@@ -99,7 +106,12 @@ where
             .provider()
             .send_transaction_with_status(&tx_envelope)
             .await
-            .map_err(TransactionError::from)?;
+            .map_err(|e| {
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["provider_error", "n/a"])
+                    .inc();
+                TransactionError::from(e)
+            })?;
 
         // Handle status codes from the RPC response
         match response.status.as_str() {
@@ -178,12 +190,75 @@ where
                 let error_detail = response
                     .error_result_xdr
                     .unwrap_or_else(|| "No error details provided".to_string());
+                let decoded_result_code = decode_transaction_result_code(&error_detail);
+
+                // Insufficient fee is a transient condition (network fee spike).
+                // Treat like TRY_AGAIN_LATER: update sent_at and let the status
+                // checker retry with exponential backoff.
+                if decoded_result_code
+                    .as_deref()
+                    .is_some_and(is_insufficient_fee_error)
+                {
+                    let insufficient_fee_retries = tx
+                        .metadata
+                        .as_ref()
+                        .map_or(0, |metadata| metadata.insufficient_fee_retries)
+                        .saturating_add(1);
+
+                    if insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                        STELLAR_SUBMISSION_FAILURES
+                            .with_label_values(&["error", "tx_insufficient_fee"])
+                            .inc();
+                        return Err(TransactionError::UnexpectedError(format!(
+                            "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+                        )));
+                    }
+
+                    debug!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        status = ?tx.status,
+                        insufficient_fee_retries,
+                        result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
+                        "ERROR with insufficient fee — status checker will retry"
+                    );
+                    let update_req = TransactionUpdateRequest {
+                        sent_at: Some(Utc::now().to_rfc3339()),
+                        metadata: Some(TransactionMetadata {
+                            consecutive_failures: tx
+                                .metadata
+                                .as_ref()
+                                .map_or(0, |metadata| metadata.consecutive_failures),
+                            total_failures: tx
+                                .metadata
+                                .as_ref()
+                                .map_or(0, |metadata| metadata.total_failures),
+                            insufficient_fee_retries,
+                        }),
+                        ..Default::default()
+                    };
+                    let updated_tx = self
+                        .transaction_repository()
+                        .partial_update(tx.id.clone(), update_req)
+                        .await?;
+                    return Ok(updated_tx);
+                }
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&[
+                        "error",
+                        decoded_result_code.as_deref().unwrap_or("unknown"),
+                    ])
+                    .inc();
                 Err(TransactionError::UnexpectedError(format!(
-                    "Transaction submission error: {error_detail}"
+                    "Transaction submission error: {}",
+                    decoded_result_code.unwrap_or(error_detail)
                 )))
             }
             unknown => {
                 // Unknown status - treat as error
+                STELLAR_SUBMISSION_FAILURES
+                    .with_label_values(&["unknown_status", "n/a"])
+                    .inc();
                 warn!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
@@ -1044,7 +1119,7 @@ mod tests {
                 "ERROR",
                 "0101010101010101010101010101010101010101010101010101010101010101",
             );
-            response.error_result_xdr = Some("AAAAAAAAAGT////7AAAAAA==".to_string());
+            response.error_result_xdr = Some("not-base64".to_string());
             mocks
                 .provider
                 .expect_send_transaction_with_status()
@@ -1096,6 +1171,209 @@ mod tests {
             let res = handler.submit_transaction_impl(tx).await;
 
             // Transaction marked as failed — no error propagated
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_keeps_tx_alive() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns ERROR status with insufficient fee XDR
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // partial_update is called to refresh sent_at — status should NOT change
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.sent_at.is_some()
+                        && upd.status.is_none()
+                        && upd
+                            .metadata
+                            .as_ref()
+                            .is_some_and(|metadata| metadata.insufficient_fee_retries == 1)
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = upd.metadata;
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            // Transaction stays alive — status checker will retry
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(1)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_exceeding_retry_limit_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| {
+                    upd.status == Some(TransactionStatus::Failed)
+                        && upd.status_reason.as_ref().is_some_and(|reason| {
+                            reason.contains("insufficient fee retry limit exceeded (2)")
+                        })
+                })
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.status_reason = upd.status_reason;
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
+                ..Default::default()
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let failed_tx = res.unwrap();
+            assert_eq!(failed_tx.status, TransactionStatus::Failed);
+            assert!(
+                failed_tx.status_reason.as_ref().is_some_and(
+                    |reason| reason.contains("insufficient fee retry limit exceeded (2)")
+                )
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_error_non_fee_still_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns ERROR status with a non-fee error
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAA/v////6AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // Mock finalize_transaction_state for failure handling
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Mock notification for failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Mock find_by_status_paginated for enqueue_next_pending_transaction
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(move |_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            // Non-fee ERROR still marks as failed
             let failed_tx = res.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }

@@ -145,6 +145,23 @@ use tracing::{debug, info, warn};
 
 use super::PluginError;
 
+/// Log socket write errors at the appropriate level.
+/// Broken pipe and connection reset are expected when a plugin times out
+/// while an RPC call is still in-flight, so they're logged at DEBUG.
+fn log_socket_write_error(context: &str, error: &std::io::Error) {
+    match error.kind() {
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset => {
+            debug!(
+                "Failed to write {}: {} (plugin likely timed out)",
+                context, error
+            );
+        }
+        _ => {
+            warn!("Failed to write {}: {}", context, error);
+        }
+    }
+}
+
 /// Unified message protocol for bidirectional communication
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -654,12 +671,12 @@ impl SharedSocketService {
                             + "\n";
 
                         if let Err(e) = w.write_all(response_str.as_bytes()).await {
-                            warn!("Failed to write API response: {}", e);
+                            log_socket_write_error("API response", &e);
                             break;
                         }
 
                         if let Err(e) = w.flush().await {
-                            warn!("Failed to flush API response: {}", e);
+                            log_socket_write_error("API response flush", &e);
                             break;
                         }
                     }
@@ -720,12 +737,12 @@ impl SharedSocketService {
                         + "\n";
 
                     if let Err(e) = w.write_all(response_str.as_bytes()).await {
-                        warn!("Failed to write response: {}", e);
+                        log_socket_write_error("response", &e);
                         break;
                     }
 
                     if let Err(e) = w.flush().await {
-                        warn!("Failed to flush response: {}", e);
+                        log_socket_write_error("response flush", &e);
                         break;
                     }
                 } else {
@@ -2180,5 +2197,46 @@ mod tests {
 
         // After guards are consumed via into_receiver, counter should be decremented
         assert_eq!(service.registered_executions_count().await, 0);
+    }
+
+    // =========================================================================
+    // log_socket_write_error tests
+    // =========================================================================
+
+    #[test]
+    fn test_log_socket_write_error_broken_pipe_does_not_panic() {
+        // BrokenPipe is expected during timeout teardown → should log at DEBUG, not WARN
+        let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Broken pipe");
+        log_socket_write_error("API response", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_connection_reset_does_not_panic() {
+        // ConnectionReset is expected during timeout teardown → should log at DEBUG, not WARN
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Connection reset");
+        log_socket_write_error("API response flush", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_other_errors_do_not_panic() {
+        // Other IO errors (e.g., PermissionDenied) → should log at WARN
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Permission denied");
+        log_socket_write_error("response", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_unexpected_eof() {
+        let err = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected eof");
+        log_socket_write_error("response flush", &err);
+    }
+
+    #[test]
+    fn test_log_socket_write_error_context_strings() {
+        // Verify all 4 context strings used in production don't cause issues
+        let err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "os error 32");
+        log_socket_write_error("API response", &err);
+        log_socket_write_error("API response flush", &err);
+        log_socket_write_error("response", &err);
+        log_socket_write_error("response flush", &err);
     }
 }

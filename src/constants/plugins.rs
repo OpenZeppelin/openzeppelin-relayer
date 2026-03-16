@@ -16,6 +16,17 @@
 /// Override in config.json per-plugin: `"timeout": 60`
 pub const DEFAULT_PLUGIN_TIMEOUT_SECONDS: u64 = 300; // 5 minutes
 
+/// Extra seconds added to the Rust-side timeout so both Node.js timeout layers
+/// fire first. The timeout hierarchy for a plugin with timeout T is:
+///   1. Handler (pool-executor.ts):    T      — structured TIMEOUT response
+///   2. Worker-pool safety net:        T + 2s — catches stuck workers
+///   3. Rust backstop (this buffer):   T + 4s — catches hung Node.js process
+pub const PLUGIN_TIMEOUT_BUFFER_SECONDS: u64 = 4;
+
+/// Timeout for admin pool requests (precompile, cache, invalidate) in seconds.
+/// These are fast operations that don't need the full plugin timeout.
+pub const ADMIN_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 // =============================================================================
 // Plugin Pool Server Configuration
 // These constants are the source of truth. The TypeScript pool-server.ts and
@@ -60,14 +71,6 @@ pub const DEFAULT_POOL_IDLE_TIMEOUT_MS: u64 = 60000; // 60 seconds
 /// Socket connection backlog for the pool server.
 /// Env: PLUGIN_POOL_SOCKET_BACKLOG (internal, rarely needs tuning)
 pub const DEFAULT_POOL_SOCKET_BACKLOG: u32 = 2048;
-
-/// Plugin execution timeout within the pool (milliseconds).
-/// Internal constant - use per-plugin `timeout` in config.json instead.
-pub const DEFAULT_POOL_EXECUTION_TIMEOUT_MS: u64 = 30000; // 30 seconds
-
-/// Timeout for individual pool requests (seconds).
-/// Env: PLUGIN_POOL_REQUEST_TIMEOUT_SECS
-pub const DEFAULT_POOL_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// Maximum queued requests before rejection.
 /// Env: PLUGIN_POOL_MAX_QUEUE_SIZE

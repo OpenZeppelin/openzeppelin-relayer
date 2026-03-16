@@ -1,6 +1,20 @@
 //! This module provides functionality for processing configuration files and populating
 //! repositories.
+//!
+//! ## Distributed Locking for Config Processing
+//!
+//! When multiple instances of the relayer service start simultaneously with Redis storage
+//! and `DISTRIBUTED_MODE` is enabled, this module uses distributed locking to coordinate
+//! config processing and prevent race conditions:
+//!
+//! - **Global lock**: A single lock is used for the entire config processing,
+//!   ensuring only one instance processes the config at a time.
+//! - **Post-lock population check**: After acquiring the lock, checks if Redis is already
+//!   populated (by another instance that held the lock first), and skips if so.
+//! - **Single-instance mode**: When `DISTRIBUTED_MODE` is disabled (default) or using
+//!   in-memory storage, locking is skipped since coordination is not needed.
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{
     config::{Config, RepositoryStorageType, ServerConfig},
@@ -15,10 +29,26 @@ use crate::{
         Repository, TransactionCounterTrait, TransactionRepository,
     },
     services::signer::{Signer as SignerService, SignerFactory},
+    utils::{
+        is_config_processing_completed, is_config_processing_in_progress, poll_until,
+        set_config_processing_completed, set_config_processing_in_progress, DistributedLock,
+        BOOTSTRAP_LOCK_TTL_SECS, LOCK_POLL_INTERVAL_MS, LOCK_WAIT_MAX_SECS,
+    },
 };
 use color_eyre::{eyre::WrapErr, Report, Result};
+use deadpool_redis::Pool;
 use futures::future::try_join_all;
-use tracing::info;
+use tracing::{info, warn};
+
+/// Lock name for config processing lock.
+const CONFIG_PROCESSING_LOCK_NAME: &str = "config_processing";
+
+#[derive(Debug, PartialEq, Eq)]
+enum ConfigBootstrapState {
+    Empty,
+    Complete,
+    Incomplete { missing: Vec<String> },
+}
 
 async fn process_api_key<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     server_config: &ServerConfig,
@@ -280,13 +310,10 @@ where
     Ok(())
 }
 
-/// Check if Redis database is populated with existing configuration data.
-///
-/// This function checks if any of the main repository list keys exist in Redis.
-/// If they exist, it means Redis already contains data from a previous configuration load.
-async fn is_redis_populated<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+async fn validate_config_bootstrap_state<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
     app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<bool>
+) -> Result<ConfigBootstrapState>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -298,31 +325,66 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    if app_state.relayer_repository.has_entries().await? {
-        return Ok(true);
+    let mut missing = Vec::new();
+    let relayer_has_entries = app_state.relayer_repository.has_entries().await?;
+    let signer_has_entries = app_state.signer_repository.has_entries().await?;
+    let notification_has_entries = app_state.notification_repository.has_entries().await?;
+    let network_has_entries = app_state.network_repository.has_entries().await?;
+    let plugin_has_entries = app_state.plugin_repository.has_entries().await?;
+    let api_key_has_entries = app_state.api_key_repository.has_entries().await?;
+
+    let has_any_entries = relayer_has_entries
+        || signer_has_entries
+        || notification_has_entries
+        || network_has_entries
+        || plugin_has_entries
+        || api_key_has_entries;
+
+    if !has_any_entries {
+        return Ok(ConfigBootstrapState::Empty);
     }
 
-    if app_state.transaction_repository.has_entries().await? {
-        return Ok(true);
+    if config_file
+        .plugins
+        .as_ref()
+        .is_some_and(|plugins| !plugins.is_empty())
+        && !plugin_has_entries
+    {
+        missing.push("plugin repository".to_string());
     }
 
-    if app_state.signer_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.signers.is_empty() && !signer_has_entries {
+        missing.push("signer repository".to_string());
     }
 
-    if app_state.notification_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.notifications.is_empty() && !notification_has_entries {
+        missing.push("notification repository".to_string());
     }
 
-    if app_state.network_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.networks.is_empty() && !network_has_entries {
+        missing.push("network repository".to_string());
     }
 
-    if app_state.plugin_repository.has_entries().await? {
-        return Ok(true);
+    if !config_file.relayers.is_empty() && !relayer_has_entries {
+        missing.push("relayer repository".to_string());
     }
 
-    Ok(false)
+    if !api_key_has_entries {
+        missing.push("api key repository".to_string());
+    }
+
+    if missing.is_empty() {
+        Ok(ConfigBootstrapState::Complete)
+    } else {
+        Ok(ConfigBootstrapState::Incomplete { missing })
+    }
+}
+
+fn format_incomplete_bootstrap_error(missing: &[String]) -> Report {
+    eyre::eyre!(
+        "Redis contains incomplete bootstrap-managed config state without completion marker (missing: {})",
+        missing.join(", ")
+    )
 }
 
 /// Process a complete configuration file by initializing all repositories.
@@ -334,6 +396,10 @@ where
 /// 4. Process networks
 /// 5. Process relayers
 /// 6. Process API key
+///
+/// When using Redis storage with `DISTRIBUTED_MODE` enabled, this function uses distributed
+/// locking to prevent race conditions when multiple instances start simultaneously
+/// (especially with `RESET_STORAGE_ON_START=true`).
 pub async fn process_config_file<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     config_file: Config,
     server_config: Arc<ServerConfig>,
@@ -350,18 +416,332 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    let should_process_config_file = match server_config.repository_storage_type {
-        RepositoryStorageType::InMemory => true,
-        RepositoryStorageType::Redis => {
-            server_config.reset_storage_on_start || !is_redis_populated(app_state).await?
+    match server_config.repository_storage_type {
+        RepositoryStorageType::InMemory => {
+            // In-memory mode: no locking needed, process directly
+            execute_config_processing(&config_file, &server_config, app_state).await
         }
-    };
+        RepositoryStorageType::Redis => {
+            // Check if distributed locking is needed
+            let use_lock = ServerConfig::get_distributed_mode();
+            let connection_info = app_state.relayer_repository.connection_info();
 
-    if !should_process_config_file {
-        info!("Skipping config file processing");
-        return Ok(());
+            match (use_lock, connection_info) {
+                (true, Some((conn, prefix))) => {
+                    // Distributed mode: use locking to coordinate across instances
+                    coordinate_config_with_lock(
+                        &config_file,
+                        &server_config,
+                        app_state,
+                        &conn,
+                        &prefix,
+                    )
+                    .await
+                }
+                _ => {
+                    // Single-instance mode or no connection info: validate state directly.
+                    if server_config.reset_storage_on_start {
+                        return execute_config_processing(&config_file, &server_config, app_state)
+                            .await;
+                    }
+
+                    match validate_config_bootstrap_state(&config_file, app_state).await? {
+                        ConfigBootstrapState::Empty => {
+                            execute_config_processing(&config_file, &server_config, app_state).await
+                        }
+                        ConfigBootstrapState::Complete => {
+                            info!(
+                                "Skipping config file processing - bootstrap-managed Redis state is complete"
+                            );
+                            Ok(())
+                        }
+                        ConfigBootstrapState::Incomplete { missing } => {
+                            Err(format_incomplete_bootstrap_error(&missing))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Process config file with distributed locking for Redis storage.
+///
+/// Flow:
+/// 1. Try to acquire global lock for config processing
+/// 2. If lock acquired: check for an explicit completion marker, process if needed
+/// 3. If lock held: wait for the completion marker to appear
+/// 4. If wait times out: recheck state and attempt takeover after lock expiry
+async fn coordinate_config_with_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            // We got the lock - check if we need to process
+            info!("Acquired config processing lock");
+
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
+
+            drop(guard); // Release lock
+            result
+        }
+        Ok(None) => {
+            // Lock held by another instance - wait for it to complete
+            info!("Another instance is processing config, waiting for completion");
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                return Ok(());
+            }
+
+            warn!("Timeout waiting for config processing, rechecking state");
+
+            if is_config_processing_completed(conn, prefix)
+                .await
+                .unwrap_or(false)
+            {
+                info!("Config processing completed during timeout window");
+                return Ok(());
+            }
+
+            recover_config_processing_after_timeout(
+                config_file,
+                server_config,
+                app_state,
+                conn,
+                prefix,
+            )
+            .await
+        }
+        Err(e) => Err(eyre::eyre!(
+            "Failed to acquire config processing lock in distributed mode: {}",
+            e
+        )),
+    }
+}
+
+/// Process config after successfully acquiring the lock.
+///
+/// Checks if config processing was already completed and only processes if needed.
+async fn process_if_needed_after_lock<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let already_completed = is_config_processing_completed(conn, prefix).await?;
+    let in_progress = is_config_processing_in_progress(conn, prefix).await?;
+    let bootstrap_state = validate_config_bootstrap_state(config_file, app_state).await?;
+
+    if server_config.reset_storage_on_start {
+        // With reset flag: always reset and process (we have the lock)
+        execute_config_processing_with_marker(config_file, server_config, app_state, conn, prefix)
+            .await
+    } else if already_completed {
+        // No reset flag and already completed: skip
+        info!("Config processing already completed, skipping config file processing");
+        Ok(())
+    } else {
+        match bootstrap_state {
+            ConfigBootstrapState::Empty => {
+                execute_config_processing_with_marker(
+                    config_file,
+                    server_config,
+                    app_state,
+                    conn,
+                    prefix,
+                )
+                .await
+            }
+            ConfigBootstrapState::Complete if !in_progress => {
+                info!(
+                    "Bootstrap-managed Redis state is complete without marker, backfilling completion marker"
+                );
+                set_config_processing_completed(conn, prefix).await?;
+                Ok(())
+            }
+            ConfigBootstrapState::Complete => {
+                info!("Bootstrap-managed Redis state is complete, restoring completion marker");
+                set_config_processing_completed(conn, prefix).await?;
+                Ok(())
+            }
+            ConfigBootstrapState::Incomplete { missing } => {
+                Err(format_incomplete_bootstrap_error(&missing))
+            }
+        }
+    }
+}
+
+/// Waits for another instance to complete config processing.
+///
+/// Polls periodically until the explicit completion marker is set or timeout is reached.
+async fn wait_for_config_processing_complete(conn: &Arc<Pool>, prefix: &str) -> Result<bool> {
+    let max_wait = Duration::from_secs(LOCK_WAIT_MAX_SECS);
+    let poll_interval = Duration::from_millis(LOCK_POLL_INTERVAL_MS);
+
+    let conn = conn.clone();
+    let prefix = prefix.to_string();
+
+    let completed = poll_until(
+        || is_config_processing_completed(&conn, &prefix),
+        max_wait,
+        poll_interval,
+        "config processing",
+    )
+    .await?;
+
+    Ok(completed)
+}
+
+/// Attempts to recover config processing after a wait timeout.
+///
+/// This is the config-processing analogue to relayer initialization recovery:
+/// if the original lock holder died after setting the in-progress marker but
+/// before completion, a waiting instance should take over once the lock TTL
+/// expires instead of failing the whole rollout.
+async fn recover_config_processing_after_timeout<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+    let recovery_lock = DistributedLock::new(
+        conn.clone(),
+        &lock_key,
+        Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+    );
+
+    match recovery_lock.try_acquire().await {
+        Ok(Some(guard)) => {
+            warn!("Previous config-processing lock holder appears to have crashed, taking over");
+            let result =
+                process_if_needed_after_lock(config_file, server_config, app_state, conn, prefix)
+                    .await;
+            drop(guard);
+            result
+        }
+        Ok(None) => {
+            // Another instance may still be processing config.
+            // Wait one more bounded period for the explicit completion marker
+            // before giving up on this instance.
+            warn!("Config-processing lock still held after timeout, waiting again for completion");
+            let completed = wait_for_config_processing_complete(conn, prefix).await?;
+
+            if completed {
+                info!("Config processing completed by another instance during extended wait");
+                Ok(())
+            } else {
+                Err(eyre::eyre!(
+                    "Timed out waiting for config processing and could not acquire recovery lock"
+                ))
+            }
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to acquire recovery lock for config processing"
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Internal function that performs the actual config processing.
+async fn execute_config_processing_with_marker<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+    conn: &Arc<Pool>,
+    prefix: &str,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    set_config_processing_in_progress(conn, prefix).await?;
+
+    let result = execute_config_processing(config_file, server_config, app_state).await;
+
+    if result.is_ok() {
+        set_config_processing_completed(conn, prefix).await?;
     }
 
+    result
+}
+
+/// Internal function that performs the actual config processing work.
+async fn execute_config_processing<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    config_file: &Config,
+    server_config: &ServerConfig,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
     if server_config.reset_storage_on_start {
         info!("Resetting storage on start due to server config flag RESET_STORAGE_ON_START = true");
         app_state.relayer_repository.drop_all_entries().await?;
@@ -373,15 +753,14 @@ where
         app_state.api_key_repository.drop_all_entries().await?;
     }
 
-    if should_process_config_file {
-        info!("Processing config file");
-        process_plugins(&config_file, app_state).await?;
-        process_signers(&config_file, app_state).await?;
-        process_notifications(&config_file, app_state).await?;
-        process_networks(&config_file, app_state).await?;
-        process_relayers(&config_file, app_state).await?;
-        process_api_key(&server_config, app_state).await?;
-    }
+    info!("Processing config file");
+    process_plugins(config_file, app_state).await?;
+    process_signers(config_file, app_state).await?;
+    process_notifications(config_file, app_state).await?;
+    process_networks(config_file, app_state).await?;
+    process_relayers(config_file, app_state).await?;
+    process_api_key(server_config, app_state).await?;
+
     Ok(())
 }
 
@@ -409,8 +788,7 @@ mod tests {
             TransactionRepositoryStorage,
         },
         utils::mocks::mockutils::{
-            create_mock_network, create_mock_notification, create_mock_relayer, create_mock_signer,
-            create_test_server_config,
+            create_mock_relayer, create_mock_signer, create_test_server_config,
         },
     };
     use actix_web::web::ThinData;
@@ -1327,194 +1705,6 @@ mod tests {
         assert_eq!(model.id, "gcp-kms-signer");
     }
 
-    #[tokio::test]
-    async fn test_is_redis_populated_empty_repositories() -> Result<()> {
-        // Create fresh app state with all empty repositories
-        let app_state = ThinData(create_test_app_state());
-
-        // All repositories should be empty
-        assert!(!app_state.relayer_repository.has_entries().await?);
-        assert!(!app_state.transaction_repository.has_entries().await?);
-        assert!(!app_state.signer_repository.has_entries().await?);
-        assert!(!app_state.notification_repository.has_entries().await?);
-        assert!(!app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return false when all repositories are empty
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false when all repositories are empty");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_relayer_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a relayer to the repository
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        app_state.relayer_repository.create(relayer).await?;
-
-        // Verify relayer repository has entries
-        assert!(app_state.relayer_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when relayer repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_transaction_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a transaction to the repository
-        let transaction = TransactionRepoModel::default();
-        app_state.transaction_repository.create(transaction).await?;
-
-        // Verify transaction repository has entries
-        assert!(app_state.transaction_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when transaction repository has entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_signer_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a signer to the repository
-        let signer = create_mock_signer();
-        app_state.signer_repository.create(signer).await?;
-
-        // Verify signer repository has entries
-        assert!(app_state.signer_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when signer repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_notification_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a notification to the repository
-        let notification = create_mock_notification("test-notification".to_string());
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-
-        // Verify notification repository has entries
-        assert!(app_state.notification_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when notification repository has entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_network_repository_has_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add a network to the repository
-        let network = create_mock_network();
-        app_state.network_repository.create(network).await?;
-
-        // Verify network repository has entries
-        assert!(app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true when network repository has entries");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_multiple_repositories_have_entries() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Add entries to multiple repositories
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        let signer = create_mock_signer();
-        let notification = create_mock_notification("test-notification".to_string());
-        let network = create_mock_network();
-
-        app_state.relayer_repository.create(relayer).await?;
-        app_state.signer_repository.create(signer).await?;
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-        app_state.network_repository.create(network).await?;
-
-        // Verify multiple repositories have entries
-        assert!(app_state.relayer_repository.has_entries().await?);
-        assert!(app_state.signer_repository.has_entries().await?);
-        assert!(app_state.notification_repository.has_entries().await?);
-        assert!(app_state.network_repository.has_entries().await?);
-
-        // is_redis_populated should return true
-        let result = is_redis_populated(&app_state).await?;
-        assert!(
-            result,
-            "Expected true when multiple repositories have entries"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_is_redis_populated_comprehensive_scenario() -> Result<()> {
-        let app_state = ThinData(create_test_app_state());
-
-        // Test 1: Start with all empty repositories
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false when all repositories are empty");
-
-        // Test 2: Add entry to one repository
-        let relayer = create_mock_relayer("test-relayer".to_string(), false);
-        app_state.relayer_repository.create(relayer).await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding one entry");
-
-        // Test 3: Clear all repositories
-        app_state.relayer_repository.drop_all_entries().await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(!result, "Expected false after clearing all repositories");
-
-        // Test 4: Add entries to different repositories and verify each time
-        let signer = create_mock_signer();
-        app_state.signer_repository.create(signer).await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding signer");
-
-        let notification = create_mock_notification("test-notification".to_string());
-        app_state
-            .notification_repository
-            .create(notification)
-            .await?;
-        let result = is_redis_populated(&app_state).await?;
-        assert!(result, "Expected true after adding notification");
-
-        Ok(())
-    }
-
     // Helper function to create test server config with specific settings
     fn create_test_server_config_with_settings(
         storage_type: RepositoryStorageType,
@@ -1525,6 +1715,18 @@ mod tests {
             reset_storage_on_start,
             ..create_test_server_config(storage_type)
         }
+    }
+
+    async fn create_test_redis_pool() -> Option<Arc<Pool>> {
+        let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
+        let pool = cfg
+            .builder()
+            .ok()?
+            .max_size(16)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .ok()?;
+        Some(Arc::new(pool))
     }
 
     // Helper function to create minimal test config
@@ -1613,7 +1815,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ai_process_config_file_skips_when_redis_populated() -> Result<()> {
+    async fn test_validate_config_bootstrap_state_empty() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        assert_eq!(state, ConfigBootstrapState::Empty);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validate_config_bootstrap_state_complete_without_marker() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+
+        process_plugins(&config, &app_state).await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        assert_eq!(state, ConfigBootstrapState::Complete);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validate_config_bootstrap_state_incomplete_without_marker() -> Result<()> {
+        let config = create_minimal_test_config();
+        let app_state = ThinData(create_test_app_state());
+
+        process_plugins(&config, &app_state).await?;
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+
+        let state = validate_config_bootstrap_state(&config, &app_state).await?;
+
+        match state {
+            ConfigBootstrapState::Incomplete { missing } => {
+                assert!(missing.iter().any(|entry| entry == "relayer repository"));
+                assert!(missing.iter().any(|entry| entry == "api key repository"));
+            }
+            other => panic!("Expected incomplete bootstrap state, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_config_file_errors_when_redis_bootstrap_state_is_incomplete() -> Result<()>
+    {
         let config = create_minimal_test_config();
         let server_config = Arc::new(create_test_server_config_with_settings(
             RepositoryStorageType::Redis,
@@ -1627,18 +1884,19 @@ mod tests {
             .create(create_mock_relayer("existing-relayer".to_string(), false))
             .await?;
 
-        process_config_file(config, server_config, &app_state).await?;
-
-        let stored_relayers = app_state.relayer_repository.list_all().await?;
-        assert_eq!(stored_relayers.len(), 1);
-        assert_eq!(stored_relayers[0].id, "existing-relayer");
+        let err = process_config_file(config, server_config, &app_state)
+            .await
+            .expect_err("partial bootstrap state should fail closed");
+        assert!(err
+            .to_string()
+            .contains("incomplete bootstrap-managed config state"));
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_should_not_process_config_file_redis_storage_populated_repositories() -> Result<()>
-    {
+    async fn test_should_error_for_partial_config_file_redis_storage_populated_repositories(
+    ) -> Result<()> {
         let config = create_minimal_test_config();
         let server_config = Arc::new(create_test_server_config_with_settings(
             RepositoryStorageType::Redis,
@@ -1665,25 +1923,13 @@ mod tests {
         assert!(app_state1.relayer_repository.has_entries().await?);
         assert!(!app_state1.signer_repository.has_entries().await?);
 
-        // Process config file - should NOT process because Redis is populated
-        process_config_file(config, server_config, &app_state2).await?;
+        let err = process_config_file(config, server_config, &app_state2)
+            .await
+            .expect_err("partial bootstrap state should fail closed");
+        assert!(err
+            .to_string()
+            .contains("incomplete bootstrap-managed config state"));
 
-        let relayer_from_config = app_state2
-            .relayer_repository
-            .get_by_id("test-relayer-1".to_string())
-            .await;
-        assert!(
-            relayer_from_config.is_err(),
-            "Relayer from config should not be found"
-        );
-
-        let existing_relayer = app_state2
-            .relayer_repository
-            .get_by_id("existing-relayer".to_string())
-            .await?;
-        assert_eq!(existing_relayer.id, "existing-relayer");
-
-        // The test passes if no errors occurred, which means the decision logic worked
         Ok(())
     }
 
@@ -1728,5 +1974,158 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_process_if_needed_after_lock_skips_populated_redis_without_marker() -> Result<()>
+    {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let prefix = "test_config_processing_skip_populated_without_marker";
+        let bootstrap_meta_key = format!("{prefix}:bootstrap_meta");
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        let config = create_minimal_test_config();
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+        let app_state = ThinData(create_test_app_state());
+
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
+
+        process_if_needed_after_lock(&config, &server_config, &app_state, &conn, prefix).await?;
+
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+        assert!(is_config_processing_completed(&conn, prefix).await?);
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_process_if_needed_after_lock_recovers_when_in_progress_marker_exists(
+    ) -> Result<()> {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let prefix = "test_config_processing_recover_in_progress";
+        let bootstrap_meta_key = format!("{prefix}:bootstrap_meta");
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        let config = create_minimal_test_config();
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+        let app_state = ThinData(create_test_app_state());
+
+        process_signers(&config, &app_state).await?;
+        process_notifications(&config, &app_state).await?;
+        process_networks(&config, &app_state).await?;
+        process_relayers(&config, &app_state).await?;
+        process_api_key(&server_config, &app_state).await?;
+        set_config_processing_in_progress(&conn, prefix).await?;
+
+        process_if_needed_after_lock(&config, &server_config, &app_state, &conn, prefix).await?;
+
+        let stored_relayers = app_state.relayer_repository.list_all().await?;
+        assert_eq!(stored_relayers.len(), 1);
+        assert_eq!(stored_relayers[0].id, "test-relayer-1");
+        assert!(is_config_processing_completed(&conn, prefix).await?);
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_recover_config_processing_after_timeout_waits_for_extended_completion() {
+        let conn = create_test_redis_pool()
+            .await
+            .expect("Redis connection required");
+        let prefix = "test_config_recovery_extended_wait";
+        let lock_key = format!("{prefix}:lock:{CONFIG_PROCESSING_LOCK_NAME}");
+        let bootstrap_meta_key = format!("{prefix}:bootstrap_meta");
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
+
+        let config = create_minimal_test_config();
+        let server_config =
+            create_test_server_config_with_settings(RepositoryStorageType::Redis, false);
+        let app_state = ThinData(create_test_app_state());
+
+        let lock = DistributedLock::new(
+            conn.clone(),
+            &lock_key,
+            Duration::from_secs(BOOTSTRAP_LOCK_TTL_SECS),
+        );
+        let guard = lock
+            .try_acquire()
+            .await
+            .expect("Should acquire lock")
+            .expect("Lock should be available");
+
+        let conn_for_task = conn.clone();
+        let prefix_for_task = prefix.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            set_config_processing_completed(&conn_for_task, &prefix_for_task)
+                .await
+                .expect("Should set config processing completed");
+            guard.release().await.expect("Should release lock");
+        });
+
+        let result = recover_config_processing_after_timeout(
+            &config,
+            &server_config,
+            &app_state,
+            &conn,
+            prefix,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Should succeed when completion is observed during extended wait: {:?}",
+            result
+        );
+
+        {
+            let mut conn_clone = conn.get().await.expect("Failed to get connection");
+            let _: Result<(), _> = redis::AsyncCommands::del(&mut conn_clone, &lock_key).await;
+            let _: Result<(), _> =
+                redis::AsyncCommands::del(&mut conn_clone, &bootstrap_meta_key).await;
+        }
     }
 }

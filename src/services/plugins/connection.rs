@@ -145,7 +145,9 @@ impl PoolConnection {
             self.send_request(request),
         )
         .await
-        .map_err(|_| PluginError::SocketError("Request timed out".to_string()))?
+        .map_err(|_| {
+            PluginError::SocketError(format!("Request timed out after {timeout_secs} seconds"))
+        })?
     }
 
     /// Get the connection ID
