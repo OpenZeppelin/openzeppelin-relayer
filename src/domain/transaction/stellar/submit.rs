@@ -1044,7 +1044,11 @@ mod tests {
             assert!(returned_tx.sent_at.is_some());
 
             // status check sees stale Sent tx and re-enqueues submit job.
-            returned_tx.sent_at = Some((Utc::now() - chrono::Duration::seconds(31)).to_rfc3339());
+            // Both created_at and sent_at must exceed the base resubmit interval (15s)
+            // for the backoff logic to trigger.
+            let stale_time = (Utc::now() - chrono::Duration::seconds(16)).to_rfc3339();
+            returned_tx.created_at = stale_time.clone();
+            returned_tx.sent_at = Some(stale_time);
 
             let mut status_mocks = default_test_mocks();
             status_mocks
