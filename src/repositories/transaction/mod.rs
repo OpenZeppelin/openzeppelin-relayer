@@ -116,6 +116,25 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError>;
 
+    /// Atomically increments status-check failure counters using the latest stored metadata.
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Atomically resets consecutive status-check failures to zero while preserving other counters.
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Atomically sets `sent_at` and increments Stellar insufficient-fee retries.
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
     /// Set the confirmed_at timestamp of a transaction
     async fn set_confirmed_at(
         &self,
@@ -192,6 +211,9 @@ mockall::mock! {
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn increment_status_check_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn reset_status_check_consecutive_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn record_stellar_insufficient_fee_retry(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
       async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError>;
@@ -364,6 +386,51 @@ impl TransactionRepository for TransactionRepositoryStorage {
         match self {
             TransactionRepositoryStorage::InMemory(repo) => repo.set_sent_at(tx_id, sent_at).await,
             TransactionRepositoryStorage::Redis(repo) => repo.set_sent_at(tx_id, sent_at).await,
+        }
+    }
+
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.increment_status_check_failures(tx_id).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.increment_status_check_failures(tx_id).await
+            }
+        }
+    }
+
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.reset_status_check_consecutive_failures(tx_id).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.reset_status_check_consecutive_failures(tx_id).await
+            }
+        }
+    }
+
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.record_stellar_insufficient_fee_retry(tx_id, sent_at)
+                    .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.record_stellar_insufficient_fee_retry(tx_id, sent_at)
+                    .await
+            }
         }
     }
 
