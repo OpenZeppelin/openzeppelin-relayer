@@ -112,6 +112,23 @@ where
                     "status check encountered error"
                 );
 
+                // CAS conflict means another writer already mutated this tx.
+                // Reload the latest state and return Ok so the status handler
+                // sees a non-final status and schedules the next poll cycle via
+                // HandlerError::Retry — no work is lost, just deferred.
+                if error.is_concurrent_update_conflict() {
+                    info!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "concurrent transaction update detected during status handling, reloading latest state"
+                    );
+                    return self
+                        .transaction_repository()
+                        .get_by_id(tx.id.clone())
+                        .await
+                        .map_err(TransactionError::from);
+                }
+
                 // Handle different error types appropriately
                 match error {
                     TransactionError::ValidationError(ref msg) => {

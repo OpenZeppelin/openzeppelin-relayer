@@ -22,6 +22,9 @@ pub enum RepositoryError {
     #[error("Transaction failure: {0}")]
     TransactionFailure(String),
 
+    #[error("Concurrent update conflict: {0}")]
+    ConcurrentUpdateConflict(String),
+
     #[error("Transaction validation failed: {0}")]
     TransactionValidationFailed(String),
 
@@ -85,6 +88,7 @@ mod tests {
             RepositoryError::ConstraintViolation("Constraint error".to_string()),
             RepositoryError::InvalidData("Invalid data".to_string()),
             RepositoryError::TransactionFailure("Transaction failed".to_string()),
+            RepositoryError::ConcurrentUpdateConflict("Concurrent conflict".to_string()),
             RepositoryError::TransactionValidationFailed("Validation failed".to_string()),
             RepositoryError::PermissionDenied("Permission denied".to_string()),
             RepositoryError::NotSupported("Not supported".to_string()),
