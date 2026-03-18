@@ -1739,36 +1739,11 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        self.run_atomic_script(
-            r#"
-            local function set_str(json, key, val)
-                local enc = cjson.encode(val)
-                local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
-                if n > 0 then return r end
-                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
-            end
-
-            local relayer_id = redis.call('GET', KEYS[1])
-            if not relayer_id then return false end
-
-            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
-            local current = redis.call('GET', tx_key)
-            if not current then return false end
-
-            local tx = cjson.decode(current)
-            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
-            if final_states[tx["status"]] then return current end
-
-            local updated = set_str(current, "sent_at", ARGV[3])
-            redis.call('SET', tx_key, updated)
-            return updated
-            "#,
-            &tx_id,
-            &[&sent_at],
-            "set_sent_at",
-        )
-        .await
+        let update = TransactionUpdateRequest {
+            sent_at: Some(sent_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
 
     async fn increment_status_check_failures(
@@ -1782,7 +1757,8 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1796,9 +1772,11 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = (metadata["consecutive_failures"] or 0) + 1
             metadata["total_failures"] = (metadata["total_failures"] or 0) + 1
+            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1822,7 +1800,8 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1836,8 +1815,11 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = 0
+            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
+            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1862,14 +1844,16 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
             local function set_obj(json, key, tbl)
                 local enc = cjson.encode(tbl)
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1883,7 +1867,10 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            if not metadata["consecutive_failures"] then metadata["consecutive_failures"] = 0 end
+            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
             metadata["insufficient_fee_retries"] = (metadata["insufficient_fee_retries"] or 0) + 1
 
             local updated = set_str(current, "sent_at", ARGV[3])
