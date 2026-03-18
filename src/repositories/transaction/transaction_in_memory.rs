@@ -71,6 +71,16 @@ impl InMemoryTransactionRepository {
             .cmp(a_key) // Descending (newest first)
             .then_with(|| b.id.cmp(&a.id)) // Tie-breaker: sort by ID for deterministic ordering
     }
+
+    fn is_final_state(status: &TransactionStatus) -> bool {
+        matches!(
+            status,
+            TransactionStatus::Confirmed
+                | TransactionStatus::Failed
+                | TransactionStatus::Expired
+                | TransactionStatus::Canceled
+        )
+    }
 }
 
 // Implement both traits for InMemoryTransactionRepository
@@ -355,9 +365,77 @@ impl TransactionRepository for InMemoryTransactionRepository {
         tx_id: String,
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.sent_at = Some(sent_at);
-        self.update(tx_id, tx).await
+        let update = TransactionUpdateRequest {
+            sent_at: Some(sent_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
+    }
+
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.consecutive_failures = metadata.consecutive_failures.saturating_add(1);
+            metadata.total_failures = metadata.total_failures.saturating_add(1);
+            tx.metadata = Some(metadata);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.consecutive_failures = 0;
+            tx.metadata = Some(metadata);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.insufficient_fee_retries = metadata.insufficient_fee_retries.saturating_add(1);
+            tx.metadata = Some(metadata);
+            tx.sent_at = Some(sent_at);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
     }
 
     async fn set_confirmed_at(

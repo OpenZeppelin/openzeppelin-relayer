@@ -11,8 +11,8 @@ use tracing::{debug, info, warn};
 
 use super::{is_final_state, StellarRelayerTransaction};
 use crate::constants::{
-    get_stellar_max_stuck_transaction_lifetime, get_stellar_resend_timeout,
-    STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS, STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+    get_stellar_max_stuck_transaction_lifetime, STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
+    STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
 };
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::{
@@ -111,6 +111,23 @@ where
                     error = ?error,
                     "status check encountered error"
                 );
+
+                // CAS conflict means another writer already mutated this tx.
+                // Reload the latest state and return Ok so the status handler
+                // sees a non-final status and schedules the next poll cycle via
+                // HandlerError::Retry — no work is lost, just deferred.
+                if error.is_concurrent_update_conflict() {
+                    info!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "concurrent transaction update detected during status handling, reloading latest state"
+                    );
+                    return self
+                        .transaction_repository()
+                        .get_by_id(tx.id.clone())
+                        .await
+                        .map_err(TransactionError::from);
+                }
 
                 // Handle different error types appropriately
                 match error {
@@ -434,12 +451,26 @@ where
             return result;
         }
 
-        // Re-enqueue submit job if transaction exceeded resend timeout
-        let age = get_age_since_sent_or_created(&tx)?;
-        if age > get_stellar_resend_timeout() {
-            info!(tx_id = %tx.id, age_seconds = age.num_seconds(),
-                "re-enqueueing submit job for stuck Sent transaction");
-            send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+        // Resubmit with exponential backoff based on total transaction age.
+        // Uses the same backoff logic as the Submitted state handler:
+        // 15s → 30s → 60s → 120s → 180s (capped).
+        let total_age = get_age_since_created(&tx)?;
+        if let Some(backoff_interval) = compute_resubmit_backoff_interval(
+            total_age,
+            STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
+            STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+        ) {
+            let age_since_last_submit = get_age_since_sent_or_created(&tx)?;
+            if age_since_last_submit > backoff_interval {
+                info!(
+                    tx_id = %tx.id,
+                    total_age_seconds = total_age.num_seconds(),
+                    since_last_submit_seconds = age_since_last_submit.num_seconds(),
+                    backoff_interval_seconds = backoff_interval.num_seconds(),
+                    "re-enqueueing submit job for stuck Sent transaction"
+                );
+                send_submit_transaction_job(self.job_producer(), &tx, None).await?;
+            }
         }
 
         Ok(tx)
@@ -1856,7 +1887,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_sent_without_hash_handles_stuck_recovery() {
-            use crate::constants::get_stellar_resend_timeout;
+            use crate::constants::STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS;
 
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
@@ -1864,9 +1895,11 @@ mod tests {
             let mut tx = create_test_transaction(&relayer.id);
             tx.id = "tx-sent-no-hash".to_string();
             tx.status = TransactionStatus::Sent;
-            // Created more than resend timeout ago (31 seconds > 30 seconds)
-            tx.created_at =
-                (Utc::now() - get_stellar_resend_timeout() - Duration::seconds(1)).to_rfc3339();
+            // Created more than base resubmit interval ago (16 seconds > 15 seconds)
+            tx.created_at = (Utc::now()
+                - Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS)
+                - Duration::seconds(1))
+            .to_rfc3339();
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
                 stellar_data.hash = None; // No hash
             }

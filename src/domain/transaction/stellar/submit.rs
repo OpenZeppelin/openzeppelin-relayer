@@ -15,8 +15,8 @@ use crate::{
     jobs::JobProducerTrait,
     metrics::STELLAR_SUBMISSION_FAILURES,
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionMetadata,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{
@@ -175,13 +175,9 @@ where
                     status = ?tx.status,
                     "TRY_AGAIN_LATER — status checker will retry"
                 );
-                let update_req = TransactionUpdateRequest {
-                    sent_at: Some(Utc::now().to_rfc3339()),
-                    ..Default::default()
-                };
                 let updated_tx = self
                     .transaction_repository()
-                    .partial_update(tx.id.clone(), update_req)
+                    .set_sent_at(tx.id.clone(), Utc::now().to_rfc3339())
                     .await?;
                 Ok(updated_tx)
             }
@@ -222,24 +218,13 @@ where
                         result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
-                    let update_req = TransactionUpdateRequest {
-                        sent_at: Some(Utc::now().to_rfc3339()),
-                        metadata: Some(TransactionMetadata {
-                            consecutive_failures: tx
-                                .metadata
-                                .as_ref()
-                                .map_or(0, |metadata| metadata.consecutive_failures),
-                            total_failures: tx
-                                .metadata
-                                .as_ref()
-                                .map_or(0, |metadata| metadata.total_failures),
-                            insufficient_fee_retries,
-                        }),
-                        ..Default::default()
-                    };
+                    // Atomically sets `sent_at` and increments Stellar insufficient-fee retries.
                     let updated_tx = self
                         .transaction_repository()
-                        .partial_update(tx.id.clone(), update_req)
+                        .record_stellar_insufficient_fee_retry(
+                            tx.id.clone(),
+                            Utc::now().to_rfc3339(),
+                        )
                         .await?;
                     return Ok(updated_tx);
                 }
@@ -288,6 +273,23 @@ where
             reason = %error_reason,
             "transaction submission failed"
         );
+
+        // CAS conflict in the submission path only occurs after the RPC
+        // already accepted the transaction (PENDING status update raced).
+        // The on-chain state is valid; reload the latest DB state and return
+        // Ok — the status checker will reconcile on its next poll.
+        if error.is_concurrent_update_conflict() {
+            info!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                "concurrent transaction update detected during submission, reloading latest state"
+            );
+            return self
+                .transaction_repository()
+                .get_by_id(tx_id)
+                .await
+                .map_err(TransactionError::from);
+        }
 
         if is_bad_sequence_error(&error_reason) {
             // For bad sequence errors, sync sequence from chain first
@@ -970,12 +972,11 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at — status should NOT change
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
-                .returning(|id, _upd| {
+                .expect_set_sent_at()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
@@ -1017,14 +1018,14 @@ mod tests {
                 });
             submit_mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
+                .expect_set_sent_at()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
                 .times(1)
-                .returning(|id, upd| {
+                .returning(|id, sent_at| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
-                    tx.sent_at = upd.sent_at.clone();
+                    tx.sent_at = Some(sent_at);
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1044,7 +1045,19 @@ mod tests {
             assert!(returned_tx.sent_at.is_some());
 
             // status check sees stale Sent tx and re-enqueues submit job.
-            returned_tx.sent_at = Some((Utc::now() - chrono::Duration::seconds(31)).to_rfc3339());
+            // Both created_at and sent_at must exceed the base resubmit interval
+            // for the backoff logic to trigger. created_at is set earlier than sent_at
+            // to match real-world invariants (transaction is created before being sent).
+            use crate::constants::STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS;
+            let buffer = 2;
+            let created_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + buffer))
+            .to_rfc3339();
+            let sent_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + 1))
+            .to_rfc3339();
+            returned_tx.created_at = created_at;
+            returned_tx.sent_at = Some(sent_at);
 
             let mut status_mocks = default_test_mocks();
             status_mocks
@@ -1079,15 +1092,11 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at so the status checker's
-            // backoff gate measures time since this attempt, not the original submission.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| {
-                    upd.sent_at.is_some() && upd.status.is_none() // status should not change
-                })
-                .returning(|id, _upd| {
+                .expect_set_sent_at()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Submitted;
@@ -1194,25 +1203,23 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at — status should NOT change
+            // insufficient-fee retry updates sent_at and retry metadata atomically
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| {
-                    upd.sent_at.is_some()
-                        && upd.status.is_none()
-                        && upd
-                            .metadata
-                            .as_ref()
-                            .is_some_and(|metadata| metadata.insufficient_fee_retries == 1)
-                })
-                .returning(|id, upd| {
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
-                    tx.metadata = upd.metadata;
+                    tx.metadata = Some(crate::models::TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
-                });
+                })
+                .times(1);
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
@@ -1292,7 +1299,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
             tx.status = TransactionStatus::Sent;
-            tx.metadata = Some(TransactionMetadata {
+            tx.metadata = Some(crate::models::TransactionMetadata {
                 insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
                 ..Default::default()
             });

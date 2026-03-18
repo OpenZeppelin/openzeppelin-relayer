@@ -110,6 +110,95 @@ impl RedisTransactionRepository {
         )
     }
 
+    /// Returns the components needed for Lua scripts to resolve a tx key from
+    /// only the tx_id: (tx_to_relayer lookup key, key prefix, key suffix).
+    /// The Lua script does: `GET KEYS[1]` to get the relayer_id, then
+    /// constructs the tx key as `ARGV[1] .. relayer_id .. ARGV[2]`.
+    fn tx_key_parts(&self, tx_id: &str) -> (String, String, String) {
+        let lookup_key = self.tx_to_relayer_key(tx_id);
+        let key_prefix = format!("{}:{}:", self.key_prefix, RELAYER_PREFIX);
+        let key_suffix = format!(":{TX_PREFIX}:{tx_id}");
+        (lookup_key, key_prefix, key_suffix)
+    }
+
+    /// Executes an atomic Lua script with retry/backoff for transient Redis failures.
+    ///
+    /// Every script receives `KEYS[1]` = tx_to_relayer lookup key and
+    /// `ARGV[1..2]` = key prefix/suffix. `extra_args` are appended as `ARGV[3..]`.
+    /// The script must return the (possibly updated) JSON string or `false` for
+    /// not-found.
+    async fn run_atomic_script(
+        &self,
+        lua: &str,
+        tx_id: &str,
+        extra_args: &[&str],
+        op_name: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_BACKOFF_MS: u64 = 100;
+
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(tx_id);
+        let script = Script::new(lua);
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+
+            let mut conn = match self
+                .get_connection(self.connections.primary(), op_name)
+                .await
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(tx_id = %tx_id, attempt, op = %op_name, "connection failed, retrying");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            };
+
+            let mut invocation = script.prepare_invoke();
+            invocation
+                .key(&lookup_key)
+                .arg(&key_prefix)
+                .arg(&key_suffix);
+            for arg in extra_args {
+                invocation.arg(*arg);
+            }
+
+            match invocation.invoke_async::<Option<String>>(&mut conn).await {
+                Ok(result) => {
+                    let json = result.ok_or_else(|| {
+                        RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+                    })?;
+                    return self.deserialize_entity::<TransactionRepoModel>(
+                        &json,
+                        tx_id,
+                        "transaction",
+                    );
+                }
+                Err(e) => {
+                    last_error = Some(self.map_redis_error(e, op_name));
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(
+                            tx_id = %tx_id, attempt, op = %op_name,
+                            "atomic script failed, retrying"
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            RepositoryError::UnexpectedError(format!("retry loop exhausted for {op_name}"))
+        }))
+    }
+
     /// Parse timestamp string to score for sorted set (milliseconds since epoch)
     fn timestamp_to_score(&self, timestamp: &str) -> f64 {
         chrono::DateTime::parse_from_rfc3339(timestamp)
@@ -1380,7 +1469,7 @@ impl TransactionRepository for RedisTransactionRepository {
                         tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
                         continue;
                     }
-                    return Err(RepositoryError::TransactionFailure(format!(
+                    return Err(RepositoryError::ConcurrentUpdateConflict(format!(
                         "Concurrent update conflict for transaction {tx_id}"
                     )));
                 }
@@ -1578,11 +1667,130 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let update = TransactionUpdateRequest {
-            sent_at: Some(sent_at),
-            ..Default::default()
-        };
-        self.partial_update(tx_id, update).await
+        self.run_atomic_script(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            tx["sent_at"] = ARGV[3]
+
+            local updated = cjson.encode(tx)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[&sent_at],
+            "set_sent_at",
+        )
+        .await
+    }
+
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"] or {}
+            metadata["consecutive_failures"] = (metadata["consecutive_failures"] or 0) + 1
+            metadata["total_failures"] = (metadata["total_failures"] or 0) + 1
+            tx["metadata"] = metadata
+
+            local updated = cjson.encode(tx)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[],
+            "increment_status_check_failures",
+        )
+        .await
+    }
+
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"] or {}
+            metadata["consecutive_failures"] = 0
+            tx["metadata"] = metadata
+
+            local updated = cjson.encode(tx)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[],
+            "reset_status_check_consecutive_failures",
+        )
+        .await
+    }
+
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            tx["sent_at"] = ARGV[3]
+
+            local metadata = tx["metadata"] or {}
+            metadata["insufficient_fee_retries"] = (metadata["insufficient_fee_retries"] or 0) + 1
+            tx["metadata"] = metadata
+
+            local updated = cjson.encode(tx)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[&sent_at],
+            "record_stellar_insufficient_fee_retry",
+        )
+        .await
     }
 
     async fn set_confirmed_at(

@@ -12,10 +12,7 @@ use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
-    models::{
-        ApiError, DefaultAppState, TransactionMetadata, TransactionRepoModel,
-        TransactionUpdateRequest,
-    },
+    models::{ApiError, DefaultAppState, TransactionError, TransactionRepoModel},
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
     repositories::TransactionRepository,
@@ -57,7 +54,6 @@ pub async fn transaction_status_handler(
         tx_id,
         req_result.consecutive_failures,
         req_result.total_failures,
-        req_result.insufficient_fee_retries,
         req_result.should_retry_on_error,
     )
     .await
@@ -79,7 +75,6 @@ async fn handle_result<TR>(
     tx_id: &str,
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
-    insufficient_fee_retries: Option<u32>,
     should_retry_on_error: bool,
 ) -> Result<(), HandlerError>
 where
@@ -109,19 +104,13 @@ where
                 "transaction not in final state"
             );
 
-            // Reset consecutive counter only if there were previous failures
-            // This avoids unnecessary writes for transactions that never failed
+            // Reset consecutive counter only if it is actually non-zero
             match (consecutive_failures, total_failures) {
-                (Some(consecutive), Some(total)) if consecutive > 0 || total > 0 => {
-                    let update = TransactionUpdateRequest {
-                        metadata: Some(TransactionMetadata {
-                            consecutive_failures: 0,
-                            total_failures: total,
-                            insufficient_fee_retries: insufficient_fee_retries.unwrap_or(0),
-                        }),
-                        ..Default::default()
-                    };
-                    if let Err(e) = tx_repo.partial_update(tx_id.to_string(), update).await {
+                (Some(consecutive), Some(_total)) if consecutive > 0 => {
+                    if let Err(e) = tx_repo
+                        .reset_status_check_consecutive_failures(tx_id.to_string())
+                        .await
+                    {
                         warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
                     }
                 }
@@ -137,6 +126,17 @@ where
             )))
         }
         Err(e) => {
+            if e.downcast_ref::<TransactionError>()
+                .is_some_and(TransactionError::is_concurrent_update_conflict)
+            {
+                info!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    "status check lost a concurrent update race, completing job without counter changes"
+                );
+                return Ok(());
+            }
+
             // Check if this is a permanent failure that shouldn't retry
             if !should_retry_on_error {
                 info!(
@@ -162,15 +162,9 @@ where
                     );
 
                     // Update counters via transaction repository
-                    let update = TransactionUpdateRequest {
-                        metadata: Some(TransactionMetadata {
-                            consecutive_failures: new_consecutive,
-                            total_failures: new_total,
-                            insufficient_fee_retries: insufficient_fee_retries.unwrap_or(0),
-                        }),
-                        ..Default::default()
-                    };
-                    if let Err(update_err) = tx_repo.partial_update(tx_id.to_string(), update).await
+                    if let Err(update_err) = tx_repo
+                        .increment_status_check_failures(tx_id.to_string())
+                        .await
                     {
                         warn!(error = %update_err, tx_id = %tx_id, "failed to update counters");
                     }
@@ -196,7 +190,6 @@ struct HandleRequestResult {
     result: Result<TransactionRepoModel>,
     consecutive_failures: Option<u32>,
     total_failures: Option<u32>,
-    insufficient_fee_retries: Option<u32>,
     /// If false, errors should not trigger retry (e.g., transaction not found)
     should_retry_on_error: bool,
 }
@@ -227,7 +220,6 @@ async fn handle_request(
                 result: Err(eyre::eyre!("Transaction not found: {}", msg)),
                 consecutive_failures: None,
                 total_failures: None,
-                insufficient_fee_retries: None,
                 should_retry_on_error: false,
             };
         }
@@ -237,22 +229,16 @@ async fn handle_request(
                 result: Err(e.into()),
                 consecutive_failures: None,
                 total_failures: None,
-                insufficient_fee_retries: None,
                 should_retry_on_error: true,
             };
         }
     };
 
     // Read failure counters from transaction metadata
-    let (consecutive_failures, total_failures, insufficient_fee_retries) =
-        match &transaction.metadata {
-            Some(meta) => (
-                meta.consecutive_failures,
-                meta.total_failures,
-                meta.insufficient_fee_retries,
-            ),
-            None => (0, 0, 0),
-        };
+    let (consecutive_failures, total_failures) = match &transaction.metadata {
+        Some(meta) => (meta.consecutive_failures, meta.total_failures),
+        None => (0, 0),
+    };
 
     // Get network type from transaction (authoritative source)
     let network_type = transaction.network_type;
@@ -295,7 +281,6 @@ async fn handle_request(
                     result: Err(eyre::eyre!("Relayer or signer not found: {}", msg)),
                     consecutive_failures: Some(consecutive_failures),
                     total_failures: Some(total_failures),
-                    insufficient_fee_retries: Some(insufficient_fee_retries),
                     should_retry_on_error: false,
                 };
             }
@@ -305,7 +290,6 @@ async fn handle_request(
                     result: Err(e.into()),
                     consecutive_failures: Some(consecutive_failures),
                     total_failures: Some(total_failures),
-                    insufficient_fee_retries: Some(insufficient_fee_retries),
                     should_retry_on_error: true,
                 };
             }
@@ -329,7 +313,6 @@ async fn handle_request(
         result,
         consecutive_failures: Some(consecutive_failures),
         total_failures: Some(total_failures),
-        insufficient_fee_retries: Some(insufficient_fee_retries),
         should_retry_on_error: true,
     }
 }
@@ -337,7 +320,10 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkType, TransactionStatus};
+    use crate::{
+        models::{NetworkType, TransactionStatus},
+        repositories::MockTransactionRepository,
+    };
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -538,13 +524,29 @@ mod tests {
     mod handle_request_result_tests {
         use super::*;
 
+        #[tokio::test]
+        async fn test_handle_result_ignores_concurrent_update_conflict() {
+            let tx_repo = MockTransactionRepository::new();
+
+            let result = handle_result(
+                Err(TransactionError::ConcurrentUpdateConflict("tx race".to_string()).into()),
+                &tx_repo,
+                "tx-1",
+                Some(2),
+                Some(5),
+                true,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+
         #[test]
         fn test_handle_request_result_with_counters() {
             let result = HandleRequestResult {
                 result: Ok(TransactionRepoModel::default()),
                 consecutive_failures: Some(5),
                 total_failures: Some(10),
-                insufficient_fee_retries: Some(2),
                 should_retry_on_error: true,
             };
 
@@ -561,7 +563,6 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 consecutive_failures: None,
                 total_failures: None,
-                insufficient_fee_retries: None,
                 should_retry_on_error: false,
             };
 
@@ -578,7 +579,6 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 consecutive_failures: None,
                 total_failures: None,
-                insufficient_fee_retries: None,
                 should_retry_on_error: false,
             };
 
@@ -593,7 +593,6 @@ mod tests {
                 result: Err(eyre::eyre!("Connection timeout")),
                 consecutive_failures: Some(3),
                 total_failures: Some(7),
-                insufficient_fee_retries: Some(1),
                 should_retry_on_error: true,
             };
 
