@@ -125,7 +125,6 @@ where
                         "transaction already submitted (DUPLICATE status)"
                     );
                 }
-
                 let tx_hash_hex = response.hash.clone();
                 let updated_stellar_data = stellar_data.with_hash(tx_hash_hex.clone());
 
