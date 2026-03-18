@@ -12,7 +12,7 @@ use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
-    models::{ApiError, DefaultAppState, TransactionRepoModel},
+    models::{ApiError, DefaultAppState, TransactionError, TransactionRepoModel},
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
     repositories::TransactionRepository,
@@ -126,6 +126,17 @@ where
             )))
         }
         Err(e) => {
+            if e.downcast_ref::<TransactionError>()
+                .is_some_and(TransactionError::is_concurrent_update_conflict)
+            {
+                info!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    "status check lost a concurrent update race, completing job without counter changes"
+                );
+                return Ok(());
+            }
+
             // Check if this is a permanent failure that shouldn't retry
             if !should_retry_on_error {
                 info!(
@@ -309,7 +320,10 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkType, TransactionStatus};
+    use crate::{
+        models::{NetworkType, TransactionStatus},
+        repositories::MockTransactionRepository,
+    };
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -509,6 +523,23 @@ mod tests {
 
     mod handle_request_result_tests {
         use super::*;
+
+        #[tokio::test]
+        async fn test_handle_result_ignores_concurrent_update_conflict() {
+            let tx_repo = MockTransactionRepository::new();
+
+            let result = handle_result(
+                Err(TransactionError::ConcurrentUpdateConflict("tx race".to_string()).into()),
+                &tx_repo,
+                "tx-1",
+                Some(2),
+                Some(5),
+                true,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
 
         #[test]
         fn test_handle_request_result_with_counters() {

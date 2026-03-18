@@ -71,6 +71,16 @@ impl InMemoryTransactionRepository {
             .cmp(a_key) // Descending (newest first)
             .then_with(|| b.id.cmp(&a.id)) // Tie-breaker: sort by ID for deterministic ordering
     }
+
+    fn is_final_state(status: &TransactionStatus) -> bool {
+        matches!(
+            status,
+            TransactionStatus::Confirmed
+                | TransactionStatus::Failed
+                | TransactionStatus::Expired
+                | TransactionStatus::Canceled
+        )
+    }
 }
 
 // Implement both traits for InMemoryTransactionRepository
@@ -369,6 +379,9 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
 
         if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
             let mut metadata = tx.metadata.clone().unwrap_or_default();
             metadata.consecutive_failures = metadata.consecutive_failures.saturating_add(1);
             metadata.total_failures = metadata.total_failures.saturating_add(1);
@@ -388,6 +401,9 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
 
         if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
             let mut metadata = tx.metadata.clone().unwrap_or_default();
             metadata.consecutive_failures = 0;
             tx.metadata = Some(metadata);
@@ -407,6 +423,9 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let mut store = Self::acquire_lock(&self.store).await?;
 
         if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
             let mut metadata = tx.metadata.clone().unwrap_or_default();
             metadata.insufficient_fee_retries = metadata.insufficient_fee_retries.saturating_add(1);
             tx.metadata = Some(metadata);
