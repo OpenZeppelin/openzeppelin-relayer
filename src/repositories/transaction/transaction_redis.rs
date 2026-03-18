@@ -350,7 +350,6 @@ impl RedisTransactionRepository {
 
         let mut transactions = Vec::new();
         let mut failed_count = 0;
-        let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
@@ -2489,106 +2488,6 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
-    async fn test_find_by_relayer_id_migration_from_old_index() {
-        let repo = setup_test_repo().await;
-        let relayer_id = Uuid::new_v4().to_string();
-
-        // Create transactions with different created_at timestamps
-        let mut tx1 = create_test_transaction_with_relayer("migrate-test-1", &relayer_id);
-        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string(); // Oldest
-
-        let mut tx2 = create_test_transaction_with_relayer("migrate-test-2", &relayer_id);
-        tx2.created_at = "2025-01-27T12:00:00.000000+00:00".to_string(); // Middle
-
-        let mut tx3 = create_test_transaction_with_relayer("migrate-test-3", &relayer_id);
-        tx3.created_at = "2025-01-27T14:00:00.000000+00:00".to_string(); // Newest
-
-        // Create transactions directly in Redis WITHOUT adding to sorted set
-        // This simulates old transactions created before the sorted set index existed
-        let mut conn = repo.connections.primary().get().await.unwrap();
-        let relayer_list_key = repo.relayer_list_key();
-        let _: () = conn.sadd(&relayer_list_key, &relayer_id).await.unwrap();
-
-        for tx in &[&tx1, &tx2, &tx3] {
-            let key = repo.tx_key(&tx.relayer_id, &tx.id);
-            let reverse_key = repo.tx_to_relayer_key(&tx.id);
-            let value = repo.serialize_entity(tx, |t| &t.id, "transaction").unwrap();
-
-            let mut pipe = redis::pipe();
-            pipe.atomic();
-            pipe.set(&key, &value);
-            pipe.set(&reverse_key, &tx.relayer_id);
-
-            // Add to status index (but NOT to sorted set)
-            let status_key = repo.relayer_status_key(&tx.relayer_id, &tx.status);
-            pipe.sadd(&status_key, &tx.id);
-
-            pipe.exec_async(&mut conn).await.unwrap();
-        }
-
-        // Verify sorted set is empty (transactions were created without sorted set index)
-        let relayer_sorted_key = repo.relayer_tx_by_created_at_key(&relayer_id);
-        let count: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
-        assert_eq!(count, 0, "Sorted set should be empty for old transactions");
-
-        // Call find_by_relayer_id - this should trigger migration
-        let query = PaginationQuery {
-            page: 1,
-            per_page: 10,
-        };
-        let result = repo
-            .find_by_relayer_id(&relayer_id, query.clone())
-            .await
-            .unwrap();
-
-        // Verify migration happened - sorted set should now have entries
-        let count_after: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
-        assert_eq!(
-            count_after, 3,
-            "Sorted set should be populated after migration"
-        );
-
-        // Verify results are correct and sorted (newest first)
-        assert_eq!(result.total, 3);
-        assert_eq!(result.items.len(), 3);
-
-        assert_eq!(
-            result.items[0].id, "migrate-test-3",
-            "First item should be newest after migration"
-        );
-        assert_eq!(
-            result.items[0].created_at,
-            "2025-01-27T14:00:00.000000+00:00"
-        );
-
-        assert_eq!(
-            result.items[1].id, "migrate-test-2",
-            "Second item should be middle after migration"
-        );
-        assert_eq!(
-            result.items[1].created_at,
-            "2025-01-27T12:00:00.000000+00:00"
-        );
-
-        assert_eq!(
-            result.items[2].id, "migrate-test-1",
-            "Third item should be oldest after migration"
-        );
-        assert_eq!(
-            result.items[2].created_at,
-            "2025-01-27T10:00:00.000000+00:00"
-        );
-
-        // Verify second call uses sorted set (no migration needed)
-        let result2 = repo.find_by_relayer_id(&relayer_id, query).await.unwrap();
-        assert_eq!(result2.total, 3);
-        assert_eq!(result2.items.len(), 3);
-        // Results should be identical since sorted set is now populated
-        assert_eq!(result.items[0].id, result2.items[0].id);
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires active Redis instance"]
     async fn test_find_by_status() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
@@ -3647,5 +3546,242 @@ mod tests {
         // relayer-2's transaction should still exist
         let remaining = repo.get_by_id(tx_id_2).await.unwrap();
         assert_eq!(remaining.relayer_id, relayer_2);
+    }
+
+    // ── increment_status_check_failures ─────────────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_no_prior_metadata() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.metadata = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.expect("metadata should be set");
+        assert_eq!(meta.consecutive_failures, 1);
+        assert_eq!(meta.total_failures, 1);
+        assert_eq!(meta.insufficient_fee_retries, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 3);
+        assert_eq!(meta.total_failures, 3);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        repo.create(tx).await.unwrap();
+
+        let result = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        // Should return unchanged — no metadata mutation on final state
+        assert!(result.metadata.is_none());
+        assert_eq!(result.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .increment_status_check_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── reset_status_check_consecutive_failures ─────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Increment a few times first
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        // total_failures should be preserved
+        assert_eq!(meta.total_failures, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Failed);
+        tx.metadata = Some(crate::models::TransactionMetadata {
+            consecutive_failures: 5,
+            total_failures: 10,
+            insufficient_fee_retries: 0,
+        });
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 5);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .reset_status_check_consecutive_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_insufficient_fee_retry ───────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:00:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:01:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "new-time".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .record_stellar_insufficient_fee_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 }

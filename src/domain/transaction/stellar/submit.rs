@@ -1383,5 +1383,76 @@ mod tests {
             let failed_tx = res.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
         }
+
+        #[tokio::test]
+        async fn submit_transaction_concurrent_update_conflict_reloads_latest_state() {
+            // When partial_update fails with ConcurrentUpdateConflict during submission,
+            // the handler should reload the latest state via get_by_id and return Ok.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns PENDING — submission to RPC succeeded
+            let response = create_send_tx_response(
+                "PENDING",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // partial_update (Submitted) fails with CAS conflict
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .times(1)
+                .returning(|_, _| {
+                    Err(RepositoryError::ConcurrentUpdateConflict(
+                        "CAS mismatch".to_string(),
+                    ))
+                });
+
+            // After conflict, handler reloads via get_by_id
+            let reloaded_tx = {
+                let mut t = create_test_transaction(&relayer.id);
+                t.status = TransactionStatus::Submitted;
+                t
+            };
+            let reloaded_clone = reloaded_tx.clone();
+            mocks
+                .tx_repo
+                .expect_get_by_id()
+                .times(1)
+                .returning(move |_| Ok(reloaded_clone.clone()));
+
+            // No failure handling (notifications, next-pending) should occur
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            assert!(res.is_ok(), "CAS conflict should return Ok after reload");
+            let returned_tx = res.unwrap();
+            // Reloaded state reflects the concurrent writer's update
+            assert_eq!(returned_tx.status, TransactionStatus::Submitted);
+        }
     }
 }
