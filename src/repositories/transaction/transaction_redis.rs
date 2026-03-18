@@ -1636,6 +1636,11 @@ impl TransactionRepository for RedisTransactionRepository {
             -- arrays, so a decode/encode round-trip turns [] into {}.
             -- Record which keys held [] in the stored doc and the patch
             -- so we can restore them after cjson.encode.
+            -- NOTE: this relies on each array-typed field having a unique key
+            -- name across the entire JSON document (including nested objects).
+            -- If the model ever introduces duplicate key names at different
+            -- nesting levels (e.g. metadata.hashes), the gsub below could
+            -- restore the wrong occurrence.
             local empty_arrs = {}
             for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
                 empty_arrs[k] = true
@@ -1702,13 +1707,15 @@ impl TransactionRepository for RedisTransactionRepository {
 
         debug!(tx_id = %tx_id, "successfully updated transaction via patch");
 
-        // Track metrics for transaction state changes
-        if let Some(new_status) = &update.status {
+        // Track metrics only when the persisted status actually changed.
+        // The Lua script may silently reject a status patch on already-final
+        // transactions, so we compare the deserialized before/after states.
+        if original_tx.status != updated_tx.status {
             self.track_status_change_metrics(
                 &original_tx,
                 &updated_tx,
                 &original_tx.status,
-                new_status,
+                &updated_tx.status,
             );
         }
 
