@@ -70,22 +70,33 @@ pub struct TransactionMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransactionUpdateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<TransactionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sent_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub confirmed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub network_data: Option<NetworkTransactionData>,
     /// Timestamp when gas price was determined
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub priced_at: Option<String>,
     /// History of transaction hashes
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hashes: Option<Vec<String>>,
     /// Number of no-ops in the transaction
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub noop_count: Option<u32>,
     /// Whether the transaction is canceled
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub is_canceled: Option<bool>,
     /// Timestamp when this transaction should be deleted (for final states)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_at: Option<String>,
     /// Status check metadata (failure counters for circuit breaker)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<TransactionMetadata>,
 }
 

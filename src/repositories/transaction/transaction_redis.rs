@@ -1,5 +1,7 @@
 //! Redis-backed implementation of the TransactionRepository.
 
+use crate::config::ServerConfig;
+use crate::constants::FINAL_TRANSACTION_STATUSES;
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
     TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
@@ -187,6 +189,71 @@ impl RedisTransactionRepository {
                             tx_id = %tx_id, attempt, op = %op_name,
                             "atomic script failed, retrying"
                         );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            RepositoryError::UnexpectedError(format!("retry loop exhausted for {op_name}"))
+        }))
+    }
+
+    /// Executes a Lua script with retry/backoff, returning a Vec<String> result
+    /// (for scripts that return Lua tables / multi-bulk replies).
+    /// Returns `Ok(None)` when the script returns `false`.
+    async fn run_script_with_retry_vec(
+        &self,
+        script: &Script,
+        lookup_key: &str,
+        key_prefix: &str,
+        key_suffix: &str,
+        extra_args: &[&str],
+        op_name: &str,
+    ) -> Result<Option<Vec<String>>, RepositoryError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_BACKOFF_MS: u64 = 100;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+
+            let mut conn = match self
+                .get_connection(self.connections.primary(), op_name)
+                .await
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(op = %op_name, attempt, "connection failed, retrying");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            };
+
+            let mut invocation = script.prepare_invoke();
+            invocation.key(lookup_key).arg(key_prefix).arg(key_suffix);
+            for arg in extra_args {
+                invocation.arg(*arg);
+            }
+
+            // Redis returns `false` from Lua as a Nil bulk reply, which
+            // redis-rs maps to `None` for `Option<Vec<String>>`.
+            match invocation
+                .invoke_async::<Option<Vec<String>>>(&mut conn)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_error = Some(self.map_redis_error(e, op_name));
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(op = %op_name, attempt, "script failed, retrying");
                         tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
                         continue;
                     }
@@ -574,6 +641,138 @@ impl RedisTransactionRepository {
 
         debug!(tx_id = %tx.id, "successfully removed all indexes for transaction");
         Ok(())
+    }
+
+    /// Track Prometheus metrics when a transaction status changes.
+    fn track_status_change_metrics(
+        &self,
+        _original_tx: &TransactionRepoModel,
+        updated_tx: &TransactionRepoModel,
+        old_status: &TransactionStatus,
+        new_status: &TransactionStatus,
+    ) {
+        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
+        let relayer_id = updated_tx.relayer_id.as_str();
+
+        // Track submission (when status changes to Submitted)
+        if *old_status != TransactionStatus::Submitted
+            && *new_status == TransactionStatus::Submitted
+        {
+            TRANSACTIONS_SUBMITTED
+                .with_label_values(&[relayer_id, &network_type])
+                .inc();
+
+            if let Ok(created_time) = chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at) {
+                let processing_seconds =
+                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds() as f64;
+                TRANSACTION_PROCESSING_TIME
+                    .with_label_values(&[relayer_id, &network_type, "creation_to_submission"])
+                    .observe(processing_seconds);
+            }
+        }
+
+        // Track status distribution (update gauge when status changes)
+        if old_status != new_status {
+            let old_status_str = format!("{old_status:?}").to_lowercase();
+            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
+                relayer_id,
+                &network_type,
+                &old_status_str,
+            ]);
+            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
+            old_status_gauge.set(clamped_value);
+
+            let new_status_str = format!("{new_status:?}").to_lowercase();
+            TRANSACTIONS_BY_STATUS
+                .with_label_values(&[relayer_id, &network_type, &new_status_str])
+                .inc();
+        }
+
+        // Track metrics for final transaction states
+        let was_final = is_final_state(old_status);
+        let is_final = is_final_state(new_status);
+
+        if !was_final && is_final {
+            match new_status {
+                TransactionStatus::Confirmed => {
+                    TRANSACTIONS_SUCCESS
+                        .with_label_values(&[relayer_id, &network_type])
+                        .inc();
+
+                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
+                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
+                    {
+                        if let (Ok(sent_time), Ok(confirmed_time)) = (
+                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
+                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
+                        ) {
+                            let processing_seconds = (confirmed_time.with_timezone(&Utc)
+                                - sent_time.with_timezone(&Utc))
+                            .num_seconds()
+                                as f64;
+                            TRANSACTION_PROCESSING_TIME
+                                .with_label_values(&[
+                                    relayer_id,
+                                    &network_type,
+                                    "submission_to_confirmation",
+                                ])
+                                .observe(processing_seconds);
+                        }
+                    }
+
+                    if let Ok(created_time) =
+                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                    {
+                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
+                            if let Ok(confirmed_time) =
+                                chrono::DateTime::parse_from_rfc3339(confirmed_at_str)
+                            {
+                                let processing_seconds = (confirmed_time.with_timezone(&Utc)
+                                    - created_time.with_timezone(&Utc))
+                                .num_seconds()
+                                    as f64;
+                                TRANSACTION_PROCESSING_TIME
+                                    .with_label_values(&[
+                                        relayer_id,
+                                        &network_type,
+                                        "creation_to_confirmation",
+                                    ])
+                                    .observe(processing_seconds);
+                            }
+                        }
+                    }
+                }
+                TransactionStatus::Failed => {
+                    let failure_reason = updated_tx
+                        .status_reason
+                        .as_deref()
+                        .map(|reason| {
+                            if reason.starts_with("Submission failed:") {
+                                "submission_failed"
+                            } else if reason.starts_with("Preparation failed:") {
+                                "preparation_failed"
+                            } else {
+                                "failed"
+                            }
+                        })
+                        .unwrap_or("failed");
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, failure_reason])
+                        .inc();
+                }
+                TransactionStatus::Expired => {
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, "expired"])
+                        .inc();
+                }
+                TransactionStatus::Canceled => {
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, "canceled"])
+                        .inc();
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -1383,271 +1582,137 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        const MAX_RETRIES: u32 = 3;
-        const BACKOFF_MS: u64 = 100;
+        // Serialize only the non-None fields as a JSON patch.
+        let patch_json = serde_json::to_string(&update).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
+        })?;
 
-        // Optimistic CAS: only apply update if the current stored value still matches the
-        // expected pre-update value. This avoids duplicate status metric updates on races.
-        let mut original_tx = self.get_by_id(tx_id.clone()).await?;
-        let mut updated_tx = original_tx.clone();
-        updated_tx.apply_partial_update(update.clone());
-
-        let key = self.tx_key(&updated_tx.relayer_id, &tx_id);
-        let mut original_value = self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
-        let mut updated_value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
-        let mut data_updated = false;
-
-        let mut last_error = None;
-
-        for attempt in 0..MAX_RETRIES {
-            let mut conn = match self
-                .get_connection(self.connections.primary(), "partial_update")
-                .await
-            {
-                Ok(conn) => conn,
-                Err(e) => {
-                    last_error = Some(e);
-                    if attempt < MAX_RETRIES - 1 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                        continue;
-                    }
-                    return Err(last_error.unwrap());
-                }
-            };
-
-            if !data_updated {
-                let cas_script = Script::new(
-                    r#"
-                    local current = redis.call('GET', KEYS[1])
-                    if not current then
-                        return -1
-                    end
-                    if current == ARGV[1] then
-                        redis.call('SET', KEYS[1], ARGV[2])
-                        return 1
-                    end
-                    return 0
-                    "#,
-                );
-
-                let cas_result: i32 = match cas_script
-                    .key(&key)
-                    .arg(&original_value)
-                    .arg(&updated_value)
-                    .invoke_async(&mut conn)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(e) => {
-                        if attempt < MAX_RETRIES - 1 {
-                            warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed CAS transaction update, retrying");
-                            last_error = Some(self.map_redis_error(e, "partial_update_cas"));
-                            tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS))
-                                .await;
-                            continue;
-                        }
-                        return Err(self.map_redis_error(e, "partial_update_cas"));
-                    }
-                };
-
-                if cas_result == -1 {
-                    return Err(RepositoryError::NotFound(format!(
-                        "Transaction with ID {tx_id} not found"
-                    )));
-                }
-
-                if cas_result == 0 {
-                    if attempt < MAX_RETRIES - 1 {
-                        warn!(tx_id = %tx_id, attempt = %attempt, "concurrent transaction update detected, rebasing retry");
-                        original_tx = self.get_by_id(tx_id.clone()).await?;
-                        updated_tx = original_tx.clone();
-                        updated_tx.apply_partial_update(update.clone());
-                        original_value =
-                            self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
-                        updated_value =
-                            self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                        continue;
-                    }
-                    return Err(RepositoryError::ConcurrentUpdateConflict(format!(
-                        "Concurrent update conflict for transaction {tx_id}"
-                    )));
-                }
-
-                data_updated = true;
+        // If the update sets a final status, compute delete_at in Rust (depends on server config)
+        // and include it in the patch so the Lua script applies it atomically.
+        let delete_at_value = if let Some(ref status) = update.status {
+            if FINAL_TRANSACTION_STATUSES.contains(status) {
+                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
+                let seconds = (expiration_hours * 3600.0) as i64;
+                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
+                Some(delete_time.to_rfc3339())
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
 
-            // Try to update indexes with the original pre-update state
-            // This ensures stale indexes are removed even on retry attempts
-            match self.update_indexes(&updated_tx, Some(&original_tx)).await {
-                Ok(_) => {
-                    debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
 
-                    // Track metrics for transaction state changes
-                    if let Some(new_status) = &update.status {
-                        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
-                        let relayer_id = updated_tx.relayer_id.as_str();
+        // Lua script: atomically applies a JSON patch to the stored transaction.
+        // Guards: rejects status changes on already-finalized transactions.
+        // Returns a two-element array {old_json, new_json} so Rust has the full
+        // pre-update state for index cleanup and metrics.
+        // Returns false if tx not found.
+        let patch_script = Script::new(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
 
-                        // Track submission (when status changes to Submitted)
-                        if original_tx.status != TransactionStatus::Submitted
-                            && *new_status == TransactionStatus::Submitted
-                        {
-                            TRANSACTIONS_SUBMITTED
-                                .with_label_values(&[relayer_id, &network_type])
-                                .inc();
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
 
-                            // Track processing time: creation to submission
-                            if let Ok(created_time) =
-                                chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
-                            {
-                                let processing_seconds =
-                                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds()
-                                        as f64;
-                                TRANSACTION_PROCESSING_TIME
-                                    .with_label_values(&[
-                                        relayer_id,
-                                        &network_type,
-                                        "creation_to_submission",
-                                    ])
-                                    .observe(processing_seconds);
-                            }
-                        }
+            local tx = cjson.decode(current)
+            local patch = cjson.decode(ARGV[3])
 
-                        // Track status distribution (update gauge when status changes)
-                        if original_tx.status != *new_status {
-                            // Decrement old status and clamp to zero to avoid negative gauges.
-                            let old_status = &original_tx.status;
-                            let old_status_str = format!("{old_status:?}").to_lowercase();
-                            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
-                                relayer_id,
-                                &network_type,
-                                &old_status_str,
-                            ]);
-                            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
-                            old_status_gauge.set(clamped_value);
+            -- Guard: reject status changes on finalized transactions.
+            -- A stale worker must not resurrect a tx that another worker
+            -- already moved to a terminal state.
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] and patch["status"] then
+                return {current, current}
+            end
 
-                            // Increment new status
-                            let new_status_str = format!("{new_status:?}").to_lowercase();
-                            TRANSACTIONS_BY_STATUS
-                                .with_label_values(&[relayer_id, &network_type, &new_status_str])
-                                .inc();
-                        }
+            local old_snapshot = current
 
-                        // Track metrics for final transaction states
-                        // Only track when status changes from non-final to final state
-                        let was_final = is_final_state(&original_tx.status);
-                        let is_final = is_final_state(new_status);
+            -- lua-cjson cannot distinguish empty Lua tables from empty
+            -- arrays, so a decode/encode round-trip turns [] into {}.
+            -- Record which keys held [] in the stored doc and the patch
+            -- so we can restore them after cjson.encode.
+            local empty_arrs = {}
+            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
 
-                        if !was_final && is_final {
-                            match new_status {
-                                TransactionStatus::Confirmed => {
-                                    TRANSACTIONS_SUCCESS
-                                        .with_label_values(&[relayer_id, &network_type])
-                                        .inc();
+            for k, v in pairs(patch) do
+                tx[k] = v
+            end
 
-                                    // Track processing time: submission to confirmation
-                                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
-                                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
-                                    {
-                                        if let (Ok(sent_time), Ok(confirmed_time)) = (
-                                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
-                                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
-                                        ) {
-                                            let processing_seconds = (confirmed_time
-                                                .with_timezone(&Utc)
-                                                - sent_time.with_timezone(&Utc))
-                                            .num_seconds()
-                                                as f64;
-                                            TRANSACTION_PROCESSING_TIME
-                                                .with_label_values(&[
-                                                    relayer_id,
-                                                    &network_type,
-                                                    "submission_to_confirmation",
-                                                ])
-                                                .observe(processing_seconds);
-                                        }
-                                    }
+            -- Apply delete_at if transitioning to a final state and not already set
+            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
+                tx["delete_at"] = ARGV[4]
+            end
 
-                                    // Track processing time: creation to confirmation
-                                    if let Ok(created_time) =
-                                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
-                                    {
-                                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
-                                            if let Ok(confirmed_time) =
-                                                chrono::DateTime::parse_from_rfc3339(
-                                                    confirmed_at_str,
-                                                )
-                                            {
-                                                let processing_seconds = (confirmed_time
-                                                    .with_timezone(&Utc)
-                                                    - created_time.with_timezone(&Utc))
-                                                .num_seconds()
-                                                    as f64;
-                                                TRANSACTION_PROCESSING_TIME
-                                                    .with_label_values(&[
-                                                        relayer_id,
-                                                        &network_type,
-                                                        "creation_to_confirmation",
-                                                    ])
-                                                    .observe(processing_seconds);
-                                            }
-                                        }
-                                    }
-                                }
-                                TransactionStatus::Failed => {
-                                    // Parse status_reason to determine failure type
-                                    let failure_reason = updated_tx
-                                        .status_reason
-                                        .as_deref()
-                                        .map(|reason| {
-                                            if reason.starts_with("Submission failed:") {
-                                                "submission_failed"
-                                            } else if reason.starts_with("Preparation failed:") {
-                                                "preparation_failed"
-                                            } else {
-                                                "failed"
-                                            }
-                                        })
-                                        .unwrap_or("failed");
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[
-                                            relayer_id,
-                                            &network_type,
-                                            failure_reason,
-                                        ])
-                                        .inc();
-                                }
-                                TransactionStatus::Expired => {
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, "expired"])
-                                        .inc();
-                                }
-                                TransactionStatus::Canceled => {
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, "canceled"])
-                                        .inc();
-                                }
-                                _ => {
-                                    // Other final states (shouldn't happen, but handle gracefully)
-                                }
-                            }
-                        }
-                    }
-                    return Ok(updated_tx);
-                }
-                Err(e) if attempt < MAX_RETRIES - 1 => {
-                    warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to update indexes, retrying");
-                    last_error = Some(e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
+            local updated = cjson.encode(tx)
+
+            -- Restore empty arrays that cjson.encode converted to {}
+            for k, _ in pairs(empty_arrs) do
+                updated = string.gsub(
+                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
+                )
+            end
+
+            redis.call('SET', tx_key, updated)
+            return {old_snapshot, updated}
+            "#,
+        );
+
+        let result: Option<Vec<String>> = self
+            .run_script_with_retry_vec(
+                &patch_script,
+                &lookup_key,
+                &key_prefix,
+                &key_suffix,
+                &[&patch_json, delete_at_arg],
+                "partial_update",
+            )
+            .await?;
+
+        let parts = result.ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        if parts.len() != 2 {
+            return Err(RepositoryError::UnexpectedError(format!(
+                "partial_update script returned {} elements, expected 2",
+                parts.len()
+            )));
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            RepositoryError::UnexpectedError("partial_update exhausted retries".to_string())
-        }))
+        let old_json = &parts[0];
+        let new_json = &parts[1];
+
+        let original_tx =
+            self.deserialize_entity::<TransactionRepoModel>(old_json, &tx_id, "transaction")?;
+        let updated_tx =
+            self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
+
+        // Update indexes using the full pre-update state (status, network_data, nonce, etc.)
+        self.update_indexes(&updated_tx, Some(&original_tx)).await?;
+
+        debug!(tx_id = %tx_id, "successfully updated transaction via patch");
+
+        // Track metrics for transaction state changes
+        if let Some(new_status) = &update.status {
+            self.track_status_change_metrics(
+                &original_tx,
+                &updated_tx,
+                &original_tx.status,
+                new_status,
+            );
+        }
+
+        Ok(updated_tx)
     }
 
     async fn update_network_data(
@@ -1667,36 +1732,11 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        self.run_atomic_script(
-            r#"
-            local function set_str(json, key, val)
-                local enc = cjson.encode(val)
-                local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
-                if n > 0 then return r end
-                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
-            end
-
-            local relayer_id = redis.call('GET', KEYS[1])
-            if not relayer_id then return false end
-
-            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
-            local current = redis.call('GET', tx_key)
-            if not current then return false end
-
-            local tx = cjson.decode(current)
-            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
-            if final_states[tx["status"]] then return current end
-
-            local updated = set_str(current, "sent_at", ARGV[3])
-            redis.call('SET', tx_key, updated)
-            return updated
-            "#,
-            &tx_id,
-            &[&sent_at],
-            "set_sent_at",
-        )
-        .await
+        let update = TransactionUpdateRequest {
+            sent_at: Some(sent_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
     }
 
     async fn increment_status_check_failures(
@@ -1710,7 +1750,8 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1724,9 +1765,11 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = (metadata["consecutive_failures"] or 0) + 1
             metadata["total_failures"] = (metadata["total_failures"] or 0) + 1
+            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1750,7 +1793,8 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1764,8 +1808,11 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = 0
+            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
+            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1790,14 +1837,16 @@ impl TransactionRepository for RedisTransactionRepository {
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
             local function set_obj(json, key, tbl)
                 local enc = cjson.encode(tbl)
                 local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
                 if n > 0 then return r end
                 r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
-                return r
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
             end
 
             local relayer_id = redis.call('GET', KEYS[1])
@@ -1811,7 +1860,10 @@ impl TransactionRepository for RedisTransactionRepository {
             local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
             if final_states[tx["status"]] then return current end
 
-            local metadata = tx["metadata"] or {}
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            if not metadata["consecutive_failures"] then metadata["consecutive_failures"] = 0 end
+            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
             metadata["insufficient_fee_retries"] = (metadata["insufficient_fee_retries"] or 0) + 1
 
             local updated = set_str(current, "sent_at", ARGV[3])
