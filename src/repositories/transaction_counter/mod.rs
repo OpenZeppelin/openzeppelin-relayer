@@ -60,6 +60,8 @@ pub trait TransactionCounterTrait {
     async fn set(&self, relayer_id: &str, address: &str, value: u64)
         -> Result<(), RepositoryError>;
 
+    /// Remove all stored counter entries from the underlying backend.
+    /// Intended for startup reset flows when `RESET_STORAGE_ON_START` is enabled.
     async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
 }
 

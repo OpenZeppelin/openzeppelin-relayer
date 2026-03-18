@@ -10,7 +10,7 @@ use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::{AsyncCommands, Cmd};
+use redis::AsyncCommands;
 use std::fmt;
 use std::sync::Arc;
 use tracing::debug;
@@ -221,13 +221,14 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         let pattern = format!("{}:{}:*", self.key_prefix, COUNTER_PREFIX);
         debug!(pattern = %pattern, "dropping all transaction counter entries");
 
+        // Phase 1: Collect all matching keys without mutating the keyspace.
+        // Deleting during SCAN can cause hash table rehashing, which may skip keys.
         let mut cursor: u64 = 0;
-        let mut total_deleted: usize = 0;
+        let mut all_keys: Vec<String> = Vec::new();
 
         loop {
-            let (next_cursor, keys): (u64, Vec<String>) = Cmd::new()
-                .arg("SCAN")
-                .arg(cursor)
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .cursor_arg(cursor)
                 .arg("MATCH")
                 .arg(&pattern)
                 .arg("COUNT")
@@ -236,17 +237,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
                 .await
                 .map_err(|e| self.map_redis_error(e, "drop_all_entries_scan"))?;
 
-            if !keys.is_empty() {
-                let mut pipe = redis::pipe();
-                pipe.atomic();
-                for key in &keys {
-                    pipe.del(key);
-                }
-                pipe.exec_async(&mut conn)
-                    .await
-                    .map_err(|e| self.map_redis_error(e, "drop_all_entries_delete"))?;
-                total_deleted += keys.len();
-            }
+            all_keys.extend(keys);
 
             cursor = next_cursor;
             if cursor == 0 {
@@ -254,7 +245,19 @@ impl TransactionCounterTrait for RedisTransactionCounter {
             }
         }
 
-        debug!(total_deleted = %total_deleted, "dropped all transaction counter entries");
+        // Phase 2: Batch delete all collected keys.
+        if !all_keys.is_empty() {
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            for key in &all_keys {
+                pipe.del(key);
+            }
+            pipe.exec_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "drop_all_entries_delete"))?;
+        }
+
+        debug!(total_deleted = %all_keys.len(), "dropped all transaction counter entries");
         Ok(())
     }
 }
@@ -267,6 +270,10 @@ mod tests {
     use uuid::Uuid;
 
     async fn setup_test_repo() -> RedisTransactionCounter {
+        setup_test_repo_with_prefix("test_counter").await
+    }
+
+    async fn setup_test_repo_with_prefix(prefix: &str) -> RedisTransactionCounter {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let cfg = deadpool_redis::Config::from_url(&redis_url);
@@ -280,7 +287,7 @@ mod tests {
         );
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisTransactionCounter::new(connections, "test_counter".to_string())
+        RedisTransactionCounter::new(connections, prefix.to_string())
             .expect("Failed to create Redis transaction counter")
     }
 
@@ -417,7 +424,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
     async fn test_drop_all_entries() {
-        let repo = setup_test_repo().await;
+        let prefix = format!("test_drop_{}", uuid::Uuid::new_v4());
+        let repo = setup_test_repo_with_prefix(&prefix).await;
         let relayer_1 = uuid::Uuid::new_v4().to_string();
         let relayer_2 = uuid::Uuid::new_v4().to_string();
         let address_1 = uuid::Uuid::new_v4().to_string();
