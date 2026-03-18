@@ -59,6 +59,8 @@ pub trait TransactionCounterTrait {
 
     async fn set(&self, relayer_id: &str, address: &str, value: u64)
         -> Result<(), RepositoryError>;
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
 }
 
 /// Enum wrapper for different transaction counter repository implementations
@@ -137,6 +139,15 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
             }
         }
     }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        match self {
+            TransactionCounterRepositoryStorage::InMemory(counter) => {
+                counter.drop_all_entries().await
+            }
+            TransactionCounterRepositoryStorage::Redis(counter) => counter.drop_all_entries().await,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +185,18 @@ mod tests {
 
         let new_value = repo.decrement("test_relayer", "0x1234").await.unwrap();
         assert_eq!(new_value, 100);
+    }
+
+    #[tokio::test]
+    async fn test_enum_wrapper_drop_all_entries() {
+        let repo = TransactionCounterRepositoryStorage::new_in_memory();
+
+        repo.set("relayer_1", "0x1234", 100).await.unwrap();
+        repo.set("relayer_2", "0x5678", 200).await.unwrap();
+
+        repo.drop_all_entries().await.unwrap();
+
+        assert_eq!(repo.get("relayer_1", "0x1234").await.unwrap(), None);
+        assert_eq!(repo.get("relayer_2", "0x5678").await.unwrap(), None);
     }
 }

@@ -10,7 +10,7 @@ use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, Cmd};
 use std::fmt;
 use std::sync::Arc;
 use tracing::debug;
@@ -212,6 +212,51 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         debug!(value = %value, "counter set");
         Ok(())
     }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
+
+        let pattern = format!("{}:{}:*", self.key_prefix, COUNTER_PREFIX);
+        debug!(pattern = %pattern, "dropping all transaction counter entries");
+
+        let mut cursor: u64 = 0;
+        let mut total_deleted: usize = 0;
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = Cmd::new()
+                .arg("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "drop_all_entries_scan"))?;
+
+            if !keys.is_empty() {
+                let mut pipe = redis::pipe();
+                pipe.atomic();
+                for key in &keys {
+                    pipe.del(key);
+                }
+                pipe.exec_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "drop_all_entries_delete"))?;
+                total_deleted += keys.len();
+            }
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        debug!(total_deleted = %total_deleted, "dropped all transaction counter entries");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -367,6 +412,34 @@ mod tests {
             201
         );
         assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), Some(300));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let repo = setup_test_repo().await;
+        let relayer_1 = uuid::Uuid::new_v4().to_string();
+        let relayer_2 = uuid::Uuid::new_v4().to_string();
+        let address_1 = uuid::Uuid::new_v4().to_string();
+        let address_2 = uuid::Uuid::new_v4().to_string();
+
+        // Set up multiple counters
+        repo.set(&relayer_1, &address_1, 100).await.unwrap();
+        repo.set(&relayer_1, &address_2, 200).await.unwrap();
+        repo.set(&relayer_2, &address_1, 300).await.unwrap();
+
+        // Verify they exist
+        assert_eq!(repo.get(&relayer_1, &address_1).await.unwrap(), Some(100));
+        assert_eq!(repo.get(&relayer_1, &address_2).await.unwrap(), Some(200));
+        assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), Some(300));
+
+        // Drop all
+        repo.drop_all_entries().await.unwrap();
+
+        // Verify all are gone
+        assert_eq!(repo.get(&relayer_1, &address_1).await.unwrap(), None);
+        assert_eq!(repo.get(&relayer_1, &address_2).await.unwrap(), None);
+        assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), None);
     }
 
     #[tokio::test]
