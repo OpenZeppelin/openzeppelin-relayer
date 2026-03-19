@@ -974,11 +974,18 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at — status should NOT change
+            // partial_update is called to refresh sent_at and persist metadata — status should NOT change
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
+                .withf(|_, upd| {
+                    upd.sent_at.is_some()
+                        && upd.status.is_none()
+                        && upd
+                            .metadata
+                            .as_ref()
+                            .is_some_and(|m| m.try_again_later_retries == 1)
+                })
                 .returning(|id, _upd| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
