@@ -1,0 +1,28 @@
+{
+  "name": "Stellar getTransaction → NOT_FOUND",
+  "request": {
+    "method": "POST",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.method == 'getTransaction')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "status": "NOT_FOUND",
+        "latestLedger": 100,
+        "latestLedgerCloseTime": "1700000000",
+        "oldestLedger": 1,
+        "oldestLedgerCloseTime": "1600000000"
+      }
+    }
+  },
+  "scenarioName": "stellar-get-transaction-not-found",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1
+}

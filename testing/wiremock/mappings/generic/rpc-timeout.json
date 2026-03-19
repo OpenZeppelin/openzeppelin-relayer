@@ -1,0 +1,19 @@
+{
+  "name": "RPC → timeout (any method)",
+  "request": {
+    "method": "POST"
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 30000,
+    "jsonBody": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": { "code": -32000, "message": "request timed out" }
+    }
+  },
+  "scenarioName": "rpc-timeout",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1
+}
