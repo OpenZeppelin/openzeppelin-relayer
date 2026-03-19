@@ -13,7 +13,7 @@ use super::{
 use crate::{
     constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
-    metrics::STELLAR_SUBMISSION_FAILURES,
+    metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -165,13 +165,21 @@ where
                 // transaction alive. The status checker will handle retries:
                 // - Submitted txs: resubmitted with exponential backoff
                 // - Sent txs: re-enqueued via handle_sent_state
-                crate::metrics::STELLAR_TRY_AGAIN_LATER
-                    .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
-                    .inc();
+                let mut meta = tx.metadata.clone().unwrap_or_default();
+                meta.try_again_later_retries = meta.try_again_later_retries.saturating_add(1);
+
+                // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
+                if meta.try_again_later_retries == 1 {
+                    crate::metrics::STELLAR_TRY_AGAIN_LATER
+                        .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
+                        .inc();
+                }
+
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
                     status = ?tx.status,
+                    try_again_later_retries = meta.try_again_later_retries,
                     "TRY_AGAIN_LATER — status checker will retry"
                 );
                 let updated_tx = self
@@ -194,13 +202,17 @@ where
                     .as_deref()
                     .is_some_and(is_insufficient_fee_error)
                 {
-                    let insufficient_fee_retries = tx
-                        .metadata
-                        .as_ref()
-                        .map_or(0, |metadata| metadata.insufficient_fee_retries)
-                        .saturating_add(1);
+                    let mut meta = tx.metadata.clone().unwrap_or_default();
+                    meta.insufficient_fee_retries = meta.insufficient_fee_retries.saturating_add(1);
 
-                    if insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                    // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
+                    if meta.insufficient_fee_retries == 1 {
+                        TRANSACTIONS_INSUFFICIENT_FEE
+                            .with_label_values(&[tx.relayer_id.as_str(), "stellar"])
+                            .inc();
+                    }
+
+                    if meta.insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
                         STELLAR_SUBMISSION_FAILURES
                             .with_label_values(&["error", "tx_insufficient_fee"])
                             .inc();
@@ -213,7 +225,7 @@ where
                         tx_id = %tx.id,
                         relayer_id = %tx.relayer_id,
                         status = ?tx.status,
-                        insufficient_fee_retries,
+                        insufficient_fee_retries = meta.insufficient_fee_retries,
                         result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
@@ -415,6 +427,7 @@ mod tests {
     use soroban_rs::xdr::WriteXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
+    use crate::models::TransactionMetadata;
 
     /// Helper to create a SendTransactionResponse with given status
     fn create_send_tx_response(status: &str, hash: &str) -> SendTransactionResponse {
@@ -1215,6 +1228,7 @@ mod tests {
                         consecutive_failures: 0,
                         total_failures: 0,
                         insufficient_fee_retries: 1,
+                        try_again_later_retries: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })

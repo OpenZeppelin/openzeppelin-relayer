@@ -2115,6 +2115,7 @@ mod tests {
             consecutive_failures: 5,
             total_failures: 10,
             insufficient_fee_retries: 0,
+            try_again_later_retries: 0,
         });
         repo.create(tx).await.unwrap();
 

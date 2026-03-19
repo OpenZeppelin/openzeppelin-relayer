@@ -12,7 +12,9 @@ use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
-    models::{ApiError, DefaultAppState, TransactionError, TransactionRepoModel},
+    models::{
+        ApiError, DefaultAppState, TransactionError, TransactionMetadata, TransactionRepoModel,
+    },
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
     repositories::TransactionRepository,
@@ -52,8 +54,7 @@ pub async fn transaction_status_handler(
         req_result.result,
         &*tx_repo,
         tx_id,
-        req_result.consecutive_failures,
-        req_result.total_failures,
+        req_result.metadata,
         req_result.should_retry_on_error,
     )
     .await
@@ -68,13 +69,12 @@ pub async fn transaction_status_handler(
 /// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
 /// - If counters are None (early failure) → Skip counter updates
 ///
-/// Counters are stored in transaction metadata, persisted via partial_update.
+/// Counters are stored in transaction metadata, persisted via atomic Lua scripts.
 async fn handle_result<TR>(
     result: Result<TransactionRepoModel>,
     tx_repo: &TR,
     tx_id: &str,
-    consecutive_failures: Option<u32>,
-    total_failures: Option<u32>,
+    metadata: Option<TransactionMetadata>,
     should_retry_on_error: bool,
 ) -> Result<(), HandlerError>
 where
@@ -88,8 +88,8 @@ where
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
                 status = ?tx.status,
-                consecutive_failures = ?consecutive_failures,
-                total_failures = ?total_failures,
+                consecutive_failures = ?metadata.as_ref().map(|m| m.consecutive_failures),
+                total_failures = ?metadata.as_ref().map(|m| m.total_failures),
                 "transaction in final state, status check complete"
             );
 
@@ -104,18 +104,17 @@ where
                 "transaction not in final state"
             );
 
-            // Reset consecutive counter only if it is actually non-zero
-            match (consecutive_failures, total_failures) {
-                (Some(consecutive), Some(_total)) if consecutive > 0 => {
+            // Use fresh metadata from the transaction (updated during handle_transaction_status)
+            // to decide whether a reset is needed, falling back to the pre-check snapshot.
+            let fresh_meta = tx.metadata.clone().or(metadata);
+            if let Some(meta) = fresh_meta {
+                if meta.consecutive_failures > 0 {
                     if let Err(e) = tx_repo
                         .reset_status_check_consecutive_failures(tx_id.to_string())
                         .await
                     {
                         warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
                     }
-                }
-                _ => {
-                    // No previous failures or counters not available - nothing to reset
                 }
             }
 
@@ -147,36 +146,30 @@ where
                 return Ok(());
             }
 
-            // Transient error - INCREMENT both counters (only if we have values)
-            match (consecutive_failures, total_failures) {
-                (Some(consecutive), Some(total)) => {
-                    let new_consecutive = consecutive.saturating_add(1);
-                    let new_total = total.saturating_add(1);
+            // Transient error - INCREMENT both counters (only if we have metadata)
+            if let Some(meta) = metadata {
+                warn!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    consecutive_failures = meta.consecutive_failures.saturating_add(1),
+                    total_failures = meta.total_failures.saturating_add(1),
+                    "status check failed, incrementing failure counters"
+                );
 
-                    warn!(
-                        error = %e,
-                        tx_id = %tx_id,
-                        consecutive_failures = new_consecutive,
-                        total_failures = new_total,
-                        "status check failed, incrementing failure counters"
-                    );
-
-                    // Update counters via transaction repository
-                    if let Err(update_err) = tx_repo
-                        .increment_status_check_failures(tx_id.to_string())
-                        .await
-                    {
-                        warn!(error = %update_err, tx_id = %tx_id, "failed to update counters");
-                    }
+                // Update counters via atomic transaction repository method
+                if let Err(update_err) = tx_repo
+                    .increment_status_check_failures(tx_id.to_string())
+                    .await
+                {
+                    warn!(error = %update_err, tx_id = %tx_id, "failed to update counters");
                 }
-                _ => {
-                    // Early failure before counters were read - skip counter update
-                    warn!(
-                        error = %e,
-                        tx_id = %tx_id,
-                        "status check failed early, counters not available"
-                    );
-                }
+            } else {
+                // Early failure before counters were read - skip counter update
+                warn!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    "status check failed early, counters not available"
+                );
             }
 
             // Return error to trigger retry
@@ -188,8 +181,9 @@ where
 /// Result of handle_request including whether to retry on error.
 struct HandleRequestResult {
     result: Result<TransactionRepoModel>,
-    consecutive_failures: Option<u32>,
-    total_failures: Option<u32>,
+    /// Transaction metadata with failure counters. None if metadata couldn't be read
+    /// (e.g., transaction fetch failed early).
+    metadata: Option<TransactionMetadata>,
     /// If false, errors should not trigger retry (e.g., transaction not found)
     should_retry_on_error: bool,
 }
@@ -218,8 +212,7 @@ async fn handle_request(
             warn!(tx_id = %tx_id, "transaction not found, completing job without retry: {}", msg);
             return HandleRequestResult {
                 result: Err(eyre::eyre!("Transaction not found: {}", msg)),
-                consecutive_failures: None,
-                total_failures: None,
+                metadata: None,
                 should_retry_on_error: false,
             };
         }
@@ -227,18 +220,14 @@ async fn handle_request(
             // Other errors - should retry
             return HandleRequestResult {
                 result: Err(e.into()),
-                consecutive_failures: None,
-                total_failures: None,
+                metadata: None,
                 should_retry_on_error: true,
             };
         }
     };
 
     // Read failure counters from transaction metadata
-    let (consecutive_failures, total_failures) = match &transaction.metadata {
-        Some(meta) => (meta.consecutive_failures, meta.total_failures),
-        None => (0, 0),
-    };
+    let meta = transaction.metadata.clone().unwrap_or_default();
 
     // Get network type from transaction (authoritative source)
     let network_type = transaction.network_type;
@@ -247,8 +236,8 @@ async fn handle_request(
 
     debug!(
         tx_id = %tx_id,
-        consecutive_failures,
-        total_failures,
+        consecutive_failures = meta.consecutive_failures,
+        total_failures = meta.total_failures,
         max_consecutive,
         max_total,
         attempt,
@@ -258,8 +247,8 @@ async fn handle_request(
 
     // Build circuit breaker context
     let context = StatusCheckContext::new(
-        consecutive_failures,
-        total_failures,
+        meta.consecutive_failures,
+        meta.total_failures,
         attempt as u32,
         max_consecutive,
         max_total,
@@ -279,8 +268,7 @@ async fn handle_request(
                 );
                 return HandleRequestResult {
                     result: Err(eyre::eyre!("Relayer or signer not found: {}", msg)),
-                    consecutive_failures: Some(consecutive_failures),
-                    total_failures: Some(total_failures),
+                    metadata: Some(meta),
                     should_retry_on_error: false,
                 };
             }
@@ -288,8 +276,7 @@ async fn handle_request(
                 // Other errors - should retry
                 return HandleRequestResult {
                     result: Err(e.into()),
-                    consecutive_failures: Some(consecutive_failures),
-                    total_failures: Some(total_failures),
+                    metadata: Some(meta),
                     should_retry_on_error: true,
                 };
             }
@@ -311,8 +298,7 @@ async fn handle_request(
 
     HandleRequestResult {
         result,
-        consecutive_failures: Some(consecutive_failures),
-        total_failures: Some(total_failures),
+        metadata: Some(meta),
         should_retry_on_error: true,
     }
 }
@@ -532,8 +518,11 @@ mod tests {
                 Err(TransactionError::ConcurrentUpdateConflict("tx race".to_string()).into()),
                 &tx_repo,
                 "tx-1",
-                Some(2),
-                Some(5),
+                Some(TransactionMetadata {
+                    consecutive_failures: 2,
+                    total_failures: 5,
+                    ..Default::default()
+                }),
                 true,
             )
             .await;
@@ -545,14 +534,19 @@ mod tests {
         fn test_handle_request_result_with_counters() {
             let result = HandleRequestResult {
                 result: Ok(TransactionRepoModel::default()),
-                consecutive_failures: Some(5),
-                total_failures: Some(10),
+                metadata: Some(TransactionMetadata {
+                    consecutive_failures: 5,
+                    total_failures: 10,
+                    insufficient_fee_retries: 2,
+                    try_again_later_retries: 1,
+                }),
                 should_retry_on_error: true,
             };
 
             assert!(result.result.is_ok());
-            assert_eq!(result.consecutive_failures, Some(5));
-            assert_eq!(result.total_failures, Some(10));
+            let meta = result.metadata.unwrap();
+            assert_eq!(meta.consecutive_failures, 5);
+            assert_eq!(meta.total_failures, 10);
             assert!(result.should_retry_on_error);
         }
 
@@ -561,14 +555,12 @@ mod tests {
             // Early failure before counters could be read
             let result = HandleRequestResult {
                 result: Err(eyre::eyre!("Transaction not found")),
-                consecutive_failures: None,
-                total_failures: None,
+                metadata: None,
                 should_retry_on_error: false,
             };
 
             assert!(result.result.is_err());
-            assert_eq!(result.consecutive_failures, None);
-            assert_eq!(result.total_failures, None);
+            assert!(result.metadata.is_none());
             assert!(!result.should_retry_on_error);
         }
 
@@ -577,8 +569,7 @@ mod tests {
             // NotFound errors are permanent - should not retry
             let result = HandleRequestResult {
                 result: Err(eyre::eyre!("Transaction not found")),
-                consecutive_failures: None,
-                total_failures: None,
+                metadata: None,
                 should_retry_on_error: false,
             };
 
@@ -591,8 +582,12 @@ mod tests {
             // Network/connection errors are transient - should retry
             let result = HandleRequestResult {
                 result: Err(eyre::eyre!("Connection timeout")),
-                consecutive_failures: Some(3),
-                total_failures: Some(7),
+                metadata: Some(TransactionMetadata {
+                    consecutive_failures: 3,
+                    total_failures: 7,
+                    insufficient_fee_retries: 1,
+                    try_again_later_retries: 0,
+                }),
                 should_retry_on_error: true,
             };
 

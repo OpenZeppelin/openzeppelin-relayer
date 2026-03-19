@@ -40,7 +40,7 @@ use crate::{
         HealthCheckFailure, NetworkRepoModel, NetworkTransactionData, NetworkType, PaginationQuery,
         RelayerNetworkPolicy, RelayerRepoModel, RelayerSolanaPolicy, SolanaAllowedTokensPolicy,
         SolanaDexPayload, SolanaFeePaymentStrategy, SolanaNetwork, SolanaTransactionData,
-        TransactionRepoModel, TransactionStatus,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -656,15 +656,11 @@ where
                 .await
                 .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
-            self.job_producer
-                .produce_transaction_request_job(
-                    TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
-                    None,
-                )
-                .await?;
-
-            // Queue status check job (with initial delay)
-            self.job_producer
+            // Status check FIRST - this is our safety net for monitoring.
+            // If this fails, mark transaction as failed and don't proceed.
+            // This ensures we never have an unmonitored transaction.
+            if let Err(e) = self
+                .job_producer
                 .produce_check_transaction_status_job(
                     TransactionStatusCheck::new(
                         transaction.id.clone(),
@@ -674,6 +670,44 @@ where
                     Some(calculate_scheduled_timestamp(
                         SOLANA_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                     )),
+                )
+                .await
+            {
+                // Status queue failed - mark transaction as failed to prevent orphaned tx
+                error!(
+                    relayer_id = %self.relayer.id,
+                    transaction_id = %transaction.id,
+                    error = %e,
+                    "Status check queue push failed - marking transaction as failed"
+                );
+                if let Err(update_err) = self
+                    .transaction_repository
+                    .partial_update(
+                        transaction.id.clone(),
+                        TransactionUpdateRequest {
+                            status: Some(TransactionStatus::Failed),
+                            status_reason: Some("Queue unavailable".to_string()),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        transaction_id = %transaction.id,
+                        error = %update_err,
+                        "Failed to mark transaction as failed after queue push failure"
+                    );
+                }
+                return Err(e.into());
+            }
+
+            // Now safe to push transaction request.
+            // Even if this fails, status check will monitor and detect the stuck transaction.
+            self.job_producer
+                .produce_transaction_request_job(
+                    TransactionRequest::new(transaction.id.clone(), transaction.relayer_id.clone()),
+                    None,
                 )
                 .await?;
 
@@ -2906,5 +2940,124 @@ mod tests {
         } else {
             panic!("Expected ValidationError for wrong network type");
         }
+    }
+
+    #[tokio::test]
+    async fn test_process_transaction_request_status_check_failure_returns_error() {
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            network: "devnet".to_string(),
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let network_tx =
+            NetworkTransactionRequest::Solana(crate::models::SolanaTransactionRequest {
+                transaction: Some(EncodedSerializedTransaction::new(
+                    "test_transaction".to_string(),
+                )),
+                instructions: None,
+                valid_until: None,
+            });
+
+        let mut tx_repo = MockTransactionRepository::new();
+        tx_repo.expect_create().returning(|t| Ok(t.clone()));
+        // When status check fails, transaction is marked as failed
+        tx_repo
+            .expect_partial_update()
+            .returning(|_, _| Ok(TransactionRepoModel::default()));
+
+        let mut job_producer = MockJobProducerTrait::new();
+
+        // Status check fails
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::jobs::JobProducerError::QueueError(
+                        "Failed to queue job".to_string(),
+                    ))
+                })
+            });
+
+        // Transaction request should NOT be called when status check fails
+        // (no expectation set = test fails if called)
+
+        let ctx = TestCtx {
+            relayer_model,
+            tx_repo: Arc::new(tx_repo),
+            job_producer: Arc::new(job_producer),
+            ..Default::default()
+        };
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.process_transaction_request(network_tx).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_process_transaction_request_status_check_failure_marks_tx_failed() {
+        let relayer_model = RelayerRepoModel {
+            id: "test-relayer-id".to_string(),
+            address: "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string(),
+            network: "devnet".to_string(),
+            network_type: NetworkType::Solana,
+            policies: RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
+                fee_payment_strategy: Some(SolanaFeePaymentStrategy::Relayer),
+                min_balance: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let network_tx =
+            NetworkTransactionRequest::Solana(crate::models::SolanaTransactionRequest {
+                transaction: Some(EncodedSerializedTransaction::new(
+                    "test_transaction".to_string(),
+                )),
+                instructions: None,
+                valid_until: None,
+            });
+
+        let mut tx_repo = MockTransactionRepository::new();
+        tx_repo.expect_create().returning(|t| Ok(t.clone()));
+
+        // Verify partial_update is called with correct status and reason
+        tx_repo
+            .expect_partial_update()
+            .withf(|_tx_id, update| {
+                update.status == Some(TransactionStatus::Failed)
+                    && update.status_reason == Some("Queue unavailable".to_string())
+            })
+            .returning(|_, _| Ok(TransactionRepoModel::default()));
+
+        let mut job_producer = MockJobProducerTrait::new();
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Err(crate::jobs::JobProducerError::QueueError(
+                        "Redis timeout".to_string(),
+                    ))
+                })
+            });
+
+        let ctx = TestCtx {
+            relayer_model,
+            tx_repo: Arc::new(tx_repo),
+            job_producer: Arc::new(job_producer),
+            ..Default::default()
+        };
+        let solana_relayer = ctx.into_relayer().await;
+
+        let result = solana_relayer.process_transaction_request(network_tx).await;
+        assert!(result.is_err());
+        // The mock verification (withf) ensures partial_update was called correctly
     }
 }
