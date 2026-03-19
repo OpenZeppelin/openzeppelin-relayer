@@ -13,10 +13,10 @@ use super::{
 use crate::{
     constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
-    metrics::STELLAR_SUBMISSION_FAILURES,
+    metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE},
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionMetadata,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
+        TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{
@@ -166,17 +166,26 @@ where
                 // transaction alive. The status checker will handle retries:
                 // - Submitted txs: resubmitted with exponential backoff
                 // - Sent txs: re-enqueued via handle_sent_state
-                crate::metrics::STELLAR_TRY_AGAIN_LATER
-                    .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
-                    .inc();
+                let mut meta = tx.metadata.clone().unwrap_or_default();
+                meta.try_again_later_retries = meta.try_again_later_retries.saturating_add(1);
+
+                // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
+                if meta.try_again_later_retries == 1 {
+                    crate::metrics::STELLAR_TRY_AGAIN_LATER
+                        .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
+                        .inc();
+                }
+
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
                     status = ?tx.status,
+                    try_again_later_retries = meta.try_again_later_retries,
                     "TRY_AGAIN_LATER — status checker will retry"
                 );
                 let update_req = TransactionUpdateRequest {
                     sent_at: Some(Utc::now().to_rfc3339()),
+                    metadata: Some(meta),
                     ..Default::default()
                 };
                 let updated_tx = self
@@ -199,13 +208,17 @@ where
                     .as_deref()
                     .is_some_and(is_insufficient_fee_error)
                 {
-                    let insufficient_fee_retries = tx
-                        .metadata
-                        .as_ref()
-                        .map_or(0, |metadata| metadata.insufficient_fee_retries)
-                        .saturating_add(1);
+                    let mut meta = tx.metadata.clone().unwrap_or_default();
+                    meta.insufficient_fee_retries = meta.insufficient_fee_retries.saturating_add(1);
 
-                    if insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                    // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
+                    if meta.insufficient_fee_retries == 1 {
+                        TRANSACTIONS_INSUFFICIENT_FEE
+                            .with_label_values(&[tx.relayer_id.as_str(), "stellar"])
+                            .inc();
+                    }
+
+                    if meta.insufficient_fee_retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
                         STELLAR_SUBMISSION_FAILURES
                             .with_label_values(&["error", "tx_insufficient_fee"])
                             .inc();
@@ -218,23 +231,13 @@ where
                         tx_id = %tx.id,
                         relayer_id = %tx.relayer_id,
                         status = ?tx.status,
-                        insufficient_fee_retries,
+                        insufficient_fee_retries = meta.insufficient_fee_retries,
                         result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
                     let update_req = TransactionUpdateRequest {
                         sent_at: Some(Utc::now().to_rfc3339()),
-                        metadata: Some(TransactionMetadata {
-                            consecutive_failures: tx
-                                .metadata
-                                .as_ref()
-                                .map_or(0, |metadata| metadata.consecutive_failures),
-                            total_failures: tx
-                                .metadata
-                                .as_ref()
-                                .map_or(0, |metadata| metadata.total_failures),
-                            insufficient_fee_retries,
-                        }),
+                        metadata: Some(meta),
                         ..Default::default()
                     };
                     let updated_tx = self
@@ -414,6 +417,7 @@ mod tests {
     use soroban_rs::xdr::WriteXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
+    use crate::models::TransactionMetadata;
 
     /// Helper to create a SendTransactionResponse with given status
     fn create_send_tx_response(status: &str, hash: &str) -> SendTransactionResponse {
@@ -970,11 +974,18 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at — status should NOT change
+            // partial_update is called to refresh sent_at and persist metadata — status should NOT change
             mocks
                 .tx_repo
                 .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
+                .withf(|_, upd| {
+                    upd.sent_at.is_some()
+                        && upd.status.is_none()
+                        && upd
+                            .metadata
+                            .as_ref()
+                            .is_some_and(|m| m.try_again_later_retries == 1)
+                })
                 .returning(|id, _upd| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
@@ -1044,7 +1055,19 @@ mod tests {
             assert!(returned_tx.sent_at.is_some());
 
             // status check sees stale Sent tx and re-enqueues submit job.
-            returned_tx.sent_at = Some((Utc::now() - chrono::Duration::seconds(31)).to_rfc3339());
+            // Both created_at and sent_at must exceed the base resubmit interval
+            // for the backoff logic to trigger. created_at is set earlier than sent_at
+            // to match real-world invariants (transaction is created before being sent).
+            use crate::constants::STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS;
+            let buffer = 2;
+            let created_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + buffer))
+            .to_rfc3339();
+            let sent_at = (Utc::now()
+                - chrono::Duration::seconds(STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS + 1))
+            .to_rfc3339();
+            returned_tx.created_at = created_at;
+            returned_tx.sent_at = Some(sent_at);
 
             let mut status_mocks = default_test_mocks();
             status_mocks

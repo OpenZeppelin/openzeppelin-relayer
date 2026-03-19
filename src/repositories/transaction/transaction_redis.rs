@@ -2,8 +2,10 @@
 
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
-    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
-    TRANSACTIONS_SUCCESS, TRANSACTION_PROCESSING_TIME,
+    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED,
+    TRANSACTIONS_INSUFFICIENT_FEE_FAILED, TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS,
+    TRANSACTIONS_SUBMITTED, TRANSACTIONS_SUCCESS, TRANSACTIONS_TRY_AGAIN_LATER_FAILED,
+    TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS, TRANSACTION_PROCESSING_TIME,
 };
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
@@ -1450,11 +1452,27 @@ impl TransactionRepository for RedisTransactionRepository {
                         let is_final = is_final_state(new_status);
 
                         if !was_final && is_final {
+                            let meta = updated_tx.metadata.as_ref();
+                            let had_insufficient_fee =
+                                meta.is_some_and(|m| m.insufficient_fee_retries > 0);
+                            let had_try_again_later =
+                                meta.is_some_and(|m| m.try_again_later_retries > 0);
+
                             match new_status {
                                 TransactionStatus::Confirmed => {
                                     TRANSACTIONS_SUCCESS
                                         .with_label_values(&[relayer_id, &network_type])
                                         .inc();
+                                    if had_insufficient_fee {
+                                        TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS
+                                            .with_label_values(&[relayer_id, &network_type])
+                                            .inc();
+                                    }
+                                    if had_try_again_later {
+                                        TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS
+                                            .with_label_values(&[relayer_id, &network_type])
+                                            .inc();
+                                    }
 
                                     // Track processing time: submission to confirmation
                                     if let (Some(sent_at_str), Some(confirmed_at_str)) =
@@ -1540,6 +1558,20 @@ impl TransactionRepository for RedisTransactionRepository {
                                 }
                                 _ => {
                                     // Other final states (shouldn't happen, but handle gracefully)
+                                }
+                            }
+
+                            // Track retry-related failure metrics for all non-success final states
+                            if *new_status != TransactionStatus::Confirmed {
+                                if had_insufficient_fee {
+                                    TRANSACTIONS_INSUFFICIENT_FEE_FAILED
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .inc();
+                                }
+                                if had_try_again_later {
+                                    TRANSACTIONS_TRY_AGAIN_LATER_FAILED
+                                        .with_label_values(&[relayer_id, &network_type])
+                                        .inc();
                                 }
                             }
                         }

@@ -1,0 +1,19 @@
+{
+  "name": "RPC → HTTP 500 (any method)",
+  "request": {
+    "method": "POST"
+  },
+  "response": {
+    "status": 500,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": { "code": -32603, "message": "Internal server error" }
+    }
+  },
+  "scenarioName": "rpc-500",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1
+}
