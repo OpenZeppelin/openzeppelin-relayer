@@ -42,6 +42,9 @@ pub enum TransactionError {
     #[error("Unexpected error: {0}")]
     UnexpectedError(String),
 
+    #[error("Concurrent update conflict: {0}")]
+    ConcurrentUpdateConflict(String),
+
     #[error("Not supported: {0}")]
     NotSupported(String),
 
@@ -82,6 +85,7 @@ impl TransactionError {
 
             // Transient errors - may resolve on retry
             TransactionError::UnexpectedError(_) => true,
+            TransactionError::ConcurrentUpdateConflict(_) => true,
             TransactionError::JobProducerError(_) => true,
 
             // Permanent errors - fail immediately
@@ -94,6 +98,11 @@ impl TransactionError {
             TransactionError::SimulationFailed(_) => false,
             TransactionError::StellarTransactionValidationError(_) => false,
         }
+    }
+
+    /// Detects optimistic-lock conflicts caused by concurrent transaction updates.
+    pub fn is_concurrent_update_conflict(&self) -> bool {
+        matches!(self, TransactionError::ConcurrentUpdateConflict(_))
     }
 }
 
@@ -114,6 +123,7 @@ impl From<TransactionError> for ApiError {
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
+            TransactionError::ConcurrentUpdateConflict(msg) => ApiError::InternalError(msg),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
             TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
             TransactionError::SimulationFailed(msg) => ApiError::BadRequest(msg),
@@ -123,7 +133,25 @@ impl From<TransactionError> for ApiError {
 
 impl From<RepositoryError> for TransactionError {
     fn from(error: RepositoryError) -> Self {
-        TransactionError::ValidationError(error.to_string())
+        match error {
+            RepositoryError::NotFound(msg)
+            | RepositoryError::InvalidData(msg)
+            | RepositoryError::ConstraintViolation(msg)
+            | RepositoryError::TransactionValidationFailed(msg) => {
+                TransactionError::ValidationError(msg)
+            }
+            RepositoryError::ConcurrentUpdateConflict(msg) => {
+                TransactionError::ConcurrentUpdateConflict(msg)
+            }
+            RepositoryError::TransactionFailure(msg)
+            | RepositoryError::LockError(msg)
+            | RepositoryError::ConnectionError(msg)
+            | RepositoryError::PermissionDenied(msg)
+            | RepositoryError::Unknown(msg)
+            | RepositoryError::UnexpectedError(msg)
+            | RepositoryError::Other(msg) => TransactionError::UnexpectedError(msg),
+            RepositoryError::NotSupported(msg) => TransactionError::NotSupported(msg),
+        }
     }
 }
 
@@ -205,6 +233,10 @@ mod tests {
                 TransactionError::SimulationFailed("sim failed".to_string()),
                 "Stellar transaction simulation failed: sim failed",
             ),
+            (
+                TransactionError::ConcurrentUpdateConflict("conflict on tx-1".to_string()),
+                "Concurrent update conflict: conflict on tx-1",
+            ),
         ];
 
         for (error, expected_message) in test_cases {
@@ -247,6 +279,10 @@ mod tests {
                 TransactionError::SimulationFailed("boom".to_string()),
                 ApiError::BadRequest("boom".to_string()),
             ),
+            (
+                TransactionError::ConcurrentUpdateConflict("conflict".to_string()),
+                ApiError::InternalError("conflict".to_string()),
+            ),
         ];
 
         for (tx_error, expected_api_error) in test_cases {
@@ -271,9 +307,49 @@ mod tests {
 
         match tx_error {
             TransactionError::ValidationError(msg) => {
-                assert_eq!(msg, "Entity not found: record not found");
+                assert_eq!(msg, "record not found");
             }
             _ => panic!("Expected TransactionError::ValidationError"),
+        }
+    }
+
+    #[test]
+    fn test_concurrent_update_conflict_variant() {
+        let error = TransactionError::ConcurrentUpdateConflict("conflict on tx-1".to_string());
+        assert!(error.is_transient());
+        assert!(error.is_concurrent_update_conflict());
+        assert_eq!(
+            error.to_string(),
+            "Concurrent update conflict: conflict on tx-1"
+        );
+
+        let api_error = ApiError::from(error);
+        assert!(matches!(api_error, ApiError::InternalError(_)));
+    }
+
+    #[test]
+    fn test_concurrent_update_conflict_repo_conversion() {
+        let repo_error = RepositoryError::ConcurrentUpdateConflict("conflict on tx-1".to_string());
+        let tx_error = TransactionError::from(repo_error);
+        assert!(matches!(
+            tx_error,
+            TransactionError::ConcurrentUpdateConflict(_)
+        ));
+        assert!(tx_error.is_concurrent_update_conflict());
+    }
+
+    #[test]
+    fn test_non_conflict_errors_are_not_concurrent_update_conflict() {
+        let errors = vec![
+            TransactionError::ValidationError("some error".to_string()),
+            TransactionError::UnexpectedError("some error".to_string()),
+            TransactionError::NetworkConfiguration("some error".to_string()),
+        ];
+        for error in errors {
+            assert!(
+                !error.is_concurrent_update_conflict(),
+                "Error {error:?} should not be a concurrent update conflict"
+            );
         }
     }
 
