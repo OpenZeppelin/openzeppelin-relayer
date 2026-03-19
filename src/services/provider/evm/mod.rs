@@ -499,19 +499,18 @@ impl EvmProviderTrait for EvmProvider {
 impl TryFrom<&EvmTransactionData> for TransactionRequest {
     type Error = TransactionError;
     fn try_from(tx: &EvmTransactionData) -> Result<Self, Self::Error> {
+        let to = match tx.to.as_ref() {
+            Some(address) => TxKind::Call(address.parse().map_err(|_| {
+                TransactionError::InvalidType("Invalid address format".to_string())
+            })?),
+            None => TxKind::Create,
+        };
+
         Ok(TransactionRequest {
             from: Some(tx.from.clone().parse().map_err(|_| {
                 TransactionError::InvalidType("Invalid address format".to_string())
             })?),
-            to: Some(TxKind::Call(
-                tx.to
-                    .clone()
-                    .unwrap_or("".to_string())
-                    .parse()
-                    .map_err(|_| {
-                        TransactionError::InvalidType("Invalid address format".to_string())
-                    })?,
-            )),
+            to: Some(to),
             gas_price: tx
                 .gas_price
                 .map(|gp| {
@@ -889,6 +888,59 @@ mod tests {
 
         let result = TransactionRequest::try_from(&tx_data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transaction_request_conversion_contract_creation() {
+        let tx_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: None,
+            gas_price: Some(1000000000),
+            value: Uint::<256, 4>::from(0),
+            data: Some("0x6080604052348015600f57600080fd5b".to_string()),
+            nonce: Some(1),
+            chain_id: 1,
+            gas_limit: None,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        let result = TransactionRequest::try_from(&tx_data);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to, Some(TxKind::Create));
+    }
+
+    #[test]
+    fn test_transaction_request_conversion_invalid_to_address() {
+        let tx_data = EvmTransactionData {
+            from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
+            to: Some("invalid-address".to_string()),
+            gas_price: Some(1000000000),
+            value: Uint::<256, 4>::from(0),
+            data: Some("0x".to_string()),
+            nonce: Some(1),
+            chain_id: 1,
+            gas_limit: None,
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        let result = TransactionRequest::try_from(&tx_data);
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(TransactionError::InvalidType(ref msg)) if msg == "Invalid address format"
+        ));
     }
 
     #[tokio::test]

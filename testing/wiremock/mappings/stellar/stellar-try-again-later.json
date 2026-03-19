@@ -1,0 +1,30 @@
+{
+  "name": "Stellar sendTransaction → TRY_AGAIN_LATER",
+  "request": {
+    "method": "POST",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.method == 'sendTransaction')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "status": "TRY_AGAIN_LATER",
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "latestLedger": 100,
+        "latestLedgerCloseTime": "1700000000"
+      }
+    }
+  },
+  "scenarioName": "stellar-try-again-later",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1,
+  "metadata": {
+    "description": "Returns TRY_AGAIN_LATER once, then reverts to proxy mode. Activate via: PUT /__admin/scenarios/stellar-try-again-later/state  {\"state\": \"armed\"}"
+  }
+}

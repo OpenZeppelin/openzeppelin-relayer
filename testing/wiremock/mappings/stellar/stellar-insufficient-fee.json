@@ -1,0 +1,31 @@
+{
+  "name": "Stellar sendTransaction → ERROR (insufficient fee)",
+  "request": {
+    "method": "POST",
+    "bodyPatterns": [
+      { "matchesJsonPath": "$[?(@.method == 'sendTransaction')]" }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "status": "ERROR",
+        "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "latestLedger": 100,
+        "latestLedgerCloseTime": "1700000000",
+        "errorResultXdr": "AAAAAAAAY/n////3AAAAAA=="
+      }
+    }
+  },
+  "scenarioName": "stellar-insufficient-fee",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1,
+  "metadata": {
+    "description": "Returns ERROR with tx_insufficient_fee XDR once. Activate via: PUT /__admin/scenarios/stellar-insufficient-fee/state  {\"state\": \"armed\"}"
+  }
+}
