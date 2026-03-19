@@ -160,16 +160,24 @@ where
             }
             "TRY_AGAIN_LATER" => {
                 // Network is temporarily congested — the transaction is valid but the
-                // node's queue is full. Update sent_at so the status checker's backoff
-                // gate measures time since this attempt, then return Ok to keep the
-                // transaction alive. The status checker will handle retries:
+                // node's queue is full. Atomically update sent_at and increment
+                // try_again_later_retries so the status checker's backoff gate measures
+                // time since this attempt. Return Ok to keep the transaction alive.
+                // The status checker will handle retries:
                 // - Submitted txs: resubmitted with exponential backoff
                 // - Sent txs: re-enqueued via handle_sent_state
-                let mut meta = tx.metadata.clone().unwrap_or_default();
-                meta.try_again_later_retries = meta.try_again_later_retries.saturating_add(1);
+                let updated_tx = self
+                    .transaction_repository()
+                    .record_stellar_try_again_later_retry(tx.id.clone(), Utc::now().to_rfc3339())
+                    .await?;
+
+                let retries = updated_tx
+                    .metadata
+                    .as_ref()
+                    .map_or(0, |m| m.try_again_later_retries);
 
                 // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
-                if meta.try_again_later_retries == 1 {
+                if retries == 1 {
                     crate::metrics::STELLAR_TRY_AGAIN_LATER
                         .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
                         .inc();
@@ -179,13 +187,9 @@ where
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
                     status = ?tx.status,
-                    try_again_later_retries = meta.try_again_later_retries,
+                    try_again_later_retries = retries,
                     "TRY_AGAIN_LATER — status checker will retry"
                 );
-                let updated_tx = self
-                    .transaction_repository()
-                    .set_sent_at(tx.id.clone(), Utc::now().to_rfc3339())
-                    .await?;
                 Ok(updated_tx)
             }
             "ERROR" => {
@@ -986,12 +990,18 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_set_sent_at()
+                .expect_record_stellar_try_again_later_retry()
                 .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
                 .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1030,7 +1040,7 @@ mod tests {
                 });
             submit_mocks
                 .tx_repo
-                .expect_set_sent_at()
+                .expect_record_stellar_try_again_later_retry()
                 .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
                 .times(1)
                 .returning(|id, sent_at| {
@@ -1038,6 +1048,12 @@ mod tests {
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
                     tx.sent_at = Some(sent_at);
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1106,12 +1122,18 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_set_sent_at()
+                .expect_record_stellar_try_again_later_retry()
                 .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
                 .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Submitted;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1224,7 +1246,7 @@ mod tests {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
-                    tx.metadata = Some(crate::models::TransactionMetadata {
+                    tx.metadata = Some(TransactionMetadata {
                         consecutive_failures: 0,
                         total_failures: 0,
                         insufficient_fee_retries: 1,
@@ -1312,7 +1334,7 @@ mod tests {
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
             tx.status = TransactionStatus::Sent;
-            tx.metadata = Some(crate::models::TransactionMetadata {
+            tx.metadata = Some(TransactionMetadata {
                 insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
                 ..Default::default()
             });

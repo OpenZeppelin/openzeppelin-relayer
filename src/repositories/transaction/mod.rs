@@ -135,6 +135,13 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError>;
 
+    /// Atomically sets `sent_at` and increments Stellar try-again-later retries.
+    async fn record_stellar_try_again_later_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
     /// Set the confirmed_at timestamp of a transaction
     async fn set_confirmed_at(
         &self,
@@ -214,6 +221,7 @@ mockall::mock! {
       async fn increment_status_check_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn reset_status_check_consecutive_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn record_stellar_insufficient_fee_retry(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn record_stellar_try_again_later_retry(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_confirmed_at(&self, tx_id: String, confirmed_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn count_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<u64, RepositoryError>;
       async fn delete_by_ids(&self, ids: Vec<String>) -> Result<BatchDeleteResult, RepositoryError>;
@@ -429,6 +437,23 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.record_stellar_insufficient_fee_retry(tx_id, sent_at)
+                    .await
+            }
+        }
+    }
+
+    async fn record_stellar_try_again_later_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.record_stellar_try_again_later_retry(tx_id, sent_at)
+                    .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.record_stellar_try_again_later_retry(tx_id, sent_at)
                     .await
             }
         }
@@ -1348,6 +1373,92 @@ mod tests {
             result.iter().map(|tx| tx.status.clone()).collect();
         assert!(found_statuses.contains(&TransactionStatus::Pending));
         assert!(found_statuses.contains(&TransactionStatus::Sent));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_stellar_try_again_later_retry_in_memory() -> Result<()> {
+        let storage = TransactionRepositoryStorage::new_in_memory();
+        let mut transaction = create_test_transaction("test-tx", "test-relayer");
+        transaction.status = TransactionStatus::Sent;
+        storage.create(transaction).await?;
+
+        let sent_at = "2025-03-18T10:00:00Z".to_string();
+        let updated = storage
+            .record_stellar_try_again_later_retry("test-tx".to_string(), sent_at.clone())
+            .await?;
+
+        assert_eq!(updated.id, "test-tx");
+        assert_eq!(updated.sent_at, Some(sent_at));
+        let meta = updated.metadata.expect("metadata should be set");
+        assert_eq!(meta.try_again_later_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+        assert_eq!(meta.insufficient_fee_retries, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_stellar_try_again_later_retry_accumulates_in_memory() -> Result<()> {
+        let storage = TransactionRepositoryStorage::new_in_memory();
+        let mut transaction = create_test_transaction("test-tx", "test-relayer");
+        transaction.status = TransactionStatus::Sent;
+        storage.create(transaction).await?;
+
+        storage
+            .record_stellar_try_again_later_retry(
+                "test-tx".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await?;
+
+        let updated = storage
+            .record_stellar_try_again_later_retry(
+                "test-tx".to_string(),
+                "2025-03-18T10:01:00Z".to_string(),
+            )
+            .await?;
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_stellar_try_again_later_retry_noop_on_final_state_in_memory() -> Result<()>
+    {
+        let storage = TransactionRepositoryStorage::new_in_memory();
+        let mut transaction = create_test_transaction("test-tx", "test-relayer");
+        transaction.status = TransactionStatus::Confirmed;
+        transaction.sent_at = Some("old-time".to_string());
+        storage.create(transaction).await?;
+
+        let result = storage
+            .record_stellar_try_again_later_retry("test-tx".to_string(), "new-time".to_string())
+            .await?;
+
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_stellar_try_again_later_retry_not_found_in_memory() -> Result<()> {
+        let storage = TransactionRepositoryStorage::new_in_memory();
+
+        let result = storage
+            .record_stellar_try_again_later_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
 
         Ok(())
     }

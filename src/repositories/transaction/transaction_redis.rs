@@ -1805,7 +1805,6 @@ impl TransactionRepository for RedisTransactionRepository {
             if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = (metadata["consecutive_failures"] or 0) + 1
             metadata["total_failures"] = (metadata["total_failures"] or 0) + 1
-            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1847,8 +1846,6 @@ impl TransactionRepository for RedisTransactionRepository {
             local metadata = tx["metadata"]
             if type(metadata) ~= 'table' then metadata = {} end
             metadata["consecutive_failures"] = 0
-            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
-            if not metadata["insufficient_fee_retries"] then metadata["insufficient_fee_retries"] = 0 end
 
             local updated = set_obj(current, "metadata", metadata)
             redis.call('SET', tx_key, updated)
@@ -1898,8 +1895,6 @@ impl TransactionRepository for RedisTransactionRepository {
 
             local metadata = tx["metadata"]
             if type(metadata) ~= 'table' then metadata = {} end
-            if not metadata["consecutive_failures"] then metadata["consecutive_failures"] = 0 end
-            if not metadata["total_failures"] then metadata["total_failures"] = 0 end
             metadata["insufficient_fee_retries"] = (metadata["insufficient_fee_retries"] or 0) + 1
 
             local updated = set_str(current, "sent_at", ARGV[3])
@@ -1910,6 +1905,57 @@ impl TransactionRepository for RedisTransactionRepository {
             &tx_id,
             &[&sent_at],
             "record_stellar_insufficient_fee_retry",
+        )
+        .await
+    }
+
+    async fn record_stellar_try_again_later_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local function set_str(json, key, val)
+                local enc = cjson.encode(val)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+            local function set_obj(json, key, tbl)
+                local enc = cjson.encode(tbl)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            metadata["try_again_later_retries"] = (metadata["try_again_later_retries"] or 0) + 1
+
+            local updated = set_str(current, "sent_at", ARGV[3])
+            updated = set_obj(updated, "metadata", metadata)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[&sent_at],
+            "record_stellar_try_again_later_retry",
         )
         .await
     }
@@ -3814,5 +3860,241 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_try_again_later_retry ────────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(tx_id, "2025-03-18T10:00:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(tx_id, "2025-03-18T10:01:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_try_again_later_retry(tx_id, "new-time".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .record_stellar_try_again_later_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── metadata preservation across operations ─────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_failures_preserves_try_again_later_retries() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set try_again_later_retries = 1
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Now increment failures — should NOT clobber try_again_later_retries
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.try_again_later_retries, 1,
+            "try_again_later_retries must survive increment_status_check_failures"
+        );
+        assert_eq!(meta.consecutive_failures, 1);
+        assert_eq!(meta.total_failures, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_failures_preserves_insufficient_fee_retries() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set insufficient_fee_retries = 1
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Now increment failures — should NOT clobber insufficient_fee_retries
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.insufficient_fee_retries, 1,
+            "insufficient_fee_retries must survive increment_status_check_failures"
+        );
+        assert_eq!(meta.consecutive_failures, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_failures_preserves_retry_counters() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set both retry counters
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:01:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Increment then reset consecutive failures
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        let updated = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 1);
+        assert_eq!(
+            meta.try_again_later_retries, 1,
+            "try_again_later_retries must survive reset"
+        );
+        assert_eq!(
+            meta.insufficient_fee_retries, 1,
+            "insufficient_fee_retries must survive reset"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_fee_and_try_again_later_retries_independent() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set try_again_later_retries = 2
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:01:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Set insufficient_fee_retries = 1 — should NOT clobber try_again_later_retries
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:02:00Z".to_string())
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.try_again_later_retries, 2,
+            "try_again_later_retries must survive insufficient_fee_retry"
+        );
+        assert_eq!(meta.insufficient_fee_retries, 1);
     }
 }
