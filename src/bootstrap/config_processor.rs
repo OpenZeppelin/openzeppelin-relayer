@@ -751,6 +751,10 @@ where
         app_state.network_repository.drop_all_entries().await?;
         app_state.plugin_repository.drop_all_entries().await?;
         app_state.api_key_repository.drop_all_entries().await?;
+        app_state
+            .transaction_counter_store
+            .drop_all_entries()
+            .await?;
     }
 
     info!("Processing config file");
@@ -1792,6 +1796,48 @@ mod tests {
         let stored_relayers = app_state2.relayer_repository.list_all().await?;
         assert_eq!(stored_relayers.len(), 1);
         assert_eq!(stored_relayers[0].id, "test-relayer-1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reset_storage_on_start_clears_transaction_counter() -> Result<()> {
+        let config = create_minimal_test_config();
+        let server_config = Arc::new(create_test_server_config_with_settings(
+            RepositoryStorageType::InMemory,
+            true,
+        ));
+
+        let app_state = ThinData(create_test_app_state());
+
+        // Seed transaction counter with a value that simulates an inflated nonce
+        app_state
+            .transaction_counter_store
+            .set("test-relayer-1", "0xABC", 999)
+            .await
+            .unwrap();
+        assert_eq!(
+            app_state
+                .transaction_counter_store
+                .get("test-relayer-1", "0xABC")
+                .await
+                .unwrap(),
+            Some(999)
+        );
+
+        // Process config with reset_storage_on_start = true
+        process_config_file(config, server_config, &app_state).await?;
+
+        // Transaction counter should have been cleared
+        assert_eq!(
+            app_state
+                .transaction_counter_store
+                .get("test-relayer-1", "0xABC")
+                .await
+                .unwrap(),
+            None,
+            "Transaction counter should be cleared when RESET_STORAGE_ON_START is true"
+        );
 
         Ok(())
     }

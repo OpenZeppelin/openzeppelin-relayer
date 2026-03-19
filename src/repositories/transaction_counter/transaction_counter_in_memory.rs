@@ -66,6 +66,11 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
             .insert((relayer_id.to_string(), address.to_string()), value);
         Ok(())
     }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        self.store.clear();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -102,6 +107,23 @@ mod tests {
         // Decrement
         assert_eq!(store.decrement(relayer_id, address).await.unwrap(), 100);
         assert_eq!(store.get(relayer_id, address).await.unwrap(), Some(100));
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_entries() {
+        let store = InMemoryTransactionCounter::new();
+
+        store.set("relayer_1", "0x1234", 100).await.unwrap();
+        store.set("relayer_1", "0x5678", 200).await.unwrap();
+        store.set("relayer_2", "0x1234", 300).await.unwrap();
+
+        assert_eq!(store.get("relayer_1", "0x1234").await.unwrap(), Some(100));
+
+        store.drop_all_entries().await.unwrap();
+
+        assert_eq!(store.get("relayer_1", "0x1234").await.unwrap(), None);
+        assert_eq!(store.get("relayer_1", "0x5678").await.unwrap(), None);
+        assert_eq!(store.get("relayer_2", "0x1234").await.unwrap(), None);
     }
 
     #[tokio::test]
