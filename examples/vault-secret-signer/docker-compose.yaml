@@ -45,7 +45,7 @@ services:
       - metrics-network
     restart: on-failure:5
   vault:
-    image: hashicorp/vault:1.19.0
+    image: hashicorp/vault:1.21.4
     platform: linux/amd64
     ports:
       - 8200:8200
