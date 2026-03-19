@@ -1956,16 +1956,15 @@ mod tests {
             is_retriable_error, should_mark_provider_failed, ProviderError,
         };
 
-        let _guard = setup_test_env();
         RpcHealthStore::instance().clear_all();
 
-        let url1 = "http://localhost:8545";
-        let url2 = "http://localhost:8546";
+        let url1 = "http://localhost:9977";
+        let url2 = "http://localhost:9976";
         let configs = vec![
             RpcConfig::new(url1.to_string()),
             RpcConfig::new(url2.to_string()),
         ];
-        let selector = RpcSelector::new_with_defaults(configs).expect("Failed to create selector");
+        let selector = RpcSelector::new(configs, 1, 60, 60).expect("Failed to create selector");
 
         let attempts = Arc::new(AtomicU8::new(0));
         let attempts_clone = attempts.clone();

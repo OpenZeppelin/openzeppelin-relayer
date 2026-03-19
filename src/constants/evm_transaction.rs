@@ -115,7 +115,7 @@ pub const ALREADY_SUBMITTED_PATTERNS: &[&str] = &[
 pub fn matches_known_transaction(msg_lower: &str) -> bool {
     if let Some(pos) = msg_lower.find("known transaction") {
         // Reject if preceded by "un" (i.e. "unknown transaction")
-        if pos >= 2 && &msg_lower[pos - 2..pos] == "un" {
+        if msg_lower[..pos].ends_with("un") {
             return false;
         }
         return true;
