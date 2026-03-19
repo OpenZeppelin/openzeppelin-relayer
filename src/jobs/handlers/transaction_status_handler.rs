@@ -105,9 +105,12 @@ where
                 "transaction not in final state"
             );
 
-            // Reset consecutive counter only if there were previous failures
-            // This avoids unnecessary writes for transactions that never failed
-            if let Some(mut meta) = metadata {
+            // Use tx.metadata (fresh from handle_transaction_status) instead of the
+            // pre-check snapshot to avoid overwriting retry counters
+            // (e.g. try_again_later_retries, insufficient_fee_retries) that may have
+            // been updated during resubmission.
+            let fresh_meta = tx.metadata.clone().or(metadata);
+            if let Some(mut meta) = fresh_meta {
                 if meta.consecutive_failures > 0 || meta.total_failures > 0 {
                     meta.consecutive_failures = 0;
                     let update = TransactionUpdateRequest {

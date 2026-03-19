@@ -13,7 +13,7 @@ use super::{
 use crate::{
     constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
-    metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE_ACCEPTED},
+    metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE},
     models::{
         NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
         TransactionStatus, TransactionUpdateRequest,
@@ -213,7 +213,7 @@ where
 
                     // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
                     if meta.insufficient_fee_retries == 1 {
-                        TRANSACTIONS_INSUFFICIENT_FEE_ACCEPTED
+                        TRANSACTIONS_INSUFFICIENT_FEE
                             .with_label_values(&[tx.relayer_id.as_str(), "stellar"])
                             .inc();
                     }

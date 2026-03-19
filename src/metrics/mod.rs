@@ -250,9 +250,9 @@ lazy_static! {
     };
 
     // Counter for transactions that encountered an insufficient fee error.
-    pub static ref TRANSACTIONS_INSUFFICIENT_FEE_ACCEPTED: CounterVec = {
+    pub static ref TRANSACTIONS_INSUFFICIENT_FEE: CounterVec = {
         let opts = Opts::new(
-            "transactions_insufficient_fee_accepted_total",
+            "transactions_insufficient_fee_total",
             "Total number of transactions that encountered an insufficient fee error"
         );
         let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
@@ -481,7 +481,7 @@ mod actix_tests {
             .inc();
 
         // Touch insufficient fee metrics to ensure they appear in output
-        TRANSACTIONS_INSUFFICIENT_FEE_ACCEPTED
+        TRANSACTIONS_INSUFFICIENT_FEE
             .with_label_values(&["test-relayer", "stellar"])
             .inc();
         TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS
@@ -518,7 +518,7 @@ mod actix_tests {
         assert!(output.contains("error_requests_total"));
 
         // Insufficient fee metrics
-        assert!(output.contains("transactions_insufficient_fee_accepted_total"));
+        assert!(output.contains("transactions_insufficient_fee_total"));
         assert!(output.contains("transactions_insufficient_fee_success_total"));
         assert!(output.contains("transactions_insufficient_fee_failed_total"));
 
