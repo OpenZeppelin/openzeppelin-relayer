@@ -1,6 +1,22 @@
 {
   "networks": [
     {
+      "average_blocktime_ms": 2400,
+      "chain_id": 420420419,
+      "explorer_urls": ["https://blockscout.polkadot.io/"],
+      "features": [],
+      "is_testnet": false,
+      "network": "polkadot-hub",
+      "required_confirmations": 6,
+      "rpc_urls": [
+        "https://eth-rpc.polkadot.io/",
+        "https://services.polkadothub-rpc.com/mainnet/"
+      ],
+      "symbol": "DOT",
+      "tags": ["polkadot-based"],
+      "type": "evm"
+    },
+    {
       "average_blocktime_ms": 6000,
       "chain_id": 420420422,
       "explorer_urls": [
@@ -10,13 +26,9 @@
       "is_testnet": true,
       "network": "polkadot-hub-testnet",
       "required_confirmations": 2,
-      "rpc_urls": [
-        "https://testnet-passet-hub-eth-rpc.polkadot.io"
-      ],
+      "rpc_urls": ["https://testnet-passet-hub-eth-rpc.polkadot.io"],
       "symbol": "PAS",
-      "tags": [
-        "polkadot-based"
-      ],
+      "tags": ["polkadot-based"],
       "type": "evm"
     }
   ]
