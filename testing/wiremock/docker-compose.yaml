@@ -1,0 +1,44 @@
+---
+# WireMock proxy for RPC testing.
+#
+# Usage (Stellar testnet — default):
+#   docker compose -f testing/wiremock/docker-compose.yaml up -d
+#
+# Usage (EVM via Anvil):
+#   WIREMOCK_PROXY_TARGET=http://host.docker.internal:8545 \
+#     docker compose -f testing/wiremock/docker-compose.yaml up -d
+#
+# Usage (custom RPC):
+#   WIREMOCK_PROXY_TARGET=https://my-rpc.example.com \
+#     docker compose -f testing/wiremock/docker-compose.yaml up -d
+#
+# Then point your relayer's network config rpc_urls to:
+#   http://localhost:9090
+#
+# By default, all traffic is proxied to the target RPC.
+# Use /wiremock-test skill or scripts in testing/wiremock/scripts/ to inject mock responses.
+services:
+  wiremock:
+    image: wiremock/wiremock:3.13.0
+    ports:
+      - ${WIREMOCK_PORT:-9090}:8080
+    command:
+      - --proxy-all=${WIREMOCK_PROXY_TARGET:-https://soroban-testnet.stellar.org}
+      - --verbose
+    volumes:
+      # Generic mappings (timeout, 500, connection reset) — work with any network
+      - ./mappings/generic:/home/wiremock/mappings/generic:ro
+      # Stellar-specific mappings (TRY_AGAIN_LATER, insufficient fee, etc.)
+      - ./mappings/stellar:/home/wiremock/mappings/stellar:ro
+      # Future: mount EVM-specific mappings
+      # - ./mappings/evm:/home/wiremock/mappings/evm:ro
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://localhost:8080/__admin/health
+      interval: 5s
+      timeout: 3s
+      retries: 5
