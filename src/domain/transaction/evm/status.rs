@@ -9,9 +9,9 @@ use tracing::{debug, error, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, get_age_since_status_change, has_enough_confirmations, is_noop,
-    is_too_early_to_resubmit, is_transaction_valid, make_noop, too_many_attempts,
-    too_many_noop_attempts,
+    ensure_status, evm_transaction::NONCE_ERROR_HINT_KEY, get_age_since_status_change,
+    has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
+    too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
@@ -531,6 +531,136 @@ where
         Ok(updated_tx)
     }
 
+    /// Performs nonce recovery when a status check carries a `nonce_error_hint` in job metadata.
+    ///
+    /// This is the fast-path reconciliation triggered by nonce errors during submission.
+    /// It checks:
+    /// 1. Receipt for current tx hash — if found, defers to normal flow
+    /// 2. Historical hash recovery — if a different hash was mined, updates the tx
+    /// 3. On-chain nonce comparison — if the nonce was consumed externally, marks Failed
+    ///
+    /// Returns `Some(tx)` if recovery handled the transaction (caller should return early),
+    /// or `None` to continue with normal status flow.
+    async fn handle_nonce_recovery(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
+        let evm_data = tx.network_data.get_evm_transaction_data()?;
+
+        // Track whether any RPC call failed transiently. If so, we must NOT
+        // make the irreversible "consumed externally" determination in step 3,
+        // because the tx could be mined under a hash we failed to check.
+        let mut had_rpc_errors = false;
+
+        // 1. Check receipt for current tx hash — if found, normal flow handles it
+        if let Some(ref hash) = evm_data.hash {
+            match self.provider().get_transaction_receipt(hash).await {
+                Ok(Some(_)) => {
+                    debug!(
+                        tx_id = %tx.id,
+                        hash = %hash,
+                        "nonce recovery: receipt found for current hash, deferring to normal flow"
+                    );
+                    return Ok(None);
+                }
+                Ok(None) => {
+                    // No receipt for current hash — continue recovery
+                }
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        hash = %hash,
+                        error = %e,
+                        "nonce recovery: error checking receipt for current hash"
+                    );
+                    had_rpc_errors = true;
+                }
+            }
+        }
+
+        // 2. Try historical hash recovery (reuse existing method)
+        if tx.hashes.len() > 1 {
+            match self.try_recover_with_historical_hashes(tx, &evm_data).await {
+                Ok(Some(recovered_tx)) => {
+                    debug!(
+                        tx_id = %tx.id,
+                        "nonce recovery: recovered transaction via historical hash"
+                    );
+                    return Ok(Some(recovered_tx));
+                }
+                Ok(None) => {
+                    // No historical hash found — continue
+                }
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "nonce recovery: error during historical hash recovery"
+                    );
+                    had_rpc_errors = true;
+                }
+            }
+        }
+
+        // 3. Compare on-chain nonce to determine if nonce was consumed externally.
+        //    Only safe to make this determination if all hash checks succeeded.
+        //    If any RPC call failed, the tx might be mined under a hash we couldn't check.
+        if had_rpc_errors {
+            warn!(
+                tx_id = %tx.id,
+                "nonce recovery: skipping nonce comparison due to RPC errors during hash checks, deferring to normal flow"
+            );
+            return Ok(None);
+        }
+
+        let tx_nonce = match evm_data.nonce {
+            Some(n) => n,
+            None => {
+                // No nonce assigned — can't compare, defer to normal flow
+                return Ok(None);
+            }
+        };
+
+        let on_chain_nonce = self
+            .provider()
+            .get_transaction_count(&self.relayer().address)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to get on-chain nonce for recovery: {e}"
+                ))
+            })?;
+
+        if on_chain_nonce > tx_nonce {
+            // Nonce was consumed but no known hash found — consumed externally
+            let reason = format!(
+                "Nonce {tx_nonce} consumed externally (on-chain nonce: {on_chain_nonce}). \
+                 No matching transaction hash found on-chain."
+            );
+            warn!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                tx_nonce = tx_nonce,
+                on_chain_nonce = on_chain_nonce,
+                "nonce recovery: nonce consumed externally, marking as Failed"
+            );
+
+            let updated_tx = self
+                .update_transaction_status(tx.clone(), TransactionStatus::Failed, Some(reason))
+                .await?;
+            return Ok(Some(updated_tx));
+        }
+
+        // on_chain_nonce <= tx_nonce: nonce not yet consumed, defer to normal status flow
+        debug!(
+            tx_id = %tx.id,
+            tx_nonce = tx_nonce,
+            on_chain_nonce = on_chain_nonce,
+            "nonce recovery: on-chain nonce not past tx nonce, deferring to normal flow"
+        );
+        Ok(None)
+    }
+
     /// Handles circuit breaker safely based on transaction status.
     ///
     /// This method implements the safe circuit breaker logic:
@@ -554,17 +684,49 @@ where
         );
 
         match tx.status {
-            TransactionStatus::Pending | TransactionStatus::Sent => {
-                // Pending: no nonce assigned yet
-                // Sent: nonce assigned but never broadcast to network
-                // Both are safe to mark as Failed - transaction can't execute on-chain
+            TransactionStatus::Pending => {
+                // Pending: no nonce assigned yet - safe to mark as Failed
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
-                    status = ?tx.status,
-                    "circuit breaker: transaction never broadcast - safe to mark as Failed"
+                    "circuit breaker: Pending transaction (no nonce) - safe to mark as Failed"
                 );
                 self.mark_as_failed(tx, reason).await
+            }
+            TransactionStatus::Sent => {
+                // Sent: nonce assigned but never broadcast to network.
+                // If a nonce is assigned, we must issue a NOOP to clear the nonce slot
+                // rather than just marking as Failed (which would leak the nonce).
+                let has_nonce = tx
+                    .network_data
+                    .get_evm_transaction_data()
+                    .map(|d| d.nonce.is_some())
+                    .unwrap_or(false);
+
+                if has_nonce {
+                    warn!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "circuit breaker: Sent transaction with nonce assigned - triggering NOOP to clear nonce slot"
+                    );
+                    let noop_reason = Some(format!(
+                        "{reason}. Replacing with NOOP to clear nonce slot (Sent state with assigned nonce)."
+                    ));
+                    let updated_tx = self.process_noop_transaction(&tx, noop_reason).await?;
+                    // Must use resubmit (not submit) — resubmit re-signs with new gas pricing,
+                    // producing fresh `raw` bytes for the NOOP. submit_transaction would
+                    // broadcast the stale `raw` bytes which still contain the original tx.
+                    self.send_transaction_resubmit_job(&updated_tx).await?;
+                    Ok(updated_tx)
+                } else {
+                    // Defensive: Sent without nonce shouldn't normally happen
+                    debug!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "circuit breaker: Sent transaction without nonce - safe to mark as Failed"
+                    );
+                    self.mark_as_failed(tx, reason).await
+                }
             }
             TransactionStatus::Submitted => {
                 // Submitted transactions occupy a nonce slot and could still execute.
@@ -653,6 +815,41 @@ where
                     relayer_id = %tx.relayer_id,
                     "circuit breaker would trigger but transaction is NOOP - continuing with normal status logic"
                 );
+            }
+        }
+
+        // 1.2. Check for nonce recovery hint in job metadata (one-shot signal from submission errors).
+        // This performs nonce reconciliation before normal status flow.
+        // The hint is in job_metadata, not the transaction — subsequent retries won't have it.
+        if let Some(ref ctx) = context {
+            if let Some(ref metadata) = ctx.job_metadata {
+                if let Some(hint) = metadata.get(NONCE_ERROR_HINT_KEY) {
+                    debug!(
+                        tx_id = %tx.id,
+                        hint = %hint,
+                        "nonce recovery hint detected - performing nonce reconciliation"
+                    );
+                    match self.handle_nonce_recovery(&tx).await {
+                        Ok(Some(recovered_tx)) => {
+                            return Ok(recovered_tx);
+                        }
+                        Ok(None) => {
+                            // Recovery didn't resolve it — fall through to normal flow
+                            debug!(
+                                tx_id = %tx.id,
+                                "nonce recovery did not resolve transaction, continuing normal flow"
+                            );
+                        }
+                        Err(e) => {
+                            // Recovery failed — log and continue with normal flow
+                            warn!(
+                                tx_id = %tx.id,
+                                error = %e,
+                                "nonce recovery failed, falling through to normal status flow"
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -3112,6 +3309,351 @@ mod tests {
                 TransactionStatus::Confirmed,
                 "Should return final state without querying blockchain"
             );
+        }
+    }
+
+    mod nonce_recovery_tests {
+        use super::*;
+        use crate::jobs::StatusCheckContext;
+
+        /// Test handle_nonce_recovery with on_chain_nonce > tx_nonce → marks Failed
+        #[tokio::test]
+        async fn test_nonce_recovery_nonce_consumed_externally() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+            tx.sent_at = Some(Utc::now().to_rfc3339());
+
+            // No receipt for current hash
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            // On-chain nonce is 10, tx nonce is 5 → consumed externally
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(10) }));
+
+            // Should update to Failed status
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| {
+                    update.status == Some(TransactionStatus::Failed)
+                        && update
+                            .status_reason
+                            .as_ref()
+                            .map(|r| r.contains("consumed externally"))
+                            .unwrap_or(false)
+                })
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.status = update.status.unwrap();
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+
+            assert!(result.is_ok());
+            let recovered = result.unwrap();
+            assert!(recovered.is_some(), "Expected Some(tx) for consumed nonce");
+            assert_eq!(recovered.unwrap().status, TransactionStatus::Failed);
+        }
+
+        /// Test handle_nonce_recovery with on_chain_nonce <= tx_nonce → returns None
+        #[tokio::test]
+        async fn test_nonce_recovery_nonce_not_consumed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            // No receipt for current hash
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            // On-chain nonce is 5, same as tx nonce → not consumed yet
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(5) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+
+            assert!(result.is_ok());
+            assert!(
+                result.unwrap().is_none(),
+                "Expected None when nonce not consumed"
+            );
+        }
+
+        /// Test handle_nonce_recovery with receipt found → returns None (defer to normal flow)
+        #[tokio::test]
+        async fn test_nonce_recovery_receipt_found() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            // Receipt exists for current hash — defer to normal flow
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| {
+                    let receipt = make_mock_receipt(true, Some(100));
+                    Box::pin(async move { Ok(Some(receipt)) })
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+
+            assert!(result.is_ok());
+            assert!(
+                result.unwrap().is_none(),
+                "Expected None when receipt found — defer to normal flow"
+            );
+        }
+
+        /// Test handle_nonce_recovery with RPC errors during receipt check → returns None
+        /// Must NOT proceed to force-fail via nonce comparison when hash checks were incomplete
+        #[tokio::test]
+        async fn test_nonce_recovery_rpc_error_prevents_force_fail() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            // Receipt check FAILS with RPC error
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(crate::services::provider::ProviderError::Other(
+                            "RPC timeout".to_string(),
+                        ))
+                    })
+                });
+
+            // get_transaction_count should NOT be called — we bail before reaching it
+            // (no expectation set = will panic if called)
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+
+            assert!(result.is_ok());
+            assert!(
+                result.unwrap().is_none(),
+                "Expected None when RPC errors occurred — must not force-fail on incomplete data"
+            );
+        }
+
+        /// Test handle_status_impl with nonce_error_hint metadata triggers recovery
+        #[tokio::test]
+        async fn test_handle_status_impl_nonce_recovery_hint() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+            tx.sent_at = Some(Utc::now().to_rfc3339());
+
+            // No receipt for current hash
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+
+            // On-chain nonce > tx nonce → consumed externally
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(10) }));
+
+            // Should update to Failed
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    if let Some(status) = update.status {
+                        updated_tx.status = status;
+                    }
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            // Build context with nonce_error_hint metadata
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert("nonce_error_hint".to_string(), "NonceTooLow".to_string());
+            let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
+
+            let result = evm_transaction.handle_status_impl(tx, Some(context)).await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Failed);
+        }
+    }
+
+    mod circuit_breaker_sent_state_tests {
+        use super::*;
+        use crate::jobs::StatusCheckContext;
+
+        /// Test circuit breaker on Sent tx with nonce → issues NOOP + submit job
+        #[tokio::test]
+        async fn test_circuit_breaker_sent_with_nonce_issues_noop() {
+            let mut mocks = default_test_mocks_with_network();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+            tx.sent_at = Some(Utc::now().to_rfc3339());
+
+            // process_noop_transaction calls prepare_noop_update_request → partial_update
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    if let Some(status) = update.status {
+                        updated_tx.status = status;
+                    }
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // Should produce a submit job (for the NOOP)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            // Circuit breaker context that should trigger
+            let ctx = StatusCheckContext::new(100, 200, 250, 15, 45, NetworkType::Evm);
+
+            let result = evm_transaction
+                .handle_circuit_breaker_safely(tx, &ctx)
+                .await;
+            assert!(result.is_ok());
+        }
+
+        /// Test circuit breaker on Sent tx without nonce → marks Failed
+        #[tokio::test]
+        async fn test_circuit_breaker_sent_without_nonce_marks_failed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            // No nonce assigned
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: None,
+                hash: None,
+                raw: None,
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+            tx.sent_at = Some(Utc::now().to_rfc3339());
+
+            // Should mark as Failed
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.status = update.status.unwrap();
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let ctx = StatusCheckContext::new(100, 200, 250, 15, 45, NetworkType::Evm);
+
+            let result = evm_transaction
+                .handle_circuit_breaker_safely(tx, &ctx)
+                .await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Failed);
+        }
+
+        /// Test circuit breaker on Pending tx → marks Failed (unchanged behavior)
+        #[tokio::test]
+        async fn test_circuit_breaker_pending_marks_failed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let tx = make_test_transaction(TransactionStatus::Pending);
+
+            // Should mark as Failed
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.status = update.status.unwrap();
+                    Ok(updated_tx)
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let ctx = StatusCheckContext::new(100, 200, 250, 15, 45, NetworkType::Evm);
+
+            let result = evm_transaction
+                .handle_circuit_breaker_safely(tx, &ctx)
+                .await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Failed);
         }
     }
 }

@@ -270,7 +270,7 @@ async fn handle_request(
         "handling transaction status check"
     );
 
-    // Build circuit breaker context
+    // Build circuit breaker context, attaching any job metadata (e.g., nonce recovery hints)
     let context = StatusCheckContext::new(
         consecutive_failures,
         total_failures,
@@ -278,7 +278,8 @@ async fn handle_request(
         max_consecutive,
         max_total,
         network_type,
-    );
+    )
+    .with_job_metadata(status_request.metadata.clone());
 
     // Get relayer transaction handler
     let relayer_transaction =
