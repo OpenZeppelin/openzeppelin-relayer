@@ -1,7 +1,9 @@
 use std::num::ParseIntError;
 
 use crate::config::ServerConfig;
-use crate::constants::{matches_known_transaction, ALREADY_SUBMITTED_PATTERNS};
+use crate::constants::{
+    matches_known_transaction, ALREADY_SUBMITTED_PATTERNS, NONCE_TOO_HIGH_PATTERNS,
+};
 use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
@@ -386,6 +388,9 @@ fn is_non_retriable_transaction_rpc_message(message: &str) -> bool {
     ALREADY_SUBMITTED_PATTERNS
         .iter()
         .any(|p| msg_lower.contains(p))
+        || NONCE_TOO_HIGH_PATTERNS
+            .iter()
+            .any(|p| msg_lower.contains(p))
         || matches_known_transaction(&msg_lower)
 }
 
@@ -1301,6 +1306,16 @@ mod tests {
         // "unknown transaction" must NOT match "known transaction"
         assert!(!is_non_retriable_transaction_rpc_message(
             "Unknown transaction status"
+        ));
+
+        // Nonce-too-high patterns are also non-retriable
+        assert!(is_non_retriable_transaction_rpc_message("nonce too high"));
+        assert!(is_non_retriable_transaction_rpc_message("future nonce"));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "exceeds next nonce"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "Nonce Too Far In The Future"
         ));
     }
 

@@ -29,7 +29,7 @@ use std::sync::Arc;
 use crate::{
     constants::{
         transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MAX_GAP_SCAN_RANGE,
     },
     domain::{
         relayer::{Relayer, RelayerError},
@@ -42,10 +42,10 @@ use crate::{
     },
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
-        EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
-        NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest, NetworkType,
-        PaginationQuery, RelayerRepoModel, RelayerStatus, RepositoryError, RpcErrorCodes,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        EvmNetwork, EvmTransactionData, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse,
+        NetworkRepoModel, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
+        NetworkType, PaginationQuery, RelayerRepoModel, RelayerStatus, RepositoryError,
+        RpcErrorCodes, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -234,6 +234,107 @@ where
             .map_err(RelayerError::from)?;
 
         Ok(())
+    }
+
+    /// Checks if a transaction at the given nonce is still active (not a gap).
+    ///
+    /// Active statuses: Pending, Sent, Submitted, Mined — tx is still in-flight.
+    /// Gap indicators: Failed, Canceled, Expired, Confirmed, or no tx at all.
+    async fn find_active_tx_for_nonce(
+        &self,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RelayerError> {
+        let tx = self
+            .transaction_repository
+            .find_by_nonce(&self.relayer.id, nonce)
+            .await
+            .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+        match tx {
+            Some(tx) => {
+                let is_active = matches!(
+                    tx.status,
+                    TransactionStatus::Pending
+                        | TransactionStatus::Sent
+                        | TransactionStatus::Submitted
+                        | TransactionStatus::Mined
+                );
+                if is_active {
+                    Ok(Some(tx))
+                } else {
+                    // Tx exists but in a final/failed state — this nonce slot is a gap
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Fetches the on-chain nonce for this relayer's address.
+    async fn get_on_chain_nonce(&self) -> Result<u64, RelayerError> {
+        self.provider
+            .get_transaction_count(&self.relayer.address)
+            .await
+            .map_err(|e| RelayerError::ProviderError(e.to_string()))
+    }
+
+    /// Detects nonce gaps between the on-chain nonce and local counter.
+    ///
+    /// Accepts an optional pre-fetched on-chain nonce to avoid redundant RPC calls
+    /// when the caller (e.g., `resolve_nonce_gaps`) already has it.
+    /// Scans up to `MAX_GAP_SCAN_RANGE` nonces forward. Returns gap nonce list.
+    async fn detect_nonce_gaps(
+        &self,
+        on_chain_nonce: Option<u64>,
+    ) -> Result<Vec<u64>, RelayerError> {
+        let on_chain_nonce = match on_chain_nonce {
+            Some(n) => n,
+            None => self.get_on_chain_nonce().await?,
+        };
+
+        let local_counter = self
+            .transaction_counter_service
+            .get()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+
+        if local_counter <= on_chain_nonce {
+            // Counter is at or behind on-chain — no gaps possible
+            return Ok(vec![]);
+        }
+
+        let scan_end = std::cmp::min(local_counter, on_chain_nonce + MAX_GAP_SCAN_RANGE);
+        let mut gaps = Vec::new();
+
+        for nonce in on_chain_nonce..scan_end {
+            if self.find_active_tx_for_nonce(nonce).await?.is_none() {
+                gaps.push(nonce);
+            }
+        }
+
+        if local_counter > on_chain_nonce + MAX_GAP_SCAN_RANGE {
+            warn!(
+                relayer_id = %self.relayer.id,
+                on_chain_nonce = on_chain_nonce,
+                local_counter = local_counter,
+                scan_range = MAX_GAP_SCAN_RANGE,
+                "nonce gap exceeds scan range — operator investigation required"
+            );
+        }
+
+        Ok(gaps)
+    }
+
+    /// Schedules a targeted nonce health job for this relayer.
+    async fn schedule_nonce_health_job(&self) -> Result<(), RelayerError> {
+        let job = RelayerHealthCheck::nonce_health(self.relayer.id.clone());
+
+        self.job_producer
+            .produce_relayer_health_check_job(job, None)
+            .await
+            .map_err(RelayerError::from)
     }
 }
 
@@ -687,6 +788,7 @@ where
         debug!("running health checks");
 
         let nonce_sync_result = self.sync_nonce().await;
+        let nonce_sync_ok = nonce_sync_result.is_ok();
         let validate_rpc_result = self.validate_rpc().await;
         let validate_min_balance_result = self.validate_min_balance().await;
 
@@ -705,6 +807,36 @@ where
         .into_iter()
         .flatten()
         .collect();
+
+        // After sync_nonce, detect nonce gaps and schedule resolution (best effort).
+        // Gaps are repairable maintenance issues, NOT health check failures — they don't
+        // disable the relayer. We only attempt detection if sync_nonce succeeded.
+        if nonce_sync_ok {
+            match self.detect_nonce_gaps(None).await {
+                Ok(gaps) if !gaps.is_empty() => {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        gaps = ?gaps,
+                        "nonce gaps detected, scheduling nonce health job"
+                    );
+                    if let Err(e) = self.schedule_nonce_health_job().await {
+                        warn!(
+                            relayer_id = %self.relayer.id,
+                            error = %e,
+                            "failed to schedule nonce health job from check_health"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "failed to detect nonce gaps during health check"
+                    );
+                }
+                _ => {}
+            }
+        }
 
         if failures.is_empty() {
             info!("all health checks passed");
@@ -791,6 +923,200 @@ where
         Err(RelayerError::NotSupported(
             "Transaction signing not supported for EVM".to_string(),
         ))
+    }
+
+    /// Detects and resolves nonce gaps by creating gap-filling NOOP transactions.
+    ///
+    /// # Algorithm
+    /// 1. Run `sync_nonce()` — raises counter if on-chain is ahead (existing behavior)
+    /// 2. Run `detect_nonce_gaps()` — finds unfilled nonce slots (capped at MAX_GAP_SCAN_RANGE)
+    /// 3. For each gap: double-check, create NOOP, push through prepare/submit pipeline
+    ///
+    /// # Returns
+    /// Number of gaps filled, or error.
+    #[instrument(
+        level = "debug",
+        skip(self),
+        fields(
+            request_id = ?crate::observability::request_id::get_request_id(),
+            relayer_id = %self.relayer.id,
+        )
+    )]
+    async fn resolve_nonce_gaps(&self) -> Result<usize, RelayerError> {
+        // Fetch on-chain nonce once and reuse for both sync and gap detection
+        let on_chain_nonce = self.get_on_chain_nonce().await?;
+
+        // Step 1: Sync nonce — raises counter to max(on_chain, local).
+        // Intentionally never lowers the counter (avoids race with concurrent get_and_increment).
+        // Gaps are filled forward with NOOPs instead.
+        self.sync_nonce().await?;
+
+        // Step 2: Detect gaps (reuse the on-chain nonce to avoid a second RPC call)
+        let gaps = self.detect_nonce_gaps(Some(on_chain_nonce)).await?;
+        if gaps.is_empty() {
+            debug!("no nonce gaps detected");
+            return Ok(0);
+        }
+
+        info!(
+            relayer_id = %self.relayer.id,
+            gap_count = gaps.len(),
+            gaps = ?gaps,
+            "filling nonce gaps with NOOP transactions"
+        );
+
+        let mut filled = 0;
+        for nonce in &gaps {
+            // Double-check: race guard — another instance may have filled this gap
+            if self.find_active_tx_for_nonce(*nonce).await?.is_some() {
+                debug!(
+                    nonce = nonce,
+                    "gap already filled by concurrent process, skipping"
+                );
+                continue;
+            }
+
+            match self.create_gap_filling_noop(*nonce).await {
+                Ok(_) => {
+                    filled += 1;
+                    debug!(nonce = nonce, "created gap-filling NOOP transaction");
+                }
+                Err(e) => {
+                    // Log and continue — each nonce is independent, a transient error
+                    // (e.g., Redis timeout) for one nonce shouldn't block others.
+                    error!(
+                        nonce = nonce,
+                        error = %e,
+                        "failed to create gap-filling NOOP, continuing with remaining gaps"
+                    );
+                }
+            }
+        }
+
+        info!(
+            relayer_id = %self.relayer.id,
+            total_gaps = gaps.len(),
+            filled = filled,
+            "nonce gap resolution complete"
+        );
+
+        Ok(filled)
+    }
+}
+
+impl<P, RR, NR, TR, J, S, TCS> EvmRelayer<P, RR, NR, TR, J, S, TCS>
+where
+    P: EvmProviderTrait + Send + Sync,
+    RR: Repository<RelayerRepoModel, String> + RelayerRepository + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    TR: Repository<TransactionRepoModel, String> + TransactionRepository + Send + Sync + 'static,
+    J: JobProducerTrait + Send + Sync + 'static,
+    S: DataSignerTrait + Send + Sync + 'static,
+    TCS: TransactionCounterServiceTrait + Send + Sync + 'static,
+{
+    /// Creates a gap-filling NOOP transaction for a specific nonce.
+    ///
+    /// The transaction is created as `Pending` with a preset nonce and pushed through
+    /// the normal prepare/submit pipeline. The prepare flow correctly handles preset
+    /// nonces (reuses them instead of calling `get_and_increment`).
+    async fn create_gap_filling_noop(
+        &self,
+        nonce: u64,
+    ) -> Result<TransactionRepoModel, RelayerError> {
+        let network_model = self
+            .network_repository
+            .get_by_name(NetworkType::Evm, &self.relayer.network)
+            .await?
+            .ok_or_else(|| {
+                RelayerError::NetworkConfiguration(format!(
+                    "Network {} not found",
+                    self.relayer.network
+                ))
+            })?;
+
+        let evm_network = EvmNetwork::try_from(network_model.clone())?;
+
+        // Build base transaction data, then use make_noop to set NOOP fields
+        // (handles Arbitrum gas estimation via provider)
+        let mut evm_data = EvmTransactionData {
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            value: crate::models::U256::from(0u64),
+            data: None,
+            from: self.relayer.address.clone(),
+            to: None,
+            chain_id: evm_network.id(),
+            hash: None,
+            signature: None,
+            speed: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            raw: None,
+        };
+
+        // make_noop sets value=0, data="0x", to=from, speed, and gas_limit
+        // (with Arbitrum-aware estimation via provider)
+        crate::domain::evm::make_noop(&mut evm_data, &evm_network, Some(&self.provider))
+            .await
+            .map_err(|e| RelayerError::Internal(format!("Failed to create NOOP data: {e}")))?;
+
+        // Set the specific nonce for gap filling (after make_noop)
+        evm_data.nonce = Some(nonce);
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let tx = TransactionRepoModel {
+            id: uuid::Uuid::new_v4().to_string(),
+            relayer_id: self.relayer.id.clone(),
+            status: TransactionStatus::Pending,
+            status_reason: Some(format!("Gap-filling NOOP for nonce {nonce}")),
+            created_at: now,
+            sent_at: None,
+            confirmed_at: None,
+            valid_until: None,
+            delete_at: None,
+            network_type: NetworkType::Evm,
+            network_data: crate::models::NetworkTransactionData::Evm(evm_data),
+            priced_at: None,
+            hashes: Vec::new(),
+            noop_count: Some(1),
+            is_canceled: Some(false),
+            metadata: None,
+        };
+
+        // Persist the transaction
+        self.transaction_repository
+            .create(tx.clone())
+            .await
+            .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+        // Schedule status check first (safety net)
+        self.job_producer
+            .produce_check_transaction_status_job(
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
+                Some(calculate_scheduled_timestamp(
+                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                )),
+            )
+            .await
+            .map_err(RelayerError::from)?;
+
+        // Push through prepare pipeline (will sign and advance to Sent)
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
+            .await
+            .map_err(RelayerError::from)?;
+
+        info!(
+            tx_id = %tx.id,
+            nonce = nonce,
+            "gap-filling NOOP transaction created and queued"
+        );
+
+        Ok(tx)
     }
 }
 
@@ -3104,5 +3430,211 @@ mod tests {
 
         let result = relayer.initialize_relayer().await;
         assert!(result.is_ok());
+    }
+
+    // ── nonce gap detection & resolution tests ────────────────────────────────
+
+    fn make_tx_with_status(status: TransactionStatus) -> TransactionRepoModel {
+        TransactionRepoModel {
+            id: "tx-id".to_string(),
+            relayer_id: "test-relayer-id".to_string(),
+            status,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_find_active_tx_for_nonce_with_submitted_tx_returns_some() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Submitted))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.find_active_tx_for_nonce(5).await.unwrap();
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_find_active_tx_for_nonce_with_failed_tx_returns_none() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Failed))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        // Failed status is a final/gap state — should return None
+        let result = relayer.find_active_tx_for_nonce(5).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_active_tx_for_nonce_with_no_tx_returns_none() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.find_active_tx_for_nonce(5).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_nonce_gaps_with_gap() {
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // on_chain = 5, local = 8 → scan nonces 5, 6, 7
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(5u64))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(8u64)))));
+
+        // nonce 5 → Submitted (active)
+        // nonce 6 → Failed   (gap)
+        // nonce 7 → Sent     (active)
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, nonce| match nonce {
+                5 => Ok(Some(make_tx_with_status(TransactionStatus::Submitted))),
+                6 => Ok(Some(make_tx_with_status(TransactionStatus::Failed))),
+                7 => Ok(Some(make_tx_with_status(TransactionStatus::Sent))),
+                _ => Ok(None),
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        assert_eq!(gaps, vec![6u64]);
+    }
+
+    #[tokio::test]
+    async fn test_detect_nonce_gaps_no_gaps() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // on_chain == local → no range to scan
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(5u64))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(5u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        assert!(gaps.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_detect_nonce_gaps_counter_behind_chain() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // local (5) < on_chain (10) → no gaps possible
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(10u64))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(5u64)))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        assert!(gaps.is_empty());
     }
 }

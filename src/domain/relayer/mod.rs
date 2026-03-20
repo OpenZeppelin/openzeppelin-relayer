@@ -184,6 +184,14 @@ pub trait Relayer {
         &self,
         request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError>;
+
+    /// Detects and resolves nonce gaps by filling them with NOOP transactions.
+    ///
+    /// Returns the number of gaps filled. Only meaningful for EVM relayers;
+    /// other network types return 0 by default.
+    async fn resolve_nonce_gaps(&self) -> Result<usize, RelayerError> {
+        Ok(0)
+    }
 }
 
 /// Solana Relayer Dex Trait
@@ -374,6 +382,14 @@ impl<
             )),
             NetworkRelayer::Solana(relayer) => relayer.sign_transaction(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+        }
+    }
+
+    async fn resolve_nonce_gaps(&self) -> Result<usize, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.resolve_nonce_gaps().await,
+            // Non-EVM relayers don't have nonce gaps
+            NetworkRelayer::Solana(_) | NetworkRelayer::Stellar(_) => Ok(0),
         }
     }
 }

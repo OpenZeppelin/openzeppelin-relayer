@@ -4,7 +4,10 @@
 //! disabled relayers by running health checks with exponential backoff.
 
 use crate::{
-    constants::WORKER_DEFAULT_MAXIMUM_RETRIES,
+    config::ServerConfig,
+    constants::{
+        HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, WORKER_DEFAULT_MAXIMUM_RETRIES,
+    },
     domain::{get_network_relayer, Relayer},
     jobs::{handle_result, Job, JobProducerTrait, RelayerHealthCheck},
     models::{
@@ -18,12 +21,12 @@ use crate::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
         Repository, TransactionCounterTrait, TransactionRepository,
     },
-    utils::calculate_scheduled_timestamp,
+    utils::{calculate_scheduled_timestamp, DistributedLock},
 };
 use actix_web::web::ThinData;
 use eyre::Result;
 use std::time::Duration;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 /// Handler for relayer health check jobs.
 ///
@@ -117,10 +120,17 @@ where
 {
     let relayer_id = data.relayer_id.clone();
 
+    // Check for targeted health action (e.g., nonce gap resolution)
+    let targeted_action = data
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get(HEALTH_CHECK_ACTION_KEY).cloned());
+
     debug!(
         relayer_id = %relayer_id,
         retry_count = data.retry_count,
-        "Running health check on disabled relayer"
+        targeted_action = ?targeted_action,
+        "Running health check"
     );
 
     // Check if relayer is actually disabled
@@ -130,12 +140,19 @@ where
         .await
         .map_err(|e| eyre::eyre!("Failed to get relayer: {}", e))?;
 
-    if !relayer.system_disabled {
+    // Normal health check — skip for enabled relayers (existing behavior).
+    // Targeted actions run for any relayer (enabled or disabled).
+    if !relayer.system_disabled && targeted_action.is_none() {
         info!(
             relayer_id = %relayer_id,
-            "Relayer is not disabled, skipping health check"
+            "Relayer is not disabled and no targeted action, skipping health check"
         );
         return Ok(());
+    }
+
+    // Handle targeted action if present
+    if let Some(action) = &targeted_action {
+        return handle_targeted_action(action, &relayer_id, app_state).await;
     }
 
     // Get the network relayer instance
@@ -245,6 +262,100 @@ where
                 .await
                 .map_err(|e| eyre::eyre!("Failed to schedule retry: {}", e))?;
 
+            Ok(())
+        }
+    }
+}
+
+/// Handles a targeted health action dispatched via job metadata.
+///
+/// Currently supported actions:
+/// - `nonce_health`: Detects and fills nonce gaps with NOOPs
+async fn handle_targeted_action<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    action: &str,
+    relayer_id: &str,
+    app_state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<()>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    match action {
+        HEALTH_CHECK_ACTION_NONCE_HEALTH => {
+            info!(relayer_id = %relayer_id, "executing targeted nonce health action");
+
+            // Acquire distributed lock to prevent concurrent gap resolution.
+            // In single-instance mode, skip locking.
+            let _lock_guard = if ServerConfig::get_distributed_mode() {
+                if let Some((pool, prefix)) = app_state.relayer_repository.connection_info() {
+                    let lock_key = format!("{prefix}:lock:nonce_health:{relayer_id}");
+                    let lock = DistributedLock::new(pool, &lock_key, Duration::from_secs(60));
+
+                    match lock.try_acquire().await {
+                        Ok(Some(guard)) => {
+                            debug!(lock_key = %lock_key, "acquired distributed lock for nonce health");
+                            Some(guard)
+                        }
+                        Ok(None) => {
+                            info!(
+                                relayer_id = %relayer_id,
+                                "nonce health already running for this relayer, skipping"
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            // Fail closed: skip if we can't acquire the lock
+                            warn!(
+                                relayer_id = %relayer_id,
+                                error = %e,
+                                "failed to acquire nonce health lock, skipping"
+                            );
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let relayer_service = get_network_relayer(relayer_id.to_string(), app_state)
+                .await
+                .map_err(|e| eyre::eyre!("Failed to get relayer for nonce health: {}", e))?;
+
+            match relayer_service.resolve_nonce_gaps().await {
+                Ok(filled) => {
+                    info!(
+                        relayer_id = %relayer_id,
+                        gaps_filled = filled,
+                        "nonce health action completed"
+                    );
+                    Ok(())
+                }
+                Err(e) => {
+                    error!(
+                        relayer_id = %relayer_id,
+                        error = %e,
+                        "nonce health action failed"
+                    );
+                    Err(eyre::eyre!("Nonce health action failed: {}", e))
+                }
+            }
+        }
+        _ => {
+            warn!(
+                relayer_id = %relayer_id,
+                action = %action,
+                "unknown targeted health action, skipping"
+            );
             Ok(())
         }
     }

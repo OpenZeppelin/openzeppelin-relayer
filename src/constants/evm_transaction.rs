@@ -110,6 +110,34 @@ pub const ALREADY_SUBMITTED_PATTERNS: &[&str] = &[
     "same hash was already imported",
 ];
 
+/// Error message patterns indicating the transaction nonce is ahead of the expected on-chain nonce.
+/// This can be transient (burst ordering: tx N+1 arrives before N) or persistent (counter drift).
+///
+/// Checked **after** `ALREADY_SUBMITTED_PATTERNS` in `classify_submission_error` to avoid
+/// ambiguity. Each entry is a lowercased substring to match against the RPC error message.
+pub const NONCE_TOO_HIGH_PATTERNS: &[&str] = &[
+    "nonce too high",
+    "nonce is too high",
+    "future nonce",
+    "exceeds next nonce",          // Nethermind
+    "nonce too far in the future", // Besu
+];
+
+/// Maximum number of "nonce too high" retries before escalating to a nonce health job.
+/// With ~25s between retries (driven by status checker resend timeout), this means
+/// escalation happens within ~75s — enough time for transient burst ordering to resolve.
+pub const MAX_NONCE_TOO_HIGH_RETRIES: u32 = 3;
+
+/// Maximum number of nonces to scan when detecting gaps between on-chain and local counter.
+/// Gaps beyond this range are logged for operator investigation rather than automated recovery.
+pub const MAX_GAP_SCAN_RANGE: u64 = 100;
+
+/// Metadata key used in `RelayerHealthCheck` to indicate a targeted health action.
+pub const HEALTH_CHECK_ACTION_KEY: &str = "health_check_action";
+
+/// Value for `HEALTH_CHECK_ACTION_KEY` that triggers nonce gap detection and resolution.
+pub const HEALTH_CHECK_ACTION_NONCE_HEALTH: &str = "nonce_health";
+
 /// Checks if a lowercased message matches "known transaction" without matching
 /// "unknown transaction" (substring false positive).
 pub fn matches_known_transaction(msg_lower: &str) -> bool {
@@ -121,4 +149,58 @@ pub fn matches_known_transaction(msg_lower: &str) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nonce_too_high_patterns_match_expected_strings() {
+        let cases = [
+            "nonce too high",
+            "nonce is too high",
+            "future nonce",
+            "exceeds next nonce",
+            "nonce too far in the future",
+        ];
+        for case in &cases {
+            let msg_lower = case.to_lowercase();
+            assert!(
+                NONCE_TOO_HIGH_PATTERNS
+                    .iter()
+                    .any(|p| msg_lower.contains(p)),
+                "Expected NONCE_TOO_HIGH_PATTERNS to match: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_matches_known_transaction_does_not_match_nonce_too_high() {
+        let nonce_too_high_msgs = [
+            "nonce too high",
+            "nonce is too high",
+            "future nonce",
+            "exceeds next nonce",
+            "nonce too far in the future",
+        ];
+        for msg in &nonce_too_high_msgs {
+            assert!(
+                !matches_known_transaction(&msg.to_lowercase()),
+                "matches_known_transaction should NOT match nonce-too-high message: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_matches_known_transaction_matches_known_transaction() {
+        assert!(matches_known_transaction("known transaction"));
+        assert!(matches_known_transaction("already known transaction here"));
+    }
+
+    #[test]
+    fn test_matches_known_transaction_does_not_match_unknown_transaction() {
+        assert!(!matches_known_transaction("unknown transaction"));
+        assert!(!matches_known_transaction("unknown transaction status"));
+    }
 }
