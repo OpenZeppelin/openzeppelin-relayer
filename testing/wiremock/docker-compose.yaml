@@ -19,7 +19,7 @@
 # Use /wiremock-test skill or scripts in testing/wiremock/scripts/ to inject mock responses.
 services:
   wiremock:
-    image: wiremock/wiremock:3.13.0
+    image: wiremock/wiremock:3.13.2
     ports:
       - ${WIREMOCK_PORT:-9090}:8080
     command:
