@@ -29,7 +29,7 @@ jobs:
     if: (github.actor != 'dependabot[bot]')
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594  # v2.16.0
         with:
           egress-policy: audit
       - name: Checkout code
@@ -44,6 +44,6 @@ jobs:
           # No metrics
           SEMGREP_SEND_METRICS: 'off'
       - name: Upload SARIF file for GitHub Advanced Security Dashboard
-        uses: github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30  # v3.29.5
+        uses: github/codeql-action/upload-sarif@b1bff81932f5cdfc8695c7752dcee935dcd061c8  # v3.29.5
         with:
           sarif_file: semgrep.sarif

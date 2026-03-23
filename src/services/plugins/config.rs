@@ -23,10 +23,8 @@ use crate::constants::{
     CONCURRENT_TASKS_HEADROOM_MULTIPLIER, DEFAULT_POOL_CONCURRENT_TASKS_PER_WORKER,
     DEFAULT_POOL_CONNECT_RETRIES, DEFAULT_POOL_HEALTH_CHECK_INTERVAL_SECS,
     DEFAULT_POOL_IDLE_TIMEOUT_MS, DEFAULT_POOL_MAX_CONNECTIONS, DEFAULT_POOL_MAX_THREADS_FLOOR,
-    DEFAULT_POOL_MIN_THREADS, DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS,
-    DEFAULT_POOL_REQUEST_TIMEOUT_SECS, DEFAULT_POOL_SOCKET_BACKLOG,
-    DEFAULT_SOCKET_IDLE_TIMEOUT_SECS, DEFAULT_SOCKET_READ_TIMEOUT_SECS, DEFAULT_TRACE_TIMEOUT_MS,
-    MAX_CONCURRENT_TASKS_PER_WORKER,
+    DEFAULT_POOL_MIN_THREADS, DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS, DEFAULT_POOL_SOCKET_BACKLOG,
+    DEFAULT_TRACE_TIMEOUT_MS, MAX_CONCURRENT_TASKS_PER_WORKER,
 };
 use std::sync::OnceLock;
 
@@ -45,8 +43,6 @@ pub struct PluginConfig {
     pub pool_max_connections: usize,
     /// Retry attempts when connecting to pool
     pub pool_connect_retries: usize,
-    /// Request timeout in seconds
-    pub pool_request_timeout_secs: u64,
 
     // === Request Queue (Rust side, auto-derived from max_concurrency) ===
     /// Maximum queued requests
@@ -59,10 +55,6 @@ pub struct PluginConfig {
     // === Socket Service (Rust side, auto-derived from max_concurrency) ===
     /// Maximum concurrent socket connections
     pub socket_max_connections: usize,
-    /// Idle timeout for connections (seconds)
-    pub socket_idle_timeout_secs: u64,
-    /// Read timeout per message (seconds)
-    pub socket_read_timeout_secs: u64,
 
     // === Node.js Worker Pool (passed to pool-server.ts) ===
     /// Minimum worker threads in Node.js pool
@@ -144,20 +136,7 @@ impl PluginConfig {
         // Other settings with defaults
         let pool_connect_retries =
             env_parse("PLUGIN_POOL_CONNECT_RETRIES", DEFAULT_POOL_CONNECT_RETRIES);
-        let pool_request_timeout_secs = env_parse(
-            "PLUGIN_POOL_REQUEST_TIMEOUT_SECS",
-            DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
-        );
         let pool_workers = env_parse("PLUGIN_POOL_WORKERS", 0); // 0 = auto
-
-        let socket_idle_timeout_secs = env_parse(
-            "PLUGIN_SOCKET_IDLE_TIMEOUT_SECS",
-            DEFAULT_SOCKET_IDLE_TIMEOUT_SECS,
-        );
-        let socket_read_timeout_secs = env_parse(
-            "PLUGIN_SOCKET_READ_TIMEOUT_SECS",
-            DEFAULT_SOCKET_READ_TIMEOUT_SECS,
-        );
 
         let health_check_interval_secs = env_parse(
             "PLUGIN_POOL_HEALTH_CHECK_INTERVAL_SECS",
@@ -310,13 +289,10 @@ impl PluginConfig {
             max_concurrency,
             pool_max_connections,
             pool_connect_retries,
-            pool_request_timeout_secs,
             pool_max_queue_size,
             pool_queue_send_timeout_ms,
             pool_workers,
             socket_max_connections,
-            socket_idle_timeout_secs,
-            socket_read_timeout_secs,
             nodejs_pool_min_threads,
             nodejs_pool_max_threads,
             nodejs_pool_concurrent_tasks,
@@ -454,13 +430,10 @@ impl Default for PluginConfig {
             max_concurrency,
             pool_max_connections,
             pool_connect_retries: DEFAULT_POOL_CONNECT_RETRIES,
-            pool_request_timeout_secs: DEFAULT_POOL_REQUEST_TIMEOUT_SECS,
             pool_max_queue_size,
             pool_queue_send_timeout_ms: DEFAULT_POOL_QUEUE_SEND_TIMEOUT_MS,
             pool_workers: 0,
             socket_max_connections,
-            socket_idle_timeout_secs: DEFAULT_SOCKET_IDLE_TIMEOUT_SECS,
-            socket_read_timeout_secs: DEFAULT_SOCKET_READ_TIMEOUT_SECS,
             nodejs_pool_min_threads,
             nodejs_pool_max_threads,
             nodejs_pool_concurrent_tasks,

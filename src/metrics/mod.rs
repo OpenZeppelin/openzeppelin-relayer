@@ -199,10 +199,85 @@ lazy_static! {
         histogram_vec
     };
 
+    // Counter for Stellar transaction submission failures with decoded result codes.
+    pub static ref STELLAR_SUBMISSION_FAILURES: CounterVec = {
+        let opts = Opts::new("stellar_submission_failures_total",
+            "Stellar transaction submission failures by status and result code");
+        let counter_vec = CounterVec::new(opts, &["submit_status", "result_code"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
     // Counter for plugin calls (tracks requests to /api/v1/plugins/{plugin_id}/call endpoints).
     pub static ref PLUGIN_CALLS: CounterVec = {
         let opts = Opts::new("plugin_calls_total", "Total number of plugin calls");
         let counter_vec = CounterVec::new(opts, &["plugin_id", "method", "status"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for Stellar submit responses with TRY_AGAIN_LATER status.
+    pub static ref STELLAR_TRY_AGAIN_LATER: CounterVec = {
+        let opts = Opts::new(
+            "stellar_try_again_later_total",
+            "Total number of Stellar transaction submit responses with TRY_AGAIN_LATER"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "tx_status"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transactions confirmed after experiencing TRY_AGAIN_LATER.
+    pub static ref TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS: CounterVec = {
+        let opts = Opts::new(
+            "transactions_try_again_later_success_total",
+            "Total number of transactions confirmed after experiencing TRY_AGAIN_LATER"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transactions that failed after experiencing TRY_AGAIN_LATER.
+    pub static ref TRANSACTIONS_TRY_AGAIN_LATER_FAILED: CounterVec = {
+        let opts = Opts::new(
+            "transactions_try_again_later_failed_total",
+            "Total number of transactions that failed after experiencing TRY_AGAIN_LATER"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transactions that encountered an insufficient fee error.
+    pub static ref TRANSACTIONS_INSUFFICIENT_FEE: CounterVec = {
+        let opts = Opts::new(
+            "transactions_insufficient_fee_total",
+            "Total number of transactions that encountered an insufficient fee error"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transactions confirmed after experiencing insufficient fee.
+    pub static ref TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS: CounterVec = {
+        let opts = Opts::new(
+            "transactions_insufficient_fee_success_total",
+            "Total number of transactions confirmed after experiencing insufficient fee"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
+        counter_vec
+    };
+
+    // Counter for transactions that failed after experiencing insufficient fee.
+    pub static ref TRANSACTIONS_INSUFFICIENT_FEE_FAILED: CounterVec = {
+        let opts = Opts::new(
+            "transactions_insufficient_fee_failed_total",
+            "Total number of transactions that failed after experiencing insufficient fee"
+        );
+        let counter_vec = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
         REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
         counter_vec
     };
@@ -405,6 +480,25 @@ mod actix_tests {
             .with_label_values(&["/test", "GET", "500"])
             .inc();
 
+        // Touch insufficient fee metrics to ensure they appear in output
+        TRANSACTIONS_INSUFFICIENT_FEE
+            .with_label_values(&["test-relayer", "stellar"])
+            .inc();
+        TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS
+            .with_label_values(&["test-relayer", "stellar"])
+            .inc();
+        TRANSACTIONS_INSUFFICIENT_FEE_FAILED
+            .with_label_values(&["test-relayer", "stellar"])
+            .inc();
+
+        // Touch TRY_AGAIN_LATER metrics to ensure they appear in output
+        TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS
+            .with_label_values(&["test-relayer", "stellar"])
+            .inc();
+        TRANSACTIONS_TRY_AGAIN_LATER_FAILED
+            .with_label_values(&["test-relayer", "stellar"])
+            .inc();
+
         let metrics = gather_metrics().expect("failed to gather metrics");
         let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
 
@@ -422,6 +516,15 @@ mod actix_tests {
         assert!(output.contains("raw_requests_total"));
         assert!(output.contains("request_latency_seconds"));
         assert!(output.contains("error_requests_total"));
+
+        // Insufficient fee metrics
+        assert!(output.contains("transactions_insufficient_fee_total"));
+        assert!(output.contains("transactions_insufficient_fee_success_total"));
+        assert!(output.contains("transactions_insufficient_fee_failed_total"));
+
+        // TRY_AGAIN_LATER metrics
+        assert!(output.contains("transactions_try_again_later_success_total"));
+        assert!(output.contains("transactions_try_again_later_failed_total"));
     }
 
     #[actix_rt::test]

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e3f713f2d8f53843e71c69a996d56f51aa9adfb9  # v2.14.1
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594  # v2.16.0
         with:
           egress-policy: audit
       - name: Checkout
@@ -43,7 +43,7 @@ jobs:
           fi
       - name: Install cargo hack
         if: steps.lock-file-commit.outputs.changes == 'true'
-        uses: taiki-e/install-action@650c5ca14212efbbf3e580844b04bdccf68dac31  # v2.67.18
+        uses: taiki-e/install-action@e24b8b7a939c6a537188f34a4163cb153dd85cf6  # v2.69.1
         with:
           tool: cargo-hack
       - name: Check MSRV

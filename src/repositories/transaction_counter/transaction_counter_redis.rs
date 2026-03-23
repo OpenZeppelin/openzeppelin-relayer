@@ -212,6 +212,54 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         debug!(value = %value, "counter set");
         Ok(())
     }
+
+    async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
+
+        let pattern = format!("{}:{}:*", self.key_prefix, COUNTER_PREFIX);
+        debug!(pattern = %pattern, "dropping all transaction counter entries");
+
+        // Phase 1: Collect all matching keys without mutating the keyspace.
+        // Deleting during SCAN can cause hash table rehashing, which may skip keys.
+        let mut cursor: u64 = 0;
+        let mut all_keys: Vec<String> = Vec::new();
+
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .cursor_arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "drop_all_entries_scan"))?;
+
+            all_keys.extend(keys);
+
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        // Phase 2: Batch delete all collected keys.
+        if !all_keys.is_empty() {
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            for key in &all_keys {
+                pipe.del(key);
+            }
+            pipe.exec_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "drop_all_entries_delete"))?;
+        }
+
+        debug!(total_deleted = %all_keys.len(), "dropped all transaction counter entries");
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +270,10 @@ mod tests {
     use uuid::Uuid;
 
     async fn setup_test_repo() -> RedisTransactionCounter {
+        setup_test_repo_with_prefix("test_counter").await
+    }
+
+    async fn setup_test_repo_with_prefix(prefix: &str) -> RedisTransactionCounter {
         let redis_url =
             std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
         let cfg = deadpool_redis::Config::from_url(&redis_url);
@@ -235,7 +287,7 @@ mod tests {
         );
         let connections = Arc::new(RedisConnections::new_single_pool(pool));
 
-        RedisTransactionCounter::new(connections, "test_counter".to_string())
+        RedisTransactionCounter::new(connections, prefix.to_string())
             .expect("Failed to create Redis transaction counter")
     }
 
@@ -367,6 +419,35 @@ mod tests {
             201
         );
         assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), Some(300));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_entries() {
+        let prefix = format!("test_drop_{}", uuid::Uuid::new_v4());
+        let repo = setup_test_repo_with_prefix(&prefix).await;
+        let relayer_1 = uuid::Uuid::new_v4().to_string();
+        let relayer_2 = uuid::Uuid::new_v4().to_string();
+        let address_1 = uuid::Uuid::new_v4().to_string();
+        let address_2 = uuid::Uuid::new_v4().to_string();
+
+        // Set up multiple counters
+        repo.set(&relayer_1, &address_1, 100).await.unwrap();
+        repo.set(&relayer_1, &address_2, 200).await.unwrap();
+        repo.set(&relayer_2, &address_1, 300).await.unwrap();
+
+        // Verify they exist
+        assert_eq!(repo.get(&relayer_1, &address_1).await.unwrap(), Some(100));
+        assert_eq!(repo.get(&relayer_1, &address_2).await.unwrap(), Some(200));
+        assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), Some(300));
+
+        // Drop all
+        repo.drop_all_entries().await.unwrap();
+
+        // Verify all are gone
+        assert_eq!(repo.get(&relayer_1, &address_1).await.unwrap(), None);
+        assert_eq!(repo.get(&relayer_1, &address_2).await.unwrap(), None);
+        assert_eq!(repo.get(&relayer_2, &address_1).await.unwrap(), None);
     }
 
     #[tokio::test]

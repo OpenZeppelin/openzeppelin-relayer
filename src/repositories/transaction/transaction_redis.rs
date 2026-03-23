@@ -1,9 +1,13 @@
 //! Redis-backed implementation of the TransactionRepository.
 
+use crate::config::ServerConfig;
+use crate::constants::FINAL_TRANSACTION_STATUSES;
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
-    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED, TRANSACTIONS_SUBMITTED,
-    TRANSACTIONS_SUCCESS, TRANSACTION_PROCESSING_TIME,
+    TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED,
+    TRANSACTIONS_INSUFFICIENT_FEE_FAILED, TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS,
+    TRANSACTIONS_SUBMITTED, TRANSACTIONS_SUCCESS, TRANSACTIONS_TRY_AGAIN_LATER_FAILED,
+    TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS, TRANSACTION_PROCESSING_TIME,
 };
 use crate::models::{
     NetworkTransactionData, PaginationQuery, RepositoryError, TransactionRepoModel,
@@ -110,6 +114,160 @@ impl RedisTransactionRepository {
         )
     }
 
+    /// Returns the components needed for Lua scripts to resolve a tx key from
+    /// only the tx_id: (tx_to_relayer lookup key, key prefix, key suffix).
+    /// The Lua script does: `GET KEYS[1]` to get the relayer_id, then
+    /// constructs the tx key as `ARGV[1] .. relayer_id .. ARGV[2]`.
+    fn tx_key_parts(&self, tx_id: &str) -> (String, String, String) {
+        let lookup_key = self.tx_to_relayer_key(tx_id);
+        let key_prefix = format!("{}:{}:", self.key_prefix, RELAYER_PREFIX);
+        let key_suffix = format!(":{TX_PREFIX}:{tx_id}");
+        (lookup_key, key_prefix, key_suffix)
+    }
+
+    /// Executes an atomic Lua script with retry/backoff for transient Redis failures.
+    ///
+    /// Every script receives `KEYS[1]` = tx_to_relayer lookup key and
+    /// `ARGV[1..2]` = key prefix/suffix. `extra_args` are appended as `ARGV[3..]`.
+    /// The script must return the (possibly updated) JSON string or `false` for
+    /// not-found.
+    async fn run_atomic_script(
+        &self,
+        lua: &str,
+        tx_id: &str,
+        extra_args: &[&str],
+        op_name: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_BACKOFF_MS: u64 = 100;
+
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(tx_id);
+        let script = Script::new(lua);
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+
+            let mut conn = match self
+                .get_connection(self.connections.primary(), op_name)
+                .await
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(tx_id = %tx_id, attempt, op = %op_name, "connection failed, retrying");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            };
+
+            let mut invocation = script.prepare_invoke();
+            invocation
+                .key(&lookup_key)
+                .arg(&key_prefix)
+                .arg(&key_suffix);
+            for arg in extra_args {
+                invocation.arg(*arg);
+            }
+
+            match invocation.invoke_async::<Option<String>>(&mut conn).await {
+                Ok(result) => {
+                    let json = result.ok_or_else(|| {
+                        RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+                    })?;
+                    return self.deserialize_entity::<TransactionRepoModel>(
+                        &json,
+                        tx_id,
+                        "transaction",
+                    );
+                }
+                Err(e) => {
+                    last_error = Some(self.map_redis_error(e, op_name));
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(
+                            tx_id = %tx_id, attempt, op = %op_name,
+                            "atomic script failed, retrying"
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            RepositoryError::UnexpectedError(format!("retry loop exhausted for {op_name}"))
+        }))
+    }
+
+    /// Executes a Lua script with retry/backoff, returning a Vec<String> result
+    /// (for scripts that return Lua tables / multi-bulk replies).
+    /// Returns `Ok(None)` when the script returns `false`.
+    async fn run_script_with_retry_vec(
+        &self,
+        script: &Script,
+        lookup_key: &str,
+        key_prefix: &str,
+        key_suffix: &str,
+        extra_args: &[&str],
+        op_name: &str,
+    ) -> Result<Option<Vec<String>>, RepositoryError> {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_BACKOFF_MS: u64 = 100;
+
+        let mut last_error = None;
+
+        for attempt in 0..MAX_RETRIES {
+            let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+
+            let mut conn = match self
+                .get_connection(self.connections.primary(), op_name)
+                .await
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(op = %op_name, attempt, "connection failed, retrying");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            };
+
+            let mut invocation = script.prepare_invoke();
+            invocation.key(lookup_key).arg(key_prefix).arg(key_suffix);
+            for arg in extra_args {
+                invocation.arg(*arg);
+            }
+
+            // Redis returns `false` from Lua as a Nil bulk reply, which
+            // redis-rs maps to `None` for `Option<Vec<String>>`.
+            match invocation
+                .invoke_async::<Option<Vec<String>>>(&mut conn)
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_error = Some(self.map_redis_error(e, op_name));
+                    if attempt < MAX_RETRIES - 1 {
+                        warn!(op = %op_name, attempt, "script failed, retrying");
+                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                        continue;
+                    }
+                    return Err(last_error.unwrap());
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            RepositoryError::UnexpectedError(format!("retry loop exhausted for {op_name}"))
+        }))
+    }
+
     /// Parse timestamp string to score for sorted set (milliseconds since epoch)
     fn timestamp_to_score(&self, timestamp: &str) -> f64 {
         chrono::DateTime::parse_from_rfc3339(timestamp)
@@ -194,7 +352,6 @@ impl RedisTransactionRepository {
 
         let mut transactions = Vec::new();
         let mut failed_count = 0;
-        let mut failed_ids = Vec::new();
         for (i, value) in values.into_iter().enumerate() {
             match value {
                 Some(json) => {
@@ -485,6 +642,166 @@ impl RedisTransactionRepository {
 
         debug!(tx_id = %tx.id, "successfully removed all indexes for transaction");
         Ok(())
+    }
+
+    /// Track Prometheus metrics when a transaction status changes.
+    fn track_status_change_metrics(
+        &self,
+        _original_tx: &TransactionRepoModel,
+        updated_tx: &TransactionRepoModel,
+        old_status: &TransactionStatus,
+        new_status: &TransactionStatus,
+    ) {
+        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
+        let relayer_id = updated_tx.relayer_id.as_str();
+
+        // Track submission (when status changes to Submitted)
+        if *old_status != TransactionStatus::Submitted
+            && *new_status == TransactionStatus::Submitted
+        {
+            TRANSACTIONS_SUBMITTED
+                .with_label_values(&[relayer_id, &network_type])
+                .inc();
+
+            if let Ok(created_time) = chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at) {
+                let processing_seconds =
+                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds() as f64;
+                TRANSACTION_PROCESSING_TIME
+                    .with_label_values(&[relayer_id, &network_type, "creation_to_submission"])
+                    .observe(processing_seconds);
+            }
+        }
+
+        // Track status distribution (update gauge when status changes)
+        if old_status != new_status {
+            let old_status_str = format!("{old_status:?}").to_lowercase();
+            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
+                relayer_id,
+                &network_type,
+                &old_status_str,
+            ]);
+            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
+            old_status_gauge.set(clamped_value);
+
+            let new_status_str = format!("{new_status:?}").to_lowercase();
+            TRANSACTIONS_BY_STATUS
+                .with_label_values(&[relayer_id, &network_type, &new_status_str])
+                .inc();
+        }
+
+        // Track metrics for final transaction states
+        let was_final = is_final_state(old_status);
+        let is_final = is_final_state(new_status);
+
+        if !was_final && is_final {
+            let meta = updated_tx.metadata.as_ref();
+            let had_insufficient_fee = meta.is_some_and(|m| m.insufficient_fee_retries > 0);
+            let had_try_again_later = meta.is_some_and(|m| m.try_again_later_retries > 0);
+
+            match new_status {
+                TransactionStatus::Confirmed => {
+                    TRANSACTIONS_SUCCESS
+                        .with_label_values(&[relayer_id, &network_type])
+                        .inc();
+                    if had_insufficient_fee {
+                        TRANSACTIONS_INSUFFICIENT_FEE_SUCCESS
+                            .with_label_values(&[relayer_id, &network_type])
+                            .inc();
+                    }
+                    if had_try_again_later {
+                        TRANSACTIONS_TRY_AGAIN_LATER_SUCCESS
+                            .with_label_values(&[relayer_id, &network_type])
+                            .inc();
+                    }
+
+                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
+                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
+                    {
+                        if let (Ok(sent_time), Ok(confirmed_time)) = (
+                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
+                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
+                        ) {
+                            let processing_seconds = (confirmed_time.with_timezone(&Utc)
+                                - sent_time.with_timezone(&Utc))
+                            .num_seconds()
+                                as f64;
+                            TRANSACTION_PROCESSING_TIME
+                                .with_label_values(&[
+                                    relayer_id,
+                                    &network_type,
+                                    "submission_to_confirmation",
+                                ])
+                                .observe(processing_seconds);
+                        }
+                    }
+
+                    if let Ok(created_time) =
+                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
+                    {
+                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
+                            if let Ok(confirmed_time) =
+                                chrono::DateTime::parse_from_rfc3339(confirmed_at_str)
+                            {
+                                let processing_seconds = (confirmed_time.with_timezone(&Utc)
+                                    - created_time.with_timezone(&Utc))
+                                .num_seconds()
+                                    as f64;
+                                TRANSACTION_PROCESSING_TIME
+                                    .with_label_values(&[
+                                        relayer_id,
+                                        &network_type,
+                                        "creation_to_confirmation",
+                                    ])
+                                    .observe(processing_seconds);
+                            }
+                        }
+                    }
+                }
+                TransactionStatus::Failed => {
+                    let failure_reason = updated_tx
+                        .status_reason
+                        .as_deref()
+                        .map(|reason| {
+                            if reason.starts_with("Submission failed:") {
+                                "submission_failed"
+                            } else if reason.starts_with("Preparation failed:") {
+                                "preparation_failed"
+                            } else {
+                                "failed"
+                            }
+                        })
+                        .unwrap_or("failed");
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, failure_reason])
+                        .inc();
+                }
+                TransactionStatus::Expired => {
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, "expired"])
+                        .inc();
+                }
+                TransactionStatus::Canceled => {
+                    TRANSACTIONS_FAILED
+                        .with_label_values(&[relayer_id, &network_type, "canceled"])
+                        .inc();
+                }
+                _ => {}
+            }
+
+            // Track retry-related failure metrics for all non-success final states
+            if *new_status != TransactionStatus::Confirmed {
+                if had_insufficient_fee {
+                    TRANSACTIONS_INSUFFICIENT_FEE_FAILED
+                        .with_label_values(&[relayer_id, &network_type])
+                        .inc();
+                }
+                if had_try_again_later {
+                    TRANSACTIONS_TRY_AGAIN_LATER_FAILED
+                        .with_label_values(&[relayer_id, &network_type])
+                        .inc();
+                }
+            }
+        }
     }
 }
 
@@ -1294,271 +1611,144 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        const MAX_RETRIES: u32 = 3;
-        const BACKOFF_MS: u64 = 100;
+        // Serialize only the non-None fields as a JSON patch.
+        let patch_json = serde_json::to_string(&update).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
+        })?;
 
-        // Optimistic CAS: only apply update if the current stored value still matches the
-        // expected pre-update value. This avoids duplicate status metric updates on races.
-        let mut original_tx = self.get_by_id(tx_id.clone()).await?;
-        let mut updated_tx = original_tx.clone();
-        updated_tx.apply_partial_update(update.clone());
-
-        let key = self.tx_key(&updated_tx.relayer_id, &tx_id);
-        let mut original_value = self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
-        let mut updated_value = self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
-        let mut data_updated = false;
-
-        let mut last_error = None;
-
-        for attempt in 0..MAX_RETRIES {
-            let mut conn = match self
-                .get_connection(self.connections.primary(), "partial_update")
-                .await
-            {
-                Ok(conn) => conn,
-                Err(e) => {
-                    last_error = Some(e);
-                    if attempt < MAX_RETRIES - 1 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                        continue;
-                    }
-                    return Err(last_error.unwrap());
-                }
-            };
-
-            if !data_updated {
-                let cas_script = Script::new(
-                    r#"
-                    local current = redis.call('GET', KEYS[1])
-                    if not current then
-                        return -1
-                    end
-                    if current == ARGV[1] then
-                        redis.call('SET', KEYS[1], ARGV[2])
-                        return 1
-                    end
-                    return 0
-                    "#,
-                );
-
-                let cas_result: i32 = match cas_script
-                    .key(&key)
-                    .arg(&original_value)
-                    .arg(&updated_value)
-                    .invoke_async(&mut conn)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(e) => {
-                        if attempt < MAX_RETRIES - 1 {
-                            warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed CAS transaction update, retrying");
-                            last_error = Some(self.map_redis_error(e, "partial_update_cas"));
-                            tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS))
-                                .await;
-                            continue;
-                        }
-                        return Err(self.map_redis_error(e, "partial_update_cas"));
-                    }
-                };
-
-                if cas_result == -1 {
-                    return Err(RepositoryError::NotFound(format!(
-                        "Transaction with ID {tx_id} not found"
-                    )));
-                }
-
-                if cas_result == 0 {
-                    if attempt < MAX_RETRIES - 1 {
-                        warn!(tx_id = %tx_id, attempt = %attempt, "concurrent transaction update detected, rebasing retry");
-                        original_tx = self.get_by_id(tx_id.clone()).await?;
-                        updated_tx = original_tx.clone();
-                        updated_tx.apply_partial_update(update.clone());
-                        original_value =
-                            self.serialize_entity(&original_tx, |t| &t.id, "transaction")?;
-                        updated_value =
-                            self.serialize_entity(&updated_tx, |t| &t.id, "transaction")?;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                        continue;
-                    }
-                    return Err(RepositoryError::TransactionFailure(format!(
-                        "Concurrent update conflict for transaction {tx_id}"
-                    )));
-                }
-
-                data_updated = true;
+        // If the update sets a final status, compute delete_at in Rust (depends on server config)
+        // and include it in the patch so the Lua script applies it atomically.
+        let delete_at_value = if let Some(ref status) = update.status {
+            if FINAL_TRANSACTION_STATUSES.contains(status) {
+                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
+                let seconds = (expiration_hours * 3600.0) as i64;
+                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
+                Some(delete_time.to_rfc3339())
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
 
-            // Try to update indexes with the original pre-update state
-            // This ensures stale indexes are removed even on retry attempts
-            match self.update_indexes(&updated_tx, Some(&original_tx)).await {
-                Ok(_) => {
-                    debug!(tx_id = %tx_id, attempt = %attempt, "successfully updated transaction");
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
 
-                    // Track metrics for transaction state changes
-                    if let Some(new_status) = &update.status {
-                        let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
-                        let relayer_id = updated_tx.relayer_id.as_str();
+        // Lua script: atomically applies a JSON patch to the stored transaction.
+        // Guards: rejects status changes on already-finalized transactions.
+        // Returns a two-element array {old_json, new_json} so Rust has the full
+        // pre-update state for index cleanup and metrics.
+        // Returns false if tx not found.
+        let patch_script = Script::new(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
 
-                        // Track submission (when status changes to Submitted)
-                        if original_tx.status != TransactionStatus::Submitted
-                            && *new_status == TransactionStatus::Submitted
-                        {
-                            TRANSACTIONS_SUBMITTED
-                                .with_label_values(&[relayer_id, &network_type])
-                                .inc();
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
 
-                            // Track processing time: creation to submission
-                            if let Ok(created_time) =
-                                chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
-                            {
-                                let processing_seconds =
-                                    (Utc::now() - created_time.with_timezone(&Utc)).num_seconds()
-                                        as f64;
-                                TRANSACTION_PROCESSING_TIME
-                                    .with_label_values(&[
-                                        relayer_id,
-                                        &network_type,
-                                        "creation_to_submission",
-                                    ])
-                                    .observe(processing_seconds);
-                            }
-                        }
+            local tx = cjson.decode(current)
+            local patch = cjson.decode(ARGV[3])
 
-                        // Track status distribution (update gauge when status changes)
-                        if original_tx.status != *new_status {
-                            // Decrement old status and clamp to zero to avoid negative gauges.
-                            let old_status = &original_tx.status;
-                            let old_status_str = format!("{old_status:?}").to_lowercase();
-                            let old_status_gauge = TRANSACTIONS_BY_STATUS.with_label_values(&[
-                                relayer_id,
-                                &network_type,
-                                &old_status_str,
-                            ]);
-                            let clamped_value = (old_status_gauge.get() - 1.0).max(0.0);
-                            old_status_gauge.set(clamped_value);
+            -- Guard: reject status changes on finalized transactions.
+            -- A stale worker must not resurrect a tx that another worker
+            -- already moved to a terminal state.
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] and patch["status"] then
+                return {current, current}
+            end
 
-                            // Increment new status
-                            let new_status_str = format!("{new_status:?}").to_lowercase();
-                            TRANSACTIONS_BY_STATUS
-                                .with_label_values(&[relayer_id, &network_type, &new_status_str])
-                                .inc();
-                        }
+            local old_snapshot = current
 
-                        // Track metrics for final transaction states
-                        // Only track when status changes from non-final to final state
-                        let was_final = is_final_state(&original_tx.status);
-                        let is_final = is_final_state(new_status);
+            -- lua-cjson cannot distinguish empty Lua tables from empty
+            -- arrays, so a decode/encode round-trip turns [] into {}.
+            -- Record which keys held [] in the stored doc and the patch
+            -- so we can restore them after cjson.encode.
+            -- NOTE: this relies on each array-typed field having a unique key
+            -- name across the entire JSON document (including nested objects).
+            -- If the model ever introduces duplicate key names at different
+            -- nesting levels (e.g. metadata.hashes), the gsub below could
+            -- restore the wrong occurrence.
+            local empty_arrs = {}
+            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
 
-                        if !was_final && is_final {
-                            match new_status {
-                                TransactionStatus::Confirmed => {
-                                    TRANSACTIONS_SUCCESS
-                                        .with_label_values(&[relayer_id, &network_type])
-                                        .inc();
+            for k, v in pairs(patch) do
+                tx[k] = v
+            end
 
-                                    // Track processing time: submission to confirmation
-                                    if let (Some(sent_at_str), Some(confirmed_at_str)) =
-                                        (&updated_tx.sent_at, &updated_tx.confirmed_at)
-                                    {
-                                        if let (Ok(sent_time), Ok(confirmed_time)) = (
-                                            chrono::DateTime::parse_from_rfc3339(sent_at_str),
-                                            chrono::DateTime::parse_from_rfc3339(confirmed_at_str),
-                                        ) {
-                                            let processing_seconds = (confirmed_time
-                                                .with_timezone(&Utc)
-                                                - sent_time.with_timezone(&Utc))
-                                            .num_seconds()
-                                                as f64;
-                                            TRANSACTION_PROCESSING_TIME
-                                                .with_label_values(&[
-                                                    relayer_id,
-                                                    &network_type,
-                                                    "submission_to_confirmation",
-                                                ])
-                                                .observe(processing_seconds);
-                                        }
-                                    }
+            -- Apply delete_at if transitioning to a final state and not already set
+            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
+                tx["delete_at"] = ARGV[4]
+            end
 
-                                    // Track processing time: creation to confirmation
-                                    if let Ok(created_time) =
-                                        chrono::DateTime::parse_from_rfc3339(&updated_tx.created_at)
-                                    {
-                                        if let Some(confirmed_at_str) = &updated_tx.confirmed_at {
-                                            if let Ok(confirmed_time) =
-                                                chrono::DateTime::parse_from_rfc3339(
-                                                    confirmed_at_str,
-                                                )
-                                            {
-                                                let processing_seconds = (confirmed_time
-                                                    .with_timezone(&Utc)
-                                                    - created_time.with_timezone(&Utc))
-                                                .num_seconds()
-                                                    as f64;
-                                                TRANSACTION_PROCESSING_TIME
-                                                    .with_label_values(&[
-                                                        relayer_id,
-                                                        &network_type,
-                                                        "creation_to_confirmation",
-                                                    ])
-                                                    .observe(processing_seconds);
-                                            }
-                                        }
-                                    }
-                                }
-                                TransactionStatus::Failed => {
-                                    // Parse status_reason to determine failure type
-                                    let failure_reason = updated_tx
-                                        .status_reason
-                                        .as_deref()
-                                        .map(|reason| {
-                                            if reason.starts_with("Submission failed:") {
-                                                "submission_failed"
-                                            } else if reason.starts_with("Preparation failed:") {
-                                                "preparation_failed"
-                                            } else {
-                                                "failed"
-                                            }
-                                        })
-                                        .unwrap_or("failed");
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[
-                                            relayer_id,
-                                            &network_type,
-                                            failure_reason,
-                                        ])
-                                        .inc();
-                                }
-                                TransactionStatus::Expired => {
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, "expired"])
-                                        .inc();
-                                }
-                                TransactionStatus::Canceled => {
-                                    TRANSACTIONS_FAILED
-                                        .with_label_values(&[relayer_id, &network_type, "canceled"])
-                                        .inc();
-                                }
-                                _ => {
-                                    // Other final states (shouldn't happen, but handle gracefully)
-                                }
-                            }
-                        }
-                    }
-                    return Ok(updated_tx);
-                }
-                Err(e) if attempt < MAX_RETRIES - 1 => {
-                    warn!(tx_id = %tx_id, attempt = %attempt, error = %e, "failed to update indexes, retrying");
-                    last_error = Some(e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(BACKOFF_MS)).await;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
+            local updated = cjson.encode(tx)
+
+            -- Restore empty arrays that cjson.encode converted to {}
+            for k, _ in pairs(empty_arrs) do
+                updated = string.gsub(
+                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
+                )
+            end
+
+            redis.call('SET', tx_key, updated)
+            return {old_snapshot, updated}
+            "#,
+        );
+
+        let result: Option<Vec<String>> = self
+            .run_script_with_retry_vec(
+                &patch_script,
+                &lookup_key,
+                &key_prefix,
+                &key_suffix,
+                &[&patch_json, delete_at_arg],
+                "partial_update",
+            )
+            .await?;
+
+        let parts = result.ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        if parts.len() != 2 {
+            return Err(RepositoryError::UnexpectedError(format!(
+                "partial_update script returned {} elements, expected 2",
+                parts.len()
+            )));
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            RepositoryError::UnexpectedError("partial_update exhausted retries".to_string())
-        }))
+        let old_json = &parts[0];
+        let new_json = &parts[1];
+
+        let original_tx =
+            self.deserialize_entity::<TransactionRepoModel>(old_json, &tx_id, "transaction")?;
+        let updated_tx =
+            self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
+
+        // Update indexes using the full pre-update state (status, network_data, nonce, etc.)
+        self.update_indexes(&updated_tx, Some(&original_tx)).await?;
+
+        debug!(tx_id = %tx_id, "successfully updated transaction via patch");
+
+        // Track metrics only when the persisted status actually changed.
+        // The Lua script may silently reject a status patch on already-final
+        // transactions, so we compare the deserialized before/after states.
+        if original_tx.status != updated_tx.status {
+            self.track_status_change_metrics(
+                &original_tx,
+                &updated_tx,
+                &original_tx.status,
+                &updated_tx.status,
+            );
+        }
+
+        Ok(updated_tx)
     }
 
     async fn update_network_data(
@@ -1583,6 +1773,191 @@ impl TransactionRepository for RedisTransactionRepository {
             ..Default::default()
         };
         self.partial_update(tx_id, update).await
+    }
+
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local function set_obj(json, key, tbl)
+                local enc = cjson.encode(tbl)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            metadata["consecutive_failures"] = (metadata["consecutive_failures"] or 0) + 1
+            metadata["total_failures"] = (metadata["total_failures"] or 0) + 1
+
+            local updated = set_obj(current, "metadata", metadata)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[],
+            "increment_status_check_failures",
+        )
+        .await
+    }
+
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local function set_obj(json, key, tbl)
+                local enc = cjson.encode(tbl)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            metadata["consecutive_failures"] = 0
+
+            local updated = set_obj(current, "metadata", metadata)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[],
+            "reset_status_check_consecutive_failures",
+        )
+        .await
+    }
+
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local function set_str(json, key, val)
+                local enc = cjson.encode(val)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+            local function set_obj(json, key, tbl)
+                local enc = cjson.encode(tbl)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            metadata["insufficient_fee_retries"] = (metadata["insufficient_fee_retries"] or 0) + 1
+
+            local updated = set_str(current, "sent_at", ARGV[3])
+            updated = set_obj(updated, "metadata", metadata)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[&sent_at],
+            "record_stellar_insufficient_fee_retry",
+        )
+        .await
+    }
+
+    async fn record_stellar_try_again_later_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.run_atomic_script(
+            r#"
+            local function set_str(json, key, val)
+                local enc = cjson.encode(val)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*"[^"]*"', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+            local function set_obj(json, key, tbl)
+                local enc = cjson.encode(tbl)
+                local r, n = string.gsub(json, '"'..key..'"%s*:%s*%b{}', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                r, n = string.gsub(json, '"'..key..'"%s*:%s*null', '"'..key..'":'..enc, 1)
+                if n > 0 then return r end
+                return string.gsub(json, '}%s*$', ',"'..key..'":'..enc..'}', 1)
+            end
+
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] then return current end
+
+            local metadata = tx["metadata"]
+            if type(metadata) ~= 'table' then metadata = {} end
+            metadata["try_again_later_retries"] = (metadata["try_again_later_retries"] or 0) + 1
+
+            local updated = set_str(current, "sent_at", ARGV[3])
+            updated = set_obj(updated, "metadata", metadata)
+            redis.call('SET', tx_key, updated)
+            return updated
+            "#,
+            &tx_id,
+            &[&sent_at],
+            "record_stellar_try_again_later_retry",
+        )
+        .await
     }
 
     async fn set_confirmed_at(
@@ -2185,106 +2560,6 @@ mod tests {
             result.items[2].created_at,
             "2025-01-27T10:00:00.000000+00:00"
         );
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires active Redis instance"]
-    async fn test_find_by_relayer_id_migration_from_old_index() {
-        let repo = setup_test_repo().await;
-        let relayer_id = Uuid::new_v4().to_string();
-
-        // Create transactions with different created_at timestamps
-        let mut tx1 = create_test_transaction_with_relayer("migrate-test-1", &relayer_id);
-        tx1.created_at = "2025-01-27T10:00:00.000000+00:00".to_string(); // Oldest
-
-        let mut tx2 = create_test_transaction_with_relayer("migrate-test-2", &relayer_id);
-        tx2.created_at = "2025-01-27T12:00:00.000000+00:00".to_string(); // Middle
-
-        let mut tx3 = create_test_transaction_with_relayer("migrate-test-3", &relayer_id);
-        tx3.created_at = "2025-01-27T14:00:00.000000+00:00".to_string(); // Newest
-
-        // Create transactions directly in Redis WITHOUT adding to sorted set
-        // This simulates old transactions created before the sorted set index existed
-        let mut conn = repo.connections.primary().get().await.unwrap();
-        let relayer_list_key = repo.relayer_list_key();
-        let _: () = conn.sadd(&relayer_list_key, &relayer_id).await.unwrap();
-
-        for tx in &[&tx1, &tx2, &tx3] {
-            let key = repo.tx_key(&tx.relayer_id, &tx.id);
-            let reverse_key = repo.tx_to_relayer_key(&tx.id);
-            let value = repo.serialize_entity(tx, |t| &t.id, "transaction").unwrap();
-
-            let mut pipe = redis::pipe();
-            pipe.atomic();
-            pipe.set(&key, &value);
-            pipe.set(&reverse_key, &tx.relayer_id);
-
-            // Add to status index (but NOT to sorted set)
-            let status_key = repo.relayer_status_key(&tx.relayer_id, &tx.status);
-            pipe.sadd(&status_key, &tx.id);
-
-            pipe.exec_async(&mut conn).await.unwrap();
-        }
-
-        // Verify sorted set is empty (transactions were created without sorted set index)
-        let relayer_sorted_key = repo.relayer_tx_by_created_at_key(&relayer_id);
-        let count: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
-        assert_eq!(count, 0, "Sorted set should be empty for old transactions");
-
-        // Call find_by_relayer_id - this should trigger migration
-        let query = PaginationQuery {
-            page: 1,
-            per_page: 10,
-        };
-        let result = repo
-            .find_by_relayer_id(&relayer_id, query.clone())
-            .await
-            .unwrap();
-
-        // Verify migration happened - sorted set should now have entries
-        let count_after: u64 = conn.zcard(&relayer_sorted_key).await.unwrap();
-        assert_eq!(
-            count_after, 3,
-            "Sorted set should be populated after migration"
-        );
-
-        // Verify results are correct and sorted (newest first)
-        assert_eq!(result.total, 3);
-        assert_eq!(result.items.len(), 3);
-
-        assert_eq!(
-            result.items[0].id, "migrate-test-3",
-            "First item should be newest after migration"
-        );
-        assert_eq!(
-            result.items[0].created_at,
-            "2025-01-27T14:00:00.000000+00:00"
-        );
-
-        assert_eq!(
-            result.items[1].id, "migrate-test-2",
-            "Second item should be middle after migration"
-        );
-        assert_eq!(
-            result.items[1].created_at,
-            "2025-01-27T12:00:00.000000+00:00"
-        );
-
-        assert_eq!(
-            result.items[2].id, "migrate-test-1",
-            "Third item should be oldest after migration"
-        );
-        assert_eq!(
-            result.items[2].created_at,
-            "2025-01-27T10:00:00.000000+00:00"
-        );
-
-        // Verify second call uses sorted set (no migration needed)
-        let result2 = repo.find_by_relayer_id(&relayer_id, query).await.unwrap();
-        assert_eq!(result2.total, 3);
-        assert_eq!(result2.items.len(), 3);
-        // Results should be identical since sorted set is now populated
-        assert_eq!(result.items[0].id, result2.items[0].id);
     }
 
     #[tokio::test]
@@ -3347,5 +3622,479 @@ mod tests {
         // relayer-2's transaction should still exist
         let remaining = repo.get_by_id(tx_id_2).await.unwrap();
         assert_eq!(remaining.relayer_id, relayer_2);
+    }
+
+    // ── increment_status_check_failures ─────────────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_no_prior_metadata() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.metadata = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.expect("metadata should be set");
+        assert_eq!(meta.consecutive_failures, 1);
+        assert_eq!(meta.total_failures, 1);
+        assert_eq!(meta.insufficient_fee_retries, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 3);
+        assert_eq!(meta.total_failures, 3);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        repo.create(tx).await.unwrap();
+
+        let result = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        // Should return unchanged — no metadata mutation on final state
+        assert!(result.metadata.is_none());
+        assert_eq!(result.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_status_check_failures_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .increment_status_check_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── reset_status_check_consecutive_failures ─────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Increment a few times first
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        // total_failures should be preserved
+        assert_eq!(meta.total_failures, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Failed);
+        tx.metadata = Some(crate::models::TransactionMetadata {
+            consecutive_failures: 5,
+            total_failures: 10,
+            insufficient_fee_retries: 0,
+            try_again_later_retries: 0,
+        });
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 5);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_consecutive_failures_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .reset_status_check_consecutive_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_insufficient_fee_retry ───────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:00:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:01:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "new-time".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_insufficient_fee_retry_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .record_stellar_insufficient_fee_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_try_again_later_retry ────────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(tx_id, "2025-03-18T10:00:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_accumulates() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(tx_id, "2025-03-18T10:01:00Z".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_noop_on_final_state() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Confirmed);
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_try_again_later_retry(tx_id, "new-time".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged on final state
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_record_try_again_later_retry_not_found() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+
+        let result = repo
+            .record_stellar_try_again_later_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── metadata preservation across operations ─────────────────────
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_failures_preserves_try_again_later_retries() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set try_again_later_retries = 1
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Now increment failures — should NOT clobber try_again_later_retries
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.try_again_later_retries, 1,
+            "try_again_later_retries must survive increment_status_check_failures"
+        );
+        assert_eq!(meta.consecutive_failures, 1);
+        assert_eq!(meta.total_failures, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_increment_failures_preserves_insufficient_fee_retries() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set insufficient_fee_retries = 1
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Now increment failures — should NOT clobber insufficient_fee_retries
+        let updated = repo.increment_status_check_failures(tx_id).await.unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.insufficient_fee_retries, 1,
+            "insufficient_fee_retries must survive increment_status_check_failures"
+        );
+        assert_eq!(meta.consecutive_failures, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reset_failures_preserves_retry_counters() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set both retry counters
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+        repo.record_stellar_insufficient_fee_retry(
+            tx_id.clone(),
+            "2025-03-18T10:01:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Increment then reset consecutive failures
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+        let updated = repo
+            .reset_status_check_consecutive_failures(tx_id)
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 1);
+        assert_eq!(
+            meta.try_again_later_retries, 1,
+            "try_again_later_retries must survive reset"
+        );
+        assert_eq!(
+            meta.insufficient_fee_retries, 1,
+            "insufficient_fee_retries must survive reset"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_fee_and_try_again_later_retries_independent() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Sent);
+        repo.create(tx).await.unwrap();
+
+        // Set try_again_later_retries = 2
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+        repo.record_stellar_try_again_later_retry(
+            tx_id.clone(),
+            "2025-03-18T10:01:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        // Set insufficient_fee_retries = 1 — should NOT clobber try_again_later_retries
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(tx_id, "2025-03-18T10:02:00Z".to_string())
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(
+            meta.try_again_later_retries, 2,
+            "try_again_later_retries must survive insufficient_fee_retry"
+        );
+        assert_eq!(meta.insufficient_fee_retries, 1);
     }
 }
