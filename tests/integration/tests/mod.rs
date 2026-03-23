@@ -2,6 +2,7 @@
 //!
 //! This module contains all integration test files organized by category.
 
+mod api_key_permissions;
 mod api_keys_api;
 mod authorization;
 mod authz_api;

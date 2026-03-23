@@ -37,13 +37,13 @@ async fn test_create_and_list_api_keys() {
     );
 
     let listed = client
-        .list_api_keys_paginated(1, 20)
+        .list_api_keys_paginated(1, 100)
         .await
         .expect("Failed to list api keys");
 
     if let Some(meta) = listed.pagination {
         assert_eq!(meta.current_page, 1);
-        assert_eq!(meta.per_page, 20);
+        assert_eq!(meta.per_page, 100);
         assert!(meta.total_items >= listed.items.len() as u64);
     }
 
