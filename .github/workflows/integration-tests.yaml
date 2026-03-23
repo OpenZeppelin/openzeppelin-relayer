@@ -4,7 +4,7 @@ on:
   workflow_dispatch:  # Allow manual triggering from GitHub UI
     inputs:
       storage_backend:
-        description: "Storage backend to test"
+        description: Storage backend to test
         type: choice
         required: false
         default: all
@@ -23,7 +23,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        storage_backend: [in_memory, redis]
+        storage_backend:
+          - in_memory
+          - redis
     permissions:
       contents: read
       id-token: write  # Required for OIDC authentication with AWS
