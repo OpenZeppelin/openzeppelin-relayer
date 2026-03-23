@@ -208,6 +208,14 @@ impl ApiKeyRepositoryTrait for RedisApiKeyRepository {
                 .map_err(|e| self.map_redis_error(e, "list_paginated_members"))?;
 
             let start = ((query.page - 1) * query.per_page) as usize;
+            if start >= all_ids.len() {
+                return Ok(PaginatedResult {
+                    items: vec![],
+                    total,
+                    page: query.page,
+                    per_page: query.per_page,
+                });
+            }
             let end = (start + query.per_page as usize).min(all_ids.len());
 
             (total, all_ids[start..end].to_vec())

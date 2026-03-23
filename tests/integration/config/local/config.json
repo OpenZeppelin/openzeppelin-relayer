@@ -22,5 +22,18 @@
     }
   ],
   "networks": "/app/networks",
-  "plugins": []
+  "plugins": [
+    {
+      "id": "e2e-echo",
+      "path": "examples/e2e-echo.ts",
+      "emit_logs": false,
+      "emit_traces": false,
+      "forward_logs": false,
+      "allow_get_invocation": true,
+      "raw_response": false,
+      "config": {
+        "suite": "integration"
+      }
+    }
+  ]
 }

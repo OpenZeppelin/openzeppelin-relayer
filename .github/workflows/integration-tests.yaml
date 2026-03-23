@@ -2,13 +2,28 @@
 name: Integration Tests
 on:
   workflow_dispatch:  # Allow manual triggering from GitHub UI
+    inputs:
+      storage_backend:
+        description: "Storage backend to test"
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - in_memory
+          - redis
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   test-integration:
-    name: Integration Tests
+    if: ${{ github.event.inputs.storage_backend == '' || github.event.inputs.storage_backend == 'all' || github.event.inputs.storage_backend == matrix.storage_backend }}
+    name: Integration Tests (strict=true, storage=${{ matrix.storage_backend }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage_backend: [in_memory, redis]
     permissions:
       contents: read
       id-token: write  # Required for OIDC authentication with AWS
@@ -30,6 +45,10 @@ jobs:
           cat > .env.integration << EOF
           MODE=testnet
           API_KEY=${{ secrets.INTEGRATION_TESTS_API_KEY }}
+          STRICT_E2E=true
+          REPOSITORY_STORAGE_TYPE=${{ matrix.storage_backend }}
+          RESET_STORAGE_ON_START=true
+          REDIS_KEY_PREFIX=it-${{ github.run_id }}-${{ github.run_attempt }}-strict-${{ matrix.storage_backend }}
           LOG_LEVEL=info
           USE_KMS=true
           CI=true
