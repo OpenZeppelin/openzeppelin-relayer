@@ -193,13 +193,13 @@ async fn test_plugin_call_get_with_query_and_route() {
     );
     assert_eq!(
         data.pointer("/query/region"),
-        Some(&serde_json::json!("us")),
-        "query.region should be forwarded"
+        Some(&serde_json::json!(["us"])),
+        "query.region should be forwarded as array"
     );
     assert_eq!(
         data.pointer("/query/verbose"),
-        Some(&serde_json::json!("true")),
-        "query.verbose should be forwarded"
+        Some(&serde_json::json!(["true"])),
+        "query.verbose should be forwarded as array"
     );
 }
 

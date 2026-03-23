@@ -117,9 +117,8 @@ async fn test_relayer_signing_and_rpc_not_found() {
             .sign_typed_data(
                 MISSING_RELAYER_ID,
                 serde_json::json!({
-                    "domain": {},
-                    "types": {},
-                    "value": {}
+                    "domain_separator": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "hash_struct_message": "0x0000000000000000000000000000000000000000000000000000000000000000"
                 }),
             )
             .await
@@ -130,7 +129,7 @@ async fn test_relayer_signing_and_rpc_not_found() {
             .sign_transaction_payload(
                 MISSING_RELAYER_ID,
                 serde_json::json!({
-                    "unsigned_tx": "AAAA"
+                    "unsigned_xdr": "AAAA"
                 }),
             )
             .await
@@ -150,8 +149,8 @@ async fn test_relayer_sponsored_routes_not_found() {
             .quote_sponsored_transaction(
                 MISSING_RELAYER_ID,
                 serde_json::json!({
-                    "network": "evm",
-                    "transaction": {}
+                    "transaction": "AAAA",
+                    "fee_token": "So11111111111111111111111111111111111111112"
                 }),
             )
             .await
@@ -162,8 +161,8 @@ async fn test_relayer_sponsored_routes_not_found() {
             .build_sponsored_transaction(
                 MISSING_RELAYER_ID,
                 serde_json::json!({
-                    "network": "evm",
-                    "transaction": {}
+                    "transaction": "AAAA",
+                    "fee_token": "So11111111111111111111111111111111111111112"
                 }),
             )
             .await

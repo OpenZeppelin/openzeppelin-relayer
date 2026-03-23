@@ -17,8 +17,8 @@ use std::env;
 
 fn strict_e2e_enabled() -> bool {
     env::var("STRICT_E2E")
-        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
+        .map(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no" | "off"))
+        .unwrap_or(true)
 }
 
 /// HTTP client for OpenZeppelin Relayer API
