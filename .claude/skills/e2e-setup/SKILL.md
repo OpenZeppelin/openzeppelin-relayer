@@ -42,7 +42,7 @@ You help configure and run the integration test environment for the OpenZeppelin
 
 2. **Configure environment file (.env.integration):**
    - Read `.env.integration` and check if values are still placeholder defaults
-   - For local mode, `API_KEY` can be any value (e.g., `local-test-key`)
+   - For local mode, `API_KEY` can be any value (e.g., `local-integration-test-key-00000`)
    - For local mode, `KEYSTORE_PASSPHRASE` should be empty or match the Anvil keystore password (`test`)
    - Set `WEBHOOK_SIGNING_KEY` to a UUID if not already set
 
