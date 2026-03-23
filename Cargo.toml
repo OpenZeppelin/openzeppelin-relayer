@@ -117,7 +117,7 @@ mockall = { version = "0.13" }
 mockito = "1.7.1"
 proptest = "1.6.0"
 rand = "0.9.0"
-tempfile = "3.2"
+tempfile = "3.27"
 serial_test = "3.2"
 clap = { version = "4.5", features = ["derive"] }
 
