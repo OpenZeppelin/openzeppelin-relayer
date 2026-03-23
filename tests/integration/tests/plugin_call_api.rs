@@ -273,7 +273,7 @@ async fn test_plugin_call_metadata_logs_and_traces_enabled() {
         )
         .await;
 
-    let _ = client
+    client
         .update_plugin(
             E2E_PLUGIN_ID,
             serde_json::json!({
@@ -281,7 +281,8 @@ async fn test_plugin_call_metadata_logs_and_traces_enabled() {
                 "emit_traces": original.emit_traces
             }),
         )
-        .await;
+        .await
+        .expect("Failed to restore plugin metadata flags");
 
     let (status, body) = call_result.expect("Failed to call plugin route");
     assert_eq!(status, 200, "Expected HTTP 200, got body={}", body);
@@ -344,7 +345,7 @@ async fn test_plugin_call_metadata_omitted_when_disabled() {
         )
         .await;
 
-    let _ = client
+    client
         .update_plugin(
             E2E_PLUGIN_ID,
             serde_json::json!({
@@ -352,7 +353,8 @@ async fn test_plugin_call_metadata_omitted_when_disabled() {
                 "emit_traces": original.emit_traces
             }),
         )
-        .await;
+        .await
+        .expect("Failed to restore plugin metadata flags");
 
     let (status, body) = call_result.expect("Failed to call plugin route");
     assert_eq!(status, 200, "Expected HTTP 200, got body={}", body);
@@ -368,9 +370,12 @@ async fn test_plugin_call_metadata_omitted_when_disabled() {
 #[tokio::test]
 #[serial]
 async fn test_plugin_call_post_invalid_json_payload() {
-    let Some(_client) = RelayerClient::from_env_or_skip().await else {
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
         return;
     };
+    if !has_e2e_plugin(&client).await {
+        return;
+    }
     let api_key = env::var("API_KEY").expect("API_KEY should be set for integration tests");
     let url = format!("{}/api/v1/plugins/{}/call", test_base_url(), E2E_PLUGIN_ID);
 
@@ -407,6 +412,9 @@ async fn test_plugin_call_post_invalid_json_payload() {
 #[serial]
 async fn test_plugin_call_post_invalid_request_shape() {
     let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
+    if !has_e2e_plugin(&client).await {
         return;
     };
 

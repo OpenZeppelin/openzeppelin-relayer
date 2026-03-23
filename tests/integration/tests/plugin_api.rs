@@ -175,12 +175,13 @@ async fn test_update_plugin_timeout() {
     assert_eq!(updated.timeout.as_secs(), new_timeout);
 
     // Restore original timeout
-    let _ = client
+    client
         .update_plugin(
             plugin_id,
             serde_json::json!({ "timeout": original_timeout }),
         )
-        .await;
+        .await
+        .expect("Failed to restore original plugin timeout");
 }
 
 /// Tests updating a plugin's boolean flags and restoring them
@@ -216,12 +217,13 @@ async fn test_update_plugin_flags() {
     assert_eq!(updated.emit_logs, new_emit_logs);
 
     // Restore original
-    let _ = client
+    client
         .update_plugin(
             plugin_id,
             serde_json::json!({ "emit_logs": original.emit_logs }),
         )
-        .await;
+        .await
+        .expect("Failed to restore original plugin flags");
 }
 
 /// Tests updating a plugin's config and restoring it
@@ -232,25 +234,20 @@ async fn test_update_plugin_config() {
         return;
     };
 
-    let plugins = client
-        .list_plugins(None, None)
-        .await
-        .expect("Failed to list plugins");
-
-    if plugins.is_empty() {
+    // Use the deterministic e2e plugin so we know it accepts arbitrary config.
+    if client.get_plugin(E2E_PLUGIN_ID).await.is_err() {
         return;
     }
 
-    let plugin_id = &plugins[0].id;
     let original = client
-        .get_plugin(plugin_id)
+        .get_plugin(E2E_PLUGIN_ID)
         .await
         .expect("Failed to get plugin");
 
     // Set a new config
     let updated = client
         .update_plugin(
-            plugin_id,
+            E2E_PLUGIN_ID,
             serde_json::json!({
                 "config": { "test_key": "test_value" }
             }),
@@ -270,7 +267,10 @@ async fn test_update_plugin_config() {
         Some(c) => serde_json::json!({ "config": c }),
         None => serde_json::json!({ "config": null }),
     };
-    let _ = client.update_plugin(plugin_id, restore_value).await;
+    client
+        .update_plugin(E2E_PLUGIN_ID, restore_value)
+        .await
+        .expect("Failed to restore original plugin config");
 }
 
 /// Tests clearing a plugin's config with null and restoring it

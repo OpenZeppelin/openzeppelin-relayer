@@ -141,8 +141,9 @@ async fn test_list_notifications() {
         .await
         .expect("Failed to create notification 2");
 
+    // Use an explicit page size large enough to include the created notifications.
     let notifications = client
-        .list_notifications(None, None)
+        .list_notifications(Some(1), Some(100))
         .await
         .expect("Failed to list notifications");
 

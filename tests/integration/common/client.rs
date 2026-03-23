@@ -15,11 +15,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-fn strict_e2e_enabled() -> bool {
-    env::var("STRICT_E2E")
-        .map(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no" | "off"))
-        .unwrap_or(true)
-}
+use super::strict_e2e_enabled;
 
 /// HTTP client for OpenZeppelin Relayer API
 #[derive(Debug)]
@@ -59,6 +55,8 @@ impl RelayerClient {
     ///
     /// Returns `None` when integration prerequisites are not available in the
     /// current environment (missing env vars or unreachable relayer).
+    /// When `STRICT_E2E=true`, panics instead of returning `None` so CI
+    /// surfaces missing prerequisites as failures.
     pub async fn from_env_or_skip() -> Option<Self> {
         let strict_mode = strict_e2e_enabled();
         let client = match Self::from_env() {
@@ -80,7 +78,24 @@ impl RelayerClient {
             .send()
             .await
         {
-            Ok(_) => Some(client),
+            Ok(response) => {
+                if response.status().is_success() {
+                    Some(client)
+                } else {
+                    let status = response.status();
+                    if strict_mode {
+                        panic!(
+                            "STRICT_E2E enabled: relayer health check returned {} at {}",
+                            status, url
+                        );
+                    }
+                    eprintln!(
+                        "Skipping integration test: relayer health check returned {} at {}",
+                        status, url
+                    );
+                    None
+                }
+            }
             Err(error) => {
                 if error.is_connect() || error.is_timeout() {
                     if strict_mode {

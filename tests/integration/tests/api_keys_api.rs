@@ -36,23 +36,45 @@ async fn test_create_and_list_api_keys() {
         "Created API key id should not be empty"
     );
 
-    let listed = client
-        .list_api_keys_paginated(1, 100)
-        .await
-        .expect("Failed to list api keys");
+    // Scan pages until the created key is found (ordering is not guaranteed).
+    let mut has_created;
+    let per_page: usize = 100;
+    let mut page: usize = 1;
+    loop {
+        let listed = client
+            .list_api_keys_paginated(page, per_page)
+            .await
+            .expect("Failed to list api keys");
 
-    if let Some(meta) = listed.pagination {
-        assert_eq!(meta.current_page, 1);
-        assert_eq!(meta.per_page, 100);
-        assert!(meta.total_items >= listed.items.len() as u64);
+        if page == 1 {
+            if let Some(ref meta) = listed.pagination {
+                assert_eq!(meta.current_page, 1);
+                assert_eq!(meta.per_page as usize, per_page);
+                assert!(meta.total_items >= listed.items.len() as u64);
+            }
+        }
+
+        has_created = listed.items.iter().any(|item| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(|id| id == created_id)
+                .unwrap_or(false)
+        });
+
+        if has_created || listed.items.is_empty() {
+            break;
+        }
+
+        let total_pages = listed
+            .pagination
+            .as_ref()
+            .map(|m| ((m.total_items + m.per_page as u64 - 1) / m.per_page as u64) as usize)
+            .unwrap_or(1);
+        if page >= total_pages {
+            break;
+        }
+        page += 1;
     }
-
-    let has_created = listed.items.iter().any(|item| {
-        item.get("id")
-            .and_then(serde_json::Value::as_str)
-            .map(|id| id == created_id)
-            .unwrap_or(false)
-    });
     assert!(has_created, "List should include created API key");
 }
 

@@ -312,6 +312,9 @@ async fn test_update_relayer() {
         .expect("Failed to fetch created relayer");
     if initial.system_disabled == Some(true) {
         let _ = test_relayer.cleanup(&client).await;
+        if crate::integration::common::strict_e2e_enabled() {
+            panic!("STRICT_E2E enabled: relayer is system_disabled, cannot test updates");
+        }
         return;
     }
 
@@ -325,6 +328,9 @@ async fn test_update_relayer() {
         Err(error) => {
             if error.to_string().contains("Relayer is disabled") {
                 let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
                 return;
             }
             panic!("Failed to update relayer name: {}", error);
@@ -344,6 +350,9 @@ async fn test_update_relayer() {
         Err(error) => {
             if error.to_string().contains("Relayer is disabled") {
                 let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
                 return;
             }
             panic!("Failed to update relayer paused status: {}", error);
@@ -365,6 +374,9 @@ async fn test_update_relayer() {
         Err(error) => {
             if error.to_string().contains("Relayer is disabled") {
                 let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
                 return;
             }
             panic!("Failed to update multiple fields: {}", error);

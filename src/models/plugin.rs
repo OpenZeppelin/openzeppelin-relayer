@@ -262,4 +262,34 @@ mod tests {
         assert_eq!(updated.path, plugin.path);
         assert_eq!(updated.timeout, plugin.timeout);
     }
+
+    // Serde tri-state deserialization tests for the double-option config field
+
+    #[test]
+    fn test_deserialize_config_absent() {
+        let req: UpdatePluginRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(req.config, None, "Absent field should deserialize to None");
+    }
+
+    #[test]
+    fn test_deserialize_config_null() {
+        let req: UpdatePluginRequest = serde_json::from_str(r#"{"config":null}"#).unwrap();
+        assert_eq!(
+            req.config,
+            Some(None),
+            "Null field should deserialize to Some(None)"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_config_object() {
+        let req: UpdatePluginRequest =
+            serde_json::from_str(r#"{"config":{"suite":"integration"}}"#).unwrap();
+        assert!(
+            matches!(req.config, Some(Some(_))),
+            "Object field should deserialize to Some(Some(...))"
+        );
+        let map = req.config.unwrap().unwrap();
+        assert_eq!(map.get("suite"), Some(&serde_json::json!("integration")));
+    }
 }

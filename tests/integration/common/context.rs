@@ -17,9 +17,10 @@ use super::{
 };
 use eyre::Result;
 use openzeppelin_relayer::models::relayer::RelayerResponse;
-use std::env;
 use std::future::Future;
 use tracing::{error, info, info_span, warn};
+
+use super::strict_e2e_enabled;
 
 fn is_connectivity_error(error: &str) -> bool {
     error.contains("Failed to send request")
@@ -39,12 +40,6 @@ fn is_environmental_test_error(error: &str) -> bool {
         || e.contains("replacement transaction underpriced")
         || e.contains("nonce too low")
         || e.contains("already known")
-}
-
-fn strict_e2e_enabled() -> bool {
-    env::var("STRICT_E2E")
-        .map(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "no" | "off"))
-        .unwrap_or(true)
 }
 
 // =============================================================================
@@ -146,6 +141,7 @@ pub async fn run_multi_network_test<F, Fut>(
 
     let mut failures = Vec::new();
     let mut total_tests = 0;
+    let mut skipped = 0;
 
     for network in &eligible {
         // Discover ALL active relayers for this network
@@ -184,9 +180,9 @@ pub async fn run_multi_network_test<F, Fut>(
 
         // Test each relayer sequentially
         for relayer in relayers {
-            total_tests += 1;
             match test_fn(network.clone(), relayer.clone()).await {
                 Ok(()) => {
+                    total_tests += 1;
                     info!(
                         network = %network,
                         relayer = %relayer.id,
@@ -196,9 +192,11 @@ pub async fn run_multi_network_test<F, Fut>(
                 Err(e) => {
                     if is_connectivity_error(&e.to_string()) {
                         if strict_mode {
+                            total_tests += 1;
                             failures.push((network.clone(), relayer.id.clone(), e.to_string()));
                             continue;
                         }
+                        skipped += 1;
                         warn!(
                             network = %network,
                             relayer = %relayer.id,
@@ -209,9 +207,11 @@ pub async fn run_multi_network_test<F, Fut>(
                     }
                     if is_environmental_test_error(&e.to_string()) {
                         if strict_mode {
+                            total_tests += 1;
                             failures.push((network.clone(), relayer.id.clone(), e.to_string()));
                             continue;
                         }
+                        skipped += 1;
                         warn!(
                             network = %network,
                             relayer = %relayer.id,
@@ -220,6 +220,7 @@ pub async fn run_multi_network_test<F, Fut>(
                         );
                         continue;
                     }
+                    total_tests += 1;
                     error!(
                         network = %network,
                         relayer = %relayer.id,
@@ -239,7 +240,8 @@ pub async fn run_multi_network_test<F, Fut>(
     info!(
         passed = total_tests - failures.len(),
         failed = failures.len(),
-        total = total_tests,
+        skipped = skipped,
+        total = total_tests + skipped,
         "Summary"
     );
 

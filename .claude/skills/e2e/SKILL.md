@@ -229,7 +229,7 @@ This command orchestrates both the e2e environment and WireMock fault injection.
    - For standalone mode: update the network JSON in `config/networks/` to point `rpc_urls` to `http://localhost:9090`
    - For Docker mode: update to `http://host.docker.internal:9090`
    - **Save the original RPC URL** so it can be restored on teardown
-   - Restart the relayer if it's running in Docker: `docker compose -f docker-compose.integration.yml restart relayer`
+   - Restart the relayer if it's running in Docker: `docker compose -f docker-compose.integration.yml restart integration-relayer`
 
 4. **Report status:**
    - Show WireMock is proxying, which RPC URL was replaced
