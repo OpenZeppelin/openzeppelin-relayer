@@ -48,6 +48,7 @@ jobs:
           REPOSITORY_STORAGE_TYPE=${{ matrix.storage_backend }}
           RESET_STORAGE_ON_START=true
           REDIS_KEY_PREFIX=it-${{ github.run_id }}-${{ github.run_attempt }}-strict-${{ matrix.storage_backend }}
+          STORAGE_ENCRYPTION_KEY=${{ secrets.INTEGRATION_TESTS_ENCRYPTION_KEY }}
           LOG_LEVEL=info
           USE_KMS=true
           CI=true
