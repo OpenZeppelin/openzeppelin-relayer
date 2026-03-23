@@ -1,5 +1,5 @@
 ---
-name: e2e-setup
+name: e2e
 description: Set up and run e2e/integration tests. Configures environment, keystores, Docker services, and test execution for local (Anvil), standalone, or testnet modes. Supports chaos testing via WireMock proxy.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Skill
 argument-hint: "setup [local|standalone|testnet] | run [local|standalone|testnet] | chaos [scenario] | status | logs | stop | clean | add-network <name>"
@@ -13,8 +13,9 @@ You help configure and run the integration test environment for the OpenZeppelin
 
 - Test source: `tests/integration/tests/` (test files), `tests/integration/common/` (helpers)
 - Config templates: `tests/integration/config/config.example.json`, `tests/integration/config/registry.example.json`
+- Standalone test config: `config/config.test.json` (tracked in git, used via `CONFIG_FILE_NAME=config.test.json`)
 - Local Docker config: `tests/integration/config/local/` (config.json, registry.json, keys/)
-- Standalone config: `tests/integration/config/local-standalone/` (config.json, registry.json, keys/)
+- Standalone registry + keys: `tests/integration/config/local-standalone/` (registry.json, keys/)
 - Testnet config: `tests/integration/config/testnet/` (config.json, registry.json, keys/)
 - Docker compose: `docker-compose.integration.yml`
 - Run script: `scripts/run-integration-docker.sh`
@@ -73,6 +74,8 @@ You help configure and run the integration test environment for the OpenZeppelin
 
 ### `setup standalone` — Local development setup
 
+Standalone mode uses `config/config.test.json` — a dedicated test config checked into git. No need to modify `config/config.json`.
+
 1. **Check prerequisites:**
    - Verify `cargo` and `cast` (foundry) are available
    - Check if Redis is running: `redis-cli ping`
@@ -93,50 +96,10 @@ You help configure and run the integration test environment for the OpenZeppelin
      kill %1
      ```
 
-3. **Check relayer config (`config/config.json`):**
-   The main relayer config must contain three entries for standalone e2e tests:
-
-   a. **Anvil relayer** — grep for `"anvil-relayer"` in the relayers array. If missing, add:
-      ```json
-      {
-        "id": "anvil-relayer",
-        "name": "Standalone Anvil Relayer",
-        "network": "localhost-anvil",
-        "paused": false,
-        "signer_id": "anvil-signer",
-        "network_type": "evm",
-        "policies": { "min_balance": 0 }
-      }
-      ```
-      - MUST use network `localhost-anvil` (NOT `localhost-anvil-docker` — that's for Docker mode)
-      - `min_balance: 0` disables balance checks (Anvil pre-funds 10,000 ETH)
-
-   b. **Anvil signer** — grep for `"anvil-signer"` in the signers array. If missing, add:
-      ```json
-      {
-        "id": "anvil-signer",
-        "type": "local",
-        "config": {
-          "path": "tests/integration/config/local-standalone/keys/anvil-test.json",
-          "passphrase": { "type": "plain", "value": "test" }
-        }
-      }
-      ```
-
-   c. **e2e-echo plugin** — grep for `"e2e-echo"` in the plugins array. If missing, add:
-      ```json
-      {
-        "id": "e2e-echo",
-        "path": "plugins/examples/e2e-echo.ts",
-        "emit_logs": false,
-        "emit_traces": false,
-        "forward_logs": false,
-        "allow_get_invocation": true,
-        "raw_response": false,
-        "config": { "suite": "integration" }
-      }
-      ```
-      - Required for plugin e2e tests (`plugin_api`, `plugin_call_api`)
+3. **Check test config (`config/config.test.json`):**
+   - Verify it exists (tracked in git, should be present)
+   - It contains: anvil-relayer (network `localhost-anvil`), anvil-signer, and e2e-echo plugin
+   - The relayer reads it via `CONFIG_FILE_NAME=config.test.json` env var
 
 4. **Check network config:**
    - Verify `config/networks/local-anvil.json` exists and has `rpc_urls: ["http://localhost:8545"]`
@@ -147,8 +110,8 @@ You help configure and run the integration test environment for the OpenZeppelin
    - Show which networks are enabled
 
 6. **Report readiness:**
-   - Remind: start Anvil, then relayer in terminal 1 (`cargo run`), run tests in terminal 2
-   - Show command: `cargo make integration-test-standalone`
+   - Summarize what's ready and what's missing
+   - If everything is OK, suggest: `Use /e2e run standalone to start services and run tests`
 
 ### `setup testnet` — Testnet configuration
 
@@ -176,23 +139,44 @@ You help configure and run the integration test environment for the OpenZeppelin
 2. Execute: `./scripts/run-integration-docker.sh`
 3. Stream output and report results
 
-### `run standalone` — Run standalone tests
+### `run standalone` — Run standalone tests (full orchestration)
 
-1. **Pre-flight checks** (verify all, report any missing):
-   - Anvil is running: `cast client --rpc-url http://localhost:8545`
-   - Relayer is healthy: `curl -sf http://localhost:8080/api/v1/health`
-   - `config/config.json` has `anvil-relayer`, `anvil-signer`, and `e2e-echo` plugin entries
-   - `tests/integration/config/local-standalone/keys/anvil-test.json` exists
-   - `config/networks/local-anvil.json` exists
-2. If all OK, run the test command directly with env vars from `.env`:
-     ```bash
-     export $(grep -v '^#' .env | grep -v '^$' | xargs) && \
-     TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \
-     cargo test --features integration-tests --test integration
-     ```
-   - The `API_KEY` env var must match `channel_service_api_key` in `config/config.json`
-   - Do NOT use `cargo make integration-test-standalone` — it tries to start a Docker Anvil container which conflicts when Anvil is already running natively
-3. If anything is missing, run `setup standalone` checks and report what needs fixing
+This command should get tests running with minimal manual steps. It starts services if needed.
+
+1. **Check prerequisites** (same as `setup standalone` — verify cargo, cast, redis, keystore, config files)
+
+2. **Start Anvil if not running:**
+   ```bash
+   cast client --rpc-url http://localhost:8545 2>/dev/null
+   ```
+   If unreachable, start it in the background:
+   ```bash
+   anvil &
+   ```
+   Wait for it to be healthy (retry `cast client` a few times).
+
+3. **Start relayer if not running:**
+   ```bash
+   curl -sf http://localhost:8080/api/v1/health
+   ```
+   If unreachable, start it in the background with the test config:
+   ```bash
+   CONFIG_FILE_NAME=config.test.json cargo run &
+   ```
+   Wait for health check to pass (retry up to 30s).
+   - The relayer MUST be started with `CONFIG_FILE_NAME=config.test.json` to use the test config
+   - If the relayer IS running but was started without the test config, warn the user and ask them to restart it
+
+4. **Run tests:**
+   ```bash
+   export $(grep -v '^#' .env | grep -v '^$' | xargs) && \
+   TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \
+   cargo test --features integration-tests --test integration
+   ```
+   - The `API_KEY` env var must match the relayer's configured API key
+   - Do NOT use `cargo make integration-test-standalone` — it may try to start a Docker Anvil container
+
+5. **Report results** — show pass/fail summary
 
 ### `run testnet` — Run testnet tests
 
@@ -307,6 +291,7 @@ This command orchestrates both the e2e environment and WireMock fault injection.
 | `REPOSITORY_STORAGE_TYPE` | All | `in_memory` or `redis` (default: `in_memory`) |
 | `RESET_STORAGE_ON_START` | All | `true` to clear Redis state on startup (required for integration tests with redis storage) |
 | `STORAGE_ENCRYPTION_KEY` | All | Base64-encoded encryption key for Redis storage (required when using redis storage) |
+| `CONFIG_FILE_NAME` | Standalone | Config file name in `config/` dir (default: `config.json`, use `config.test.json` for e2e) |
 | `TEST_REGISTRY_PATH` | Standalone | Path to registry.json |
 
 ## Important reminders

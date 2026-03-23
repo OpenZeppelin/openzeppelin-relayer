@@ -1,0 +1,39 @@
+{
+  "relayers": [
+    {
+      "id": "anvil-relayer",
+      "name": "Standalone Anvil Relayer",
+      "network": "localhost-anvil",
+      "paused": false,
+      "signer_id": "anvil-signer",
+      "network_type": "evm",
+      "policies": { "min_balance": 0 }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "anvil-signer",
+      "type": "local",
+      "config": {
+        "path": "tests/integration/config/local-standalone/keys/anvil-test.json",
+        "passphrase": { "type": "plain", "value": "test" }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": [
+    {
+      "id": "e2e-echo",
+      "path": "plugins/examples/e2e-echo.ts",
+      "emit_logs": false,
+      "emit_traces": false,
+      "forward_logs": false,
+      "allow_get_invocation": true,
+      "raw_response": false,
+      "config": {
+        "suite": "integration"
+      }
+    }
+  ]
+}
