@@ -17,15 +17,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test-integration:
-    if: ${{ github.event.inputs.storage_backend == '' || github.event.inputs.storage_backend == 'all' || github.event.inputs.storage_backend == matrix.storage_backend }}
     name: Integration Tests (strict=true, storage=${{ matrix.storage_backend }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        storage_backend:
-          - in_memory
-          - redis
+        storage_backend: ${{ github.event.inputs.storage_backend == 'in_memory' && fromJSON('["in_memory"]') || github.event.inputs.storage_backend == 'redis' && fromJSON('["redis"]') || fromJSON('["in_memory","redis"]') }}
     permissions:
       contents: read
       id-token: write  # Required for OIDC authentication with AWS
