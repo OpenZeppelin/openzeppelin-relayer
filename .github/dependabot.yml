@@ -13,7 +13,6 @@ updates:
         patterns:
           - '*'
     commit-message:
-      # Prefix all commit messages with "chore(deps): "
       prefix: 'chore(deps): '
 
   # Maintain dependencies for cargo
@@ -26,10 +25,64 @@ updates:
         update-types:
           - version-update:semver-major
     commit-message:
-      # Prefix all commit messages
       prefix: 'chore(deps): '
     labels:
       - dependabot
       - dependencies
-    # Allow up to 10 open pull requests for testing
+    open-pull-requests-limit: 5
+
+  # Maintain dependencies for Docker
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      docker-deps:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'chore(deps): '
+
+  # Maintain dependencies for Docker Compose
+  - package-ecosystem: docker-compose
+    directories:
+      - '**/*'
+    schedule:
+      interval: monthly
+    groups:
+      docker-compose-deps:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: 'chore(deps): '
+
+  # Maintain dependencies for npm
+  - package-ecosystem: npm
+    directories:
+      - /examples/basic-example-plugin/test-plugin/
+      - /examples/channels-plugin-example/channel/
+      - /examples/channels-x402-plugin-example/channel/
+      - /examples/launchtube-plugin-example/launchtube/
+      - /examples/x402-facilitator-plugin/x402-facilitator/
+      - /plugins/
+    schedule:
+      interval: monthly
+    allow:
+      - dependency-name: '*'
+        dependency-type: production
+    ignore:
+      - dependency-name: '*'
+        update-types:
+          - version-update:semver-major
+    groups:
+      npm-deps:
+        patterns:
+          - '*'
+        dependency-type: production
+        group-by: dependency-name
+    commit-message:
+      prefix: 'chore(deps): '
+    labels:
+      - dependabot
+      - dependencies
     open-pull-requests-limit: 5
