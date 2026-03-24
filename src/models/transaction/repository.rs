@@ -74,6 +74,19 @@ pub struct TransactionMetadata {
     pub nonce_too_high_retries: u32,
 }
 
+impl TransactionMetadata {
+    /// Returns a copy with `nonce_too_high_retries` reset to 0, or `None` if already 0.
+    pub fn with_nonce_retries_reset(&self) -> Option<Self> {
+        if self.nonce_too_high_retries == 0 {
+            return None;
+        }
+        Some(Self {
+            nonce_too_high_retries: 0,
+            ..self.clone()
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransactionUpdateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]

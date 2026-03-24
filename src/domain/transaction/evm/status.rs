@@ -531,7 +531,7 @@ where
         Ok(updated_tx)
     }
 
-    /// Performs nonce recovery when a status check carries a `nonce_error_hint` in job metadata.
+    /// Reconciles a single transaction's nonce state against on-chain reality.
     ///
     /// This is the fast-path reconciliation triggered by nonce errors during submission.
     /// It checks:
@@ -541,7 +541,7 @@ where
     ///
     /// Returns `Some(tx)` if recovery handled the transaction (caller should return early),
     /// or `None` to continue with normal status flow.
-    async fn handle_nonce_recovery(
+    async fn reconcile_tx_nonce_state(
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<Option<TransactionRepoModel>, TransactionError> {
@@ -829,7 +829,7 @@ where
                         hint = %hint,
                         "nonce recovery hint detected - performing nonce reconciliation"
                     );
-                    match self.handle_nonce_recovery(&tx).await {
+                    match self.reconcile_tx_nonce_state(&tx).await {
                         Ok(Some(recovered_tx)) => {
                             return Ok(recovered_tx);
                         }
@@ -3314,9 +3314,10 @@ mod tests {
 
     mod nonce_recovery_tests {
         use super::*;
+        use crate::domain::transaction::evm::evm_transaction::NONCE_ERROR_HINT_KEY;
         use crate::jobs::StatusCheckContext;
 
-        /// Test handle_nonce_recovery with on_chain_nonce > tx_nonce → marks Failed
+        /// Test reconcile_tx_nonce_state with on_chain_nonce > tx_nonce → marks Failed
         #[tokio::test]
         async fn test_nonce_recovery_nonce_consumed_externally() {
             let mut mocks = default_test_mocks();
@@ -3364,7 +3365,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+            let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
 
             assert!(result.is_ok());
             let recovered = result.unwrap();
@@ -3372,7 +3373,7 @@ mod tests {
             assert_eq!(recovered.unwrap().status, TransactionStatus::Failed);
         }
 
-        /// Test handle_nonce_recovery with on_chain_nonce <= tx_nonce → returns None
+        /// Test reconcile_tx_nonce_state with on_chain_nonce <= tx_nonce → returns None
         #[tokio::test]
         async fn test_nonce_recovery_nonce_not_consumed() {
             let mut mocks = default_test_mocks();
@@ -3399,7 +3400,7 @@ mod tests {
                 .returning(|_| Box::pin(async { Ok(5) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+            let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
 
             assert!(result.is_ok());
             assert!(
@@ -3408,7 +3409,7 @@ mod tests {
             );
         }
 
-        /// Test handle_nonce_recovery with receipt found → returns None (defer to normal flow)
+        /// Test reconcile_tx_nonce_state with receipt found → returns None (defer to normal flow)
         #[tokio::test]
         async fn test_nonce_recovery_receipt_found() {
             let mut mocks = default_test_mocks();
@@ -3432,7 +3433,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+            let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
 
             assert!(result.is_ok());
             assert!(
@@ -3441,7 +3442,7 @@ mod tests {
             );
         }
 
-        /// Test handle_nonce_recovery with RPC errors during receipt check → returns None
+        /// Test reconcile_tx_nonce_state with RPC errors during receipt check → returns None
         /// Must NOT proceed to force-fail via nonce comparison when hash checks were incomplete
         #[tokio::test]
         async fn test_nonce_recovery_rpc_error_prevents_force_fail() {
@@ -3472,7 +3473,7 @@ mod tests {
             // (no expectation set = will panic if called)
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_nonce_recovery(&tx).await;
+            let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
 
             assert!(result.is_ok());
             assert!(
@@ -3526,7 +3527,7 @@ mod tests {
 
             // Build context with nonce_error_hint metadata
             let mut metadata = std::collections::HashMap::new();
-            metadata.insert("nonce_error_hint".to_string(), "NonceTooLow".to_string());
+            metadata.insert(NONCE_ERROR_HINT_KEY.to_string(), "NonceTooLow".to_string());
             let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
 
             let result = evm_transaction.handle_status_impl(tx, Some(context)).await;

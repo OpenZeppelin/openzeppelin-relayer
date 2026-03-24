@@ -270,7 +270,7 @@ where
     /// Called when "nonce too high" retries are exhausted, indicating a persistent
     /// counter drift rather than transient burst ordering. The health job will
     /// detect and fill nonce gaps with NOOPs.
-    pub(super) async fn schedule_nonce_health_check(
+    pub(super) async fn schedule_relayer_nonce_health_job(
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
@@ -288,8 +288,6 @@ where
 
     /// Handles a "nonce too high" error by incrementing the retry counter and
     /// escalating to a nonce health job after the threshold.
-    ///
-    /// Returns `true` if the threshold was reached and a health job was scheduled.
     pub(super) async fn handle_nonce_too_high(&self, tx: &TransactionRepoModel, context: &str) {
         let retry_count = tx
             .metadata
@@ -326,7 +324,7 @@ where
                 "nonce too high after {} attempts {context}, scheduling nonce health check",
                 new_count
             );
-            if let Err(schedule_err) = self.schedule_nonce_health_check(tx).await {
+            if let Err(schedule_err) = self.schedule_relayer_nonce_health_job(tx).await {
                 error!(
                     tx_id = %tx.id,
                     error = %schedule_err,
@@ -891,11 +889,11 @@ where
                 let error_kind = Self::classify_submission_error(&e);
 
                 match (&tx.status, &error_kind) {
-                    // Sent + nonce-related error: transaction was likely already submitted
-                    // (possibly by another instance or in a previous retry)
-                    (TransactionStatus::Sent, SubmissionErrorKind::NonceTooLow)
-                    | (TransactionStatus::Sent, SubmissionErrorKind::AlreadyKnown)
-                    | (TransactionStatus::Sent, SubmissionErrorKind::ReplacementUnderpriced) => {
+                    // AlreadyKnown / ReplacementUnderpriced (any status):
+                    // The node recognizes the exact same transaction bytes (same hash)
+                    // in its mempool — this confirms it's our tx. Safe to treat as submitted.
+                    (_, SubmissionErrorKind::AlreadyKnown)
+                    | (_, SubmissionErrorKind::ReplacementUnderpriced) => {
                         warn!(
                             tx_id = %tx.id,
                             error = %e,
@@ -904,17 +902,18 @@ where
                         );
                         // Continue to update status to Submitted
                     }
-                    // Non-Sent + nonce consumed error: nonce was consumed externally or
-                    // there's a nonce mismatch. Don't propagate (would go to Dead Queue),
-                    // instead schedule nonce recovery via status checker.
-                    (_, SubmissionErrorKind::NonceTooLow)
-                    | (_, SubmissionErrorKind::AlreadyKnown) => {
+                    // NonceTooLow (any status): the nonce was consumed, but we don't know
+                    // by whom — could be our tx (retry after crash) or a different tx
+                    // (multi-instance / external wallet). Schedule nonce recovery via the
+                    // status checker, which will check receipts and on-chain nonce to
+                    // determine the actual outcome.
+                    (_, SubmissionErrorKind::NonceTooLow) => {
                         warn!(
                             tx_id = %tx.id,
                             status = ?tx.status,
                             error = %e,
                             error_kind = ?error_kind,
-                            "nonce error during submission on non-Sent tx - scheduling nonce recovery"
+                            "nonce error during submission - scheduling nonce recovery"
                         );
 
                         // Persist status_reason so the error is visible
@@ -968,9 +967,15 @@ where
 
         // Transaction is now on-chain - update database
         // If this fails, transaction is still valid, just not tracked correctly
+        // Reset nonce_too_high_retries on success so resubmission gets a fresh retry budget.
+        let metadata_reset = tx
+            .metadata
+            .as_ref()
+            .and_then(|m| m.with_nonce_retries_reset());
         let update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Submitted),
             sent_at: Some(Utc::now().to_rfc3339()),
+            metadata: metadata_reset,
             ..Default::default()
         };
 
@@ -1151,11 +1156,18 @@ where
             }
         };
 
+        // Reset nonce_too_high_retries on success so subsequent resubmissions get a fresh budget.
+        let metadata_reset = tx
+            .metadata
+            .as_ref()
+            .and_then(|m| m.with_nonce_retries_reset());
+
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
             // Keep original hash and data - just ensure status is Submitted
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
+                metadata: metadata_reset,
                 ..Default::default()
             }
         } else {
@@ -1171,6 +1183,7 @@ where
                 status: Some(TransactionStatus::Submitted),
                 priced_at: Some(Utc::now().to_rfc3339()),
                 sent_at: Some(Utc::now().to_rfc3339()),
+                metadata: metadata_reset,
                 ..Default::default()
             }
         };
@@ -3841,7 +3854,7 @@ mod tests {
             .withf(|job, _| {
                 job.metadata
                     .as_ref()
-                    .map(|m| m.contains_key("nonce_error_hint"))
+                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
                     .unwrap_or(false)
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
@@ -3866,9 +3879,12 @@ mod tests {
         );
     }
 
-    /// Test submit_transaction with NonceTooLow on Sent tx preserves existing behavior
+    /// Test submit_transaction with NonceTooLow on Sent tx schedules nonce recovery.
+    /// NonceTooLow means the nonce was consumed, but we don't know by whom — could be
+    /// our tx (retry after crash) or a different tx (multi-instance / external wallet).
+    /// Must NOT blindly advance to Submitted; instead schedule reconciliation.
     #[tokio::test]
-    async fn test_submit_transaction_nonce_too_low_on_sent_treats_as_submitted() {
+    async fn test_submit_transaction_nonce_too_low_on_sent_schedules_recovery() {
         let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
@@ -3901,21 +3917,24 @@ mod tests {
                 })
             });
 
-        // Should update to Submitted status (existing behavior)
+        // Should persist status_reason (nonce recovery path)
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
             .times(1)
-            .withf(|_, update| update.status == Some(TransactionStatus::Submitted))
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = update.status.unwrap();
-                Ok(updated_tx)
-            });
+            .withf(|_, update| update.status_reason.is_some())
+            .returning(move |_, _| Ok(test_tx_clone.clone()));
 
+        // Should schedule nonce recovery status check
         mock_job_producer
-            .expect_produce_send_notification_job()
+            .expect_produce_check_transaction_status_job()
             .times(1)
+            .withf(|job, _| {
+                job.metadata
+                    .as_ref()
+                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
+                    .unwrap_or(false)
+            })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let evm_transaction = EvmRelayerTransaction {
@@ -3930,10 +3949,15 @@ mod tests {
             signer: mock_signer,
         };
 
-        let result = evm_transaction.submit_transaction(test_tx).await;
-        assert!(result.is_ok());
-        let updated_tx = result.unwrap();
-        assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+        // Should return Ok (not error → Dead Queue) but NOT advance to Submitted
+        let result = evm_transaction.submit_transaction(test_tx.clone()).await;
+        assert!(
+            result.is_ok(),
+            "Expected Ok on nonce too low for Sent tx, got: {result:?}"
+        );
+        // Status should remain Sent — reconciliation happens via status checker
+        let returned_tx = result.unwrap();
+        assert_eq!(returned_tx.status, TransactionStatus::Sent);
     }
 
     /// Test resubmit_transaction with NonceTooLow schedules recovery and treats as already submitted
@@ -4022,7 +4046,7 @@ mod tests {
             .withf(|job, _| {
                 job.metadata
                     .as_ref()
-                    .map(|m| m.contains_key("nonce_error_hint"))
+                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
                     .unwrap_or(false)
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));

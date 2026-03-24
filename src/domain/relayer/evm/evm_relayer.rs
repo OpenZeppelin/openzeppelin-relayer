@@ -1090,22 +1090,25 @@ where
             .await
             .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-        // Schedule status check first (safety net)
+        // Push through prepare pipeline first (will sign and advance to Sent).
+        // Produced before the status check so the tx enters the prepare pipeline
+        // immediately. The status check fires after a delay and acts as a safety
+        // net in case the prepare/submit path stalls or fails silently.
+        self.job_producer
+            .produce_transaction_request_job(
+                TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone()),
+                None,
+            )
+            .await
+            .map_err(RelayerError::from)?;
+
+        // Schedule delayed status check (safety net)
         self.job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
                 Some(calculate_scheduled_timestamp(
                     EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
-            )
-            .await
-            .map_err(RelayerError::from)?;
-
-        // Push through prepare pipeline (will sign and advance to Sent)
-        self.job_producer
-            .produce_transaction_request_job(
-                TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone()),
-                None,
             )
             .await
             .map_err(RelayerError::from)?;
