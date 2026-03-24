@@ -17,7 +17,9 @@ use tokio::time::sleep;
 #[tokio::test]
 #[serial]
 async fn test_list_networks() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
     let networks = client
         .list_networks(None, None)
         .await
@@ -35,24 +37,37 @@ async fn test_list_networks() {
 #[tokio::test]
 #[serial]
 async fn test_list_networks_pagination() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Get first page
     let page1 = client
-        .list_networks(Some(1), Some(2))
+        .list_networks_paginated(1, 2)
         .await
         .expect("Failed to list networks page 1");
 
     // Get second page
     let page2 = client
-        .list_networks(Some(2), Some(2))
+        .list_networks_paginated(2, 2)
         .await
         .expect("Failed to list networks page 2");
 
+    if let Some(meta) = page1.pagination {
+        assert_eq!(meta.current_page, 1);
+        assert_eq!(meta.per_page, 2);
+        assert!(meta.total_items >= page1.items.len() as u64);
+    }
+    if let Some(meta) = page2.pagination {
+        assert_eq!(meta.current_page, 2);
+        assert_eq!(meta.per_page, 2);
+        assert!(meta.total_items >= page2.items.len() as u64);
+    }
+
     // Pages should not overlap (if we have enough networks)
-    if !page1.is_empty() && !page2.is_empty() {
-        let page1_ids: std::collections::HashSet<_> = page1.iter().map(|n| &n.id).collect();
-        let page2_ids: std::collections::HashSet<_> = page2.iter().map(|n| &n.id).collect();
+    if !page1.items.is_empty() && !page2.items.is_empty() {
+        let page1_ids: std::collections::HashSet<_> = page1.items.iter().map(|n| &n.id).collect();
+        let page2_ids: std::collections::HashSet<_> = page2.items.iter().map(|n| &n.id).collect();
         assert!(
             page1_ids.is_disjoint(&page2_ids),
             "Page 1 and Page 2 should not have overlapping networks"
@@ -68,7 +83,9 @@ async fn test_list_networks_pagination() {
 #[tokio::test]
 #[serial]
 async fn test_get_network_by_id() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // First, list networks to get a valid network ID
     let networks = client
@@ -97,7 +114,9 @@ async fn test_get_network_by_id() {
 #[tokio::test]
 #[serial]
 async fn test_get_network_not_found() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Try to get a network that doesn't exist
     let result = client.get_network("nonexistent:network").await;
@@ -175,7 +194,9 @@ async fn wait_for_relayer_recovery(client: &RelayerClient, network_name: &str) {
 #[tokio::test]
 #[serial]
 async fn test_update_network_rpc_urls_simple_format() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Find a network that's not actively being used by relayers
     // Skip this test if all networks are in use to avoid interfering with relayer tests
@@ -261,7 +282,9 @@ async fn test_update_network_rpc_urls_simple_format() {
 #[tokio::test]
 #[serial]
 async fn test_update_network_rpc_urls_extended_format() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Find a network that's not actively being used by relayers
     // Skip this test if all networks are in use to avoid interfering with relayer tests
@@ -345,7 +368,9 @@ async fn test_update_network_rpc_urls_extended_format() {
 #[tokio::test]
 #[serial]
 async fn test_update_network_empty_rpc_urls() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Get an existing network
     let networks = client
@@ -378,7 +403,9 @@ async fn test_update_network_empty_rpc_urls() {
 #[tokio::test]
 #[serial]
 async fn test_update_network_invalid_rpc_url() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Get an existing network
     let networks = client
@@ -414,7 +441,9 @@ async fn test_update_network_invalid_rpc_url() {
 #[tokio::test]
 #[serial]
 async fn test_update_network_not_found() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Try to update a network that doesn't exist
     let update_request = UpdateNetworkRequest {
@@ -441,7 +470,9 @@ async fn test_update_network_not_found() {
 #[tokio::test]
 #[serial]
 async fn test_update_network_empty_request() {
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Get an existing network
     let networks = client

@@ -1,8 +1,20 @@
 use std::{collections::HashMap, time::Duration};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Map;
 use utoipa::ToSchema;
+
+/// Custom deserializer for `Option<Option<T>>` that distinguishes between:
+/// - JSON field absent → `None` (no change)
+/// - JSON field is `null` → `Some(None)` (clear the value)
+/// - JSON field has a value → `Some(Some(value))` (update)
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::deserialize(deserializer)?))
+}
 
 use crate::constants::DEFAULT_PLUGIN_TIMEOUT_SECONDS;
 
@@ -73,7 +85,11 @@ pub struct UpdatePluginRequest {
     pub allow_get_invocation: Option<bool>,
     /// User-defined configuration accessible to the plugin (must be a JSON object)
     /// Use `null` to clear the config
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
     pub config: Option<Option<Map<String, serde_json::Value>>>,
     /// Whether to forward plugin logs into the relayer's tracing output
     pub forward_logs: Option<bool>,
@@ -245,5 +261,35 @@ mod tests {
         assert_eq!(updated.id, plugin.id);
         assert_eq!(updated.path, plugin.path);
         assert_eq!(updated.timeout, plugin.timeout);
+    }
+
+    // Serde tri-state deserialization tests for the double-option config field
+
+    #[test]
+    fn test_deserialize_config_absent() {
+        let req: UpdatePluginRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(req.config, None, "Absent field should deserialize to None");
+    }
+
+    #[test]
+    fn test_deserialize_config_null() {
+        let req: UpdatePluginRequest = serde_json::from_str(r#"{"config":null}"#).unwrap();
+        assert_eq!(
+            req.config,
+            Some(None),
+            "Null field should deserialize to Some(None)"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_config_object() {
+        let req: UpdatePluginRequest =
+            serde_json::from_str(r#"{"config":{"suite":"integration"}}"#).unwrap();
+        assert!(
+            matches!(req.config, Some(Some(_))),
+            "Object field should deserialize to Some(Some(...))"
+        );
+        let map = req.config.unwrap().unwrap();
+        assert_eq!(map.get("suite"), Some(&serde_json::json!("integration")));
     }
 }
