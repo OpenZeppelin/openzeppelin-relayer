@@ -158,3 +158,9 @@ path = "helpers/sign_soroban_auth_entry.rs"
 
 [lib]
 path = "src/lib.rs"
+
+[features]
+fuzzing = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
