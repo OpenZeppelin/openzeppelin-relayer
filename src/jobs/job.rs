@@ -4,7 +4,9 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
-use crate::constants::{HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH};
+use crate::constants::{
+    HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
+};
 use crate::models::{NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -277,6 +279,20 @@ impl RelayerHealthCheck {
         );
         Self::new(relayer_id).with_metadata(metadata)
     }
+
+    /// Creates a nonce health check job with a nonce hint.
+    /// The hint tells `resolve_nonce_gaps` to raise the counter to cover
+    /// this nonce, even if the counter was reset below it (e.g., after restart).
+    pub fn nonce_health_with_hint(relayer_id: String, nonce_hint: u64) -> Self {
+        let mut job = Self::nonce_health(relayer_id);
+        if let Some(ref mut metadata) = job.metadata {
+            metadata.insert(
+                HEALTH_CHECK_NONCE_HINT_KEY.to_string(),
+                nonce_hint.to_string(),
+            );
+        }
+        job
+    }
 }
 
 #[cfg(test)]
@@ -505,6 +521,35 @@ mod tests {
 
         assert_eq!(health_check.relayer_id, "relayer-1");
         assert_eq!(health_check.retry_count, 5);
+    }
+
+    #[test]
+    fn test_relayer_health_check_nonce_health() {
+        let job = RelayerHealthCheck::nonce_health("relayer-1".to_string());
+
+        assert_eq!(job.relayer_id, "relayer-1");
+        let metadata = job.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_ACTION_KEY),
+            Some(&HEALTH_CHECK_ACTION_NONCE_HEALTH.to_string())
+        );
+        assert!(!metadata.contains_key(HEALTH_CHECK_NONCE_HINT_KEY));
+    }
+
+    #[test]
+    fn test_relayer_health_check_nonce_health_with_hint() {
+        let job = RelayerHealthCheck::nonce_health_with_hint("relayer-1".to_string(), 274);
+
+        assert_eq!(job.relayer_id, "relayer-1");
+        let metadata = job.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_ACTION_KEY),
+            Some(&HEALTH_CHECK_ACTION_NONCE_HEALTH.to_string())
+        );
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_NONCE_HINT_KEY),
+            Some(&"274".to_string())
+        );
     }
 
     #[test]

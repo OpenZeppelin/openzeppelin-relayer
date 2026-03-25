@@ -7,6 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 use tracing::{debug, error, warn};
 
+use super::super::common::is_active_nonce_status;
 use super::EvmRelayerTransaction;
 use super::{
     ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
@@ -351,17 +352,127 @@ where
     }
 
     /// Handles transactions in the Submitted state.
+    ///
+    /// Before resubmitting, checks whether the transaction's nonce is ahead of
+    /// the on-chain nonce. If so, the tx can never mine because there's a gap
+    /// below it — schedules a nonce health job to fill the gap instead of
+    /// resubmitting (which would be futile).
     async fn handle_submitted_state(
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
         if self.should_resubmit(&tx).await? {
+            // Before resubmitting, check if there's a nonce gap blocking this tx.
+            // Only worth the RPC call when we're already going to resubmit (tx is stale).
+            if let Some(nonce_gap_detected) = self.detect_nonce_gap_ahead(&tx).await {
+                if nonce_gap_detected {
+                    // Tx can't mine — nonce gap below it. Trigger health job, skip resubmit.
+                    return self
+                        .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
+                        .await;
+                }
+            }
+
             let resubmitted_tx = self.handle_resubmission(tx).await?;
             return Ok(resubmitted_tx);
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
             .await
+    }
+
+    /// Checks whether the tx is blocked by a nonce gap below it.
+    ///
+    /// 1. Fetches on-chain nonce (single RPC call).
+    /// 2. If `tx_nonce <= on_chain_nonce` — no gap, tx should be mineable.
+    /// 3. Otherwise scans `on_chain_nonce..tx_nonce` using the Redis nonce index
+    ///    to check if every slot has an active (Pending/Sent/Submitted/Mined) tx.
+    /// 4. If any slot is empty or has a terminal-status tx — that's a real gap.
+    ///    Schedules a nonce health job and returns `Some(true)`.
+    ///
+    /// Returns:
+    /// - `Some(true)` — gap confirmed, health job scheduled
+    /// - `Some(false)` — no gap (all slots filled or tx is next)
+    /// - `None` — couldn't determine (missing nonce, RPC/Redis error)
+    async fn detect_nonce_gap_ahead(&self, tx: &TransactionRepoModel) -> Option<bool> {
+        let evm_data = match tx.network_data.get_evm_transaction_data() {
+            Ok(d) => d,
+            Err(_) => return None,
+        };
+        let tx_nonce = match evm_data.nonce {
+            Some(n) => n,
+            None => return None,
+        };
+
+        let on_chain_nonce = match self
+            .provider()
+            .get_transaction_count(&self.relayer().address)
+            .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce gap check: failed to get on-chain nonce, skipping"
+                );
+                return None;
+            }
+        };
+
+        // tx is the next expected nonce or already behind — no gap possible.
+        if tx_nonce <= on_chain_nonce {
+            return Some(false);
+        }
+
+        // Batch-scan on_chain_nonce..tx_nonce using MGET (2 Redis round trips
+        // regardless of range size, vs N*3 sequential GETs with find_by_nonce).
+        let occupancy = match self
+            .transaction_repository()
+            .get_nonce_occupancy(&tx.relayer_id, on_chain_nonce, tx_nonce)
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce gap check: occupancy lookup failed, skipping"
+                );
+                return None;
+            }
+        };
+
+        let gap_nonces: Vec<u64> = occupancy
+            .into_iter()
+            .filter(|(_, status)| !status.as_ref().is_some_and(is_active_nonce_status))
+            .map(|(nonce, _)| nonce)
+            .collect();
+
+        if gap_nonces.is_empty() {
+            // All slots between on-chain and tx_nonce are actively filled — no gap.
+            return Some(false);
+        }
+
+        warn!(
+            tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
+            tx_nonce = tx_nonce,
+            on_chain_nonce = on_chain_nonce,
+            gap_count = gap_nonces.len(),
+            gaps = ?gap_nonces,
+            "nonce gaps confirmed below tx, scheduling nonce health to fill"
+        );
+
+        if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+            warn!(
+                tx_id = %tx.id,
+                error = %e,
+                "failed to schedule nonce health job for nonce gap"
+            );
+        }
+
+        Some(true)
     }
 
     /// Processes transaction resubmission logic
@@ -648,6 +759,19 @@ where
             let updated_tx = self
                 .update_transaction_status(tx.clone(), TransactionStatus::Failed, Some(reason))
                 .await?;
+
+            // External nonce consumption may have left the internal transaction counter
+            // behind the on-chain nonce, or created gaps. Schedule a nonce health job
+            // to sync the counter and fill any gaps with NOOPs. Best-effort — failure
+            // here doesn't block the recovery; the periodic health check will catch it.
+            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce recovery: failed to schedule nonce health after external consumption"
+                );
+            }
+
             return Ok(Some(updated_tx));
         }
 
@@ -2116,6 +2240,12 @@ mod tests {
                 })
             });
 
+            // On-chain nonce <= tx nonce (no gap), so resubmission proceeds normally
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(10) }));
+
             // Expect the resubmit job to be produced
             mocks
                 .job_producer
@@ -2132,6 +2262,179 @@ mod tests {
             let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
 
             // We remain in "Submitted" after scheduling the resubmit
+            assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+        }
+
+        /// When tx_nonce > on_chain_nonce and nonce slots are empty, the tx is
+        /// blocked by a gap. Should schedule nonce health job and skip resubmission.
+        #[tokio::test]
+        async fn test_nonce_gap_detected_schedules_health_skips_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(274),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            // Mock network repository for should_resubmit
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            // On-chain nonce is 269, tx nonce is 274
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(269) }));
+
+            // Batch nonce scan: nonces 269-273 are all empty → confirmed gap
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .withf(|relayer_id, from, to| {
+                    relayer_id == "test-relayer-id" && *from == 269 && *to == 274
+                })
+                .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+
+            // Should schedule nonce health job
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, _| {
+                    job.metadata.as_ref().map_or(false, |m| {
+                        m.get("health_check_action") == Some(&"nonce_health".to_string())
+                    })
+                })
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // Should NOT call produce_submit_transaction_job (resubmit skipped)
+            // mockall will panic if unexpected calls are made
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
+
+            assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+        }
+
+        /// When get_transaction_count fails, the gap check should be skipped
+        /// and resubmission should proceed normally.
+        #[tokio::test]
+        async fn test_nonce_gap_check_rpc_failure_proceeds_to_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // RPC fails for nonce check — should be gracefully skipped
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(crate::services::provider::ProviderError::Other(
+                            "rpc timeout".to_string(),
+                        ))
+                    })
+                });
+
+            // Resubmission should still proceed
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
+
+            assert_eq!(updated_tx.status, TransactionStatus::Submitted);
+        }
+
+        /// When all nonce slots between on-chain and tx_nonce are filled by active
+        /// transactions, no gap exists — resubmission proceeds normally.
+        #[tokio::test]
+        async fn test_no_gap_when_slots_filled_proceeds_to_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(600)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(270),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // tx_nonce=270, on_chain=269 → 1 slot to check
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(269) }));
+
+            // Nonce 269 has an active Submitted tx → no gap
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .returning(|_, from, to| {
+                    Ok((from..to)
+                        .map(|n| (n, Some(TransactionStatus::Submitted)))
+                        .collect())
+                });
+
+            // Should proceed to resubmit (no health job expected)
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let updated_tx = evm_transaction.handle_submitted_state(tx).await.unwrap();
+
             assert_eq!(updated_tx.status, TransactionStatus::Submitted);
         }
     }
@@ -3364,6 +3667,19 @@ mod tests {
                     Ok(updated_tx)
                 });
 
+            // Should schedule nonce health job after detecting external consumption
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, scheduled_on| {
+                    job.relayer_id == "test-relayer-id"
+                        && job.metadata.as_ref().map_or(false, |m| {
+                            m.get("health_check_action") == Some(&"nonce_health".to_string())
+                        })
+                        && scheduled_on.is_none()
+                })
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
 
@@ -3522,6 +3838,12 @@ mod tests {
                     updated_tx.status_reason = update.status_reason.clone();
                     Ok(updated_tx)
                 });
+
+            // Should schedule nonce health job after detecting external consumption
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
 

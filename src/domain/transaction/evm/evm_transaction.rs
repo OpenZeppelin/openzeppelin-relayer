@@ -278,7 +278,17 @@ where
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
-        let job = RelayerHealthCheck::nonce_health(tx.relayer_id.clone());
+        // Include the tx nonce as a hint so resolve_nonce_gaps can extend
+        // its scan range even if the counter was reset below this nonce.
+        let nonce_hint = tx
+            .network_data
+            .get_evm_transaction_data()
+            .ok()
+            .and_then(|d| d.nonce);
+        let job = match nonce_hint {
+            Some(nonce) => RelayerHealthCheck::nonce_health_with_hint(tx.relayer_id.clone(), nonce),
+            None => RelayerHealthCheck::nonce_health(tx.relayer_id.clone()),
+        };
 
         self.job_producer()
             .produce_relayer_health_check_job(job, None)

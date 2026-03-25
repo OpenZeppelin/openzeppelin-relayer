@@ -116,11 +116,12 @@ pub const ALREADY_SUBMITTED_PATTERNS: &[&str] = &[
 /// Checked **after** `ALREADY_SUBMITTED_PATTERNS` in `classify_submission_error` to avoid
 /// ambiguity. Each entry is a lowercased substring to match against the RPC error message.
 pub const NONCE_TOO_HIGH_PATTERNS: &[&str] = &[
-    "nonce too high",
-    "nonce is too high",
-    "future nonce",
-    "exceeds next nonce",          // Nethermind
+    "nonce too high",              // Geth, Erigon, Hardhat, Anvil
+    "nonce is too high",           // Geth, Erigon, Hardhat, Anvil
     "nonce too far in the future", // Besu
+    "exceeds next nonce",          // Nethermind
+    "nonce out of range",          // Arbitrum, Optimism, specialized RPCs
+    "tx-nonce-too-high",           // Certain SaaS RPC providers (e.g. Alchemy/Infura internal)
 ];
 
 /// Maximum number of "nonce too high" retries before escalating to a nonce health job.
@@ -137,6 +138,12 @@ pub const HEALTH_CHECK_ACTION_KEY: &str = "health_check_action";
 
 /// Value for `HEALTH_CHECK_ACTION_KEY` that triggers nonce gap detection and resolution.
 pub const HEALTH_CHECK_ACTION_NONCE_HEALTH: &str = "nonce_health";
+
+/// Optional metadata key carrying a nonce hint for the health action.
+/// When present, `resolve_nonce_gaps` ensures the counter covers at least `hint + 1`
+/// so the scan range includes the hinted nonce. This handles the case where the
+/// counter was reset (e.g., after a restart) but a tx at a higher nonce still exists.
+pub const HEALTH_CHECK_NONCE_HINT_KEY: &str = "nonce_hint";
 
 /// Checks if a lowercased message matches "known transaction" without matching
 /// "unknown transaction" (substring false positive).
