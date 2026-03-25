@@ -17,7 +17,7 @@ use super::{
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    EVM_MIN_HASHES_FOR_RECOVERY,
+    EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -425,11 +425,14 @@ where
             return Some(false);
         }
 
-        // Batch-scan on_chain_nonce..tx_nonce using MGET (2 Redis round trips
-        // regardless of range size, vs N*3 sequential GETs with find_by_nonce).
+        // Cap scan range to avoid unbounded MGET if tx_nonce is very far ahead.
+        // If the gap exceeds the cap, we still schedule the health job — it will
+        // do its own bounded scan via detect_nonce_gaps.
+        let scan_to = std::cmp::min(tx_nonce, on_chain_nonce + MAX_GAP_SCAN_RANGE);
+
         let occupancy = match self
             .transaction_repository()
-            .get_nonce_occupancy(&tx.relayer_id, on_chain_nonce, tx_nonce)
+            .get_nonce_occupancy(&tx.relayer_id, on_chain_nonce, scan_to)
             .await
         {
             Ok(o) => o,

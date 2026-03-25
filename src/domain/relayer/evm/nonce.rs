@@ -111,11 +111,15 @@ where
         }
     }
 
-    /// Detects nonce gaps between the on-chain nonce and a pre-captured counter snapshot.
+    /// Detects nonce gaps by scanning the nonce index ahead of the on-chain nonce.
+    ///
+    /// Scans `[on_chain_nonce, on_chain_nonce + MAX_GAP_SCAN_RANGE)` via batched
+    /// `get_nonce_occupancy` (2 Redis MGET round trips). Finds the highest nonce
+    /// that has any transaction and reports gaps below it — empty slots beyond the
+    /// highest known tx are not gaps, just unassigned nonces.
     ///
     /// Accepts an optional pre-fetched on-chain nonce to avoid redundant RPC calls
     /// when the caller (e.g., `resolve_nonce_gaps`) already has it.
-    /// Scans up to `MAX_GAP_SCAN_RANGE` nonces forward. Returns gap nonce list.
     ///
     /// # Known race condition (mitigated, not eliminated)
     ///
@@ -124,17 +128,13 @@ where
     /// slot appears empty to this scanner — it could be misclassified as a gap.
     ///
     /// Mitigations in place:
-    /// - **Settling pause**: `resolve_nonce_gaps` snapshots the counter, waits
-    ///   `NONCE_GAP_SETTLE_DURATION`, then passes the snapshot here. Any nonce
-    ///   reserved after the snapshot is excluded from the scan.
+    /// - **Settling pause**: `resolve_nonce_gaps` waits `NONCE_GAP_SETTLE_DURATION`
+    ///   before calling this, giving in-flight `prepare_transaction` calls time to persist.
     /// - **Double-check**: `resolve_nonce_gaps` re-checks each gap candidate
     ///   via `find_active_tx_for_nonce` before creating a NOOP.
     /// - **Self-correcting**: if a false NOOP is created, it competes with the
     ///   real tx at the same nonce. The loser gets a nonce error which is handled
     ///   by the existing nonce recovery path — no funds lost, no stuck nonces.
-    ///
-    /// For a provably race-free solution, a `highest_persisted_nonce` watermark
-    /// in the counter store would be needed (tracked as a follow-up).
     async fn detect_nonce_gaps(
         &self,
         on_chain_nonce: Option<u64>,

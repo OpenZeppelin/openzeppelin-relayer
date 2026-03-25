@@ -1310,7 +1310,9 @@ mod tests {
 
         // Nonce-too-high patterns are also non-retriable
         assert!(is_non_retriable_transaction_rpc_message("nonce too high"));
-        assert!(is_non_retriable_transaction_rpc_message("future nonce"));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "nonce too far in the future",
+        ));
         assert!(is_non_retriable_transaction_rpc_message(
             "exceeds next nonce"
         ));

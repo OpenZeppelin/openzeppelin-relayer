@@ -1611,8 +1611,9 @@ impl TransactionRepository for RedisTransactionRepository {
             .collect();
 
         // Phase 1: MGET nonce keys → tx_ids (single round trip)
+        // Uses primary to avoid replica lag fabricating false gaps.
         let mut conn = self
-            .get_connection(self.connections.reader(), "get_nonce_occupancy")
+            .get_connection(self.connections.primary(), "get_nonce_occupancy")
             .await?;
         let tx_ids: Vec<Option<String>> = redis::cmd("MGET")
             .arg(&nonce_keys)
@@ -1642,11 +1643,22 @@ impl TransactionRepository for RedisTransactionRepository {
 
             raw_values
                 .into_iter()
-                .map(|v| {
+                .enumerate()
+                .map(|(i, v)| {
                     v.and_then(|json| {
-                        serde_json::from_str::<TransactionRepoModel>(&json)
-                            .ok()
-                            .map(|tx| tx.status)
+                        match serde_json::from_str::<TransactionRepoModel>(&json) {
+                            Ok(tx) => Some(tx.status),
+                            Err(e) => {
+                                let nonce = tx_key_entries.get(i).map(|(idx, _)| nonces[*idx]);
+                                warn!(
+                                    relayer_id = %relayer_id,
+                                    nonce = ?nonce,
+                                    error = %e,
+                                    "get_nonce_occupancy: failed to deserialize transaction, treating as empty"
+                                );
+                                None
+                            }
+                        }
                     })
                 })
                 .collect()

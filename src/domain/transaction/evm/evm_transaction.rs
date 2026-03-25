@@ -3796,7 +3796,7 @@ mod tests {
             SubmissionErrorKind::NonceTooHigh
         );
         assert_eq!(
-            DefaultEvmTransaction::classify_submission_error(&"future nonce"),
+            DefaultEvmTransaction::classify_submission_error(&"nonce out of range"),
             SubmissionErrorKind::NonceTooHigh
         );
     }
@@ -3808,7 +3808,7 @@ mod tests {
             SubmissionErrorKind::NonceTooHigh
         );
         assert_eq!(
-            DefaultEvmTransaction::classify_submission_error(&"FUTURE NONCE"),
+            DefaultEvmTransaction::classify_submission_error(&"NONCE OUT OF RANGE"),
             SubmissionErrorKind::NonceTooHigh
         );
         assert_eq!(

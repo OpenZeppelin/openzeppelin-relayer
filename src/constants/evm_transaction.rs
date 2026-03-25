@@ -167,9 +167,9 @@ mod tests {
         let cases = [
             "nonce too high",
             "nonce is too high",
-            "future nonce",
-            "exceeds next nonce",
             "nonce too far in the future",
+            "exceeds next nonce",
+            "nonce out of range",
         ];
         for case in &cases {
             let msg_lower = case.to_lowercase();
@@ -187,9 +187,9 @@ mod tests {
         let nonce_too_high_msgs = [
             "nonce too high",
             "nonce is too high",
-            "future nonce",
-            "exceeds next nonce",
             "nonce too far in the future",
+            "exceeds next nonce",
+            "nonce out of range",
         ];
         for msg in &nonce_too_high_msgs {
             assert!(
