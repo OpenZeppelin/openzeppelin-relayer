@@ -48,9 +48,10 @@ use crate::{
 
 use super::PriceParams;
 
-/// Metadata key used to signal nonce recovery to the status checker.
+/// Metadata key that triggers nonce reconciliation in the status checker.
 /// Written by `schedule_nonce_recovery_status_check`, read by `handle_status_impl`.
-pub(super) const NONCE_ERROR_HINT_KEY: &str = "nonce_error_hint";
+/// The value carries the `SubmissionErrorKind` that caused the trigger.
+pub(super) const TX_NONCE_RECONCILE_TRIGGER: &str = "tx_nonce_reconcile_trigger";
 
 /// Classifies submission/resubmission RPC errors for targeted handling.
 ///
@@ -261,7 +262,10 @@ where
         error_kind: &SubmissionErrorKind,
     ) -> Result<(), TransactionError> {
         let mut metadata = std::collections::HashMap::new();
-        metadata.insert(NONCE_ERROR_HINT_KEY.to_string(), format!("{error_kind:?}"));
+        metadata.insert(
+            TX_NONCE_RECONCILE_TRIGGER.to_string(),
+            format!("{error_kind:?}"),
+        );
         self.schedule_status_check(tx, None, Some(metadata)).await
     }
 
@@ -3854,7 +3858,7 @@ mod tests {
             .withf(|job, _| {
                 job.metadata
                     .as_ref()
-                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
+                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
                     .unwrap_or(false)
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
@@ -3932,7 +3936,7 @@ mod tests {
             .withf(|job, _| {
                 job.metadata
                     .as_ref()
-                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
+                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
                     .unwrap_or(false)
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
@@ -4046,7 +4050,7 @@ mod tests {
             .withf(|job, _| {
                 job.metadata
                     .as_ref()
-                    .map(|m| m.contains_key(NONCE_ERROR_HINT_KEY))
+                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
                     .unwrap_or(false)
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));

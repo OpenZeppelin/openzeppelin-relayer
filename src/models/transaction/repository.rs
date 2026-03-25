@@ -1277,6 +1277,37 @@ mod tests {
     }
 
     #[test]
+    fn test_with_nonce_retries_reset_returns_none_when_zero() {
+        let metadata = TransactionMetadata {
+            consecutive_failures: 2,
+            total_failures: 5,
+            insufficient_fee_retries: 1,
+            try_again_later_retries: 3,
+            nonce_too_high_retries: 0,
+        };
+        assert!(metadata.with_nonce_retries_reset().is_none());
+    }
+
+    #[test]
+    fn test_with_nonce_retries_reset_returns_reset_metadata() {
+        let metadata = TransactionMetadata {
+            consecutive_failures: 2,
+            total_failures: 5,
+            insufficient_fee_retries: 1,
+            try_again_later_retries: 3,
+            nonce_too_high_retries: 3,
+        };
+        let result = metadata.with_nonce_retries_reset();
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        assert_eq!(reset.nonce_too_high_retries, 0);
+        assert_eq!(reset.consecutive_failures, 2);
+        assert_eq!(reset.total_failures, 5);
+        assert_eq!(reset.insufficient_fee_retries, 1);
+        assert_eq!(reset.try_again_later_retries, 3);
+    }
+
+    #[test]
     fn test_stellar_transaction_data_reset_to_pre_prepare_state() {
         let stellar_data = StellarTransactionData {
             source_account: "GTEST".to_string(),

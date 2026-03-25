@@ -185,12 +185,15 @@ pub trait Relayer {
         request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError>;
 
-    /// Detects and resolves nonce gaps by filling them with NOOP transactions.
+    /// Handles a targeted health action dispatched via job metadata.
     ///
-    /// Returns the number of gaps filled. Only meaningful for EVM relayers;
-    /// other network types return 0 by default.
-    async fn resolve_nonce_gaps(&self) -> Result<usize, RelayerError> {
-        Ok(0)
+    /// Returns `Ok(true)` if an action was handled, `Ok(false)` if no recognized action.
+    /// Only meaningful for EVM relayers; other network types return `Ok(false)` by default.
+    async fn handle_health_action(
+        &self,
+        _metadata: &std::collections::HashMap<String, String>,
+    ) -> Result<bool, RelayerError> {
+        Ok(false)
     }
 }
 
@@ -385,11 +388,13 @@ impl<
         }
     }
 
-    async fn resolve_nonce_gaps(&self) -> Result<usize, RelayerError> {
+    async fn handle_health_action(
+        &self,
+        metadata: &std::collections::HashMap<String, String>,
+    ) -> Result<bool, RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.resolve_nonce_gaps().await,
-            // Non-EVM relayers don't have nonce gaps
-            NetworkRelayer::Solana(_) | NetworkRelayer::Stellar(_) => Ok(0),
+            NetworkRelayer::Evm(relayer) => relayer.handle_health_action(metadata).await,
+            NetworkRelayer::Solana(_) | NetworkRelayer::Stellar(_) => Ok(false),
         }
     }
 }

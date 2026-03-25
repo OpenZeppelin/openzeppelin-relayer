@@ -9,7 +9,7 @@ use tracing::{debug, error, warn};
 
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, evm_transaction::NONCE_ERROR_HINT_KEY, get_age_since_status_change,
+    ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
     has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
     too_many_attempts, too_many_noop_attempts,
 };
@@ -823,7 +823,7 @@ where
         // The hint is in job_metadata, not the transaction — subsequent retries won't have it.
         if let Some(ref ctx) = context {
             if let Some(ref metadata) = ctx.job_metadata {
-                if let Some(hint) = metadata.get(NONCE_ERROR_HINT_KEY) {
+                if let Some(hint) = metadata.get(TX_NONCE_RECONCILE_TRIGGER) {
                     debug!(
                         tx_id = %tx.id,
                         hint = %hint,
@@ -3314,7 +3314,7 @@ mod tests {
 
     mod nonce_recovery_tests {
         use super::*;
-        use crate::domain::transaction::evm::evm_transaction::NONCE_ERROR_HINT_KEY;
+        use crate::domain::transaction::evm::evm_transaction::TX_NONCE_RECONCILE_TRIGGER;
         use crate::jobs::StatusCheckContext;
 
         /// Test reconcile_tx_nonce_state with on_chain_nonce > tx_nonce → marks Failed
@@ -3527,7 +3527,10 @@ mod tests {
 
             // Build context with nonce_error_hint metadata
             let mut metadata = std::collections::HashMap::new();
-            metadata.insert(NONCE_ERROR_HINT_KEY.to_string(), "NonceTooLow".to_string());
+            metadata.insert(
+                TX_NONCE_RECONCILE_TRIGGER.to_string(),
+                "NonceTooLow".to_string(),
+            );
             let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
 
             let result = evm_transaction.handle_status_impl(tx, Some(context)).await;
