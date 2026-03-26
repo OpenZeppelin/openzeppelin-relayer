@@ -138,18 +138,18 @@ where
     async fn detect_nonce_gaps(
         &self,
         on_chain_nonce: Option<u64>,
+        nonce_hint: Option<u64>,
     ) -> Result<Vec<u64>, RelayerError> {
         let on_chain_nonce = match on_chain_nonce {
             Some(n) => n,
             None => self.get_on_chain_nonce().await?,
         };
 
-        // Always scan up to MAX_GAP_SCAN_RANGE ahead of on-chain nonce.
-        // This catches txs that exist beyond the counter (e.g., counter was
-        // reset after restart but txs at higher nonces still exist).
-        // The highest_occupied check below ensures we only report gaps below
-        // actual transactions, not empty unassigned slots.
-        let scan_end = on_chain_nonce + MAX_GAP_SCAN_RANGE;
+        // Scan at least MAX_GAP_SCAN_RANGE ahead, but extend to cover the
+        // nonce hint if it's beyond the default range. This handles cases
+        // where a tx exists far ahead (e.g., counter bumped by 110).
+        let hint_end = nonce_hint.map(|h| h + 1).unwrap_or(0);
+        let scan_end = std::cmp::max(on_chain_nonce + MAX_GAP_SCAN_RANGE, hint_end);
 
         // Batch-scan using MGET (2 Redis round trips) instead of
         // N sequential find_by_nonce calls (N*3 round trips).
@@ -239,7 +239,9 @@ where
 
         self.sync_nonce().await?;
 
-        let gaps = self.detect_nonce_gaps(Some(on_chain_nonce)).await?;
+        let gaps = self
+            .detect_nonce_gaps(Some(on_chain_nonce), nonce_hint)
+            .await?;
         if gaps.is_empty() {
             debug!("no nonce gaps detected");
             return Ok(0);
@@ -695,7 +697,7 @@ mod tests {
         )
         .unwrap();
 
-        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        let gaps = relayer.detect_nonce_gaps(None, None).await.unwrap();
         assert_eq!(gaps, vec![6u64]);
     }
 
@@ -738,7 +740,7 @@ mod tests {
         )
         .unwrap();
 
-        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        let gaps = relayer.detect_nonce_gaps(None, None).await.unwrap();
         assert!(gaps.is_empty());
     }
 
@@ -781,7 +783,7 @@ mod tests {
         )
         .unwrap();
 
-        let gaps = relayer.detect_nonce_gaps(None).await.unwrap();
+        let gaps = relayer.detect_nonce_gaps(None, None).await.unwrap();
         assert!(gaps.is_empty());
     }
 

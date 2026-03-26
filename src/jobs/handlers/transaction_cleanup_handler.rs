@@ -438,7 +438,7 @@ async fn process_transactions_for_cleanup(
         .filter(|tx| {
             // Must be in a final state
             if !FINAL_TRANSACTION_STATUSES.contains(&tx.status) {
-                warn!(
+                debug!(
                     tx_id = %tx.id,
                     status = ?tx.status,
                     "skipping transaction not in final state"

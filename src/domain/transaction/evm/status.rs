@@ -425,9 +425,9 @@ where
             return Some(false);
         }
 
-        // Cap scan range to avoid unbounded MGET if tx_nonce is very far ahead.
-        // If the gap exceeds the cap, we still schedule the health job — it will
-        // do its own bounded scan via detect_nonce_gaps.
+        // Cap the scan to avoid an unbounded MGET if tx_nonce is very far ahead.
+        // If the gap is larger, we scan what we can — the health job's
+        // detect_nonce_gaps will use the nonce hint to extend its own scan.
         let scan_to = std::cmp::min(tx_nonce, on_chain_nonce + MAX_GAP_SCAN_RANGE);
 
         let occupancy = match self
