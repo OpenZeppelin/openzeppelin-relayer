@@ -1001,6 +1001,7 @@ mod tests {
                         total_failures: 0,
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
+                        nonce_too_high_retries: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1053,6 +1054,7 @@ mod tests {
                         total_failures: 0,
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
+                        nonce_too_high_retries: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1133,6 +1135,7 @@ mod tests {
                         total_failures: 0,
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
+                        nonce_too_high_retries: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1251,6 +1254,7 @@ mod tests {
                         total_failures: 0,
                         insufficient_fee_retries: 1,
                         try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })

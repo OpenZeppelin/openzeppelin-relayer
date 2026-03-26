@@ -245,7 +245,7 @@ async fn handle_request(
         "handling transaction status check"
     );
 
-    // Build circuit breaker context
+    // Build circuit breaker context, attaching any job metadata (e.g., nonce recovery hints)
     let context = StatusCheckContext::new(
         meta.consecutive_failures,
         meta.total_failures,
@@ -253,7 +253,8 @@ async fn handle_request(
         max_consecutive,
         max_total,
         network_type,
-    );
+    )
+    .with_job_metadata(status_request.metadata.clone());
 
     // Get relayer transaction handler
     let relayer_transaction =
@@ -539,6 +540,7 @@ mod tests {
                     total_failures: 10,
                     insufficient_fee_retries: 2,
                     try_again_later_retries: 1,
+                    nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
             };
@@ -587,6 +589,7 @@ mod tests {
                     total_failures: 7,
                     insufficient_fee_retries: 1,
                     try_again_later_retries: 0,
+                    nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
             };

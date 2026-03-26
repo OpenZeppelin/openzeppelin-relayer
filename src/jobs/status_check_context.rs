@@ -8,6 +8,8 @@
 //! - **Consecutive failures**: Triggers when RPC is completely down
 //! - **Total failures**: Safety net for flaky RPC that succeeds occasionally but keeps failing
 
+use std::collections::HashMap;
+
 use crate::constants::{EVM_MAX_CONSECUTIVE_STATUS_FAILURES, EVM_MAX_TOTAL_STATUS_FAILURES};
 use crate::models::NetworkType;
 
@@ -61,6 +63,11 @@ pub struct StatusCheckContext {
 
     /// The network type for this transaction.
     pub network_type: NetworkType,
+
+    /// Optional metadata from the job that triggered this status check.
+    /// Used as a one-shot signal for special handling (e.g., nonce recovery hints).
+    /// Subsequent retries won't carry this metadata — they follow normal flow.
+    pub job_metadata: Option<HashMap<String, String>>,
 }
 
 impl Default for StatusCheckContext {
@@ -72,6 +79,7 @@ impl Default for StatusCheckContext {
             max_consecutive_failures: EVM_MAX_CONSECUTIVE_STATUS_FAILURES,
             max_total_failures: EVM_MAX_TOTAL_STATUS_FAILURES,
             network_type: NetworkType::Evm,
+            job_metadata: None,
         }
     }
 }
@@ -102,7 +110,14 @@ impl StatusCheckContext {
             max_consecutive_failures,
             max_total_failures,
             network_type,
+            job_metadata: None,
         }
+    }
+
+    /// Attaches job metadata to this context (e.g., nonce recovery hints).
+    pub fn with_job_metadata(mut self, metadata: Option<HashMap<String, String>>) -> Self {
+        self.job_metadata = metadata;
+        self
     }
 
     /// Determines if the circuit breaker should force-finalize the transaction.

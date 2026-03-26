@@ -1,6 +1,9 @@
 use std::num::ParseIntError;
 
 use crate::config::ServerConfig;
+use crate::constants::{
+    matches_known_transaction, ALREADY_SUBMITTED_PATTERNS, NONCE_TOO_HIGH_PATTERNS,
+};
 use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use serde::Serialize;
 use thiserror::Error;
@@ -374,6 +377,23 @@ pub fn should_mark_provider_failed(error: &ProviderError) -> bool {
     }
 }
 
+/// Returns true if the RPC error message indicates a transaction-level error
+/// that should not be retried — the RPC is working correctly, but rejecting
+/// the transaction itself.
+///
+/// Uses the shared `ALREADY_SUBMITTED_PATTERNS` from constants, consistent with
+/// `is_already_submitted_error` in `domain::transaction::evm::evm_transaction`.
+fn is_non_retriable_transaction_rpc_message(message: &str) -> bool {
+    let msg_lower = message.to_lowercase();
+    ALREADY_SUBMITTED_PATTERNS
+        .iter()
+        .any(|p| msg_lower.contains(p))
+        || NONCE_TOO_HIGH_PATTERNS
+            .iter()
+            .any(|p| msg_lower.contains(p))
+        || matches_known_transaction(&msg_lower)
+}
+
 // Errors that are retriable
 pub fn is_retriable_error(error: &ProviderError) -> bool {
     match error {
@@ -403,14 +423,16 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
         }
 
         // JSON-RPC error codes (EIP-1474)
-        ProviderError::RpcErrorCode { code, .. } => {
+        ProviderError::RpcErrorCode { code, message } => {
             match code {
-                // -32002: Resource unavailable (temporary state)
-                -32002 => true,
+                // -32002: Resource unavailable — retriable unless the message indicates a
+                // transaction-level rejection (some providers wrap nonce/tx errors here)
+                -32002 => !is_non_retriable_transaction_rpc_message(message),
                 // -32005: Limit exceeded / rate limited
                 -32005 => true,
-                // -32603: Internal error (may be temporary)
-                -32603 => true,
+                // -32603: Internal error — retriable unless the message indicates a
+                // transaction-level rejection (some providers wrap nonce/tx errors here)
+                -32603 => !is_non_retriable_transaction_rpc_message(message),
                 // -32000: Invalid input
                 -32000 => false,
                 // -32001: Resource not found
@@ -1251,6 +1273,99 @@ mod tests {
                 description,
                 if should_be_retriable { "" } else { " NOT" }
             );
+        }
+    }
+
+    #[test]
+    fn test_is_non_retriable_transaction_rpc_message() {
+        // Positive cases: these messages should be recognized as non-retriable
+        assert!(is_non_retriable_transaction_rpc_message("nonce too low"));
+        assert!(is_non_retriable_transaction_rpc_message("Nonce Too Low"));
+        assert!(is_non_retriable_transaction_rpc_message("nonce is too low"));
+        assert!(is_non_retriable_transaction_rpc_message("already known"));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "known transaction"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "Known Transaction"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "replacement transaction underpriced"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "same hash was already imported"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "Transaction nonce too low"
+        ));
+
+        // Negative cases: generic/unrelated messages should not match
+        assert!(!is_non_retriable_transaction_rpc_message("Internal error"));
+        assert!(!is_non_retriable_transaction_rpc_message("server busy"));
+        assert!(!is_non_retriable_transaction_rpc_message(""));
+        // "unknown transaction" must NOT match "known transaction"
+        assert!(!is_non_retriable_transaction_rpc_message(
+            "Unknown transaction status"
+        ));
+
+        // Nonce-too-high patterns are also non-retriable
+        assert!(is_non_retriable_transaction_rpc_message("nonce too high"));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "nonce too far in the future",
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "exceeds next nonce"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "Nonce Too Far In The Future"
+        ));
+    }
+
+    #[test]
+    fn test_is_retriable_error_rpc_tx_errors_not_retriable() {
+        // Transaction-level messages that should NOT be retriable regardless of code
+        let non_retriable_messages = vec![
+            "Transaction nonce too low",
+            "nonce too low",
+            "nonce is too low",
+            "already known",
+            "known transaction",
+            "replacement transaction underpriced",
+            "same hash was already imported",
+        ];
+
+        // Messages that should remain retriable (generic/unrelated)
+        let retriable_messages = vec![
+            "Internal error",
+            "",
+            // "unknown transaction" must NOT false-positive on "known transaction"
+            "Unknown transaction status",
+            "Resource unavailable",
+        ];
+
+        // Both -32603 and -32002 should behave the same way for tx-level messages
+        for code in [-32603, -32002] {
+            for message in &non_retriable_messages {
+                let error = ProviderError::RpcErrorCode {
+                    code,
+                    message: message.to_string(),
+                };
+                assert!(
+                    !is_retriable_error(&error),
+                    "{code} with message {message:?} should NOT be retriable"
+                );
+            }
+
+            for message in &retriable_messages {
+                let error = ProviderError::RpcErrorCode {
+                    code,
+                    message: message.to_string(),
+                };
+                assert!(
+                    is_retriable_error(&error),
+                    "{code} with message {message:?} should be retriable"
+                );
+            }
         }
     }
 }

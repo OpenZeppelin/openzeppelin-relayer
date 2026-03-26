@@ -4,6 +4,9 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
+use crate::constants::{
+    HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
+};
 use crate::models::{NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -238,6 +241,10 @@ impl TokenSwapRequest {
 pub struct RelayerHealthCheck {
     pub relayer_id: String,
     pub retry_count: u32,
+    /// Optional metadata for targeted health actions (e.g., nonce health).
+    /// Backwards-compatible: old messages without this field deserialize as `None`.
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 impl RelayerHealthCheck {
@@ -245,6 +252,7 @@ impl RelayerHealthCheck {
         Self {
             relayer_id,
             retry_count: 0,
+            metadata: None,
         }
     }
 
@@ -252,7 +260,38 @@ impl RelayerHealthCheck {
         Self {
             relayer_id,
             retry_count,
+            metadata: None,
         }
+    }
+
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Creates a nonce health check job for the given relayer.
+    /// Pre-populates metadata with the nonce health action key.
+    pub fn nonce_health(relayer_id: String) -> Self {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            HEALTH_CHECK_ACTION_KEY.to_string(),
+            HEALTH_CHECK_ACTION_NONCE_HEALTH.to_string(),
+        );
+        Self::new(relayer_id).with_metadata(metadata)
+    }
+
+    /// Creates a nonce health check job with a nonce hint.
+    /// The hint tells `resolve_nonce_gaps` to raise the counter to cover
+    /// this nonce, even if the counter was reset below it (e.g., after restart).
+    pub fn nonce_health_with_hint(relayer_id: String, nonce_hint: u64) -> Self {
+        let mut job = Self::nonce_health(relayer_id);
+        if let Some(ref mut metadata) = job.metadata {
+            metadata.insert(
+                HEALTH_CHECK_NONCE_HINT_KEY.to_string(),
+                nonce_hint.to_string(),
+            );
+        }
+        job
     }
 }
 
@@ -485,6 +524,35 @@ mod tests {
     }
 
     #[test]
+    fn test_relayer_health_check_nonce_health() {
+        let job = RelayerHealthCheck::nonce_health("relayer-1".to_string());
+
+        assert_eq!(job.relayer_id, "relayer-1");
+        let metadata = job.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_ACTION_KEY),
+            Some(&HEALTH_CHECK_ACTION_NONCE_HEALTH.to_string())
+        );
+        assert!(!metadata.contains_key(HEALTH_CHECK_NONCE_HINT_KEY));
+    }
+
+    #[test]
+    fn test_relayer_health_check_nonce_health_with_hint() {
+        let job = RelayerHealthCheck::nonce_health_with_hint("relayer-1".to_string(), 274);
+
+        assert_eq!(job.relayer_id, "relayer-1");
+        let metadata = job.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_ACTION_KEY),
+            Some(&HEALTH_CHECK_ACTION_NONCE_HEALTH.to_string())
+        );
+        assert_eq!(
+            metadata.get(HEALTH_CHECK_NONCE_HINT_KEY),
+            Some(&"274".to_string())
+        );
+    }
+
+    #[test]
     fn test_relayer_health_check_correct_field_values() {
         // Test with zero retry count
         let health_check_zero = RelayerHealthCheck::new("relayer-test-123".to_string());
@@ -553,5 +621,72 @@ mod tests {
             deserialized.data.retry_count,
             original_health_check.retry_count
         );
+    }
+
+    #[test]
+    fn test_relayer_health_check_with_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "health_check_action".to_string(),
+            "nonce_health".to_string(),
+        );
+
+        let health_check =
+            RelayerHealthCheck::new("relayer-1".to_string()).with_metadata(metadata.clone());
+
+        assert_eq!(health_check.relayer_id, "relayer-1");
+        assert_eq!(health_check.retry_count, 0);
+        assert!(health_check.metadata.is_some());
+        assert_eq!(
+            health_check
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("health_check_action"),
+            Some(&"nonce_health".to_string())
+        );
+        assert_eq!(health_check.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_relayer_health_check_metadata_serialization() {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "health_check_action".to_string(),
+            "nonce_health".to_string(),
+        );
+
+        let original = RelayerHealthCheck::with_retry_count("relayer-2".to_string(), 2)
+            .with_metadata(metadata.clone());
+
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: RelayerHealthCheck = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.relayer_id, original.relayer_id);
+        assert_eq!(deserialized.retry_count, original.retry_count);
+        assert_eq!(deserialized.metadata, original.metadata);
+        assert_eq!(
+            deserialized
+                .metadata
+                .as_ref()
+                .unwrap()
+                .get("health_check_action"),
+            Some(&"nonce_health".to_string())
+        );
+    }
+
+    #[test]
+    fn test_relayer_health_check_backward_compatibility() {
+        // Simulate an old message without the metadata field
+        let old_json = r#"{
+            "relayer_id": "relayer-legacy",
+            "retry_count": 3
+        }"#;
+
+        let deserialized: RelayerHealthCheck = serde_json::from_str(old_json).unwrap();
+
+        assert_eq!(deserialized.relayer_id, "relayer-legacy");
+        assert_eq!(deserialized.retry_count, 3);
+        assert!(deserialized.metadata.is_none());
     }
 }

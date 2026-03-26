@@ -88,6 +88,18 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 
+    /// Returns the transaction status for each nonce in `[from_nonce, to_nonce)`.
+    ///
+    /// For each nonce, returns `Some(status)` if a transaction exists at that slot,
+    /// or `None` if the slot is empty. Implementations should batch I/O where possible
+    /// (e.g., Redis MGET) to minimize round trips.
+    async fn get_nonce_occupancy(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
+
     /// Update the status of a transaction
     async fn update_status(
         &self,
@@ -214,6 +226,7 @@ mockall::mock! {
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+      async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
@@ -343,6 +356,24 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.find_by_nonce(relayer_id, nonce).await
+            }
+        }
+    }
+
+    async fn get_nonce_occupancy(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.get_nonce_occupancy(relayer_id, from_nonce, to_nonce)
+                    .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.get_nonce_occupancy(relayer_id, from_nonce, to_nonce)
+                    .await
             }
         }
     }
