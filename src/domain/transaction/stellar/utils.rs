@@ -1304,10 +1304,10 @@ pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtil
 /// Computes the resubmit interval with backoff based on total transaction age.
 ///
 /// The interval grows by `growth_factor` each time the age crosses the next tier boundary:
-///   - age < base  → `None` (too early to resubmit)
-///   - age 1–1.5x base → interval = base (e.g. 10s)
-///   - age 1.5–2.25x base → interval = base × factor (e.g. 15s)
-///   - age 2.25–3.375x base → interval = base × factor² (e.g. 22s)
+///   - age < base         → `None` (too early to resubmit)
+///   - age in [1x, 1.5x)  → interval = base (e.g. 10s)
+///   - age in [1.5x, 2.25x) → interval = base × factor (e.g. 15s)
+///   - age in [2.25x, 3.375x) → interval = base × factor² (e.g. 22s)
 ///   - ...capped at `max_interval`
 ///
 /// With base=10, factor=1.5, max=120:
@@ -1322,11 +1322,11 @@ pub fn compute_resubmit_backoff_interval(
 ) -> Option<chrono::Duration> {
     let age_secs = total_age.num_seconds();
 
-    if age_secs < base_interval_secs {
+    if age_secs < base_interval_secs || base_interval_secs <= 0 || max_interval_secs <= 0 {
         return None;
     }
 
-    // Guard: factor must be > 1.0 to produce growth; fall back to base interval.
+    // Guard: factor must be > 1.0 to produce growth; fall back to min(base, max).
     if growth_factor <= 1.0 {
         return Some(chrono::Duration::seconds(
             base_interval_secs.min(max_interval_secs),
@@ -3921,17 +3921,37 @@ mod compute_resubmit_backoff_interval_tests {
     }
 
     #[test]
-    fn factor_at_or_below_one_returns_base() {
-        // growth_factor <= 1.0 would cause an infinite loop; guard returns base instead
+    fn factor_at_or_below_one_returns_min_base_max() {
+        // growth_factor <= 1.0 would cause an infinite loop; guard returns min(base, max) instead
         assert_eq!(
             compute_resubmit_backoff_interval(Duration::seconds(100), BASE, MAX, 1.0),
-            Some(Duration::seconds(BASE))
+            Some(Duration::seconds(std::cmp::min(BASE, MAX)))
         );
         assert_eq!(
             compute_resubmit_backoff_interval(Duration::seconds(100), BASE, MAX, 0.5),
-            Some(Duration::seconds(BASE))
+            Some(Duration::seconds(std::cmp::min(BASE, MAX)))
+        );
+        // When base > max, returns max
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(200), 200, MAX, 1.0),
+            Some(Duration::seconds(MAX))
         );
         // Still returns None below base
         assert!(compute_resubmit_backoff_interval(Duration::seconds(5), BASE, MAX, 1.0).is_none());
+    }
+
+    #[test]
+    fn non_positive_base_or_max_returns_none() {
+        // base_interval_secs <= 0 would cause infinite loop; guard returns None
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(100), 0, MAX, FACTOR).is_none()
+        );
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(100), -5, MAX, FACTOR).is_none()
+        );
+        // max_interval_secs <= 0 also returns None
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(100), BASE, 0, FACTOR).is_none()
+        );
     }
 }
