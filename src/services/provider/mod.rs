@@ -148,7 +148,7 @@ static SHARED_RPC_HTTP_CLIENT: Lazy<Result<ReqwestClient, String>> = Lazy::new(|
 pub fn get_shared_rpc_http_client() -> Result<ReqwestClient, ProviderError> {
     SHARED_RPC_HTTP_CLIENT
         .as_ref()
-        .cloned()
+        .map(|c| c.clone())
         .map_err(|e| ProviderError::NetworkConfiguration(e.clone()))
 }
 
