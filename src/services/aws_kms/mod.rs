@@ -928,19 +928,21 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_kms_client_creation_returns_error_not_panic() {
+    async fn test_kms_client_returns_config_error_when_region_missing() {
         let config = AwsKmsSignerConfig {
             region: None,
             key_id: "test-key".to_string(),
         };
 
-        // Should return a typed error, not panic, even without AWS env
+        // Covers the missing-region branch in resolve_aws_region().
+        // Does not exercise Client::new() panic handling (that requires TLS root absence).
         let result = get_or_create_kms_client(&config).await;
-        if let Err(e) = &result {
-            assert!(
-                matches!(e, AwsKmsError::ConfigError(_)),
-                "Expected ConfigError, got: {e:?}"
-            );
+        match result {
+            Err(AwsKmsError::ConfigError(_)) => {}
+            Ok(_) => panic!(
+                "Expected missing-region error; AWS_REGION/AWS_DEFAULT_REGION may be set in env"
+            ),
+            Err(e) => panic!("Expected ConfigError, got: {e:?}"),
         }
     }
 }

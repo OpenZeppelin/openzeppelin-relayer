@@ -419,8 +419,9 @@ impl StellarProvider {
 
         STELLAR_RPC_CLIENT_CACHE.get_or_try_init(url.to_string(), || {
             Client::new(url).map_err(|e| {
+                let safe_url = crate::utils::mask_url(url);
                 ProviderError::NetworkConfiguration(format!(
-                    "Failed to create Stellar RPC client: {e} - URL: '{url}'"
+                    "Failed to create Stellar RPC client: {e} - URL: '{safe_url}'"
                 ))
             })
         })

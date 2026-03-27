@@ -7,7 +7,8 @@
 //! - [`SyncClientCache`] — for synchronous client constructors
 //!   (e.g., `soroban_rs::Client::new(url)`, Solana `RpcClient::new(...)`)
 //!
-//! Both guarantee exactly-once initialization per key under concurrent access.
+//! Both guarantee at most one in-flight initializer per key. If `init` returns
+//! `Err`, the entry is not cached and subsequent calls will retry initialization.
 
 use std::{
     hash::Hash,
@@ -21,8 +22,9 @@ use tokio::sync::OnceCell;
 // AsyncClientCache
 // ---------------------------------------------------------------------------
 
-/// A thread-safe cache for async client construction. Exactly one caller
+/// A thread-safe cache for async client construction. At most one caller
 /// runs the init closure per key; others `.await` the same result.
+/// If init returns `Err`, the entry remains uninitialized and the next caller retries.
 #[derive(Debug)]
 pub struct AsyncClientCache<K: Eq + Hash, V> {
     entries: DashMap<K, Arc<OnceCell<Arc<V>>>>,
@@ -74,8 +76,9 @@ impl<K: Eq + Hash + Clone, V> Default for AsyncClientCache<K, V> {
 // SyncClientCache
 // ---------------------------------------------------------------------------
 
-/// A thread-safe cache for synchronous client construction. Exactly one caller
+/// A thread-safe cache for synchronous client construction. At most one caller
 /// runs the init closure per key; others block on a mutex and receive the same result.
+/// If init returns `Err`, the entry remains uninitialized and the next caller retries.
 #[derive(Debug)]
 pub struct SyncClientCache<K: Eq + Hash, V> {
     entries: DashMap<K, Arc<Mutex<Option<Arc<V>>>>>,
