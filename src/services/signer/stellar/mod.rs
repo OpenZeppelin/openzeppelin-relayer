@@ -14,6 +14,8 @@ use local_signer::*;
 use turnkey_signer::*;
 use vault_signer::*;
 
+use soroban_rs::xdr::SignatureHint;
+
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
@@ -27,6 +29,27 @@ use crate::{
 };
 
 use super::DataSignerTrait;
+
+/// Derive a `SignatureHint` (last 4 bytes of the Ed25519 public key) from a Stellar address.
+fn derive_signature_hint(address: &Address) -> Result<SignatureHint, SignerError> {
+    match address {
+        Address::Stellar(addr) => {
+            let pk = stellar_strkey::ed25519::PublicKey::from_string(addr).map_err(|e| {
+                SignerError::SigningError(format!("Failed to parse Stellar address '{addr}': {e}"))
+            })?;
+            // pk.0 is [u8; 32], last 4 bytes are the hint
+            let hint_bytes: [u8; 4] = pk.0[28..].try_into().map_err(|_| {
+                SignerError::SigningError(
+                    "Failed to create signature hint from public key".to_string(),
+                )
+            })?;
+            Ok(SignatureHint(hint_bytes))
+        }
+        _ => Err(SignerError::SigningError(format!(
+            "Expected Stellar address, got: {address:?}"
+        ))),
+    }
+}
 
 #[cfg(test)]
 use mockall::automock;

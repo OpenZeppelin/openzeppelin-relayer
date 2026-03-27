@@ -17,11 +17,10 @@ use crate::{
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use soroban_rs::xdr::{
-    DecoratedSignature, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ReadXdr,
-    ScBytes, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, Signature, SignatureHint,
-    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanCredentials, Transaction,
+    DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
     TransactionEnvelope, WriteXdr,
 };
+use tokio::sync::OnceCell;
 use tracing::debug;
 
 pub type DefaultAwsKmsService = AwsKmsService;
@@ -31,12 +30,17 @@ where
     T: AwsKmsStellarService,
 {
     aws_kms_service: T,
+    /// Cached signature hint (last 4 bytes of the public key), computed once on first use.
+    cached_hint: OnceCell<SignatureHint>,
 }
 
 impl AwsKmsSigner<DefaultAwsKmsService> {
     /// Creates a new AwsKmsSigner with the default AwsKmsService
     pub fn new(aws_kms_service: DefaultAwsKmsService) -> Self {
-        Self { aws_kms_service }
+        Self {
+            aws_kms_service,
+            cached_hint: OnceCell::new(),
+        }
     }
 }
 
@@ -44,7 +48,10 @@ impl AwsKmsSigner<DefaultAwsKmsService> {
 impl<T: AwsKmsStellarService> AwsKmsSigner<T> {
     /// Creates a new AwsKmsSigner with a custom service implementation for testing
     pub fn new_for_testing(aws_kms_service: T) -> Self {
-        Self { aws_kms_service }
+        Self {
+            aws_kms_service,
+            cached_hint: OnceCell::new(),
+        }
     }
 }
 
@@ -194,51 +201,26 @@ impl<T: AwsKmsStellarService> AwsKmsSigner<T> {
         })
     }
 
-    /// Get the signature hint for this signer (last 4 bytes of the public key)
+    /// Get the signature hint for this signer (last 4 bytes of the public key).
+    ///
+    /// The hint is computed once and cached for the lifetime of the signer,
+    /// since it is deterministic for a given KMS key.
     async fn get_signature_hint(&self) -> Result<SignatureHint, SignerError> {
-        // Get the public key to derive the signature hint
-        let stellar_address = self
-            .aws_kms_service
-            .get_stellar_address()
-            .await
-            .map_err(|e| {
-                SignerError::SigningError(format!(
-                    "Failed to retrieve Stellar address from AWS KMS: {e}"
-                ))
-            })?;
-
-        // Extract hint from the public key (last 4 bytes of public key)
-        match stellar_address {
-            Address::Stellar(addr) => {
-                // Parse the Stellar address to get the public key
-                use stellar_strkey::ed25519::PublicKey;
-                let pk = PublicKey::from_string(&addr).map_err(|e| {
-                    SignerError::SigningError(format!(
-                        "Failed to parse Stellar address '{addr}': {e}"
-                    ))
-                })?;
-                let pk_bytes = pk.0;
-
-                // Safety check: ensure we have enough bytes for the hint
-                if pk_bytes.len() < 4 {
-                    return Err(SignerError::SigningError(format!(
-                        "Public key too short for signature hint: {} bytes",
-                        pk_bytes.len()
-                    )));
-                }
-
-                let hint_bytes: [u8; 4] =
-                    pk_bytes[pk_bytes.len() - 4..].try_into().map_err(|_| {
-                        SignerError::SigningError(
-                            "Failed to create signature hint from public key".to_string(),
-                        )
+        self.cached_hint
+            .get_or_try_init(|| async {
+                let address = self
+                    .aws_kms_service
+                    .get_stellar_address()
+                    .await
+                    .map_err(|e| {
+                        SignerError::SigningError(format!(
+                            "Failed to retrieve Stellar address from AWS KMS: {e}"
+                        ))
                     })?;
-                Ok(SignatureHint(hint_bytes))
-            }
-            _ => Err(SignerError::SigningError(format!(
-                "Expected Stellar address, got: {stellar_address:?}"
-            ))),
-        }
+                super::derive_signature_hint(&address)
+            })
+            .await
+            .cloned()
     }
 }
 
