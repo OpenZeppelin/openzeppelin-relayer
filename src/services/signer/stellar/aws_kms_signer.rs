@@ -547,4 +547,55 @@ mod tests {
             _ => panic!("Expected SigningError about KMS service"),
         }
     }
+
+    #[tokio::test]
+    async fn test_sign_xdr_hint_retrieval_failure() {
+        // Tests the get_signature_hint() error path when get_stellar_address fails
+        // inside the OnceCell init closure
+        let mut mock_service = MockAwsKmsStellarService::new();
+        mock_service
+            .expect_get_stellar_address()
+            .times(1)
+            .returning(|| {
+                Box::pin(async { Err(AwsKmsError::GetError("key not found".to_string())) })
+            });
+        // sign_stellar succeeds but hint retrieval will fail
+        mock_service
+            .expect_sign_stellar()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(vec![1u8; 64]) }));
+
+        let signer = AwsKmsSigner::new_for_testing(mock_service);
+
+        use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
+        let test_pk = StrKeyPublicKey([0u8; 32]);
+        let test_address = test_pk.to_string();
+
+        let tx_data = StellarTransactionData {
+            source_account: test_address,
+            fee: Some(100),
+            sequence_number: Some(1),
+            transaction_input: TransactionInput::Operations(vec![]),
+            memo: None,
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: Vec::new(),
+            hash: None,
+            simulation_transaction_data: None,
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        };
+
+        let result = signer
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Failed to retrieve Stellar address from AWS KMS"));
+            }
+            e => panic!("Expected SigningError about address retrieval, got: {e:?}"),
+        }
+    }
 }
