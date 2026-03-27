@@ -1301,20 +1301,24 @@ pub fn asset_to_asset_id(asset: &Asset) -> Result<String, StellarTransactionUtil
     }
 }
 
-/// Computes the resubmit interval with exponential backoff based on total transaction age.
+/// Computes the resubmit interval with backoff based on total transaction age.
 ///
-/// The interval doubles each time the total age doubles:
+/// The interval grows by `growth_factor` each time the age crosses the next tier boundary:
 ///   - age < base  → `None` (too early to resubmit)
-///   - age 1-2x base → interval = base  (10s)
-///   - age 2-4x base → interval = 2*base (20s)
-///   - age 4-8x base → interval = 4*base (40s)
+///   - age 1–1.5x base → interval = base (e.g. 10s)
+///   - age 1.5–2.25x base → interval = base × factor (e.g. 15s)
+///   - age 2.25–3.375x base → interval = base × factor² (e.g. 22s)
 ///   - ...capped at `max_interval`
+///
+/// With base=10, factor=1.5, max=120:
+///   10s → 15s → 22s → 33s → 50s → 75s → 113s → 120s (capped)
 ///
 /// Returns the backoff interval to compare against time since last submission (`sent_at`).
 pub fn compute_resubmit_backoff_interval(
     total_age: chrono::Duration,
     base_interval_secs: i64,
     max_interval_secs: i64,
+    growth_factor: f64,
 ) -> Option<chrono::Duration> {
     let age_secs = total_age.num_seconds();
 
@@ -1322,12 +1326,24 @@ pub fn compute_resubmit_backoff_interval(
         return None;
     }
 
-    // n = floor(log2(age / base)), so interval = base * 2^n
-    let ratio = age_secs / base_interval_secs; // >= 1
-    let n = (ratio as u64).ilog2(); // floor(log2(ratio))
-    let interval = base_interval_secs.saturating_mul(1_i64.wrapping_shl(n));
-    let capped = interval.min(max_interval_secs);
+    // Guard: factor must be > 1.0 to produce growth; fall back to base interval.
+    if growth_factor <= 1.0 {
+        return Some(chrono::Duration::seconds(
+            base_interval_secs.min(max_interval_secs),
+        ));
+    }
 
+    // Each tier boundary = previous boundary × growth_factor.
+    // The interval at each tier = previous interval × growth_factor, capped at max.
+    let mut interval = base_interval_secs as f64;
+    let mut tier_end = base_interval_secs as f64 * growth_factor;
+
+    while tier_end <= age_secs as f64 {
+        interval = (interval * growth_factor).min(max_interval_secs as f64);
+        tier_end *= growth_factor;
+    }
+
+    let capped = (interval as i64).min(max_interval_secs);
     Some(chrono::Duration::seconds(capped))
 }
 
@@ -3768,76 +3784,116 @@ mod compute_resubmit_backoff_interval_tests {
 
     const BASE: i64 = 10;
     const MAX: i64 = 120;
+    const FACTOR: f64 = 1.5;
 
     #[test]
     fn returns_none_below_base() {
-        assert!(compute_resubmit_backoff_interval(Duration::seconds(0), BASE, MAX).is_none());
-        assert!(compute_resubmit_backoff_interval(Duration::seconds(5), BASE, MAX).is_none());
-        assert!(compute_resubmit_backoff_interval(Duration::seconds(9), BASE, MAX).is_none());
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(0), BASE, MAX, FACTOR).is_none()
+        );
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(5), BASE, MAX, FACTOR).is_none()
+        );
+        assert!(
+            compute_resubmit_backoff_interval(Duration::seconds(9), BASE, MAX, FACTOR).is_none()
+        );
     }
 
     #[test]
-    fn base_interval_at_1x() {
-        // age 10-19s: ratio=1, log2(1)=0, interval = 10 * 2^0 = 10s
+    fn base_interval_at_first_tier() {
+        // age 10-14s: interval = 10s (tier boundary at 10 * 1.5 = 15)
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(10), BASE, MAX),
+            compute_resubmit_backoff_interval(Duration::seconds(10), BASE, MAX, FACTOR),
             Some(Duration::seconds(10))
         );
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(19), BASE, MAX),
+            compute_resubmit_backoff_interval(Duration::seconds(14), BASE, MAX, FACTOR),
             Some(Duration::seconds(10))
         );
     }
 
     #[test]
-    fn doubles_at_2x() {
-        // age 20-39s: ratio=2-3, log2(2)=1, interval = 10 * 2^1 = 20s
+    fn grows_by_factor_at_second_tier() {
+        // age 15-21s: interval = 10 * 1.5 = 15s (tier boundary at 15 * 1.5 = 22.5)
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(20), BASE, MAX),
-            Some(Duration::seconds(20))
+            compute_resubmit_backoff_interval(Duration::seconds(15), BASE, MAX, FACTOR),
+            Some(Duration::seconds(15))
         );
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(39), BASE, MAX),
-            Some(Duration::seconds(20))
-        );
-    }
-
-    #[test]
-    fn quadruples_at_4x() {
-        // age 40-79s: ratio=4-7, log2(4)=2, interval = 10 * 2^2 = 40s
-        assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(40), BASE, MAX),
-            Some(Duration::seconds(40))
-        );
-        assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(79), BASE, MAX),
-            Some(Duration::seconds(40))
+            compute_resubmit_backoff_interval(Duration::seconds(22), BASE, MAX, FACTOR),
+            Some(Duration::seconds(15))
         );
     }
 
     #[test]
-    fn interval_at_8x() {
-        // age 80-119s: ratio=8-11, log2(8)=3, interval = 10 * 2^3 = 80s
+    fn grows_by_factor_squared_at_third_tier() {
+        // age 23-33s: interval = 10 * 1.5^2 = 22.5 ≈ 22s (tier boundary at 22.5 * 1.5 = 33.75)
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(80), BASE, MAX),
-            Some(Duration::seconds(80))
+            compute_resubmit_backoff_interval(Duration::seconds(23), BASE, MAX, FACTOR),
+            Some(Duration::seconds(22))
         );
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(119), BASE, MAX),
-            Some(Duration::seconds(80))
+            compute_resubmit_backoff_interval(Duration::seconds(33), BASE, MAX, FACTOR),
+            Some(Duration::seconds(22))
+        );
+    }
+
+    #[test]
+    fn fourth_tier() {
+        // age 34-50s: interval = 10 * 1.5^3 = 33.75 → 33s (truncated)
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(34), BASE, MAX, FACTOR),
+            Some(Duration::seconds(33))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(50), BASE, MAX, FACTOR),
+            Some(Duration::seconds(33))
         );
     }
 
     #[test]
     fn capped_at_max() {
-        // age 160s: ratio=16, log2(16)=4, interval = 10*16 = 160 → capped at 120s
+        // At high ages the interval should be capped at MAX (120s)
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(160), BASE, MAX),
+            compute_resubmit_backoff_interval(Duration::seconds(300), BASE, MAX, FACTOR),
             Some(Duration::seconds(MAX))
         );
-        // age 1280s: ratio=128, log2(128)=7, interval = 10*128 = 1280 → capped at 120s
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(1280), BASE, MAX),
+            compute_resubmit_backoff_interval(Duration::seconds(1000), BASE, MAX, FACTOR),
+            Some(Duration::seconds(MAX))
+        );
+    }
+
+    #[test]
+    fn works_with_factor_2_doubling() {
+        // With factor=2.0, behavior matches classic doubling: 10 → 20 → 40 → 80 → 120
+        let factor = 2.0;
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(10), BASE, MAX, factor),
+            Some(Duration::seconds(10))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(19), BASE, MAX, factor),
+            Some(Duration::seconds(10))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(20), BASE, MAX, factor),
+            Some(Duration::seconds(20))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(39), BASE, MAX, factor),
+            Some(Duration::seconds(20))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(40), BASE, MAX, factor),
+            Some(Duration::seconds(40))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(80), BASE, MAX, factor),
+            Some(Duration::seconds(80))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(160), BASE, MAX, factor),
             Some(Duration::seconds(MAX))
         );
     }
@@ -3847,20 +3903,35 @@ mod compute_resubmit_backoff_interval_tests {
         // Verify the function is generic, not hardcoded to Stellar constants
         let base = 5;
         let max = 30;
-        // age 5-9s: interval = 5s
+        // age 5-7s: interval = 5s
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(5), base, max),
+            compute_resubmit_backoff_interval(Duration::seconds(5), base, max, FACTOR),
             Some(Duration::seconds(5))
         );
-        // age 10-19s: interval = 10s
+        // age 8-11s: interval = 5 * 1.5 = 7.5 → 7s (truncated)
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(10), base, max),
-            Some(Duration::seconds(10))
+            compute_resubmit_backoff_interval(Duration::seconds(8), base, max, FACTOR),
+            Some(Duration::seconds(7))
         );
-        // age 40s: interval = 40 → capped at 30s
+        // age 100s: capped at 30s
         assert_eq!(
-            compute_resubmit_backoff_interval(Duration::seconds(40), base, max),
+            compute_resubmit_backoff_interval(Duration::seconds(100), base, max, FACTOR),
             Some(Duration::seconds(30))
         );
+    }
+
+    #[test]
+    fn factor_at_or_below_one_returns_base() {
+        // growth_factor <= 1.0 would cause an infinite loop; guard returns base instead
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(100), BASE, MAX, 1.0),
+            Some(Duration::seconds(BASE))
+        );
+        assert_eq!(
+            compute_resubmit_backoff_interval(Duration::seconds(100), BASE, MAX, 0.5),
+            Some(Duration::seconds(BASE))
+        );
+        // Still returns None below base
+        assert!(compute_resubmit_backoff_interval(Duration::seconds(5), BASE, MAX, 1.0).is_none());
     }
 }

@@ -67,16 +67,20 @@ pub fn get_stellar_sponsored_transaction_validity_duration() -> Duration {
 pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 
 /// Base interval (seconds) for resubmitting a Submitted transaction.
-/// Stellar Core retries internally for ~3 ledgers (~15s). We start resubmitting at 15s
+/// Stellar Core retries internally for ~2 ledgers (~10s). We start resubmitting at 10s
 /// to ensure the transaction is back in the mempool before Core's window closes.
-pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 15;
+pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 10;
 
 /// Maximum number of times a Stellar submission may be retried after an insufficient-fee error.
 pub const STELLAR_INSUFFICIENT_FEE_MAX_RETRIES: u32 = 2;
 
 /// Maximum resubmit interval (seconds) to cap exponential backoff.
 /// Prevents excessively long gaps between resubmissions.
-pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 180;
+pub const STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS: i64 = 120;
+
+/// Growth factor for resubmit backoff. Each tier multiplies the interval by this factor.
+/// With base=10 and factor=1.5: 10s → 15s → 22s → 33s → 50s → 75s → 113s → 120s (capped).
+pub const STELLAR_RESUBMIT_GROWTH_FACTOR: f64 = 1.5;
 
 /// Get base resubmit interval for Submitted transactions
 pub fn get_stellar_resubmit_base_interval() -> Duration {
