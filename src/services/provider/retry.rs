@@ -1948,4 +1948,76 @@ mod tests {
             selected.len()
         );
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_retry_rpc_call_non_retriable_rpc_error_no_failover() {
+        use crate::services::provider::{
+            is_retriable_error, should_mark_provider_failed, ProviderError,
+        };
+
+        RpcHealthStore::instance().clear_all();
+
+        let url1 = "http://localhost:9977";
+        let url2 = "http://localhost:9976";
+        let configs = vec![
+            RpcConfig::new(url1.to_string()),
+            RpcConfig::new(url2.to_string()),
+        ];
+        let selector = RpcSelector::new(configs, 1, 60, 60).expect("Failed to create selector");
+
+        let attempts = Arc::new(AtomicU8::new(0));
+        let attempts_clone = attempts.clone();
+
+        let provider_initializer =
+            |_url: &str| -> Result<String, ProviderError> { Ok("mock_provider".to_string()) };
+
+        // Simulate the exact error a Monad-style provider returns:
+        // JSON-RPC -32603 with "nonce too low" in the message
+        let operation = move |_provider: String| {
+            let attempts = attempts_clone.clone();
+            async move {
+                attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                Err::<i32, ProviderError>(ProviderError::RpcErrorCode {
+                    code: -32603,
+                    message: "nonce too low".to_string(),
+                })
+            }
+        };
+
+        let config = RetryConfig::new(3, 1, 0, 0);
+
+        let result = retry_rpc_call(
+            &selector,
+            "test_operation",
+            is_retriable_error,
+            should_mark_provider_failed,
+            provider_initializer,
+            operation,
+            Some(config),
+        )
+        .await;
+
+        assert!(result.is_err(), "Expected Err result but got: {result:?}");
+        assert_eq!(
+            attempts.load(AtomicOrdering::SeqCst),
+            1,
+            "Operation should be called exactly once (no retries)"
+        );
+
+        // Verify neither provider was marked as failed in the health store
+        let health = RpcHealthStore::instance();
+        let meta1 = health.get_metadata(url1);
+        let meta2 = health.get_metadata(url2);
+        assert!(
+            meta1.failure_timestamps.is_empty(),
+            "Provider 1 should have 0 failures, got: {}",
+            meta1.failure_timestamps.len()
+        );
+        assert!(
+            meta2.failure_timestamps.is_empty(),
+            "Provider 2 should have 0 failures, got: {}",
+            meta2.failure_timestamps.len()
+        );
+    }
 }

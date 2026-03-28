@@ -96,3 +96,29 @@ pub fn get_evm_status_check_initial_delay() -> Duration {
 pub fn get_evm_min_age_for_hash_recovery() -> Duration {
     Duration::minutes(EVM_MIN_AGE_FOR_HASH_RECOVERY_MINUTES)
 }
+
+/// Error message patterns indicating a transaction was already submitted or its nonce consumed.
+/// Shared between the retry layer (`is_non_retriable_transaction_rpc_message`) and
+/// the domain layer (`is_already_submitted_error`).
+///
+/// Each entry is a lowercased substring to match against the RPC error message.
+pub const ALREADY_SUBMITTED_PATTERNS: &[&str] = &[
+    "nonce too low",
+    "nonce is too low",
+    "already known",
+    "replacement transaction underpriced",
+    "same hash was already imported",
+];
+
+/// Checks if a lowercased message matches "known transaction" without matching
+/// "unknown transaction" (substring false positive).
+pub fn matches_known_transaction(msg_lower: &str) -> bool {
+    if let Some(pos) = msg_lower.find("known transaction") {
+        // Reject if preceded by "un" (i.e. "unknown transaction")
+        if msg_lower[..pos].ends_with("un") {
+            return false;
+        }
+        return true;
+    }
+    false
+}
