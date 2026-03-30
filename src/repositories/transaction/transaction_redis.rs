@@ -654,6 +654,7 @@ impl RedisTransactionRepository {
     ) {
         let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
         let relayer_id = updated_tx.relayer_id.as_str();
+        let previous_status = format!("{old_status:?}").to_lowercase();
 
         // Track submission (when status changes to Submitted)
         if *old_status != TransactionStatus::Submitted
@@ -772,17 +773,32 @@ impl RedisTransactionRepository {
                         })
                         .unwrap_or("failed");
                     TRANSACTIONS_FAILED
-                        .with_label_values(&[relayer_id, &network_type, failure_reason])
+                        .with_label_values(&[
+                            relayer_id,
+                            &network_type,
+                            failure_reason,
+                            &previous_status,
+                        ])
                         .inc();
                 }
                 TransactionStatus::Expired => {
                     TRANSACTIONS_FAILED
-                        .with_label_values(&[relayer_id, &network_type, "expired"])
+                        .with_label_values(&[
+                            relayer_id,
+                            &network_type,
+                            "expired",
+                            &previous_status,
+                        ])
                         .inc();
                 }
                 TransactionStatus::Canceled => {
                     TRANSACTIONS_FAILED
-                        .with_label_values(&[relayer_id, &network_type, "canceled"])
+                        .with_label_values(&[
+                            relayer_id,
+                            &network_type,
+                            "canceled",
+                            &previous_status,
+                        ])
                         .inc();
                 }
                 _ => {}
