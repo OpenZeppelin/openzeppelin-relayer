@@ -138,7 +138,8 @@ lazy_static! {
     };
 
     // Counter for failed transactions (Failed, Expired, Canceled statuses).
-    // `previous_status` records the pipeline stage when the failure occurred
+    // Labels: relayer_id, network_type, failure_reason, previous_status.
+    // Note: `previous_status` label added to track the pipeline stage before the failure
     // (e.g. "pending", "sent", "submitted"), enabling pre- vs post-submission attribution.
     pub static ref TRANSACTIONS_FAILED: CounterVec = {
         let opts = Opts::new("transactions_failed_total", "Total number of failed transactions");

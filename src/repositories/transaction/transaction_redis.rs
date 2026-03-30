@@ -654,7 +654,6 @@ impl RedisTransactionRepository {
     ) {
         let network_type = format!("{:?}", updated_tx.network_type).to_lowercase();
         let relayer_id = updated_tx.relayer_id.as_str();
-        let previous_status = format!("{old_status:?}").to_lowercase();
 
         // Track submission (when status changes to Submitted)
         if *old_status != TransactionStatus::Submitted
@@ -695,6 +694,7 @@ impl RedisTransactionRepository {
         let is_final = is_final_state(new_status);
 
         if !was_final && is_final {
+            let previous_status = format!("{old_status:?}").to_lowercase();
             let meta = updated_tx.metadata.as_ref();
             let had_insufficient_fee = meta.is_some_and(|m| m.insufficient_fee_retries > 0);
             let had_try_again_later = meta.is_some_and(|m| m.try_again_later_retries > 0);
