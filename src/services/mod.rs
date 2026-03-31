@@ -42,3 +42,5 @@ pub mod plugins;
 
 pub mod health;
 pub use health::*;
+
+pub(crate) mod client_cache;
