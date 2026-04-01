@@ -1677,7 +1677,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "tracing",
- "uuid 1.20.0",
+ "uuid 1.23.0",
 ]
 
 [[package]]
@@ -2543,7 +2543,7 @@ dependencies = [
  "thiserror 1.0.69",
  "url",
  "urlencoding",
- "uuid 1.20.0",
+ "uuid 1.23.0",
 ]
 
 [[package]]
@@ -5781,7 +5781,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "utoipa",
- "uuid 1.20.0",
+ "uuid 1.23.0",
  "validator",
  "vaultrs",
  "zeroize",
@@ -7115,7 +7115,7 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
- "uuid 1.20.0",
+ "uuid 1.23.0",
 ]
 
 [[package]]
@@ -11140,7 +11140,7 @@ dependencies = [
  "mutually_exclusive_features",
  "pin-project",
  "tracing",
- "uuid 1.20.0",
+ "uuid 1.23.0",
 ]
 
 [[package]]
@@ -11513,11 +11513,11 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.20.0"
+version = "1.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee48d38b119b0cd71fe4141b30f5ba9c7c5d9f4e7a3a8b4a674e4b6ef789976f"
+checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.1",
  "js-sys",
  "serde_core",
  "sha1_smol",
