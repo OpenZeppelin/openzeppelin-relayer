@@ -673,6 +673,38 @@ impl ServerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
     }
+
+    /// Get SQS wait time from environment variable or use default.
+    ///
+    /// Environment variable format: `SQS_{QUEUE_KEY}_WAIT_TIME_SECONDS`
+    /// Example: `SQS_TRANSACTION_REQUEST_WAIT_TIME_SECONDS=2`
+    ///
+    /// Values are clamped to the SQS maximum of 20 seconds.
+    pub fn get_sqs_wait_time(queue_key: &str, default: u64) -> u64 {
+        let env_var = format!("SQS_{queue_key}_WAIT_TIME_SECONDS");
+        env::var(&env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+            .min(20)
+    }
+
+    /// Get SQS poller count from environment variable or use default.
+    ///
+    /// Environment variable format: `SQS_{QUEUE_KEY}_POLLER_COUNT`
+    /// Example: `SQS_TRANSACTION_REQUEST_POLLER_COUNT=4`
+    ///
+    /// Controls how many concurrent SQS `ReceiveMessage` loops run per queue
+    /// per task. More pollers improve pickup smoothness on bursty queues.
+    /// All pollers share the same concurrency semaphore.
+    pub fn get_sqs_poller_count(queue_key: &str, default: usize) -> usize {
+        let env_var = format!("SQS_{queue_key}_POLLER_COUNT");
+        env::var(&env_var)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+            .max(1)
+    }
 }
 
 #[cfg(test)]

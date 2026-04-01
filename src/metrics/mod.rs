@@ -8,6 +8,19 @@ use lazy_static::lazy_static;
 use prometheus::{
     CounterVec, Encoder, Gauge, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
+
+// Stage labels for TRANSACTION_PROCESSING_TIME histogram.
+pub const STAGE_REQUEST_QUEUE_DWELL: &str = "request_queue_dwell";
+pub const STAGE_PREPARE_DURATION: &str = "prepare_duration";
+pub const STAGE_SUBMISSION_QUEUE_DWELL: &str = "submission_queue_dwell";
+pub const STAGE_SUBMIT_DURATION: &str = "submit_duration";
+
+/// Observe a duration on the `TRANSACTION_PROCESSING_TIME` histogram.
+pub fn observe_processing_time(relayer_id: &str, network_type: &str, stage: &str, secs: f64) {
+    TRANSACTION_PROCESSING_TIME
+        .with_label_values(&[relayer_id, network_type, stage])
+        .observe(secs);
+}
 use sysinfo::{Disks, System};
 
 lazy_static! {

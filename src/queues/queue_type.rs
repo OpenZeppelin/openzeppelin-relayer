@@ -107,9 +107,11 @@ impl QueueType {
         }
     }
 
-    /// Returns the SQS long-poll wait time in seconds.
+    /// Returns the default SQS long-poll wait time in seconds.
     /// Note: SQS `WaitTimeSeconds` maximum is 20 seconds.
-    pub fn polling_interval_secs(&self) -> u64 {
+    /// These defaults can be overridden via environment variables
+    /// (see `sqs_env_key()`).
+    pub fn default_wait_time_secs(&self) -> u64 {
         match self {
             Self::TransactionRequest => 15,
             Self::TransactionSubmission => 15,
@@ -119,6 +121,29 @@ impl QueueType {
             Self::TokenSwapRequest => 20,
             Self::RelayerHealthCheck => 20,
         }
+    }
+
+    /// Returns the SQS environment variable key infix for this queue type.
+    ///
+    /// Used to build env vars like `SQS_{key}_WAIT_TIME_SECONDS` and
+    /// `SQS_{key}_POLLER_COUNT`.
+    pub fn sqs_env_key(&self) -> &'static str {
+        match self {
+            Self::TransactionRequest => "TRANSACTION_REQUEST",
+            Self::TransactionSubmission => "TRANSACTION_SUBMISSION",
+            Self::StatusCheck => "STATUS_CHECK",
+            Self::StatusCheckEvm => "STATUS_CHECK_EVM",
+            Self::StatusCheckStellar => "STATUS_CHECK_STELLAR",
+            Self::Notification => "NOTIFICATION",
+            Self::TokenSwapRequest => "TOKEN_SWAP_REQUEST",
+            Self::RelayerHealthCheck => "RELAYER_HEALTH_CHECK",
+        }
+    }
+
+    /// Returns the default number of SQS poll loops per worker for this queue type.
+    /// Can be overridden via `SQS_{key}_POLLER_COUNT` env vars.
+    pub fn default_poller_count(&self) -> usize {
+        1
     }
 
     /// Returns true if this is any variant of status check queue.
@@ -142,10 +167,13 @@ mod tests {
 
     #[test]
     fn test_polling_interval_defaults() {
-        assert_eq!(QueueType::TransactionRequest.polling_interval_secs(), 15);
-        assert_eq!(QueueType::TransactionSubmission.polling_interval_secs(), 15);
-        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 5);
-        assert_eq!(QueueType::StatusCheckStellar.polling_interval_secs(), 3);
+        assert_eq!(QueueType::TransactionRequest.default_wait_time_secs(), 15);
+        assert_eq!(
+            QueueType::TransactionSubmission.default_wait_time_secs(),
+            15
+        );
+        assert_eq!(QueueType::StatusCheck.default_wait_time_secs(), 5);
+        assert_eq!(QueueType::StatusCheckStellar.default_wait_time_secs(), 3);
     }
 
     #[test]
@@ -239,9 +267,9 @@ mod tests {
         ];
         for qt in &all {
             assert!(
-                qt.polling_interval_secs() <= 20,
+                qt.default_wait_time_secs() <= 20,
                 "{qt:?} polling interval {} exceeds SQS max of 20s",
-                qt.polling_interval_secs()
+                qt.default_wait_time_secs()
             );
         }
     }
