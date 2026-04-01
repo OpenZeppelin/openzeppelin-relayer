@@ -18,11 +18,11 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594  # v2.16.0
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d  # v2.16.1
         with:
           egress-policy: audit
       - name: Slack notification
-        uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
+        uses: act10ns/slack@d96404edccc6d6467fc7f8134a420c851b1e9054  # v2.2.0
         with:
           status: starting
           steps: ${{ toJson(steps) }}
@@ -96,7 +96,7 @@ jobs:
           short-description: ${{ github.event.repository.description }}
           readme-filepath: ./DOCKER_README.md
       - name: Slack notification success or failure
-        uses: act10ns/slack@44541246747a30eb3102d87f7a4cc5471b0ffb7d  # v2.1.0
+        uses: act10ns/slack@d96404edccc6d6467fc7f8134a420c851b1e9054  # v2.2.0
         with:
           status: ${{ job.status }}
           steps: ${{ toJson(steps) }}
