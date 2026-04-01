@@ -68,8 +68,10 @@ async fn handle_request(
     let relayer_id = transaction.relayer_id.clone();
     let network_type = transaction.network_type.to_string();
     if let Ok(created_time) = chrono::DateTime::parse_from_rfc3339(&transaction.created_at) {
-        let dwell_secs =
-            (Utc::now() - created_time.with_timezone(&Utc)).num_milliseconds() as f64 / 1000.0;
+        let dwell_secs = (Utc::now() - created_time.with_timezone(&Utc))
+            .num_milliseconds()
+            .max(0) as f64
+            / 1000.0;
         observe_processing_time(
             &relayer_id,
             &network_type,

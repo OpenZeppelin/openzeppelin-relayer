@@ -131,7 +131,15 @@ pub async fn spawn_worker_for_queue(
         }
 
         // Wait for all pollers to finish (they exit on shutdown signal)
-        while poller_handles.join_next().await.is_some() {}
+        while let Some(join_result) = poller_handles.join_next().await {
+            if let Err(err) = join_result {
+                error!(
+                    queue_type = ?queue_type,
+                    error = %err,
+                    "SQS poller task terminated unexpectedly"
+                );
+            }
+        }
         info!(queue_type = ?queue_type, "SQS worker stopped");
     });
 
@@ -840,7 +848,19 @@ fn get_wait_time_for_queue(queue_type: QueueType) -> u64 {
 
 /// Gets the number of poll loops to run for a queue type from environment or default.
 fn get_poller_count_for_queue(queue_type: QueueType) -> usize {
-    ServerConfig::get_sqs_poller_count(queue_type.sqs_env_key(), queue_type.default_poller_count())
+    let configured = ServerConfig::get_sqs_poller_count(
+        queue_type.sqs_env_key(),
+        queue_type.default_poller_count(),
+    );
+    if configured == 0 {
+        warn!(
+            queue_type = ?queue_type,
+            "Configured poller count is 0; clamping to 1"
+        );
+        1
+    } else {
+        configured
+    }
 }
 
 /// Gets the concurrency limit for a queue type from environment.
