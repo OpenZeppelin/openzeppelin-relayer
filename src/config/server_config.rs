@@ -2063,4 +2063,104 @@ mod tests {
             env::remove_var("API_KEY");
         }
     }
+
+    mod get_sqs_wait_time_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS");
+            let result = ServerConfig::get_sqs_wait_time("TEST_QUEUE", 5);
+            assert_eq!(result, 5, "Should return default when env var is not set");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_parsed_value() {
+            env::set_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS", "10");
+            let result = ServerConfig::get_sqs_wait_time("TEST_QUEUE", 5);
+            assert_eq!(result, 10, "Should return parsed value");
+            env::remove_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_invalid() {
+            env::set_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS", "not_a_number");
+            let result = ServerConfig::get_sqs_wait_time("TEST_QUEUE", 5);
+            assert_eq!(result, 5, "Should return default for non-numeric input");
+            env::remove_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_clamps_to_sqs_maximum_of_20() {
+            env::set_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS", "30");
+            let result = ServerConfig::get_sqs_wait_time("TEST_QUEUE", 5);
+            assert_eq!(result, 20, "Should clamp to SQS maximum of 20 seconds");
+            env::remove_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_allows_zero() {
+            env::set_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS", "0");
+            let result = ServerConfig::get_sqs_wait_time("TEST_QUEUE", 5);
+            assert_eq!(result, 0, "Should allow zero (short polling)");
+            env::remove_var("SQS_TEST_QUEUE_WAIT_TIME_SECONDS");
+        }
+    }
+
+    mod get_sqs_poller_count_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("SQS_TEST_QUEUE_POLLER_COUNT");
+            let result = ServerConfig::get_sqs_poller_count("TEST_QUEUE", 2);
+            assert_eq!(result, 2, "Should return default when env var is not set");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_parsed_value() {
+            env::set_var("SQS_TEST_QUEUE_POLLER_COUNT", "4");
+            let result = ServerConfig::get_sqs_poller_count("TEST_QUEUE", 2);
+            assert_eq!(result, 4, "Should return parsed value");
+            env::remove_var("SQS_TEST_QUEUE_POLLER_COUNT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_invalid() {
+            env::set_var("SQS_TEST_QUEUE_POLLER_COUNT", "not_a_number");
+            let result = ServerConfig::get_sqs_poller_count("TEST_QUEUE", 2);
+            assert_eq!(result, 2, "Should return default for non-numeric input");
+            env::remove_var("SQS_TEST_QUEUE_POLLER_COUNT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_clamps_zero_to_minimum_of_1() {
+            env::set_var("SQS_TEST_QUEUE_POLLER_COUNT", "0");
+            let result = ServerConfig::get_sqs_poller_count("TEST_QUEUE", 2);
+            assert_eq!(result, 1, "Should clamp zero to minimum of 1");
+            env::remove_var("SQS_TEST_QUEUE_POLLER_COUNT");
+        }
+
+        #[test]
+        #[serial]
+        fn test_default_also_clamped_to_minimum_of_1() {
+            env::remove_var("SQS_TEST_QUEUE_POLLER_COUNT");
+            let result = ServerConfig::get_sqs_poller_count("TEST_QUEUE", 0);
+            assert_eq!(
+                result, 1,
+                "Default of 0 should also be clamped to minimum of 1"
+            );
+        }
+    }
 }

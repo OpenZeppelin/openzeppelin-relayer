@@ -1683,4 +1683,146 @@ mod tests {
         assert!(!is_fifo_queue_url(standard));
         assert!(is_fifo_queue_url(fifo));
     }
+
+    // ── get_wait_time_for_queue ──────────────────────────────────────────
+
+    #[test]
+    fn test_get_wait_time_for_queue_returns_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            let wt = get_wait_time_for_queue(qt);
+            assert!(
+                wt <= 20,
+                "{qt:?}: wait time {wt} exceeds SQS maximum of 20s"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_wait_time_for_queue_matches_defaults() {
+        // Without env overrides the helper should return the queue's default
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::TransactionRequest),
+            QueueType::TransactionRequest.default_wait_time_secs()
+        );
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::StatusCheck),
+            QueueType::StatusCheck.default_wait_time_secs()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_wait_time_for_queue_respects_env_override() {
+        // StatusCheck default is 5; override to 12 via the real env var path
+        let env_var = format!(
+            "SQS_{}_WAIT_TIME_SECONDS",
+            QueueType::StatusCheck.sqs_env_key()
+        );
+        std::env::set_var(&env_var, "12");
+        assert_eq!(get_wait_time_for_queue(QueueType::StatusCheck), 12);
+        std::env::remove_var(&env_var);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_wait_time_for_queue_env_override_clamped_to_20() {
+        let env_var = format!(
+            "SQS_{}_WAIT_TIME_SECONDS",
+            QueueType::Notification.sqs_env_key()
+        );
+        std::env::set_var(&env_var, "99");
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::Notification),
+            20,
+            "Should clamp to SQS maximum of 20"
+        );
+        std::env::remove_var(&env_var);
+    }
+
+    // ── get_poller_count_for_queue ───────────────────────────────────────
+
+    #[test]
+    fn test_get_poller_count_for_queue_all_types_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            assert!(
+                get_poller_count_for_queue(qt) >= 1,
+                "{qt:?}: poller count must be at least 1"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_poller_count_for_queue_matches_defaults() {
+        // Without env overrides the helper should return the queue's default (clamped to >= 1)
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::TransactionRequest),
+            QueueType::TransactionRequest.default_poller_count().max(1)
+        );
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::Notification),
+            QueueType::Notification.default_poller_count().max(1)
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_poller_count_for_queue_respects_env_override() {
+        let env_var = format!("SQS_{}_POLLER_COUNT", QueueType::Notification.sqs_env_key());
+        std::env::set_var(&env_var, "5");
+        assert_eq!(get_poller_count_for_queue(QueueType::Notification), 5);
+        std::env::remove_var(&env_var);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_poller_count_for_queue_env_zero_clamped_to_1() {
+        let env_var = format!("SQS_{}_POLLER_COUNT", QueueType::StatusCheck.sqs_env_key());
+        std::env::set_var(&env_var, "0");
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::StatusCheck),
+            1,
+            "Zero poller count from env should be clamped to 1"
+        );
+        std::env::remove_var(&env_var);
+    }
+
+    // ── PollLoopConfig ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_poll_loop_config_clone() {
+        let config = PollLoopConfig {
+            queue_type: QueueType::TransactionRequest,
+            polling_interval: 15,
+            visibility_timeout: 120,
+            handler_timeout: Duration::from_secs(120),
+            max_retries: 3,
+            poller_id: 0,
+            poller_count: 2,
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.polling_interval, 15);
+        assert_eq!(cloned.poller_id, 0);
+        assert_eq!(cloned.poller_count, 2);
+        assert_eq!(cloned.max_retries, 3);
+    }
 }

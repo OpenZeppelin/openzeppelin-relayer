@@ -313,4 +313,90 @@ mod tests {
             assert!(qt.default_concurrency() > 0, "{qt:?} has zero concurrency");
         }
     }
+
+    #[test]
+    fn test_sqs_env_key_nonempty_and_uppercase() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            let key = qt.sqs_env_key();
+            assert!(!key.is_empty(), "{qt:?} has empty sqs_env_key");
+            assert_eq!(
+                key,
+                key.to_uppercase(),
+                "{qt:?} sqs_env_key should be uppercase"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sqs_env_key_unique_per_variant() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        let keys: Vec<&str> = all.iter().map(|qt| qt.sqs_env_key()).collect();
+        let unique: std::collections::HashSet<&str> = keys.iter().copied().collect();
+        assert_eq!(
+            keys.len(),
+            unique.len(),
+            "sqs_env_key must be unique per QueueType variant"
+        );
+    }
+
+    #[test]
+    fn test_default_poller_count_at_least_one() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            assert!(
+                qt.default_poller_count() >= 1,
+                "{qt:?} default_poller_count should be >= 1"
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_wait_time_all_variants_covered() {
+        // Ensure every variant returns a value within SQS bounds [0, 20]
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in &all {
+            let wt = qt.default_wait_time_secs();
+            assert!(
+                wt <= 20,
+                "{qt:?} default_wait_time_secs {wt} exceeds SQS max 20"
+            );
+        }
+    }
 }
