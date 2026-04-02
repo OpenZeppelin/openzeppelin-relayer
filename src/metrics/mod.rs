@@ -8,6 +8,19 @@ use lazy_static::lazy_static;
 use prometheus::{
     CounterVec, Encoder, Gauge, GaugeVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder,
 };
+
+// Stage labels for TRANSACTION_PROCESSING_TIME histogram.
+pub const STAGE_REQUEST_QUEUE_DWELL: &str = "request_queue_dwell";
+pub const STAGE_PREPARE_DURATION: &str = "prepare_duration";
+pub const STAGE_SUBMISSION_QUEUE_DWELL: &str = "submission_queue_dwell";
+pub const STAGE_SUBMIT_DURATION: &str = "submit_duration";
+
+/// Observe a duration on the `TRANSACTION_PROCESSING_TIME` histogram.
+pub fn observe_processing_time(relayer_id: &str, network_type: &str, stage: &str, secs: f64) {
+    TRANSACTION_PROCESSING_TIME
+        .with_label_values(&[relayer_id, network_type, stage])
+        .observe(secs);
+}
 use sysinfo::{Disks, System};
 
 lazy_static! {
@@ -719,5 +732,58 @@ mod property_tests {
                 prop_assert!(label.len() < 1024);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod processing_time_tests {
+    use super::*;
+
+    #[test]
+    fn test_observe_processing_time_records_to_histogram() {
+        let before = TRANSACTION_PROCESSING_TIME
+            .with_label_values(&["test-relayer", "evm", "request_queue_dwell"])
+            .get_sample_count();
+
+        observe_processing_time("test-relayer", "evm", "request_queue_dwell", 1.5);
+
+        let after = TRANSACTION_PROCESSING_TIME
+            .with_label_values(&["test-relayer", "evm", "request_queue_dwell"])
+            .get_sample_count();
+
+        assert_eq!(after, before + 1, "sample count should increase by 1");
+    }
+
+    #[test]
+    fn test_observe_processing_time_accumulates_sum() {
+        let label = "test_sum_stage";
+        let before_sum = TRANSACTION_PROCESSING_TIME
+            .with_label_values(&["test-relayer-sum", "stellar", label])
+            .get_sample_sum();
+
+        observe_processing_time("test-relayer-sum", "stellar", label, 2.0);
+        observe_processing_time("test-relayer-sum", "stellar", label, 3.0);
+
+        let after_sum = TRANSACTION_PROCESSING_TIME
+            .with_label_values(&["test-relayer-sum", "stellar", label])
+            .get_sample_sum();
+
+        let delta = after_sum - before_sum;
+        assert!(
+            (delta - 5.0).abs() < 0.001,
+            "sum should increase by 5.0, got delta {delta}"
+        );
+    }
+
+    #[test]
+    fn test_stage_constants_are_distinct() {
+        let stages = [
+            STAGE_REQUEST_QUEUE_DWELL,
+            STAGE_PREPARE_DURATION,
+            STAGE_SUBMISSION_QUEUE_DWELL,
+            STAGE_SUBMIT_DURATION,
+        ];
+        let unique: std::collections::HashSet<&str> = stages.iter().copied().collect();
+        assert_eq!(stages.len(), unique.len(), "stage constants must be unique");
     }
 }

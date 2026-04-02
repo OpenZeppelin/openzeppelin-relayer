@@ -50,6 +50,19 @@ enum MessageOutcome {
     Retain,
 }
 
+/// Configuration for a single SQS poll loop, bundling parameters that
+/// would otherwise require too many function arguments.
+#[derive(Clone)]
+struct PollLoopConfig {
+    queue_type: QueueType,
+    polling_interval: u64,
+    visibility_timeout: u32,
+    handler_timeout: Duration,
+    max_retries: usize,
+    poller_id: usize,
+    poller_count: usize,
+}
+
 /// Spawns a worker task for a specific SQS queue.
 ///
 /// The worker continuously polls the queue, processes messages, and handles
@@ -68,11 +81,12 @@ pub async fn spawn_worker_for_queue(
     queue_type: QueueType,
     queue_url: String,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
-    mut shutdown_rx: watch::Receiver<bool>,
+    shutdown_rx: watch::Receiver<bool>,
 ) -> Result<WorkerHandle, QueueBackendError> {
     let concurrency = get_concurrency_for_queue(queue_type);
     let max_retries = queue_type.max_retries();
-    let polling_interval = queue_type.polling_interval_secs();
+    let polling_interval = get_wait_time_for_queue(queue_type);
+    let poller_count = get_poller_count_for_queue(queue_type);
     let visibility_timeout = queue_type.visibility_timeout_secs();
     let handler_timeout_secs = handler_timeout_secs(queue_type);
     let handler_timeout = Duration::from_secs(handler_timeout_secs);
@@ -83,253 +97,327 @@ pub async fn spawn_worker_for_queue(
         concurrency = concurrency,
         max_retries = max_retries,
         polling_interval_secs = polling_interval,
+        poller_count = poller_count,
         visibility_timeout_secs = visibility_timeout,
         handler_timeout_secs = handler_timeout_secs,
         "Spawning SQS worker"
     );
 
+    // All pollers share the same semaphore so total concurrency is bounded.
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+
     let handle: JoinHandle<()> = tokio::spawn(async move {
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
-        let mut inflight: JoinSet<Option<String>> = JoinSet::new();
-        let mut consecutive_poll_errors: u32 = 0;
-        let mut pending_deletes: Vec<String> = Vec::new();
+        let mut poller_handles: JoinSet<()> = JoinSet::new();
 
-        loop {
-            // Reap completed tasks and collect receipt handles for batch delete
-            while let Some(result) = inflight.try_join_next() {
-                match result {
-                    Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
-                    Ok(None) => {} // Retained message, no delete needed
-                    Err(e) => {
-                        warn!(
-                            queue_type = ?queue_type,
-                            error = %e,
-                            "In-flight task failed"
-                        );
-                    }
-                }
-            }
-
-            // Flush any accumulated deletes as a batch
-            if !pending_deletes.is_empty() {
-                flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
-                pending_deletes.clear();
-            }
-
-            // Check shutdown before each iteration
-            if *shutdown_rx.borrow() {
-                info!(queue_type = ?queue_type, "Shutdown signal received, stopping SQS worker");
-                break;
-            }
-
-            // Do not poll for more messages than we can process; otherwise
-            // messages sit in-flight waiting for permits.
-            let available_permits = semaphore.available_permits();
-            if available_permits == 0 {
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
-                    _ = shutdown_rx.changed() => {
-                        info!(queue_type = ?queue_type, "Shutdown signal received, stopping SQS worker");
-                        break;
-                    }
-                }
-            }
-
-            let batch_size = available_permits.min(10) as i32;
-
-            // Poll SQS for messages, racing with shutdown signal
-            let messages_result = tokio::select! {
-                result = sqs_client
-                    .receive_message()
-                    .queue_url(&queue_url)
-                    .max_number_of_messages(batch_size) // SQS max is 10
-                    .wait_time_seconds(polling_interval as i32)
-                    .visibility_timeout(visibility_timeout as i32)
-                    .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
-                    .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
-                    .message_attribute_names("target_scheduled_on")
-                    .message_attribute_names("retry_attempt")
-                    .send() => result,
-                _ = shutdown_rx.changed() => {
-                    info!(queue_type = ?queue_type, "Shutdown signal received during SQS poll, stopping worker");
-                    break;
-                }
+        for poller_id in 0..poller_count {
+            let client = sqs_client.clone();
+            let url = queue_url.clone();
+            let state = app_state.clone();
+            let sem = semaphore.clone();
+            let mut rx = shutdown_rx.clone();
+            let config = PollLoopConfig {
+                queue_type,
+                polling_interval,
+                visibility_timeout,
+                handler_timeout,
+                max_retries,
+                poller_id,
+                poller_count,
             };
 
-            match messages_result {
-                Ok(output) => {
-                    if consecutive_poll_errors > 0 {
-                        info!(
-                            queue_type = ?queue_type,
-                            previous_errors = consecutive_poll_errors,
-                            "SQS polling recovered after consecutive errors"
-                        );
-                    }
-                    consecutive_poll_errors = 0;
+            poller_handles.spawn(async move {
+                run_poll_loop(client, url, state, sem, &mut rx, config).await;
+            });
+        }
 
-                    if let Some(messages) = output.messages {
-                        if !messages.is_empty() {
-                            debug!(
-                                queue_type = ?queue_type,
-                                message_count = messages.len(),
-                                "Received messages from SQS"
-                            );
-
-                            // Process messages concurrently (up to semaphore limit)
-                            for message in messages {
-                                let permit = match semaphore.clone().acquire_owned().await {
-                                    Ok(permit) => permit,
-                                    Err(err) => {
-                                        error!(
-                                            queue_type = ?queue_type,
-                                            error = %err,
-                                            "Semaphore closed, stopping SQS worker loop"
-                                        );
-                                        return;
-                                    }
-                                };
-                                let client = sqs_client.clone();
-                                let url = queue_url.clone();
-                                let state = app_state.clone();
-
-                                inflight.spawn(async move {
-                                    let _permit = permit; // always dropped, even on panic
-
-                                    let result = tokio::time::timeout(
-                                        handler_timeout,
-                                        AssertUnwindSafe(process_message(
-                                            client.clone(),
-                                            message,
-                                            queue_type,
-                                            &url,
-                                            state,
-                                            max_retries,
-                                        ))
-                                        .catch_unwind(),
-                                    )
-                                    .await;
-
-                                    match result {
-                                        Ok(Ok(Ok(MessageOutcome::Delete { receipt_handle }))) => {
-                                            Some(receipt_handle)
-                                        }
-                                        Ok(Ok(Ok(MessageOutcome::Retain))) => None,
-                                        Ok(Ok(Err(e))) => {
-                                            error!(
-                                                queue_type = ?queue_type,
-                                                error = %e,
-                                                "Failed to process message"
-                                            );
-                                            None
-                                        }
-                                        Ok(Err(panic_info)) => {
-                                            let msg = panic_info
-                                                .downcast_ref::<String>()
-                                                .map(|s| s.as_str())
-                                                .or_else(|| {
-                                                    panic_info.downcast_ref::<&str>().copied()
-                                                })
-                                                .unwrap_or("unknown panic");
-                                            error!(
-                                                queue_type = ?queue_type,
-                                                panic = %msg,
-                                                "Message handler panicked"
-                                            );
-                                            None
-                                        }
-                                        Err(_) => {
-                                            error!(
-                                                queue_type = ?queue_type,
-                                                timeout_secs = handler_timeout.as_secs(),
-                                                "Message handler timed out; message will be retried after visibility timeout"
-                                            );
-                                            None
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    consecutive_poll_errors = consecutive_poll_errors.saturating_add(1);
-                    let backoff_secs = poll_error_backoff_secs(consecutive_poll_errors);
-                    let (error_kind, error_code, error_message) = match &e {
-                        SdkError::ServiceError(ctx) => {
-                            ("service", ctx.err().code(), ctx.err().message())
-                        }
-                        SdkError::DispatchFailure(_) => ("dispatch", None, None),
-                        SdkError::ResponseError(_) => ("response", None, None),
-                        SdkError::TimeoutError(_) => ("timeout", None, None),
-                        _ => ("other", None, None),
-                    };
-                    error!(
-                        queue_type = ?queue_type,
-                        error_kind = error_kind,
-                        error_code = error_code.unwrap_or("unknown"),
-                        error_message = error_message.unwrap_or("n/a"),
-                        error = %e,
-                        error_debug = ?e,
-                        consecutive_errors = consecutive_poll_errors,
-                        backoff_secs = backoff_secs,
-                        "Failed to receive messages from SQS, backing off"
-                    );
-                    tokio::select! {
-                        _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
-                        _ = shutdown_rx.changed() => {
-                            info!(queue_type = ?queue_type, "Shutdown signal received during backoff, stopping worker");
-                            break;
-                        }
-                    }
-                }
+        // Wait for all pollers to finish (they exit on shutdown signal)
+        while let Some(join_result) = poller_handles.join_next().await {
+            if let Err(err) = join_result {
+                error!(
+                    queue_type = ?queue_type,
+                    error = %err,
+                    "SQS poller task terminated unexpectedly"
+                );
             }
         }
-
-        // Drain in-flight tasks before shutdown, collecting final deletes
-        if !inflight.is_empty() {
-            info!(
-                queue_type = ?queue_type,
-                count = inflight.len(),
-                "Draining in-flight tasks before shutdown"
-            );
-            match tokio::time::timeout(Duration::from_secs(30), async {
-                while let Some(result) = inflight.join_next().await {
-                    match result {
-                        Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
-                        Ok(None) => {}
-                        Err(e) => {
-                            warn!(
-                                queue_type = ?queue_type,
-                                error = %e,
-                                "In-flight task failed during drain"
-                            );
-                        }
-                    }
-                }
-            })
-            .await
-            {
-                Ok(()) => info!(queue_type = ?queue_type, "All in-flight tasks drained"),
-                Err(_) => {
-                    warn!(
-                        queue_type = ?queue_type,
-                        remaining = inflight.len(),
-                        "Drain timeout, abandoning remaining tasks"
-                    );
-                    inflight.abort_all();
-                }
-            }
-        }
-
-        // Flush any remaining deletes accumulated during drain
-        if !pending_deletes.is_empty() {
-            flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
-        }
-
         info!(queue_type = ?queue_type, "SQS worker stopped");
     });
 
     Ok(WorkerHandle::Tokio(handle))
+}
+
+/// Runs a single SQS poll loop. Multiple instances may share the same semaphore
+/// to increase pickup smoothness without exceeding handler concurrency limits.
+async fn run_poll_loop(
+    sqs_client: aws_sdk_sqs::Client,
+    queue_url: String,
+    app_state: Arc<ThinData<crate::models::DefaultAppState>>,
+    semaphore: Arc<tokio::sync::Semaphore>,
+    shutdown_rx: &mut watch::Receiver<bool>,
+    config: PollLoopConfig,
+) {
+    let PollLoopConfig {
+        queue_type,
+        polling_interval,
+        visibility_timeout,
+        handler_timeout,
+        max_retries,
+        poller_id,
+        poller_count,
+    } = config;
+    let mut inflight: JoinSet<Option<String>> = JoinSet::new();
+    let mut consecutive_poll_errors: u32 = 0;
+    let mut pending_deletes: Vec<String> = Vec::new();
+
+    loop {
+        // Reap completed tasks and collect receipt handles for batch delete
+        while let Some(result) = inflight.try_join_next() {
+            match result {
+                Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
+                Ok(None) => {} // Retained message, no delete needed
+                Err(e) => {
+                    warn!(
+                        queue_type = ?queue_type,
+                        poller_id = poller_id,
+                        error = %e,
+                        "In-flight task failed"
+                    );
+                }
+            }
+        }
+
+        // Flush any accumulated deletes as a batch
+        if !pending_deletes.is_empty() {
+            flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
+            pending_deletes.clear();
+        }
+
+        // Check shutdown before each iteration
+        if *shutdown_rx.borrow() {
+            info!(queue_type = ?queue_type, poller_id = poller_id, "Shutdown signal received, stopping SQS poller");
+            break;
+        }
+
+        // Distribute available permits fairly across pollers to prevent
+        // collective overfetch. Each poller gets floor(available / N)
+        // messages, and the first (available % N) pollers (by poller_id)
+        // each get one extra from the remainder. This ensures:
+        // - No stall: at least one poller polls when any permits exist
+        // - Bounded overfetch: at most poller_count extra from racing
+        let available_permits = semaphore.available_permits();
+        let base_share = available_permits / poller_count;
+        let remainder = available_permits % poller_count;
+        let my_share = base_share + usize::from(poller_id < remainder);
+        if my_share == 0 {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
+                _ = shutdown_rx.changed() => {
+                    info!(queue_type = ?queue_type, poller_id = poller_id, "Shutdown signal received, stopping SQS poller");
+                    break;
+                }
+            }
+        }
+
+        // SQS MaxNumberOfMessages must be 1-10.
+        let batch_size = my_share.min(10) as i32;
+
+        // Poll SQS for messages, racing with shutdown signal
+        let messages_result = tokio::select! {
+            result = sqs_client
+                .receive_message()
+                .queue_url(&queue_url)
+                .max_number_of_messages(batch_size) // SQS max is 10
+                .wait_time_seconds(polling_interval as i32)
+                .visibility_timeout(visibility_timeout as i32)
+                .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
+                .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+                .message_attribute_names("target_scheduled_on")
+                .message_attribute_names("retry_attempt")
+                .send() => result,
+            _ = shutdown_rx.changed() => {
+                info!(queue_type = ?queue_type, poller_id = poller_id, "Shutdown signal received during SQS poll, stopping poller");
+                break;
+            }
+        };
+
+        match messages_result {
+            Ok(output) => {
+                if consecutive_poll_errors > 0 {
+                    info!(
+                        queue_type = ?queue_type,
+                        poller_id = poller_id,
+                        previous_errors = consecutive_poll_errors,
+                        "SQS polling recovered after consecutive errors"
+                    );
+                }
+                consecutive_poll_errors = 0;
+
+                if let Some(messages) = output.messages {
+                    if !messages.is_empty() {
+                        debug!(
+                            queue_type = ?queue_type,
+                            poller_id = poller_id,
+                            message_count = messages.len(),
+                            "Received messages from SQS"
+                        );
+
+                        // Process messages concurrently (up to semaphore limit)
+                        for message in messages {
+                            let permit = match semaphore.clone().acquire_owned().await {
+                                Ok(permit) => permit,
+                                Err(err) => {
+                                    error!(
+                                        queue_type = ?queue_type,
+                                        poller_id = poller_id,
+                                        error = %err,
+                                        "Semaphore closed, stopping SQS poller loop"
+                                    );
+                                    return;
+                                }
+                            };
+                            let client = sqs_client.clone();
+                            let url = queue_url.clone();
+                            let state = app_state.clone();
+
+                            inflight.spawn(async move {
+                                let _permit = permit; // always dropped, even on panic
+
+                                let result = tokio::time::timeout(
+                                    handler_timeout,
+                                    AssertUnwindSafe(process_message(
+                                        client.clone(),
+                                        message,
+                                        queue_type,
+                                        &url,
+                                        state,
+                                        max_retries,
+                                    ))
+                                    .catch_unwind(),
+                                )
+                                .await;
+
+                                match result {
+                                    Ok(Ok(Ok(MessageOutcome::Delete { receipt_handle }))) => {
+                                        Some(receipt_handle)
+                                    }
+                                    Ok(Ok(Ok(MessageOutcome::Retain))) => None,
+                                    Ok(Ok(Err(e))) => {
+                                        error!(
+                                            queue_type = ?queue_type,
+                                            error = %e,
+                                            "Failed to process message"
+                                        );
+                                        None
+                                    }
+                                    Ok(Err(panic_info)) => {
+                                        let msg = panic_info
+                                            .downcast_ref::<String>()
+                                            .map(|s| s.as_str())
+                                            .or_else(|| {
+                                                panic_info.downcast_ref::<&str>().copied()
+                                            })
+                                            .unwrap_or("unknown panic");
+                                        error!(
+                                            queue_type = ?queue_type,
+                                            panic = %msg,
+                                            "Message handler panicked"
+                                        );
+                                        None
+                                    }
+                                    Err(_) => {
+                                        error!(
+                                            queue_type = ?queue_type,
+                                            timeout_secs = handler_timeout.as_secs(),
+                                            "Message handler timed out; message will be retried after visibility timeout"
+                                        );
+                                        None
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                consecutive_poll_errors = consecutive_poll_errors.saturating_add(1);
+                let backoff_secs = poll_error_backoff_secs(consecutive_poll_errors);
+                let (error_kind, error_code, error_message) = match &e {
+                    SdkError::ServiceError(ctx) => {
+                        ("service", ctx.err().code(), ctx.err().message())
+                    }
+                    SdkError::DispatchFailure(_) => ("dispatch", None, None),
+                    SdkError::ResponseError(_) => ("response", None, None),
+                    SdkError::TimeoutError(_) => ("timeout", None, None),
+                    _ => ("other", None, None),
+                };
+                error!(
+                    queue_type = ?queue_type,
+                    poller_id = poller_id,
+                    error_kind = error_kind,
+                    error_code = error_code.unwrap_or("unknown"),
+                    error_message = error_message.unwrap_or("n/a"),
+                    error = %e,
+                    error_debug = ?e,
+                    consecutive_errors = consecutive_poll_errors,
+                    backoff_secs = backoff_secs,
+                    "Failed to receive messages from SQS, backing off"
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(backoff_secs)) => {}
+                    _ = shutdown_rx.changed() => {
+                        info!(queue_type = ?queue_type, poller_id = poller_id, "Shutdown signal received during backoff, stopping poller");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Drain in-flight tasks before shutdown, collecting final deletes
+    if !inflight.is_empty() {
+        info!(
+            queue_type = ?queue_type,
+            poller_id = poller_id,
+            count = inflight.len(),
+            "Draining in-flight tasks before shutdown"
+        );
+        match tokio::time::timeout(Duration::from_secs(30), async {
+            while let Some(result) = inflight.join_next().await {
+                match result {
+                    Ok(Some(receipt_handle)) => pending_deletes.push(receipt_handle),
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(
+                            queue_type = ?queue_type,
+                            poller_id = poller_id,
+                            error = %e,
+                            "In-flight task failed during drain"
+                        );
+                    }
+                }
+            }
+        })
+        .await
+        {
+            Ok(()) => {
+                info!(queue_type = ?queue_type, poller_id = poller_id, "All in-flight tasks drained")
+            }
+            Err(_) => {
+                warn!(
+                    queue_type = ?queue_type,
+                    poller_id = poller_id,
+                    remaining = inflight.len(),
+                    "Drain timeout, abandoning remaining tasks"
+                );
+                inflight.abort_all();
+            }
+        }
+    }
+
+    // Flush any remaining deletes accumulated during drain
+    if !pending_deletes.is_empty() {
+        flush_delete_batch(&sqs_client, &queue_url, &pending_deletes, queue_type).await;
+    }
 }
 
 /// Processes a single SQS message.
@@ -748,6 +836,31 @@ fn compute_status_retry_delay(body: &str, attempt: usize) -> i32 {
         .and_then(|j| j.data.network_type);
 
     crate::queues::retry_config::status_check_retry_delay_secs(network_type, attempt)
+}
+
+/// Gets the SQS long-poll wait time for a queue type from environment or default.
+fn get_wait_time_for_queue(queue_type: QueueType) -> u64 {
+    ServerConfig::get_sqs_wait_time(
+        queue_type.sqs_env_key(),
+        queue_type.default_wait_time_secs(),
+    )
+}
+
+/// Gets the number of poll loops to run for a queue type from environment or default.
+fn get_poller_count_for_queue(queue_type: QueueType) -> usize {
+    let configured = ServerConfig::get_sqs_poller_count(
+        queue_type.sqs_env_key(),
+        queue_type.default_poller_count(),
+    );
+    if configured == 0 {
+        warn!(
+            queue_type = ?queue_type,
+            "Configured poller count is 0; clamping to 1"
+        );
+        1
+    } else {
+        configured
+    }
 }
 
 /// Gets the concurrency limit for a queue type from environment.
@@ -1569,5 +1682,147 @@ mod tests {
 
         assert!(!is_fifo_queue_url(standard));
         assert!(is_fifo_queue_url(fifo));
+    }
+
+    // ── get_wait_time_for_queue ──────────────────────────────────────────
+
+    #[test]
+    fn test_get_wait_time_for_queue_returns_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            let wt = get_wait_time_for_queue(qt);
+            assert!(
+                wt <= 20,
+                "{qt:?}: wait time {wt} exceeds SQS maximum of 20s"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_wait_time_for_queue_matches_defaults() {
+        // Without env overrides the helper should return the queue's default
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::TransactionRequest),
+            QueueType::TransactionRequest.default_wait_time_secs()
+        );
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::StatusCheck),
+            QueueType::StatusCheck.default_wait_time_secs()
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_wait_time_for_queue_respects_env_override() {
+        // StatusCheck default is 5; override to 12 via the real env var path
+        let env_var = format!(
+            "SQS_{}_WAIT_TIME_SECONDS",
+            QueueType::StatusCheck.sqs_env_key()
+        );
+        std::env::set_var(&env_var, "12");
+        assert_eq!(get_wait_time_for_queue(QueueType::StatusCheck), 12);
+        std::env::remove_var(&env_var);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_wait_time_for_queue_env_override_clamped_to_20() {
+        let env_var = format!(
+            "SQS_{}_WAIT_TIME_SECONDS",
+            QueueType::Notification.sqs_env_key()
+        );
+        std::env::set_var(&env_var, "99");
+        assert_eq!(
+            get_wait_time_for_queue(QueueType::Notification),
+            20,
+            "Should clamp to SQS maximum of 20"
+        );
+        std::env::remove_var(&env_var);
+    }
+
+    // ── get_poller_count_for_queue ───────────────────────────────────────
+
+    #[test]
+    fn test_get_poller_count_for_queue_all_types_positive() {
+        let all = [
+            QueueType::TransactionRequest,
+            QueueType::TransactionSubmission,
+            QueueType::StatusCheck,
+            QueueType::StatusCheckEvm,
+            QueueType::StatusCheckStellar,
+            QueueType::Notification,
+            QueueType::TokenSwapRequest,
+            QueueType::RelayerHealthCheck,
+        ];
+        for qt in all {
+            assert!(
+                get_poller_count_for_queue(qt) >= 1,
+                "{qt:?}: poller count must be at least 1"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_poller_count_for_queue_matches_defaults() {
+        // Without env overrides the helper should return the queue's default (clamped to >= 1)
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::TransactionRequest),
+            QueueType::TransactionRequest.default_poller_count().max(1)
+        );
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::Notification),
+            QueueType::Notification.default_poller_count().max(1)
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_poller_count_for_queue_respects_env_override() {
+        let env_var = format!("SQS_{}_POLLER_COUNT", QueueType::Notification.sqs_env_key());
+        std::env::set_var(&env_var, "5");
+        assert_eq!(get_poller_count_for_queue(QueueType::Notification), 5);
+        std::env::remove_var(&env_var);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_get_poller_count_for_queue_env_zero_clamped_to_1() {
+        let env_var = format!("SQS_{}_POLLER_COUNT", QueueType::StatusCheck.sqs_env_key());
+        std::env::set_var(&env_var, "0");
+        assert_eq!(
+            get_poller_count_for_queue(QueueType::StatusCheck),
+            1,
+            "Zero poller count from env should be clamped to 1"
+        );
+        std::env::remove_var(&env_var);
+    }
+
+    // ── PollLoopConfig ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_poll_loop_config_clone() {
+        let config = PollLoopConfig {
+            queue_type: QueueType::TransactionRequest,
+            polling_interval: 15,
+            visibility_timeout: 120,
+            handler_timeout: Duration::from_secs(120),
+            max_retries: 3,
+            poller_id: 0,
+            poller_count: 2,
+        };
+        let cloned = config.clone();
+        assert_eq!(cloned.polling_interval, 15);
+        assert_eq!(cloned.poller_id, 0);
+        assert_eq!(cloned.poller_count, 2);
+        assert_eq!(cloned.max_retries, 3);
     }
 }
