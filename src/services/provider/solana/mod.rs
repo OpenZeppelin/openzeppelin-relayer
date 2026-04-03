@@ -35,9 +35,14 @@ use spl_token_interface::state::Mint;
 use std::{str::FromStr, sync::Arc, time::Duration};
 use thiserror::Error;
 
+use once_cell::sync::Lazy;
+
 use crate::{
     models::{RpcConfig, SolanaTransactionStatus},
-    services::provider::{retry_rpc_call, should_mark_provider_failed_by_status_code},
+    services::{
+        client_cache::SyncClientCache,
+        provider::{retry_rpc_call, should_mark_provider_failed_by_status_code},
+    },
 };
 
 use super::ProviderError;
@@ -47,6 +52,16 @@ use super::{
 };
 
 use crate::utils::validate_safe_url;
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct SolanaRpcClientKey {
+    url: String,
+    timeout_ms: u128,
+    commitment: CommitmentConfig,
+}
+
+static SOLANA_RPC_CLIENT_CACHE: Lazy<SyncClientCache<SolanaRpcClientKey, RpcClient>> =
+    Lazy::new(SyncClientCache::new);
 
 /// Utility function to match error patterns by normalizing both strings.
 /// Removes spaces and converts to lowercase for flexible matching.
@@ -602,7 +617,6 @@ impl SolanaProvider {
     /// which requires adding `solana-rpc-client` as a direct dependency.
     /// The URL security validation provides the primary SSRF defense for Solana.
     fn initialize_provider(&self, url: &str) -> Result<Arc<RpcClient>, SolanaProviderError> {
-        // Layer 2 validation: Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
         let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
         validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
@@ -611,17 +625,23 @@ impl SolanaProvider {
             ))
         })?;
 
-        let rpc_url: Url = url.parse().map_err(|e| {
-            SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
-        })?;
-
-        let client = RpcClient::new_with_timeout_and_commitment(
-            rpc_url.to_string(),
-            self.timeout_seconds,
-            self.commitment,
-        );
-
-        Ok(Arc::new(client))
+        let timeout = self.timeout_seconds;
+        let commitment = self.commitment;
+        let cache_key = SolanaRpcClientKey {
+            url: url.to_string(),
+            timeout_ms: timeout.as_millis(),
+            commitment,
+        };
+        SOLANA_RPC_CLIENT_CACHE.get_or_try_init(cache_key, || {
+            let rpc_url: Url = url.parse().map_err(|e| {
+                SolanaProviderError::NetworkConfiguration(format!("Invalid URL format: {e}"))
+            })?;
+            Ok(RpcClient::new_with_timeout_and_commitment(
+                rpc_url.to_string(),
+                timeout,
+                commitment,
+            ))
+        })
     }
 
     /// Retry helper for Solana RPC calls

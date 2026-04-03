@@ -26,14 +26,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use mockall::automock;
 
-use crate::constants::{
-    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
-    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
-    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
-    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
-    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
-};
+use once_cell::sync::Lazy;
+
 use crate::models::{JsonRpcId, RpcConfig};
+use crate::services::client_cache::SyncClientCache;
 use crate::services::provider::is_retriable_error;
 use crate::services::provider::retry::retry_rpc_call;
 use crate::services::provider::rpc_selector::RpcSelector;
@@ -42,7 +38,7 @@ use crate::services::provider::RetryConfig;
 use crate::services::provider::{ProviderConfig, ProviderError};
 // Reqwest client is used for raw JSON-RPC HTTP requests. Alias to avoid name clash with the
 // soroban `Client` type imported above.
-use crate::utils::{create_secure_redirect_policy, validate_safe_url};
+use crate::utils::validate_safe_url;
 use reqwest::Client as ReqwestClient;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +55,11 @@ fn generate_unique_rpc_id() -> u64 {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
+
+/// Cache for soroban_rs Stellar RPC clients, keyed by URL.
+/// Avoids recreating jsonrpsee HTTP clients on every retry attempt.
+static STELLAR_RPC_CLIENT_CACHE: Lazy<SyncClientCache<String, Client>> =
+    Lazy::new(SyncClientCache::new);
 
 /// Categorizes a Stellar client error into an appropriate `ProviderError` variant.
 ///
@@ -407,48 +408,35 @@ impl StellarProvider {
         self.selector.get_configs()
     }
 
-    /// Initialize a Stellar client for a given URL
-    fn initialize_provider(&self, url: &str) -> Result<Client, ProviderError> {
-        // Layer 2 validation: Re-validate URL security as a safety net
+    /// Get or create a cached Stellar RPC client for a given URL.
+    /// Reuses clients across retry attempts and provider instances.
+    fn initialize_provider(&self, url: &str) -> Result<Arc<Client>, ProviderError> {
         let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
         let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
         validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
             ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
         })?;
 
-        Client::new(url).map_err(|e| {
-            ProviderError::NetworkConfiguration(format!(
-                "Failed to create Stellar RPC client: {e} - URL: '{url}'"
-            ))
+        STELLAR_RPC_CLIENT_CACHE.get_or_try_init(url.to_string(), || {
+            Client::new(url).map_err(|e| {
+                let safe_url = crate::utils::mask_url(url);
+                ProviderError::NetworkConfiguration(format!(
+                    "Failed to create Stellar RPC client: {e} - URL: '{safe_url}'"
+                ))
+            })
         })
     }
 
-    /// Initialize a reqwest client for raw HTTP JSON-RPC calls.
-    ///
-    /// This centralizes client creation so we can configure timeouts and other options in one place.
+    /// Get the shared reqwest client for raw HTTP JSON-RPC calls, after
+    /// validating the URL as an SSRF safety net.
     fn initialize_raw_provider(&self, url: &str) -> Result<ReqwestClient, ProviderError> {
-        ReqwestClient::builder()
-            .timeout(self.timeout_seconds)
-            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
-            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
-            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
-            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
-            .http2_keep_alive_interval(Some(Duration::from_secs(
-                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
-            )))
-            .http2_keep_alive_timeout(Duration::from_secs(
-                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
-            ))
-            .use_rustls_tls()
-            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
-            // while preventing SSRF via redirect chains to different hosts
-            .redirect(create_secure_redirect_policy())
-            .build()
-            .map_err(|e| {
-                ProviderError::NetworkConfiguration(format!(
-                    "Failed to create HTTP client for raw RPC: {e} - URL: '{url}'"
-                ))
-            })
+        let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
+        let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
+        validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("RPC URL security validation failed: {e}"))
+        })?;
+
+        super::get_shared_rpc_http_client()
     }
 
     /// Helper method to retry RPC calls with exponential backoff
@@ -458,7 +446,7 @@ impl StellarProvider {
         operation: F,
     ) -> Result<T, ProviderError>
     where
-        F: Fn(Client) -> Fut,
+        F: Fn(Arc<Client>) -> Fut,
         Fut: std::future::Future<Output = Result<T, ProviderError>>,
     {
         let provider_url_raw = match self.selector.get_current_url() {

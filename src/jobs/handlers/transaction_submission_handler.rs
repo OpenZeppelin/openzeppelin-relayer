@@ -6,6 +6,7 @@
 //! - Updates transaction status after submission
 //! - Enqueues status monitoring jobs
 use actix_web::web::ThinData;
+use chrono::Utc;
 use eyre::Result;
 use tracing::{debug, info, instrument};
 
@@ -16,6 +17,7 @@ use crate::{
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
     jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    metrics::{observe_processing_time, STAGE_SUBMISSION_QUEUE_DWELL, STAGE_SUBMIT_DURATION},
     models::DefaultAppState,
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
@@ -51,7 +53,8 @@ pub async fn transaction_submission_handler(
     );
 
     let command = job.data.command.clone();
-    let result = handle_request(job.data, &state).await;
+    let job_timestamp = job.timestamp.clone();
+    let result = handle_request(job.data, &state, &job_timestamp).await;
 
     // Handle result with command-specific retry logic
     handle_result(
@@ -75,6 +78,7 @@ fn get_max_retries(command: &TransactionCommand) -> usize {
 async fn handle_request(
     status_request: TransactionSend,
     state: &ThinData<DefaultAppState>,
+    job_timestamp: &str,
 ) -> Result<()> {
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), state).await?;
@@ -84,7 +88,23 @@ async fn handle_request(
     // Capture transaction info for completion log
     let tx_id = transaction.id.clone();
     let relayer_id = transaction.relayer_id.clone();
+    let network_type = transaction.network_type.to_string();
     let command = status_request.command.clone();
+
+    // Measure submission queue dwell time using the Job's creation timestamp.
+    // This is the time between when the submit job was enqueued (after prepare)
+    // and when this handler starts processing it.
+    if let Ok(enqueued_epoch) = job_timestamp.parse::<i64>() {
+        let now_ms = Utc::now().timestamp_millis();
+        let enqueued_ms = enqueued_epoch * 1000; // Job.timestamp is whole seconds
+        let dwell_secs = (now_ms - enqueued_ms).max(0) as f64 / 1000.0;
+        observe_processing_time(
+            &relayer_id,
+            &network_type,
+            STAGE_SUBMISSION_QUEUE_DWELL,
+            dwell_secs,
+        );
+    }
 
     debug!(
         tx_id = %transaction.id,
@@ -93,25 +113,25 @@ async fn handle_request(
         "loaded transaction for submission"
     );
 
+    let submit_start = std::time::Instant::now();
+
     match status_request.command {
         TransactionCommand::Submit => {
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Cancel { reason } => {
             info!(
-                tx_id = %transaction.id,
-                relayer_id = %transaction.relayer_id,
-                status = ?transaction.status,
-                reason = %reason,
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                status_reason = %reason,
                 "cancelling transaction"
             );
             relayer_transaction.submit_transaction(transaction).await?;
         }
         TransactionCommand::Resubmit => {
             debug!(
-                tx_id = %transaction.id,
-                relayer_id = %transaction.relayer_id,
-                status = ?transaction.status,
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
                 "resubmitting transaction with updated parameters"
             );
             relayer_transaction
@@ -120,19 +140,27 @@ async fn handle_request(
         }
         TransactionCommand::Resend => {
             debug!(
-                tx_id = %transaction.id,
-                relayer_id = %transaction.relayer_id,
-                status = ?transaction.status,
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
                 "resending transaction"
             );
             relayer_transaction.submit_transaction(transaction).await?;
         }
     };
 
+    let submit_duration = submit_start.elapsed().as_secs_f64();
+    observe_processing_time(
+        &relayer_id,
+        &network_type,
+        STAGE_SUBMIT_DURATION,
+        submit_duration,
+    );
+
     debug!(
         tx_id = %tx_id,
         relayer_id = %relayer_id,
         command = ?command,
+        submit_duration_ms = submit_start.elapsed().as_millis(),
         "transaction submission completed"
     );
 

@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 use super::{is_final_state, StellarRelayerTransaction};
 use crate::constants::{
     get_stellar_max_stuck_transaction_lifetime, STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
-    STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+    STELLAR_RESUBMIT_GROWTH_FACTOR, STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
 };
 use crate::domain::transaction::stellar::prepare::common::send_submit_transaction_job;
 use crate::domain::transaction::stellar::utils::{
@@ -111,6 +111,23 @@ where
                     error = ?error,
                     "status check encountered error"
                 );
+
+                // CAS conflict means another writer already mutated this tx.
+                // Reload the latest state and return Ok so the status handler
+                // sees a non-final status and schedules the next poll cycle via
+                // HandlerError::Retry — no work is lost, just deferred.
+                if error.is_concurrent_update_conflict() {
+                    info!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "concurrent transaction update detected during status handling, reloading latest state"
+                    );
+                    return self
+                        .transaction_repository()
+                        .get_by_id(tx.id.clone())
+                        .await
+                        .map_err(TransactionError::from);
+                }
 
                 // Handle different error types appropriately
                 match error {
@@ -434,14 +451,15 @@ where
             return result;
         }
 
-        // Resubmit with exponential backoff based on total transaction age.
+        // Resubmit with backoff based on total transaction age.
         // Uses the same backoff logic as the Submitted state handler:
-        // 15s → 30s → 60s → 120s → 180s (capped).
+        // 10s → 15s → 22s → 33s → 50s → 75s → 113s → 120s (capped).
         let total_age = get_age_since_created(&tx)?;
         if let Some(backoff_interval) = compute_resubmit_backoff_interval(
             total_age,
             STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
             STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+            STELLAR_RESUBMIT_GROWTH_FACTOR,
         ) {
             let age_since_last_submit = get_age_since_sent_or_created(&tx)?;
             if age_since_last_submit > backoff_interval {
@@ -582,13 +600,14 @@ where
                     return result;
                 }
 
-                // Resubmit with exponential backoff based on total transaction age.
-                // The backoff interval grows: 15s → 30s → 60s → 120s → 180s (capped).
+                // Resubmit with backoff based on total transaction age.
+                // The backoff interval grows: 10s → 15s → 22s → 33s → 50s → 75s → 113s → 120s (capped).
                 let total_age = get_age_since_created(&tx)?;
                 if let Some(backoff_interval) = compute_resubmit_backoff_interval(
                     total_age,
                     STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS,
                     STELLAR_RESUBMIT_MAX_INTERVAL_SECONDS,
+                    STELLAR_RESUBMIT_GROWTH_FACTOR,
                 ) {
                     let age_since_last_submit = get_age_since_sent_or_created(&tx)?;
                     if age_since_last_submit > backoff_interval {
@@ -1746,6 +1765,80 @@ mod tests {
                 .unwrap()
                 .contains("stuck in Sent status for too long"));
         }
+        #[tokio::test]
+        async fn handle_status_concurrent_update_conflict_reloads_latest_state() {
+            // When status_core returns ConcurrentUpdateConflict, the handler
+            // should reload the latest state via get_by_id and return Ok.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.id = "tx-cas-conflict".to_string();
+            tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            let tx_hash_bytes = [11u8; 32];
+            if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
+                stellar_data.hash = Some(hex::encode(tx_hash_bytes));
+            }
+            tx.status = TransactionStatus::Submitted;
+
+            let expected_stellar_hash = soroban_rs::xdr::Hash(tx_hash_bytes);
+
+            // Provider returns SUCCESS — triggers a partial_update for confirmation
+            mocks
+                .provider
+                .expect_get_transaction()
+                .with(eq(expected_stellar_hash))
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(async { Ok(dummy_get_transaction_response("SUCCESS")) })
+                });
+
+            // partial_update fails with ConcurrentUpdateConflict
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(|_id, _update| {
+                    Err(RepositoryError::ConcurrentUpdateConflict(
+                        "CAS mismatch".to_string(),
+                    ))
+                });
+
+            // After conflict, handler reloads via get_by_id
+            let reloaded_tx = {
+                let mut t = create_test_transaction(&relayer.id);
+                t.id = "tx-cas-conflict".to_string();
+                // Simulate another writer already confirmed it
+                t.status = TransactionStatus::Confirmed;
+                t
+            };
+            let reloaded_clone = reloaded_tx.clone();
+            mocks
+                .tx_repo
+                .expect_get_by_id()
+                .with(eq("tx-cas-conflict".to_string()))
+                .times(1)
+                .returning(move |_| Ok(reloaded_clone.clone()));
+
+            // No notifications or job enqueuing should happen on CAS path
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let result = handler.handle_transaction_status_impl(tx, None).await;
+
+            assert!(result.is_ok(), "CAS conflict should return Ok after reload");
+            let returned_tx = result.unwrap();
+            assert_eq!(returned_tx.id, "tx-cas-conflict");
+            // The reloaded tx reflects what the other writer persisted
+            assert_eq!(returned_tx.status, TransactionStatus::Confirmed);
+        }
     }
 
     mod handle_pending_state_tests {
@@ -2205,9 +2298,9 @@ mod tests {
 
         #[tokio::test]
         async fn test_handle_submitted_state_backoff_resubmits_when_interval_exceeded() {
-            // Transaction created 25s ago, sent_at 21s ago.
-            // At total_age=25s, backoff interval = 15s (base*2^0, since 25/15=1, log2(1)=0).
-            // age_since_last_submit=21s > 15s → should resubmit.
+            // Transaction created 25s ago, sent_at 25s ago.
+            // At total_age=25s with base=10, factor=1.5: interval = 22s (third tier).
+            // age_since_last_submit=25s > 22s → should resubmit.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
@@ -2215,7 +2308,7 @@ mod tests {
             tx.id = "tx-submitted-backoff-resubmit".to_string();
             tx.status = TransactionStatus::Submitted;
             tx.created_at = (Utc::now() - Duration::seconds(25)).to_rfc3339();
-            tx.sent_at = Some((Utc::now() - Duration::seconds(21)).to_rfc3339());
+            tx.sent_at = Some((Utc::now() - Duration::seconds(25)).to_rfc3339());
             let tx_hash_bytes = [12u8; 32];
             if let NetworkTransactionData::Stellar(ref mut stellar_data) = tx.network_data {
                 stellar_data.hash = Some(hex::encode(tx_hash_bytes));
@@ -2232,7 +2325,7 @@ mod tests {
                     Box::pin(async { Ok(dummy_get_transaction_response("PENDING")) })
                 });
 
-            // Should resubmit (21s > 15s backoff interval)
+            // Should resubmit (25s > 22s backoff interval)
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -2250,8 +2343,8 @@ mod tests {
         #[tokio::test]
         async fn test_handle_submitted_state_recent_sent_at_prevents_resubmit() {
             // Transaction created 60s ago (old), but sent_at only 5s ago (recent resubmission).
-            // At total_age=60s, backoff interval = 60s (base*2^2, since 60/15=4, log2(4)=2).
-            // age_since_last_submit=5s < 60s → should NOT resubmit.
+            // At total_age=60s with base=10, factor=1.5: interval = 50s (fifth tier).
+            // age_since_last_submit=5s < 50s → should NOT resubmit.
             // This verifies that sent_at being updated on resubmission correctly resets the clock.
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();

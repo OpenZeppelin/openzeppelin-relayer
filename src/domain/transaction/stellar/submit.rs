@@ -125,7 +125,6 @@ where
                         "transaction already submitted (DUPLICATE status)"
                     );
                 }
-
                 let tx_hash_hex = response.hash.clone();
                 let updated_stellar_data = stellar_data.with_hash(tx_hash_hex.clone());
 
@@ -161,16 +160,24 @@ where
             }
             "TRY_AGAIN_LATER" => {
                 // Network is temporarily congested — the transaction is valid but the
-                // node's queue is full. Update sent_at so the status checker's backoff
-                // gate measures time since this attempt, then return Ok to keep the
-                // transaction alive. The status checker will handle retries:
+                // node's queue is full. Atomically update sent_at and increment
+                // try_again_later_retries so the status checker's backoff gate measures
+                // time since this attempt. Return Ok to keep the transaction alive.
+                // The status checker will handle retries:
                 // - Submitted txs: resubmitted with exponential backoff
                 // - Sent txs: re-enqueued via handle_sent_state
-                let mut meta = tx.metadata.clone().unwrap_or_default();
-                meta.try_again_later_retries = meta.try_again_later_retries.saturating_add(1);
+                let updated_tx = self
+                    .transaction_repository()
+                    .record_stellar_try_again_later_retry(tx.id.clone(), Utc::now().to_rfc3339())
+                    .await?;
+
+                let retries = updated_tx
+                    .metadata
+                    .as_ref()
+                    .map_or(0, |m| m.try_again_later_retries);
 
                 // Only push on first encounter (dedup: won't fire on retry 2, 3, etc.)
-                if meta.try_again_later_retries == 1 {
+                if retries == 1 {
                     crate::metrics::STELLAR_TRY_AGAIN_LATER
                         .with_label_values(&[&tx.relayer_id, &tx.status.to_string()])
                         .inc();
@@ -180,18 +187,9 @@ where
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
                     status = ?tx.status,
-                    try_again_later_retries = meta.try_again_later_retries,
+                    try_again_later_retries = retries,
                     "TRY_AGAIN_LATER — status checker will retry"
                 );
-                let update_req = TransactionUpdateRequest {
-                    sent_at: Some(Utc::now().to_rfc3339()),
-                    metadata: Some(meta),
-                    ..Default::default()
-                };
-                let updated_tx = self
-                    .transaction_repository()
-                    .partial_update(tx.id.clone(), update_req)
-                    .await?;
                 Ok(updated_tx)
             }
             "ERROR" => {
@@ -235,14 +233,13 @@ where
                         result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
                         "ERROR with insufficient fee — status checker will retry"
                     );
-                    let update_req = TransactionUpdateRequest {
-                        sent_at: Some(Utc::now().to_rfc3339()),
-                        metadata: Some(meta),
-                        ..Default::default()
-                    };
+                    // Atomically sets `sent_at` and increments Stellar insufficient-fee retries.
                     let updated_tx = self
                         .transaction_repository()
-                        .partial_update(tx.id.clone(), update_req)
+                        .record_stellar_insufficient_fee_retry(
+                            tx.id.clone(),
+                            Utc::now().to_rfc3339(),
+                        )
                         .await?;
                     return Ok(updated_tx);
                 }
@@ -291,6 +288,23 @@ where
             reason = %error_reason,
             "transaction submission failed"
         );
+
+        // CAS conflict in the submission path only occurs after the RPC
+        // already accepted the transaction (PENDING status update raced).
+        // The on-chain state is valid; reload the latest DB state and return
+        // Ok — the status checker will reconcile on its next poll.
+        if error.is_concurrent_update_conflict() {
+            info!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                "concurrent transaction update detected during submission, reloading latest state"
+            );
+            return self
+                .transaction_repository()
+                .get_by_id(tx_id)
+                .await
+                .map_err(TransactionError::from);
+        }
 
         if is_bad_sequence_error(&error_reason) {
             // For bad sequence errors, sync sequence from chain first
@@ -974,22 +988,20 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at and persist metadata — status should NOT change
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| {
-                    upd.sent_at.is_some()
-                        && upd.status.is_none()
-                        && upd
-                            .metadata
-                            .as_ref()
-                            .is_some_and(|m| m.try_again_later_retries == 1)
-                })
-                .returning(|id, _upd| {
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1028,14 +1040,20 @@ mod tests {
                 });
             submit_mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| upd.sent_at.is_some() && upd.status.is_none())
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
                 .times(1)
-                .returning(|id, upd| {
+                .returning(|id, sent_at| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
-                    tx.sent_at = upd.sent_at.clone();
+                    tx.sent_at = Some(sent_at);
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1102,18 +1120,20 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at so the status checker's
-            // backoff gate measures time since this attempt, not the original submission.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| {
-                    upd.sent_at.is_some() && upd.status.is_none() // status should not change
-                })
-                .returning(|id, _upd| {
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Submitted;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                    });
                     Ok::<_, RepositoryError>(tx)
                 });
 
@@ -1217,25 +1237,24 @@ mod tests {
                     Box::pin(async move { Ok(r) })
                 });
 
-            // partial_update is called to refresh sent_at — status should NOT change
+            // insufficient-fee retry updates sent_at and retry metadata atomically
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| {
-                    upd.sent_at.is_some()
-                        && upd.status.is_none()
-                        && upd
-                            .metadata
-                            .as_ref()
-                            .is_some_and(|metadata| metadata.insufficient_fee_retries == 1)
-                })
-                .returning(|id, upd| {
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
                     let mut tx = create_test_transaction("relayer-1");
                     tx.id = id;
                     tx.status = TransactionStatus::Sent;
-                    tx.metadata = upd.metadata;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 1,
+                        try_again_later_retries: 0,
+                    });
                     Ok::<_, RepositoryError>(tx)
-                });
+                })
+                .times(1);
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
@@ -1399,6 +1418,77 @@ mod tests {
             // Non-fee ERROR still marks as failed
             let failed_tx = res.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_concurrent_update_conflict_reloads_latest_state() {
+            // When partial_update fails with ConcurrentUpdateConflict during submission,
+            // the handler should reload the latest state via get_by_id and return Ok.
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Provider returns PENDING — submission to RPC succeeded
+            let response = create_send_tx_response(
+                "PENDING",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            // partial_update (Submitted) fails with CAS conflict
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Submitted))
+                .times(1)
+                .returning(|_, _| {
+                    Err(RepositoryError::ConcurrentUpdateConflict(
+                        "CAS mismatch".to_string(),
+                    ))
+                });
+
+            // After conflict, handler reloads via get_by_id
+            let reloaded_tx = {
+                let mut t = create_test_transaction(&relayer.id);
+                t.status = TransactionStatus::Submitted;
+                t
+            };
+            let reloaded_clone = reloaded_tx.clone();
+            mocks
+                .tx_repo
+                .expect_get_by_id()
+                .times(1)
+                .returning(move |_| Ok(reloaded_clone.clone()));
+
+            // No failure handling (notifications, next-pending) should occur
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .never();
+            mocks
+                .job_producer
+                .expect_produce_transaction_request_job()
+                .never();
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            assert!(res.is_ok(), "CAS conflict should return Ok after reload");
+            let returned_tx = res.unwrap();
+            // Reloaded state reflects the concurrent writer's update
+            assert_eq!(returned_tx.status, TransactionStatus::Submitted);
         }
     }
 }

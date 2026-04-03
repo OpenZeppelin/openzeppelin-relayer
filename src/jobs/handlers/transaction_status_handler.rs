@@ -13,8 +13,7 @@ use crate::{
     domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{
-        ApiError, DefaultAppState, TransactionMetadata, TransactionRepoModel,
-        TransactionUpdateRequest,
+        ApiError, DefaultAppState, TransactionError, TransactionMetadata, TransactionRepoModel,
     },
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
@@ -70,7 +69,7 @@ pub async fn transaction_status_handler(
 /// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
 /// - If counters are None (early failure) → Skip counter updates
 ///
-/// Counters are stored in transaction metadata, persisted via partial_update.
+/// Counters are stored in transaction metadata, persisted via atomic Lua scripts.
 async fn handle_result<TR>(
     result: Result<TransactionRepoModel>,
     tx_repo: &TR,
@@ -105,19 +104,15 @@ where
                 "transaction not in final state"
             );
 
-            // Use tx.metadata (fresh from handle_transaction_status) instead of the
-            // pre-check snapshot to avoid overwriting retry counters
-            // (e.g. try_again_later_retries, insufficient_fee_retries) that may have
-            // been updated during resubmission.
+            // Use fresh metadata from the transaction (updated during handle_transaction_status)
+            // to decide whether a reset is needed, falling back to the pre-check snapshot.
             let fresh_meta = tx.metadata.clone().or(metadata);
-            if let Some(mut meta) = fresh_meta {
-                if meta.consecutive_failures > 0 || meta.total_failures > 0 {
-                    meta.consecutive_failures = 0;
-                    let update = TransactionUpdateRequest {
-                        metadata: Some(meta),
-                        ..Default::default()
-                    };
-                    if let Err(e) = tx_repo.partial_update(tx_id.to_string(), update).await {
+            if let Some(meta) = fresh_meta {
+                if meta.consecutive_failures > 0 {
+                    if let Err(e) = tx_repo
+                        .reset_status_check_consecutive_failures(tx_id.to_string())
+                        .await
+                    {
                         warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
                     }
                 }
@@ -130,6 +125,17 @@ where
             )))
         }
         Err(e) => {
+            if e.downcast_ref::<TransactionError>()
+                .is_some_and(TransactionError::is_concurrent_update_conflict)
+            {
+                info!(
+                    error = %e,
+                    tx_id = %tx_id,
+                    "status check lost a concurrent update race, completing job without counter changes"
+                );
+                return Ok(());
+            }
+
             // Check if this is a permanent failure that shouldn't retry
             if !should_retry_on_error {
                 info!(
@@ -141,24 +147,20 @@ where
             }
 
             // Transient error - INCREMENT both counters (only if we have metadata)
-            if let Some(mut meta) = metadata {
-                meta.consecutive_failures = meta.consecutive_failures.saturating_add(1);
-                meta.total_failures = meta.total_failures.saturating_add(1);
-
+            if let Some(meta) = metadata {
                 warn!(
                     error = %e,
                     tx_id = %tx_id,
-                    consecutive_failures = meta.consecutive_failures,
-                    total_failures = meta.total_failures,
+                    consecutive_failures = meta.consecutive_failures.saturating_add(1),
+                    total_failures = meta.total_failures.saturating_add(1),
                     "status check failed, incrementing failure counters"
                 );
 
-                // Update counters via transaction repository
-                let update = TransactionUpdateRequest {
-                    metadata: Some(meta),
-                    ..Default::default()
-                };
-                if let Err(update_err) = tx_repo.partial_update(tx_id.to_string(), update).await {
+                // Update counters via atomic transaction repository method
+                if let Err(update_err) = tx_repo
+                    .increment_status_check_failures(tx_id.to_string())
+                    .await
+                {
                     warn!(error = %update_err, tx_id = %tx_id, "failed to update counters");
                 }
             } else {
@@ -304,7 +306,10 @@ async fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{NetworkType, TransactionStatus};
+    use crate::{
+        models::{NetworkType, TransactionStatus},
+        repositories::MockTransactionRepository,
+    };
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -504,6 +509,26 @@ mod tests {
 
     mod handle_request_result_tests {
         use super::*;
+
+        #[tokio::test]
+        async fn test_handle_result_ignores_concurrent_update_conflict() {
+            let tx_repo = MockTransactionRepository::new();
+
+            let result = handle_result(
+                Err(TransactionError::ConcurrentUpdateConflict("tx race".to_string()).into()),
+                &tx_repo,
+                "tx-1",
+                Some(TransactionMetadata {
+                    consecutive_failures: 2,
+                    total_failures: 5,
+                    ..Default::default()
+                }),
+                true,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
 
         #[test]
         fn test_handle_request_result_with_counters() {

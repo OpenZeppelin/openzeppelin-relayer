@@ -69,6 +69,22 @@ This table lists the environment variables and their default values.
 | `AWS_ACCOUNT_ID`                                                   | (none)                   | `<aws account id>`                                                          | Required when `QUEUE_BACKEND=sqs` and `SQS_QUEUE_URL_PREFIX` is not set. Used to construct default SQS queue URLs.                                                                                                                                                                  |
 | `SQS_QUEUE_URL_PREFIX`                                             | (none)                   | `<sqs queue url prefix>`                                                    | Optional override for SQS queue URL prefix (example: `https://sqs.us-east-1.amazonaws.com/123456789012/relayer-`). When set, `AWS_ACCOUNT_ID` is not required.                                                                                                                     |
 | `SQS_QUEUE_TYPE`                                                   | `auto`                   | `auto, standard, fifo`                                                      | SQS queue type. `auto` (default) probes the `transaction-request` queue at startup to detect the type. `standard` and `fifo` skip probing and use the specified type directly.                                                                                                       |
+| `SQS_TRANSACTION_REQUEST_WAIT_TIME_SECONDS`                        | `15`                     | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the transaction request queue. Lower values reduce pickup latency on bursty queues at the cost of more SQS API calls during idle periods. Only applies when `QUEUE_BACKEND=sqs`.                                                                |
+| `SQS_TRANSACTION_SUBMISSION_WAIT_TIME_SECONDS`                     | `15`                     | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the transaction submission queue. Same trade-off as the request queue setting above.                                                                                                                                                             |
+| `SQS_STATUS_CHECK_WAIT_TIME_SECONDS`                               | `5`                      | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the generic status check queue.                                                                                                                                                                                                                  |
+| `SQS_STATUS_CHECK_EVM_WAIT_TIME_SECONDS`                           | `5`                      | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the EVM status check queue.                                                                                                                                                                                                                      |
+| `SQS_STATUS_CHECK_STELLAR_WAIT_TIME_SECONDS`                       | `3`                      | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the Stellar status check queue.                                                                                                                                                                                                                  |
+| `SQS_NOTIFICATION_WAIT_TIME_SECONDS`                               | `20`                     | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the notification queue.                                                                                                                                                                                                                          |
+| `SQS_TOKEN_SWAP_REQUEST_WAIT_TIME_SECONDS`                         | `20`                     | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the token swap request queue.                                                                                                                                                                                                                    |
+| `SQS_RELAYER_HEALTH_CHECK_WAIT_TIME_SECONDS`                       | `20`                     | `0-20`                                                                      | SQS long-poll `WaitTimeSeconds` for the relayer health check queue.                                                                                                                                                                                                                  |
+| `SQS_TRANSACTION_REQUEST_POLLER_COUNT`                              | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the transaction request queue per task. More pollers improve message pickup smoothness on bursty queues. All pollers share the same handler concurrency semaphore.                                                                |
+| `SQS_TRANSACTION_SUBMISSION_POLLER_COUNT`                           | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the transaction submission queue per task.                                                                                                                                                                                       |
+| `SQS_STATUS_CHECK_POLLER_COUNT`                                     | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the generic status check queue per task.                                                                                                                                                                                         |
+| `SQS_STATUS_CHECK_EVM_POLLER_COUNT`                                 | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the EVM status check queue per task.                                                                                                                                                                                             |
+| `SQS_STATUS_CHECK_STELLAR_POLLER_COUNT`                             | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the Stellar status check queue per task.                                                                                                                                                                                         |
+| `SQS_NOTIFICATION_POLLER_COUNT`                                     | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the notification queue per task.                                                                                                                                                                                                 |
+| `SQS_TOKEN_SWAP_REQUEST_POLLER_COUNT`                               | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the token swap request queue per task.                                                                                                                                                                                           |
+| `SQS_RELAYER_HEALTH_CHECK_POLLER_COUNT`                             | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the relayer health check queue per task.                                                                                                                                                                                         |
 | `DISTRIBUTED_MODE`                                                 | `false`                  | `bool` (`true/false`, `1/0`)                                                | Enables Redis-based distributed locks for cron/cleanup tasks in multi-instance deployments, preventing duplicate scheduled execution across nodes.                                                                                                                                    |
 | `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
 | `RPC_TIMEOUT_MS`                                                   | `10000`                  | `<timeout in milliseconds>`                                                 | Sets the maximum time to wait for RPC connections before timing out.                                                                                                                                                                                                                 |
@@ -245,6 +261,40 @@ aws sqs set-queue-attributes \
   --queue-url "https://sqs.us-east-1.amazonaws.com/<ACCOUNT_ID>/relayer-transaction-request" \
   --attributes '{"RedrivePolicy":"{\"deadLetterTargetArn\":\"<DLQ_ARN>\",\"maxReceiveCount\":\"6\"}"}'
 ```
+
+### SQS performance tuning
+
+When running with `QUEUE_BACKEND=sqs`, two configuration dimensions affect message pickup latency:
+
+**Wait time** (`SQS_*_WAIT_TIME_SECONDS`) controls the SQS `WaitTimeSeconds` parameter — how long each `ReceiveMessage` call blocks when the queue is empty. Lower values reduce worst-case pickup delay at the cost of more API calls during idle periods.
+
+**Poller count** (`SQS_*_POLLER_COUNT`) controls how many concurrent `ReceiveMessage` loops run per queue per task. Each task runs one poll loop per queue by default. With multiple relayer tasks (instances), you get one poller per task — but during traffic bursts, messages can still sit visible briefly between poll cycles. Increasing the poller count adds more concurrent receivers sharing the same handler concurrency semaphore, improving pickup smoothness without increasing processing concurrency.
+
+For high-throughput deployments (>50k transactions/hour), consider:
+
+```bash
+# Reduce long-poll wait from default 15s to 2s for the hot-path queues
+SQS_TRANSACTION_REQUEST_WAIT_TIME_SECONDS=2
+SQS_TRANSACTION_SUBMISSION_WAIT_TIME_SECONDS=2
+
+# Run 3 poll loops per queue per task for smoother pickup
+SQS_TRANSACTION_REQUEST_POLLER_COUNT=3
+SQS_TRANSACTION_SUBMISSION_POLLER_COUNT=3
+```
+
+**Monitoring pickup latency**: The `transaction_processing_seconds` histogram exposes segment-level stages to help identify bottlenecks:
+
+| Stage label | What it measures |
+| --- | --- |
+| `request_queue_dwell` | Time from transaction creation to request handler start (queue wait) |
+| `prepare_duration` | Time spent preparing the transaction (simulation, signing, fee estimation) |
+| `submission_queue_dwell` | Time from submission job enqueue to submission handler start (queue wait) |
+| `submit_duration` | Time spent submitting the transaction to the network (RPC call) |
+| `creation_to_submission` | End-to-end time from creation to network submission |
+| `submission_to_confirmation` | Time from network submission to on-chain confirmation |
+| `creation_to_confirmation` | Total lifecycle from creation to confirmation |
+
+Use the dwell-time stages to determine whether tail latency comes from queue pickup delays (tune wait time/poller count) or from handler processing (tune RPC provider or concurrency).
 
 ## Main configuration file (config.json)
 
