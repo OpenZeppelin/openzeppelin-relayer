@@ -21,6 +21,13 @@ pub fn observe_processing_time(relayer_id: &str, network_type: &str, stage: &str
         .with_label_values(&[relayer_id, network_type, stage])
         .observe(secs);
 }
+
+/// Observe queue pickup latency (time from send to consumer pickup).
+pub fn observe_queue_pickup_latency(queue_type: &str, backend: &str, secs: f64) {
+    QUEUE_PICKUP_LATENCY
+        .with_label_values(&[queue_type, backend])
+        .observe(secs);
+}
 use sysinfo::{Disks, System};
 
 lazy_static! {
@@ -202,6 +209,15 @@ lazy_static! {
         let histogram_opts = HistogramOpts::new("transaction_processing_seconds", "Transaction processing time in seconds")
             .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]);
         let histogram_vec = HistogramVec::new(histogram_opts, &["relayer_id", "network_type", "stage"]).unwrap();
+        REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
+        histogram_vec
+    };
+
+    // Histogram for queue pickup latency (time from send to consumer pickup).
+    pub static ref QUEUE_PICKUP_LATENCY: HistogramVec = {
+        let histogram_opts = HistogramOpts::new("queue_pickup_latency_seconds", "Queue pickup latency in seconds (send to consumer pickup)")
+            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0]);
+        let histogram_vec = HistogramVec::new(histogram_opts, &["queue_type", "backend"]).unwrap();
         REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
         histogram_vec
     };
@@ -515,6 +531,9 @@ mod actix_tests {
             .with_label_values(&["test-relayer", "stellar"])
             .inc();
 
+        // Queue pickup latency
+        observe_queue_pickup_latency("transaction-request", "sqs", 0.5);
+
         let metrics = gather_metrics().expect("failed to gather metrics");
         let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
 
@@ -541,6 +560,9 @@ mod actix_tests {
         // TRY_AGAIN_LATER metrics
         assert!(output.contains("transactions_try_again_later_success_total"));
         assert!(output.contains("transactions_try_again_later_failed_total"));
+
+        // Queue pickup latency
+        assert!(output.contains("queue_pickup_latency_seconds"));
     }
 
     #[actix_rt::test]
@@ -785,5 +807,41 @@ mod processing_time_tests {
         ];
         let unique: std::collections::HashSet<&str> = stages.iter().copied().collect();
         assert_eq!(stages.len(), unique.len(), "stage constants must be unique");
+    }
+
+    #[test]
+    fn test_observe_queue_pickup_latency_records_to_histogram() {
+        let before = QUEUE_PICKUP_LATENCY
+            .with_label_values(&["notification", "sqs"])
+            .get_sample_count();
+
+        observe_queue_pickup_latency("notification", "sqs", 1.5);
+
+        let after = QUEUE_PICKUP_LATENCY
+            .with_label_values(&["notification", "sqs"])
+            .get_sample_count();
+
+        assert_eq!(after, before + 1, "sample count should increase by 1");
+    }
+
+    #[test]
+    fn test_observe_queue_pickup_latency_both_backends() {
+        for backend in &["sqs", "redis"] {
+            let before = QUEUE_PICKUP_LATENCY
+                .with_label_values(&["relayer-health-check", backend])
+                .get_sample_count();
+
+            observe_queue_pickup_latency("relayer-health-check", backend, 0.25);
+
+            let after = QUEUE_PICKUP_LATENCY
+                .with_label_values(&["relayer-health-check", backend])
+                .get_sample_count();
+
+            assert_eq!(
+                after,
+                before + 1,
+                "sample count should increase by 1 for backend {backend}"
+            );
+        }
     }
 }

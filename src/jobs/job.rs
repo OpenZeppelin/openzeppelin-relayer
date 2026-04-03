@@ -21,6 +21,12 @@ pub struct Job<T> {
     pub data: T,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Unix epoch (seconds) when this job is intended to become available for
+    /// processing. Set by the producer when `scheduled_on` is provided; absent
+    /// for immediate jobs. Consumers use this to compute queue pickup latency
+    /// that excludes intentional scheduling delay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_at: Option<String>,
 }
 
 impl<T> Job<T> {
@@ -32,10 +38,15 @@ impl<T> Job<T> {
             job_type,
             data,
             request_id: None,
+            available_at: None,
         }
     }
     pub fn with_request_id(mut self, id: Option<String>) -> Self {
         self.request_id = id;
+        self
+    }
+    pub fn with_scheduled_on(mut self, scheduled_on: Option<i64>) -> Self {
+        self.available_at = scheduled_on.map(|ts| ts.to_string());
         self
     }
 }
@@ -377,6 +388,35 @@ mod tests {
         assert_eq!(deserialized.job_type.to_string(), "TransactionRequest");
         assert_eq!(deserialized.data.transaction_id, "tx123");
         assert_eq!(deserialized.data.relayer_id, "relayer-1");
+    }
+
+    #[test]
+    fn test_job_with_scheduled_on_sets_available_at() {
+        let tx_request = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(JobType::TransactionRequest, tx_request).with_scheduled_on(Some(12345));
+
+        assert_eq!(job.available_at.as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn test_job_serialization_preserves_available_at() {
+        let tx_request = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(JobType::TransactionRequest, tx_request).with_scheduled_on(Some(12345));
+
+        let serialized = serde_json::to_string(&job).unwrap();
+        let deserialized: Job<TransactionRequest> = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(deserialized.available_at.as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn test_job_serialization_omits_available_at_when_not_scheduled() {
+        let tx_request = TransactionRequest::new("tx123", "relayer-1");
+        let job = Job::new(JobType::TransactionRequest, tx_request);
+
+        let serialized = serde_json::to_string(&job).unwrap();
+
+        assert!(!serialized.contains("available_at"));
     }
 
     #[test]

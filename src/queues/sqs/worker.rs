@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
+use crate::metrics::observe_queue_pickup_latency;
 use crate::queues::{backoff_config_for_queue, retry_delay_secs};
 use crate::{
     config::ServerConfig,
@@ -231,6 +232,7 @@ async fn run_poll_loop(
                 .visibility_timeout(visibility_timeout as i32)
                 .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
                 .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+                .message_system_attribute_names(MessageSystemAttributeName::SentTimestamp)
                 .message_attribute_names("target_scheduled_on")
                 .message_attribute_names("retry_attempt")
                 .send() => result,
@@ -484,6 +486,16 @@ async fn process_message(
     // Persisted retry attempt for self-reenqueued status checks. Falls back to receive_count-based
     // attempt when attribute is missing.
     let logical_retry_attempt = parse_retry_attempt(&message).unwrap_or(attempt_number);
+
+    // Observe queue pickup latency on first delivery only.
+    // For scheduled messages, measure from `target_scheduled_on` (the intended
+    // availability time) to exclude intentional scheduling delay.
+    // For immediate messages, fall back to SQS `SentTimestamp` (millis).
+    if let Some(baseline) = queue_pickup_baseline_ms(&message, receive_count) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let latency_secs = (now_ms - baseline).max(0) as f64 / 1000.0;
+        observe_queue_pickup_latency(queue_type.queue_name(), "sqs", latency_secs);
+    }
 
     // Use SQS MessageId as the worker task_id for log correlation.
     let sqs_message_id = message.message_id().unwrap_or("unknown").to_string();
@@ -742,6 +754,21 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|attrs| attrs.get("retry_attempt"))
         .and_then(|value| value.string_value())
         .and_then(|value| value.parse::<usize>().ok())
+}
+
+fn queue_pickup_baseline_ms(message: &Message, receive_count: usize) -> Option<i64> {
+    if receive_count != 1 {
+        return None;
+    }
+
+    parse_target_scheduled_on(message)
+        .map(|ts_secs| ts_secs * 1000)
+        .or_else(|| {
+            message
+                .attributes()
+                .and_then(|a| a.get(&MessageSystemAttributeName::SentTimestamp))
+                .and_then(|v| v.parse::<i64>().ok())
+        })
 }
 
 fn is_fifo_queue_url(queue_url: &str) -> bool {
@@ -1417,6 +1444,58 @@ mod tests {
             )
             .build();
         assert_eq!(parse_retry_attempt(&message), Some(999999));
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_uses_scheduled_time_on_first_delivery() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("123")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "999999".to_string(),
+            )])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message, 1), Some(123_000));
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_falls_back_to_sent_timestamp() {
+        let message = Message::builder()
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "123456".to_string(),
+            )])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message, 1), Some(123456));
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_skips_retries() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("123")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "123456".to_string(),
+            )])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message, 2), None);
     }
 
     // ── is_fifo_queue_url: comprehensive cases ────────────────────────
