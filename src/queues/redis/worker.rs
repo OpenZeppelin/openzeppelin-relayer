@@ -68,12 +68,17 @@ use crate::queues::retry_config::{
 ///
 /// Uses `available_at` (the intended availability time) when present to exclude
 /// intentional scheduling delay. Falls back to `timestamp` (job creation time)
-/// for immediate jobs. Only call on first attempt to avoid retry inflation.
+/// for immediate jobs. Only records on the initial attempt (attempt == 1) to
+/// avoid retry-inflated latency.
 fn observe_redis_pickup_latency(
+    attempt: usize,
     available_at: Option<&String>,
     job_timestamp: &str,
     queue_type: &str,
 ) {
+    if attempt != 1 {
+        return;
+    }
     let fallback = job_timestamp.to_string();
     let baseline = available_at.unwrap_or(&fallback);
     if let Ok(baseline_epoch) = baseline.parse::<i64>() {
@@ -90,6 +95,7 @@ async fn apalis_transaction_request_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "transaction-request",
@@ -107,6 +113,7 @@ async fn apalis_transaction_submission_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "transaction-submission",
@@ -123,7 +130,12 @@ async fn apalis_transaction_status_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
-    observe_redis_pickup_latency(job.available_at.as_ref(), &job.timestamp, "status-check");
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "status-check",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
         .await
@@ -137,6 +149,7 @@ async fn apalis_transaction_status_evm_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "status-check-evm",
@@ -154,6 +167,7 @@ async fn apalis_transaction_status_stellar_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "status-check-stellar",
@@ -170,7 +184,12 @@ async fn apalis_notification_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
-    observe_redis_pickup_latency(job.available_at.as_ref(), &job.timestamp, "notification");
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "notification",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     notification_handler(job, (*state).clone(), ctx)
         .await
@@ -184,6 +203,7 @@ async fn apalis_token_swap_request_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "token-swap-request",
@@ -201,6 +221,7 @@ async fn apalis_relayer_health_check_handler(
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
     observe_redis_pickup_latency(
+        attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
         "relayer-health-check",

@@ -491,7 +491,7 @@ async fn process_message(
     // For scheduled messages, measure from `target_scheduled_on` (the intended
     // availability time) to exclude intentional scheduling delay.
     // For immediate messages, fall back to SQS `SentTimestamp` (millis).
-    if let Some(baseline) = queue_pickup_baseline_ms(&message, receive_count) {
+    if let Some(baseline) = queue_pickup_baseline_ms(&message, logical_retry_attempt) {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let latency_secs = (now_ms - baseline).max(0) as f64 / 1000.0;
         observe_queue_pickup_latency(queue_type.queue_name(), "sqs", latency_secs);
@@ -756,8 +756,13 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|value| value.parse::<usize>().ok())
 }
 
-fn queue_pickup_baseline_ms(message: &Message, receive_count: usize) -> Option<i64> {
-    if receive_count != 1 {
+fn queue_pickup_baseline_ms(message: &Message, logical_retry_attempt: usize) -> Option<i64> {
+    // Only observe on the first logical attempt. Using logical_retry_attempt
+    // (from the retry_attempt message attribute) instead of receive_count
+    // because standard-queue retries re-enqueue as new messages (receive_count
+    // resets to 1), while FIFO visibility-timeout retries increment
+    // receive_count without being a new logical attempt.
+    if logical_retry_attempt != 0 {
         return None;
     }
 
@@ -1463,7 +1468,8 @@ mod tests {
             )])))
             .build();
 
-        assert_eq!(queue_pickup_baseline_ms(&message, 1), Some(123_000));
+        // logical_retry_attempt == 0 means first attempt
+        assert_eq!(queue_pickup_baseline_ms(&message, 0), Some(123_000));
     }
 
     #[test]
@@ -1475,7 +1481,8 @@ mod tests {
             )])))
             .build();
 
-        assert_eq!(queue_pickup_baseline_ms(&message, 1), Some(123456));
+        // logical_retry_attempt == 0 means first attempt
+        assert_eq!(queue_pickup_baseline_ms(&message, 0), Some(123456));
     }
 
     #[test]
@@ -1495,7 +1502,8 @@ mod tests {
             )])))
             .build();
 
-        assert_eq!(queue_pickup_baseline_ms(&message, 2), None);
+        // logical_retry_attempt > 0 means retry — should skip
+        assert_eq!(queue_pickup_baseline_ms(&message, 1), None);
     }
 
     // ── is_fifo_queue_url: comprehensive cases ────────────────────────
