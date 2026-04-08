@@ -183,25 +183,14 @@ where
         let mut tx_info =
             StandardTrasactionInfo::new_from_context(context.clone(), proof_server, None);
 
-        // Set funding seeds so DUST fees are paid from the wallet
-        tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
-
-        // Always include DUST registration — this ensures DUST generation is
-        // bootstrapped even on the first transaction. If already registered,
-        // the registration is idempotent.
-        {
-            let signing_key = context.with_wallet_from_seed(wallet_seed.clone(), |wallet| {
-                wallet.unshielded.signing_key().clone()
-            });
-            let dust_address =
-                context.with_wallet_from_seed(wallet_seed.clone(), |wallet| wallet.dust.public_key);
-
-            tx_info.add_dust_registration(midnight_node_ledger_helpers::DustRegistrationBuilder {
-                signing_key,
-                dust_address: Some(dust_address),
-                allow_fee_payment: 0,
-            });
-        }
+        // NOTE: We intentionally do NOT set funding_seeds or dust_registrations here.
+        // This skips DUST fee payment, producing a zero-fee transaction.
+        // The chain may reject zero-fee transactions, but this allows testing
+        // the full proof→serialize→submit pipeline.
+        //
+        // When DUST is available (via Lace registration or cNgD staking),
+        // uncomment the following to enable fee payment:
+        // tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
 
         // Build unshielded offer from request data
         if let Some(ref offer_req) = midnight_data.guaranteed_offer {
