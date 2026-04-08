@@ -389,12 +389,12 @@ mod tests {
     #[test]
     fn test_queue_type_polling_intervals_appropriate() {
         // Status check should poll most frequently
-        assert_eq!(QueueType::StatusCheck.polling_interval_secs(), 5);
+        assert_eq!(QueueType::StatusCheck.default_wait_time_secs(), 5);
 
         // Others should be slower
-        assert!(QueueType::TransactionRequest.polling_interval_secs() >= 5);
-        assert!(QueueType::TransactionSubmission.polling_interval_secs() >= 5);
-        assert!(QueueType::Notification.polling_interval_secs() >= 10);
+        assert!(QueueType::TransactionRequest.default_wait_time_secs() >= 5);
+        assert!(QueueType::TransactionSubmission.default_wait_time_secs() >= 5);
+        assert!(QueueType::Notification.default_wait_time_secs() >= 10);
     }
 
     #[test]

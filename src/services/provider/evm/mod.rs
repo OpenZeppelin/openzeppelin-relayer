@@ -4,8 +4,6 @@
 //! It implements common operations like getting balances, sending transactions, and querying
 //! blockchain state.
 
-use std::time::Duration;
-
 use alloy::{
     network::AnyNetwork,
     primitives::{Bytes, TxKind, Uint},
@@ -30,20 +28,12 @@ type EvmProviderType = FillProvider<
 >;
 use async_trait::async_trait;
 use eyre::Result;
-use reqwest::ClientBuilder as ReqwestClientBuilder;
 use serde_json;
 use tracing::debug;
 
 use super::rpc_selector::RpcSelector;
 use super::{retry_rpc_call, ProviderConfig, RetryConfig};
 use crate::{
-    constants::{
-        DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
-        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
-        DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
-        DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
-        DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
-    },
     models::{
         BlockResponse, EvmTransactionData, RpcConfig, TransactionError, TransactionReceipt, U256,
     },
@@ -51,7 +41,7 @@ use crate::{
     utils::mask_url,
 };
 
-use crate::utils::{create_secure_redirect_policy, validate_safe_url};
+use crate::utils::validate_safe_url;
 
 #[cfg(test)]
 use mockall::automock;
@@ -210,7 +200,6 @@ impl EvmProvider {
 
     /// Initialize a provider for a given URL
     fn initialize_provider(&self, url: &str) -> Result<EvmProviderType, ProviderError> {
-        // Re-validate URL security as a safety net
         let allowed_hosts = crate::config::ServerConfig::get_rpc_allowed_hosts();
         let block_private_ips = crate::config::ServerConfig::get_rpc_block_private_ips();
         validate_safe_url(url, &allowed_hosts, block_private_ips).map_err(|e| {
@@ -222,25 +211,9 @@ impl EvmProvider {
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
 
-        // Using use_rustls_tls() forces the use of rustls instead of native-tls to support TLS 1.3
-        let client = ReqwestClientBuilder::new()
-            .timeout(Duration::from_secs(self.timeout_seconds))
-            .connect_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS))
-            .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
-            .pool_idle_timeout(Duration::from_secs(DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS))
-            .tcp_keepalive(Duration::from_secs(DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS))
-            .http2_keep_alive_interval(Some(Duration::from_secs(
-                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
-            )))
-            .http2_keep_alive_timeout(Duration::from_secs(
-                DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
-            ))
-            .use_rustls_tls()
-            // Allow only HTTP→HTTPS redirects on same host to handle legitimate protocol upgrades
-            // while preventing SSRF via redirect chains to different hosts
-            .redirect(create_secure_redirect_policy())
-            .build()
-            .map_err(|e| ProviderError::Other(format!("Failed to build HTTP client: {e}")))?;
+        let client = super::build_rpc_http_client_with_timeout(std::time::Duration::from_secs(
+            self.timeout_seconds,
+        ))?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
@@ -561,6 +534,7 @@ mod tests {
     use lazy_static::lazy_static;
     use std::str::FromStr;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     lazy_static! {
         static ref EVM_TEST_ENV_MUTEX: Mutex<()> = Mutex::new(());

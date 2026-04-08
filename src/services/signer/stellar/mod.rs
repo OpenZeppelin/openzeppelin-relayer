@@ -14,6 +14,8 @@ use local_signer::*;
 use turnkey_signer::*;
 use vault_signer::*;
 
+use soroban_rs::xdr::SignatureHint;
+
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
     models::{
@@ -27,6 +29,27 @@ use crate::{
 };
 
 use super::DataSignerTrait;
+
+/// Derive a `SignatureHint` (last 4 bytes of the Ed25519 public key) from a Stellar address.
+fn derive_signature_hint(address: &Address) -> Result<SignatureHint, SignerError> {
+    match address {
+        Address::Stellar(addr) => {
+            let pk = stellar_strkey::ed25519::PublicKey::from_string(addr).map_err(|e| {
+                SignerError::SigningError(format!("Failed to parse Stellar address '{addr}': {e}"))
+            })?;
+            // pk.0 is [u8; 32], last 4 bytes are the hint
+            let hint_bytes: [u8; 4] = pk.0[28..].try_into().map_err(|_| {
+                SignerError::SigningError(
+                    "Failed to create signature hint from public key".to_string(),
+                )
+            })?;
+            Ok(SignatureHint(hint_bytes))
+        }
+        _ => Err(SignerError::SigningError(format!(
+            "Expected Stellar address, got: {address:?}"
+        ))),
+    }
+}
 
 #[cfg(test)]
 use mockall::automock;
@@ -179,5 +202,67 @@ impl StellarSignerFactory {
             SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
         };
         Ok(signer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_derive_signature_hint_valid_stellar_address() {
+        let pk = stellar_strkey::ed25519::PublicKey([0u8; 32]);
+        let address = Address::Stellar(pk.to_string());
+
+        let hint = derive_signature_hint(&address).unwrap();
+        // Last 4 bytes of all-zero key
+        assert_eq!(hint.0, [0u8; 4]);
+    }
+
+    #[test]
+    fn test_derive_signature_hint_extracts_last_four_bytes() {
+        let mut key_bytes = [0u8; 32];
+        key_bytes[28] = 0xAA;
+        key_bytes[29] = 0xBB;
+        key_bytes[30] = 0xCC;
+        key_bytes[31] = 0xDD;
+        let pk = stellar_strkey::ed25519::PublicKey(key_bytes);
+        let address = Address::Stellar(pk.to_string());
+
+        let hint = derive_signature_hint(&address).unwrap();
+        assert_eq!(hint.0, [0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn test_derive_signature_hint_invalid_stellar_address() {
+        let address = Address::Stellar("INVALID_ADDRESS".to_string());
+        let result = derive_signature_hint(&address);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Failed to parse Stellar address"));
+            }
+            e => panic!("Expected SigningError, got: {e:?}"),
+        }
+    }
+
+    #[test]
+    fn test_derive_signature_hint_non_stellar_address() {
+        let address = Address::Evm([0u8; 20]);
+        let result = derive_signature_hint(&address);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SignerError::SigningError(msg) => {
+                assert!(msg.contains("Expected Stellar address"));
+            }
+            e => panic!("Expected SigningError, got: {e:?}"),
+        }
+    }
+
+    #[test]
+    fn test_derive_signature_hint_solana_address_rejected() {
+        let address = Address::Solana("SomeBase58Address".to_string());
+        let result = derive_signature_hint(&address);
+        assert!(result.is_err());
     }
 }
