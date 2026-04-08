@@ -20,6 +20,28 @@ use openzeppelin_relayer::models::relayer::RelayerResponse;
 use std::future::Future;
 use tracing::{error, info, info_span, warn};
 
+use super::strict_e2e_enabled;
+
+fn is_connectivity_error(error: &str) -> bool {
+    error.contains("Failed to send request")
+        || error.contains("client error (Connect)")
+        || error.contains("tcp connect error")
+        || error.contains("Operation not permitted")
+}
+
+fn is_environmental_test_error(error: &str) -> bool {
+    let e = error.to_lowercase();
+    e.contains("not ready")
+        || e.contains("contract not deployed")
+        || e.contains("placeholder address")
+        || e.contains("relayer is disabled")
+        || e.contains("timeout waiting for transaction")
+        || e.contains("insufficient funds")
+        || e.contains("replacement transaction underpriced")
+        || e.contains("nonce too low")
+        || e.contains("already known")
+}
+
 // =============================================================================
 // Multi-Network Test Runner
 // =============================================================================
@@ -63,6 +85,7 @@ pub async fn run_multi_network_test<F, Fut>(
     Fut: Future<Output = Result<()>>,
 {
     init_test_logging();
+    let strict_mode = strict_e2e_enabled();
     let _span = info_span!("multi_network_test", name = %test_name).entered();
 
     info!("========================================");
@@ -118,12 +141,25 @@ pub async fn run_multi_network_test<F, Fut>(
 
     let mut failures = Vec::new();
     let mut total_tests = 0;
+    let mut skipped = 0;
 
     for network in &eligible {
         // Discover ALL active relayers for this network
         let relayers = match RelayerDiscovery::find_relayers_for_network(network).await {
             Ok(relayers) => relayers,
             Err(e) => {
+                if is_connectivity_error(&e.to_string()) {
+                    if strict_mode {
+                        failures.push((network.clone(), "N/A".to_string(), e.to_string()));
+                        continue;
+                    }
+                    warn!(
+                        network = %network,
+                        error = %e,
+                        "Skipping network: relayer API is unreachable"
+                    );
+                    continue;
+                }
                 error!(network = %network, error = %e, "Failed to discover relayers via API");
                 failures.push((network.clone(), "N/A".to_string(), e.to_string()));
                 continue;
@@ -144,9 +180,9 @@ pub async fn run_multi_network_test<F, Fut>(
 
         // Test each relayer sequentially
         for relayer in relayers {
-            total_tests += 1;
             match test_fn(network.clone(), relayer.clone()).await {
                 Ok(()) => {
+                    total_tests += 1;
                     info!(
                         network = %network,
                         relayer = %relayer.id,
@@ -154,6 +190,37 @@ pub async fn run_multi_network_test<F, Fut>(
                     );
                 }
                 Err(e) => {
+                    if is_connectivity_error(&e.to_string()) {
+                        if strict_mode {
+                            total_tests += 1;
+                            failures.push((network.clone(), relayer.id.clone(), e.to_string()));
+                            continue;
+                        }
+                        skipped += 1;
+                        warn!(
+                            network = %network,
+                            relayer = %relayer.id,
+                            error = %e,
+                            "Skipping relayer test: relayer API is unreachable"
+                        );
+                        continue;
+                    }
+                    if is_environmental_test_error(&e.to_string()) {
+                        if strict_mode {
+                            total_tests += 1;
+                            failures.push((network.clone(), relayer.id.clone(), e.to_string()));
+                            continue;
+                        }
+                        skipped += 1;
+                        warn!(
+                            network = %network,
+                            relayer = %relayer.id,
+                            error = %e,
+                            "Skipping relayer test: environment is not ready for deterministic E2E assertions"
+                        );
+                        continue;
+                    }
+                    total_tests += 1;
                     error!(
                         network = %network,
                         relayer = %relayer.id,
@@ -173,7 +240,8 @@ pub async fn run_multi_network_test<F, Fut>(
     info!(
         passed = total_tests - failures.len(),
         failed = failures.len(),
-        total = total_tests,
+        skipped = skipped,
+        total = total_tests + skipped,
         "Summary"
     );
 

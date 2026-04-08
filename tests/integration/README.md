@@ -51,49 +51,28 @@ cp .env.integration.example .env.integration
 For faster iteration with `cargo run` and `cargo test`:
 
 ```bash
-# 1. One-time setup: Add Anvil relayer to your config/config.json
-# You can copy the relayer and signer configuration from:
-# tests/integration/config/local-standalone/config.json
-#
-# Add the relayer entry to the "relayers" array in config/config.json:
-# {
-#   "id": "anvil-relayer",
-#   "name": "Standalone Anvil Relayer",
-#   "network": "localhost-anvil",
-#   "paused": false,
-#   "signer_id": "anvil-signer",
-#   "network_type": "evm",
-#   "policies": { "min_balance": 0 }
-# }
-#
-# Also add the signer entry to the "signers" array:
-# {
-#   "id": "anvil-signer",
-#   "type": "local",
-#   "config": {
-#     "path": "tests/integration/config/local/keys/anvil-test.json",
-#     "passphrase": { "type": "plain", "value": "test" }
-#   }
-# }
-#
-# Note: Standalone mode uses the "localhost-anvil" network which points to http://localhost:8545
-# Docker integration tests use "localhost-anvil-docker" which points to http://anvil:8545
+# 1. One-time setup: Create Anvil keystore (if not already done)
+# See Local Mode step 1 above for instructions.
 
-# 2. Start relayer in one terminal
-cargo run
+# 2. Start Anvil in one terminal
+anvil
 
-# 3. Run tests (automatically starts Anvil if needed)
-cargo make integration-test-standalone
+# 3. Start relayer with the test config in another terminal
+CONFIG_FILE_NAME=config.test.json cargo run
 
-# 4. When done, stop Anvil
+# 4. Run tests in a third terminal
+export $(grep -v '^#' .env | grep -v '^$' | xargs) && \
+TEST_REGISTRY_PATH=tests/integration/config/local-standalone/registry.json \
+cargo test --features integration-tests --test integration
+
+# 5. When done, stop Anvil
 ./scripts/anvil-local.sh stop
 ```
 
-The `integration-test-standalone` command will:
+Standalone mode uses `config/config.test.json` — a dedicated test config tracked in git that includes the Anvil relayer, signer, and e2e-echo plugin. The `CONFIG_FILE_NAME` env var tells the relayer to use it instead of your personal `config/config.json`.
 
-- ✅ Automatically start Anvil and deploy contracts if not running
-- ✅ Check if the relayer is healthy before running tests
-- ✅ Provide clear instructions if something is missing
+> **Note:** Standalone mode uses the `localhost-anvil` network (`http://localhost:8545`).
+> Docker mode uses `localhost-anvil-docker` (`http://anvil:8545`).
 
 ### Testnet Mode
 
@@ -384,6 +363,9 @@ The test registry is a centralized configuration file that stores network-specif
 
 ```
 
+config/
+└── config.test.json # Standalone test config (tracked in git, used via CONFIG_FILE_NAME)
+
 tests/integration/config/
 ├── config.example.json # Template relayer config (tracked in git)
 ├── registry.example.json # Template registry config (tracked in git)
@@ -392,8 +374,10 @@ tests/integration/config/
 │ ├── registry.json # Network metadata for tests (gitignored)
 │ └── keys/
 │ └── anvil-test.json # Anvil keystore (gitignored)
-├── local-standalone/ # Standalone Mode - registry only
-│ └── registry.json # Network metadata for standalone tests (gitignored)
+├── local-standalone/ # Standalone Mode - registry + keys only
+│ ├── registry.json # Network metadata for standalone tests (gitignored)
+│ └── keys/
+│ └── anvil-test.json # Anvil keystore (gitignored)
 └── testnet/ # Testnet Mode configs
 ├── config.json # Relayer config for starting service (gitignored)
 ├── registry.json # Network metadata for tests (gitignored)

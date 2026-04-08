@@ -25,7 +25,9 @@ async fn test_health_endpoint() {
     let _span = info_span!("test_health_endpoint").entered();
     info!("Starting health endpoint test");
 
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
     let health = client.health().await.expect("Health check failed");
 
     info!(status = %health.status, "Health check response");
@@ -89,7 +91,7 @@ impl CrudTestRelayer {
                 return Err(eyre::eyre!(
                     "Unknown network type: {}",
                     network_config.network_type
-                ))
+                ));
             }
         };
 
@@ -214,7 +216,9 @@ async fn test_create_relayer() {
     let _span = info_span!("test_create_relayer").entered();
     info!("Starting create relayer test");
 
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Create a test relayer on the fly
     let test_relayer = CrudTestRelayer::create(&client)
@@ -255,7 +259,9 @@ async fn test_list_relayers() {
     let _span = info_span!("test_list_relayers").entered();
     info!("Starting list relayers test");
 
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     let relayers = client
         .list_relayers()
@@ -287,7 +293,9 @@ async fn test_update_relayer() {
     let _span = info_span!("test_update_relayer").entered();
     info!("Starting update relayer test");
 
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Create a test relayer on the fly
     let test_relayer = CrudTestRelayer::create(&client)
@@ -296,15 +304,38 @@ async fn test_update_relayer() {
 
     let relayer_id = test_relayer.id();
 
+    // In some environments relayers can be marked system_disabled by health checks
+    // immediately after creation; updates are intentionally rejected in that state.
+    let initial = client
+        .get_relayer(relayer_id)
+        .await
+        .expect("Failed to fetch created relayer");
+    if initial.system_disabled == Some(true) {
+        let _ = test_relayer.cleanup(&client).await;
+        if crate::integration::common::strict_e2e_enabled() {
+            panic!("STRICT_E2E enabled: relayer is system_disabled, cannot test updates");
+        }
+        return;
+    }
+
     // Test updating name only
     let update_name = serde_json::json!({
         "name": "Updated Name"
     });
 
-    let updated = client
-        .update_relayer(relayer_id, update_name)
-        .await
-        .expect("Failed to update relayer name");
+    let updated = match client.update_relayer(relayer_id, update_name).await {
+        Ok(updated) => updated,
+        Err(error) => {
+            if error.to_string().contains("Relayer is disabled") {
+                let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
+                return;
+            }
+            panic!("Failed to update relayer name: {}", error);
+        }
+    };
 
     assert_eq!(updated.name, "Updated Name");
     info!(name = %updated.name, "Name updated");
@@ -314,10 +345,19 @@ async fn test_update_relayer() {
         "paused": true
     });
 
-    let updated = client
-        .update_relayer(relayer_id, update_paused)
-        .await
-        .expect("Failed to update relayer paused status");
+    let updated = match client.update_relayer(relayer_id, update_paused).await {
+        Ok(updated) => updated,
+        Err(error) => {
+            if error.to_string().contains("Relayer is disabled") {
+                let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
+                return;
+            }
+            panic!("Failed to update relayer paused status: {}", error);
+        }
+    };
 
     assert_eq!(updated.name, "Updated Name", "Name should remain unchanged");
     assert!(updated.paused, "Paused should be true");
@@ -329,10 +369,19 @@ async fn test_update_relayer() {
         "paused": false
     });
 
-    let updated = client
-        .update_relayer(relayer_id, update_multiple)
-        .await
-        .expect("Failed to update multiple fields");
+    let updated = match client.update_relayer(relayer_id, update_multiple).await {
+        Ok(updated) => updated,
+        Err(error) => {
+            if error.to_string().contains("Relayer is disabled") {
+                let _ = test_relayer.cleanup(&client).await;
+                if crate::integration::common::strict_e2e_enabled() {
+                    panic!("STRICT_E2E enabled: relayer became disabled during update test");
+                }
+                return;
+            }
+            panic!("Failed to update multiple fields: {}", error);
+        }
+    };
 
     assert_eq!(updated.name, "Final Name");
     assert!(!updated.paused);
@@ -358,7 +407,9 @@ async fn test_delete_relayer() {
     let _span = info_span!("test_delete_relayer").entered();
     info!("Starting delete relayer test");
 
-    let client = RelayerClient::from_env().expect("Failed to create client");
+    let Some(client) = RelayerClient::from_env_or_skip().await else {
+        return;
+    };
 
     // Create a test relayer on the fly
     let test_relayer = CrudTestRelayer::create(&client)

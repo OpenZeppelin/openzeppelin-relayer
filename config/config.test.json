@@ -2,8 +2,8 @@
   "relayers": [
     {
       "id": "anvil-relayer",
-      "name": "Local Anvil Relayer",
-      "network": "localhost-anvil-docker",
+      "name": "Standalone Anvil Relayer",
+      "network": "localhost-anvil",
       "paused": false,
       "signer_id": "anvil-signer",
       "network_type": "evm",
@@ -16,16 +16,16 @@
       "id": "anvil-signer",
       "type": "local",
       "config": {
-        "path": "./config/keys/anvil-test.json",
+        "path": "tests/integration/config/local-standalone/keys/anvil-test.json",
         "passphrase": { "type": "plain", "value": "test" }
       }
     }
   ],
-  "networks": "/app/networks",
+  "networks": "./config/networks",
   "plugins": [
     {
       "id": "e2e-echo",
-      "path": "examples/e2e-echo.ts",
+      "path": "plugins/examples/e2e-echo.ts",
       "emit_logs": false,
       "emit_traces": false,
       "forward_logs": false,
