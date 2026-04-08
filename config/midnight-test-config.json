@@ -3,7 +3,7 @@
     {
       "id": "midnight-testnet",
       "name": "Midnight Testnet Relayer",
-      "network": "testnet",
+      "network": "preview",
       "paused": false,
       "signer_id": "midnight-signer",
       "network_type": "midnight",
