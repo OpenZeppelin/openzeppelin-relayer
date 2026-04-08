@@ -263,6 +263,33 @@ where
             RelayerError::ProviderError(format!("Indexer health check failed: {e}"))
         })?;
 
+        // Bootstrap LedgerContext from the node's runtime API.
+        // This populates network_id and ledger parameters needed for tx building.
+        // Subxt requires a WebSocket URL — convert https:// to wss://
+        let rpc_url = self
+            .network
+            .rpc_urls
+            .first()
+            .map(|c| {
+                c.url
+                    .replace("https://", "wss://")
+                    .replace("http://", "ws://")
+            })
+            .unwrap_or_default();
+
+        match self.ledger_ctx.bootstrap_from_node(&rpc_url).await {
+            Ok(()) => {
+                info!(relayer_id = %self.relayer.id, "LedgerContext bootstrapped from node");
+            }
+            Err(e) => {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    error = %e,
+                    "LedgerContext bootstrap failed (non-fatal)"
+                );
+            }
+        }
+
         // Sync initial ledger index
         let block = self.sync_nonce().await?;
 

@@ -9,8 +9,10 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use midnight_node_ledger_helpers::{
-    make_block_context, DefaultDB, LedgerContext, Signature, Timestamp, WalletSeed,
+    make_block_context, DefaultDB, LedgerContext, LedgerParameters, Signature, Timestamp,
+    WalletSeed,
 };
+use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 
 /// The concrete finalized transaction type from the chain.
 /// This matches the tagged format `midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1])`.
@@ -136,7 +138,7 @@ impl LedgerContextManager {
     /// re-syncing from genesis.
     pub fn serialize_state(&self) -> Result<Vec<u8>, LedgerContextError> {
         self.context.with_ledger_state(|state| {
-            midnight_node_ledger_helpers::serialize_untagged(state)
+            midnight_node_ledger_helpers::serialize(state)
                 .map_err(|e| LedgerContextError::SerializationError(e.to_string()))
         })
     }
@@ -151,6 +153,85 @@ impl LedgerContextManager {
     /// Get the number of transactions applied since creation/restore.
     pub fn applied_tx_count(&self) -> u64 {
         self.applied_tx_count
+    }
+
+    /// Bootstrap the LedgerContext from a live Midnight node via Subxt.
+    ///
+    /// Reads the network_id and ledger parameters from the node's runtime API.
+    /// This populates the minimum state needed for `StandardTrasactionInfo::build()`
+    /// to compute TTL, network_id, and fee calculations.
+    ///
+    /// NOTE: This does NOT populate the UTXO set — that requires either:
+    /// - Block-by-block sync via `update_from_tx()`
+    /// - Or injecting known UTXOs from the indexer
+    pub async fn bootstrap_from_node(&self, rpc_url: &str) -> Result<(), LedgerContextError> {
+        info!(rpc_url, "Bootstrapping LedgerContext from Midnight node");
+
+        let api = subxt::OnlineClient::<subxt::PolkadotConfig>::from_url(rpc_url)
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("Subxt connect failed: {e}")))?;
+
+        // Read network_id via runtime API
+        let network_id_call = mn_meta::apis().midnight_runtime_api().get_network_id();
+        let network_id = api
+            .runtime_api()
+            .at_latest()
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("Subxt at_latest: {e}")))?
+            .call(network_id_call)
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("get_network_id failed: {e}")))?;
+
+        info!(network_id = %network_id, "Got network_id from node");
+
+        // Read ledger parameters via runtime API
+        let params_call = mn_meta::apis()
+            .midnight_runtime_api()
+            .get_ledger_parameters();
+        let params_bytes = api
+            .runtime_api()
+            .at_latest()
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("Subxt at_latest: {e}")))?
+            .call(params_call)
+            .await
+            .map_err(|e| {
+                LedgerContextError::ContextError(format!("get_ledger_parameters failed: {e}"))
+            })?;
+
+        let params_bytes = params_bytes.map_err(|e| {
+            LedgerContextError::ContextError(format!("Ledger params API error: {e:?}"))
+        })?;
+
+        let parameters: LedgerParameters =
+            midnight_node_ledger_helpers::deserialize(&mut &params_bytes[..]).map_err(|e| {
+                LedgerContextError::DeserializationError(format!(
+                    "LedgerParameters deserialize: {e}"
+                ))
+            })?;
+
+        // Build a fresh LedgerState with the correct network_id and parameters.
+        // Use LedgerState::blank() as the base and set the fields.
+        use midnight_node_ledger_helpers::LedgerState;
+        let mut new_state = LedgerState::<DefaultDB>::new(network_id.clone());
+        new_state.parameters = midnight_node_ledger_helpers::Sp::new(parameters);
+
+        // Serialize (tagged) and inject via update_ledger_state_from_bytes
+        // which uses tagged deserialization internally
+        let state_bytes = midnight_node_ledger_helpers::serialize(&new_state).map_err(|e| {
+            LedgerContextError::SerializationError(format!(
+                "Failed to serialize bootstrapped state: {e}"
+            ))
+        })?;
+
+        self.context.update_ledger_state_from_bytes(&state_bytes);
+
+        info!(
+            network_id = %network_id,
+            "LedgerContext bootstrapped with chain parameters"
+        );
+
+        Ok(())
     }
 
     /// List unshielded UTXOs for the wallet.
