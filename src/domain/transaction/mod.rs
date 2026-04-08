@@ -806,7 +806,13 @@ impl RelayerTransactionFactory {
                     &network.network,
                 )?;
 
-                let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
+                // Use the shared LedgerContext from the relayer factory.
+                // Falls back to a fresh instance if the relayer hasn't initialized yet.
+                let ledger_ctx =
+                    crate::services::sync::midnight::ledger_context::get_shared_ledger_ctx()
+                        .unwrap_or_else(|| {
+                            Arc::new(LedgerContextManager::new(&key_bytes, &network.network))
+                        });
 
                 // Use the shared global store set by initialize_app_state.
                 // Falls back to in-memory if the global hasn't been initialized yet

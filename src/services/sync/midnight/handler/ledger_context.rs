@@ -26,6 +26,22 @@ type MnSerdeTransaction = midnight_node_ledger_helpers::SerdeTransaction<
     DefaultDB,
 >;
 
+/// Process-wide shared LedgerContextManager.
+/// Set by the relayer factory, read by the transaction factory.
+static SHARED_LEDGER_CTX: std::sync::OnceLock<Arc<LedgerContextManager>> =
+    std::sync::OnceLock::new();
+
+/// Set the shared LedgerContextManager (called from relayer factory).
+pub fn set_shared_ledger_ctx(ctx: Arc<LedgerContextManager>) {
+    let _ = SHARED_LEDGER_CTX.set(ctx);
+}
+
+/// Get the shared LedgerContextManager (called from transaction factory).
+/// Returns None if not initialized.
+pub fn get_shared_ledger_ctx() -> Option<Arc<LedgerContextManager>> {
+    SHARED_LEDGER_CTX.get().cloned()
+}
+
 /// Manages the LedgerContext lifecycle for a Midnight relayer.
 ///
 /// This struct owns the `LedgerContext` and provides methods to:
@@ -290,10 +306,22 @@ impl LedgerContextManager {
             .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
         self.context.update_ledger_state_from_bytes(&new_bytes);
 
+        // Verify injection by listing UTXOs
+        let found_utxos = self.unshielded_utxos();
         info!(
             utxo_count = utxos.len(),
+            found_after_injection = found_utxos.len(),
             "Injected unshielded UTXOs into LedgerContext"
         );
+
+        for utxo in &found_utxos {
+            debug!(
+                value = utxo.value,
+                owner = ?utxo.owner,
+                token_type = ?utxo.type_,
+                "UTXO in LedgerContext"
+            );
+        }
 
         Ok(())
     }

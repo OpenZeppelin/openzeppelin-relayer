@@ -699,6 +699,10 @@ impl<
                 )?;
 
                 let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
+                // Register as shared so transaction factory uses the same instance
+                crate::services::sync::midnight::ledger_context::set_shared_ledger_ctx(
+                    ledger_ctx.clone(),
+                );
 
                 let sync_state_store = state.relayer_state_repository();
                 let sync_manager = SyncManager::new(
