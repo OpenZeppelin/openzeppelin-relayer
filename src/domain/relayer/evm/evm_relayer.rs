@@ -72,15 +72,15 @@ where
     J: JobProducerTrait + Send + Sync + 'static,
     S: DataSignerTrait + Send + Sync + 'static,
 {
-    relayer: RelayerRepoModel,
-    signer: S,
-    network: EvmNetwork,
-    provider: P,
-    relayer_repository: Arc<RR>,
-    network_repository: Arc<NR>,
-    transaction_repository: Arc<TR>,
-    job_producer: Arc<J>,
-    transaction_counter_service: Arc<TCS>,
+    pub(super) relayer: RelayerRepoModel,
+    pub(super) signer: S,
+    pub(super) network: EvmNetwork,
+    pub(super) provider: P,
+    pub(super) relayer_repository: Arc<RR>,
+    pub(super) network_repository: Arc<NR>,
+    pub(super) transaction_repository: Arc<TR>,
+    pub(super) job_producer: Arc<J>,
+    pub(super) transaction_counter_service: Arc<TCS>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -132,50 +132,6 @@ where
             transaction_counter_service,
             job_producer,
         })
-    }
-
-    /// Synchronizes the nonce with the blockchain.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or a `RelayerError` if the operation fails.
-    #[instrument(
-        level = "debug",
-        skip(self),
-        fields(
-            request_id = ?crate::observability::request_id::get_request_id(),
-            relayer_id = %self.relayer.id,
-        )
-    )]
-    async fn sync_nonce(&self) -> Result<(), RelayerError> {
-        let on_chain_nonce = self
-            .provider
-            .get_transaction_count(&self.relayer.address)
-            .await
-            .map_err(|e| RelayerError::ProviderError(e.to_string()))?;
-
-        let transaction_counter_nonce = self
-            .transaction_counter_service
-            .get()
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-
-        let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
-
-        debug!(
-            relayer_id = %self.relayer.id,
-            on_chain_nonce = %on_chain_nonce,
-            transaction_counter_nonce = %transaction_counter_nonce,
-            "syncing nonce"
-        );
-
-        debug!(nonce = %nonce, "setting nonce for relayer");
-
-        self.transaction_counter_service.set(nonce).await?;
-
-        Ok(())
     }
 
     /// Validates the RPC connection to the blockchain provider.

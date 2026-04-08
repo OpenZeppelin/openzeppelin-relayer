@@ -320,6 +320,20 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(filtered.into_iter().next())
     }
 
+    async fn get_nonce_occupancy(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError> {
+        let mut results = Vec::new();
+        for nonce in from_nonce..to_nonce {
+            let tx = self.find_by_nonce(relayer_id, nonce).await?;
+            results.push((nonce, tx.map(|t| t.status)));
+        }
+        Ok(results)
+    }
+
     async fn update_status(
         &self,
         tx_id: String,
@@ -921,6 +935,53 @@ mod tests {
         // Test finding transaction that doesn't exist
         let result = repo.find_by_nonce("relayer-1", 99).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_nonce_occupancy_mixed_slots() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // nonce 1 → Pending (active), nonce 2 → Failed (gap), nonce 3 → empty
+        let tx1 = create_test_transaction("tx-1"); // nonce=1, status=Pending
+        repo.create(tx1).await.unwrap();
+
+        let mut tx2 = create_test_transaction("tx-2");
+        tx2.status = TransactionStatus::Failed;
+        if let NetworkTransactionData::Evm(ref mut data) = tx2.network_data {
+            data.nonce = Some(2);
+        }
+        repo.create(tx2).await.unwrap();
+
+        let result = repo.get_nonce_occupancy("relayer-1", 1, 4).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], (1, Some(TransactionStatus::Pending)));
+        assert_eq!(result[1], (2, Some(TransactionStatus::Failed)));
+        assert_eq!(result[2], (3, None));
+    }
+
+    #[tokio::test]
+    async fn test_get_nonce_occupancy_empty_range() {
+        let repo = InMemoryTransactionRepository::new();
+
+        // from >= to → empty result
+        let result = repo.get_nonce_occupancy("relayer-1", 5, 5).await.unwrap();
+        assert!(result.is_empty());
+
+        let result = repo.get_nonce_occupancy("relayer-1", 10, 5).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_nonce_occupancy_wrong_relayer() {
+        let repo = InMemoryTransactionRepository::new();
+
+        let tx1 = create_test_transaction("tx-1"); // relayer-1, nonce=1
+        repo.create(tx1).await.unwrap();
+
+        // Different relayer should see empty slots
+        let result = repo.get_nonce_occupancy("relayer-999", 1, 2).await.unwrap();
+        assert_eq!(result, vec![(1, None)]);
     }
 
     #[tokio::test]
@@ -2139,6 +2200,7 @@ mod tests {
             total_failures: 10,
             insufficient_fee_retries: 0,
             try_again_later_retries: 0,
+            nonce_too_high_retries: 0,
         });
         repo.create(tx).await.unwrap();
 

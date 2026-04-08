@@ -69,6 +69,22 @@ pub struct TransactionMetadata {
     /// Number of submission retries triggered by Stellar TRY_AGAIN_LATER responses
     #[serde(default)]
     pub try_again_later_retries: u32,
+    /// Number of submission retries triggered by EVM "nonce too high" errors
+    #[serde(default)]
+    pub nonce_too_high_retries: u32,
+}
+
+impl TransactionMetadata {
+    /// Returns a copy with `nonce_too_high_retries` reset to 0, or `None` if already 0.
+    pub fn with_nonce_retries_reset(&self) -> Option<Self> {
+        if self.nonce_too_high_retries == 0 {
+            return None;
+        }
+        Some(Self {
+            nonce_too_high_retries: 0,
+            ..self.clone()
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1229,6 +1245,66 @@ mod tests {
         assert_eq!(signature.s.len(), 64); // 32 bytes in hex
         assert_eq!(signature.v, 27);
         assert_eq!(signature.sig.len(), 130); // 65 bytes in hex
+    }
+
+    #[test]
+    fn test_transaction_metadata_nonce_too_high_retries_default() {
+        let metadata = TransactionMetadata::default();
+        assert_eq!(metadata.nonce_too_high_retries, 0);
+        assert_eq!(metadata.consecutive_failures, 0);
+        assert_eq!(metadata.total_failures, 0);
+        assert_eq!(metadata.insufficient_fee_retries, 0);
+        assert_eq!(metadata.try_again_later_retries, 0);
+    }
+
+    #[test]
+    fn test_transaction_metadata_backward_compatibility() {
+        // Simulate an old JSON payload without the nonce_too_high_retries field
+        let old_json = r#"{
+            "consecutive_failures": 1,
+            "total_failures": 2,
+            "insufficient_fee_retries": 3,
+            "try_again_later_retries": 4
+        }"#;
+
+        let metadata: TransactionMetadata = serde_json::from_str(old_json).unwrap();
+        assert_eq!(metadata.consecutive_failures, 1);
+        assert_eq!(metadata.total_failures, 2);
+        assert_eq!(metadata.insufficient_fee_retries, 3);
+        assert_eq!(metadata.try_again_later_retries, 4);
+        // Missing field should default to 0
+        assert_eq!(metadata.nonce_too_high_retries, 0);
+    }
+
+    #[test]
+    fn test_with_nonce_retries_reset_returns_none_when_zero() {
+        let metadata = TransactionMetadata {
+            consecutive_failures: 2,
+            total_failures: 5,
+            insufficient_fee_retries: 1,
+            try_again_later_retries: 3,
+            nonce_too_high_retries: 0,
+        };
+        assert!(metadata.with_nonce_retries_reset().is_none());
+    }
+
+    #[test]
+    fn test_with_nonce_retries_reset_returns_reset_metadata() {
+        let metadata = TransactionMetadata {
+            consecutive_failures: 2,
+            total_failures: 5,
+            insufficient_fee_retries: 1,
+            try_again_later_retries: 3,
+            nonce_too_high_retries: 3,
+        };
+        let result = metadata.with_nonce_retries_reset();
+        assert!(result.is_some());
+        let reset = result.unwrap();
+        assert_eq!(reset.nonce_too_high_retries, 0);
+        assert_eq!(reset.consecutive_failures, 2);
+        assert_eq!(reset.total_failures, 5);
+        assert_eq!(reset.insufficient_fee_retries, 1);
+        assert_eq!(reset.try_again_later_retries, 3);
     }
 
     #[test]

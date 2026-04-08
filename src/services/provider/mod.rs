@@ -12,7 +12,7 @@ use crate::constants::{
     DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
     DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
     DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
-    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS, NONCE_TOO_HIGH_PATTERNS,
 };
 use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
 use crate::utils::create_secure_redirect_policy;
@@ -453,6 +453,9 @@ fn is_non_retriable_transaction_rpc_message(message: &str) -> bool {
     ALREADY_SUBMITTED_PATTERNS
         .iter()
         .any(|p| msg_lower.contains(p))
+        || NONCE_TOO_HIGH_PATTERNS
+            .iter()
+            .any(|p| msg_lower.contains(p))
         || matches_known_transaction(&msg_lower)
 }
 
@@ -1368,6 +1371,18 @@ mod tests {
         // "unknown transaction" must NOT match "known transaction"
         assert!(!is_non_retriable_transaction_rpc_message(
             "Unknown transaction status"
+        ));
+
+        // Nonce-too-high patterns are also non-retriable
+        assert!(is_non_retriable_transaction_rpc_message("nonce too high"));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "nonce too far in the future",
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "exceeds next nonce"
+        ));
+        assert!(is_non_retriable_transaction_rpc_message(
+            "Nonce Too Far In The Future"
         ));
     }
 

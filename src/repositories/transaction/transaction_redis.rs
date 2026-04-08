@@ -1610,6 +1610,89 @@ impl TransactionRepository for RedisTransactionRepository {
         }
     }
 
+    async fn get_nonce_occupancy(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError> {
+        if from_nonce >= to_nonce {
+            return Ok(vec![]);
+        }
+
+        let nonces: Vec<u64> = (from_nonce..to_nonce).collect();
+        let nonce_keys: Vec<String> = nonces
+            .iter()
+            .map(|n| self.relayer_nonce_key(relayer_id, *n))
+            .collect();
+
+        // Phase 1: MGET nonce keys → tx_ids (single round trip)
+        // Uses primary to avoid replica lag fabricating false gaps.
+        let mut conn = self
+            .get_connection(self.connections.primary(), "get_nonce_occupancy")
+            .await?;
+        let tx_ids: Vec<Option<String>> = redis::cmd("MGET")
+            .arg(&nonce_keys)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_nonces"))?;
+
+        // Build tx data keys for non-None slots. We know the relayer_id so we
+        // skip the reverse lookup and go straight to the data key.
+        let mut tx_key_entries: Vec<(usize, String)> = Vec::new();
+        for (i, tx_id) in tx_ids.iter().enumerate() {
+            if let Some(id) = tx_id {
+                tx_key_entries.push((i, self.tx_key(relayer_id, id)));
+            }
+        }
+
+        // Phase 2: MGET tx data keys → JSON blobs (single round trip)
+        let tx_statuses: Vec<Option<TransactionStatus>> = if tx_key_entries.is_empty() {
+            vec![]
+        } else {
+            let data_keys: Vec<&str> = tx_key_entries.iter().map(|(_, k)| k.as_str()).collect();
+            let raw_values: Vec<Option<String>> = redis::cmd("MGET")
+                .arg(&data_keys)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_txs"))?;
+
+            raw_values
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    v.and_then(|json| {
+                        match serde_json::from_str::<TransactionRepoModel>(&json) {
+                            Ok(tx) => Some(tx.status),
+                            Err(e) => {
+                                let nonce = tx_key_entries.get(i).map(|(idx, _)| nonces[*idx]);
+                                warn!(
+                                    relayer_id = %relayer_id,
+                                    nonce = ?nonce,
+                                    error = %e,
+                                    "get_nonce_occupancy: failed to deserialize transaction, treating as empty"
+                                );
+                                None
+                            }
+                        }
+                    })
+                })
+                .collect()
+        };
+
+        // Assemble results
+        let mut results: Vec<(u64, Option<TransactionStatus>)> =
+            nonces.iter().map(|n| (*n, None)).collect();
+
+        for (idx, (original_idx, _)) in tx_key_entries.iter().enumerate() {
+            if let Some(status) = tx_statuses.get(idx).and_then(|s| s.clone()) {
+                results[*original_idx].1 = Some(status);
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn update_status(
         &self,
         tx_id: String,
@@ -2890,6 +2973,60 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
+    async fn test_get_nonce_occupancy_mixed_slots() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // nonce 10 → Pending (default), nonce 11 → Failed, nonce 12 → empty
+        let tx1 = create_test_transaction_with_nonce(&Uuid::new_v4().to_string(), 10, &relayer_id);
+        repo.create(tx1).await.unwrap();
+
+        let mut tx2 =
+            create_test_transaction_with_nonce(&Uuid::new_v4().to_string(), 11, &relayer_id);
+        tx2.status = TransactionStatus::Failed;
+        repo.create(tx2).await.unwrap();
+
+        let result = repo.get_nonce_occupancy(&relayer_id, 10, 13).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], (10, Some(TransactionStatus::Pending)));
+        assert_eq!(result[1], (11, Some(TransactionStatus::Failed)));
+        assert_eq!(result[2], (12, None));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_nonce_occupancy_empty_range() {
+        let repo = setup_test_repo().await;
+
+        let result = repo.get_nonce_occupancy("any-relayer", 5, 5).await.unwrap();
+        assert!(result.is_empty());
+
+        let result = repo
+            .get_nonce_occupancy("any-relayer", 10, 5)
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_nonce_occupancy_all_empty() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // No transactions created — all slots should be None
+        let result = repo
+            .get_nonce_occupancy(&relayer_id, 100, 103)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.iter().all(|(_, status)| status.is_none()));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
     async fn test_update_status() {
         let repo = setup_test_repo().await;
         let random_id = Uuid::new_v4().to_string();
@@ -3761,6 +3898,7 @@ mod tests {
             total_failures: 10,
             insufficient_fee_retries: 0,
             try_again_later_retries: 0,
+            nonce_too_high_retries: 0,
         });
         repo.create(tx).await.unwrap();
 
