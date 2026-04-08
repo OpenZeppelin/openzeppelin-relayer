@@ -45,6 +45,8 @@ use std::{str::FromStr, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
 
+use crate::metrics::observe_queue_pickup_latency;
+
 use super::{filter_relayers_for_swap, QueueType, WorkerContext};
 use crate::queues::retry_config::{
     RetryBackoffConfig, NOTIFICATION_BACKOFF, RELAYER_HEALTH_BACKOFF, STATUS_EVM_BACKOFF,
@@ -62,12 +64,42 @@ use crate::queues::retry_config::{
 // keeping all handler business logic backend-neutral.
 // ---------------------------------------------------------------------------
 
+/// Observe queue pickup latency for Redis/Apalis workers.
+///
+/// Uses `available_at` (the intended availability time) when present to exclude
+/// intentional scheduling delay. Falls back to `timestamp` (job creation time)
+/// for immediate jobs. Only records on the initial attempt (attempt == 1) to
+/// avoid retry-inflated latency.
+fn observe_redis_pickup_latency(
+    attempt: usize,
+    available_at: Option<&String>,
+    job_timestamp: &str,
+    queue_type: &str,
+) {
+    if attempt != 1 {
+        return;
+    }
+    let fallback = job_timestamp.to_string();
+    let baseline = available_at.unwrap_or(&fallback);
+    if let Ok(baseline_epoch) = baseline.parse::<i64>() {
+        let now = chrono::Utc::now().timestamp();
+        let latency_secs = (now - baseline_epoch).max(0) as f64;
+        observe_queue_pickup_latency(queue_type, "redis", latency_secs);
+    }
+}
+
 async fn apalis_transaction_request_handler(
     job: Job<TransactionRequest>,
     state: Data<ThinData<DefaultAppState>>,
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "transaction-request",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_request_handler(job, (*state).clone(), ctx)
         .await
@@ -80,6 +112,12 @@ async fn apalis_transaction_submission_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "transaction-submission",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_submission_handler(job, (*state).clone(), ctx)
         .await
@@ -92,6 +130,48 @@ async fn apalis_transaction_status_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "status-check",
+    );
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_status_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_transaction_status_evm_handler(
+    job: Job<TransactionStatusCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "status-check-evm",
+    );
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    transaction_status_handler(job, (*state).clone(), ctx)
+        .await
+        .map_err(Into::into)
+}
+
+async fn apalis_transaction_status_stellar_handler(
+    job: Job<TransactionStatusCheck>,
+    state: Data<ThinData<DefaultAppState>>,
+    attempt: Attempt,
+    task_id: TaskId,
+) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "status-check-stellar",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
         .await
@@ -104,6 +184,12 @@ async fn apalis_notification_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "notification",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     notification_handler(job, (*state).clone(), ctx)
         .await
@@ -116,6 +202,12 @@ async fn apalis_token_swap_request_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "token-swap-request",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     token_swap_request_handler(job, (*state).clone(), ctx)
         .await
@@ -128,6 +220,12 @@ async fn apalis_relayer_health_check_handler(
     attempt: Attempt,
     task_id: TaskId,
 ) -> Result<(), apalis::prelude::Error> {
+    observe_redis_pickup_latency(
+        attempt.current(),
+        job.available_at.as_ref(),
+        &job.timestamp,
+        "relayer-health-check",
+    );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     relayer_health_check_handler(job, (*state).clone(), ctx)
         .await
@@ -306,7 +404,7 @@ where
         ))
         .data(app_state.clone())
         .backend(queue.transaction_status_queue_evm.clone())
-        .build_fn(apalis_transaction_status_handler);
+        .build_fn(apalis_transaction_status_evm_handler);
 
     // Stellar status checker - fast retries for fast finality
     // Stellar has sub-second finality, needs more frequent status checks
@@ -326,7 +424,7 @@ where
             ))
             .data(app_state.clone())
             .backend(queue.transaction_status_queue_stellar.clone())
-            .build_fn(apalis_transaction_status_handler);
+            .build_fn(apalis_transaction_status_stellar_handler);
 
     let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
         .layer(ErrorHandlingLayer::new())
