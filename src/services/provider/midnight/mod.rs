@@ -1,6 +1,10 @@
-pub mod proof_server;
-pub mod subxt_client;
-pub mod tx_builder;
+mod proof_server;
+mod subxt_client;
+mod tx_builder;
+
+pub use proof_server::RemoteProofServer;
+pub use subxt_client::MidnightSubxtClient;
+pub use tx_builder::MidnightTxBuilder;
 
 use std::time::Duration;
 

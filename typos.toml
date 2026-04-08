@@ -1,6 +1,8 @@
 [default.extend-identifiers]
 HashiCorp = "HashiCorp"
 NOOPs = "NOOPs"
+# midnight-node-ledger-helpers crate has this typo in its public API
+StandardTrasactionInfo = "StandardTrasactionInfo"
 
 [default.extend-words]
 # Technical term for "no operation" transactions

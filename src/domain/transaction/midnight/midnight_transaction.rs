@@ -17,7 +17,7 @@ use crate::{
     services::{
         provider::MidnightProviderTrait,
         signer::MidnightSigner,
-        sync::midnight::{indexer::ApplyStage, SyncManager},
+        sync::midnight::{indexer::ApplyStage, LedgerContextManager, SyncManager},
     },
     utils::calculate_scheduled_timestamp,
 };
@@ -42,6 +42,7 @@ where
     pub provider: Arc<P>,
     pub signer: Arc<MidnightSigner>,
     pub sync_manager: SyncManager<SS>,
+    pub ledger_ctx: Arc<LedgerContextManager>,
     pub transaction_repository: Arc<TR>,
     pub relayer_repository: Arc<RR>,
     pub job_producer: Arc<J>,
@@ -71,6 +72,7 @@ where
         provider: Arc<P>,
         signer: Arc<MidnightSigner>,
         sync_manager: SyncManager<SS>,
+        ledger_ctx: Arc<LedgerContextManager>,
         transaction_repository: Arc<TR>,
         relayer_repository: Arc<RR>,
         job_producer: Arc<J>,
@@ -81,6 +83,7 @@ where
             provider,
             signer,
             sync_manager,
+            ledger_ctx,
             transaction_repository,
             relayer_repository,
             job_producer,
@@ -137,20 +140,165 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(tx_id = %tx.id, "Preparing Midnight transaction");
 
-        // Full implementation requires:
-        // 1. Incremental wallet sync (LedgerContext populated from indexer)
-        // 2. Build UnshieldedOfferInfo from request inputs/outputs
-        // 3. Generate ZK proofs via the remote proof server
-        // 4. Serialize proven transaction via midnight-node-ledger-helpers::serialize()
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
+
+        // Build the transaction using StandardTrasactionInfo.
         //
-        // Until the LedgerContext is fully populated from shielded sync events,
-        // we cannot construct valid Midnight extrinsics.
-        Err(TransactionError::NotSupported(
-            "Midnight transaction preparation is not yet fully implemented. \
-             The LedgerContext must be populated from indexer wallet sync events \
-             before transactions can be built and serialized."
-                .into(),
-        ))
+        // The flow:
+        // 1. Create StandardTrasactionInfo with LedgerContext + proof provider
+        // 2. Set unshielded offer from the request's inputs/outputs
+        // 3. Call .build() which: computes TTL, builds offers, pays DUST fees, proves
+        // 4. Serialize the proven transaction
+        //
+        // PREREQUISITE: The LedgerContext must have the current chain state
+        // (parameters, network_id, UTXOs). This is populated during relayer
+        // initialization via the shielded/unshielded sync, and the ledger state
+        // can also be bootstrapped from the RPC node.
+        let context = self.ledger_ctx.context().clone();
+
+        // Check if the context has a valid network_id (indicates it was populated)
+        let has_state = context.with_ledger_state(|state| !state.network_id.is_empty());
+
+        if !has_state {
+            return Err(TransactionError::NotSupported(
+                "LedgerContext has no chain state. The relayer must complete \
+                 initial sync before transactions can be prepared. Ensure the \
+                 node RPC is reachable and the indexer sync completed."
+                    .into(),
+            ));
+        }
+
+        // Create proof provider and transaction builder
+        use midnight_node_ledger_helpers::{
+            BuildUtxoOutput, BuildUtxoSpend, DefaultDB, FromContext, IntentInfo,
+            StandardTrasactionInfo, UnshieldedOfferInfo, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
+            NIGHT,
+        };
+
+        let proof_server = Arc::new(crate::services::provider::RemoteProofServer::new(
+            self.network.prover_url.clone(),
+        ));
+
+        let wallet_seed = self.ledger_ctx.wallet_seed().clone();
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(context.clone(), proof_server, None);
+
+        // Set funding seeds so DUST fees are paid from the wallet
+        tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
+
+        // Build unshielded offer from request data
+        if let Some(ref offer_req) = midnight_data.guaranteed_offer {
+            let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = Vec::new();
+            let mut outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = Vec::new();
+
+            for input in &offer_req.inputs {
+                let value: u128 = input.value.parse().map_err(|_| {
+                    TransactionError::ValidationError(format!(
+                        "Invalid input value: {}",
+                        input.value
+                    ))
+                })?;
+
+                inputs.push(Box::new(UtxoSpendInfo {
+                    value,
+                    owner: wallet_seed.clone(),
+                    token_type: NIGHT,
+                    intent_hash: None,
+                    output_number: None,
+                }));
+            }
+
+            for output in &offer_req.outputs {
+                let value: u128 = output.value.parse().map_err(|_| {
+                    TransactionError::ValidationError(format!(
+                        "Invalid output value: {}",
+                        output.value
+                    ))
+                })?;
+
+                outputs.push(Box::new(UtxoOutputInfo {
+                    value,
+                    owner: wallet_seed.clone(),
+                    token_type: NIGHT,
+                }));
+            }
+
+            let unshielded_offer = UnshieldedOfferInfo { inputs, outputs };
+
+            // Wrap in an intent and add to the transaction
+            tx_info.add_intent(
+                0, // segment 0 = guaranteed
+                Box::new(IntentInfo {
+                    guaranteed_unshielded_offer: Some(unshielded_offer),
+                    fallible_unshielded_offer: None,
+                    actions: vec![],
+                }),
+            );
+        }
+
+        if tx_info.is_empty() {
+            return Err(TransactionError::ValidationError(
+                "Transaction has no offers or intents to build".into(),
+            ));
+        }
+
+        // Build and prove the transaction
+        info!(tx_id = %tx.id, "Building and proving Midnight transaction");
+        let proven_tx = tx_info.prove().await.map_err(|e| {
+            TransactionError::UnexpectedError(format!("Transaction build/prove failed: {e}"))
+        })?;
+
+        // Serialize using tagged serialization
+        let serialized_bytes =
+            midnight_node_ledger_helpers::serialize(&proven_tx).map_err(|e| {
+                TransactionError::UnexpectedError(format!("Transaction serialization failed: {e}"))
+            })?;
+
+        let serialized_hex = hex::encode(&serialized_bytes);
+
+        // Compute the pallet transaction hash
+        let tx_hash = proven_tx.transaction_hash();
+        let pallet_hash = hex::encode(tx_hash.0 .0);
+
+        info!(
+            tx_id = %tx.id,
+            serialized_len = serialized_bytes.len(),
+            pallet_hash = %pallet_hash,
+            "Midnight transaction prepared and serialized"
+        );
+
+        // Store the serialized transaction and pallet hash in network data
+        let updated_network_data = crate::models::MidnightTransactionData {
+            hash: Some(serialized_hex),
+            pallet_hash: Some(pallet_hash),
+            block_hash: None,
+            guaranteed_offer: midnight_data.guaranteed_offer.clone(),
+            intents: midnight_data.intents.clone(),
+            fallible_offers: midnight_data.fallible_offers.clone(),
+        };
+
+        self.transaction_repository
+            .update_network_data(
+                tx.id.clone(),
+                crate::models::NetworkTransactionData::Midnight(updated_network_data),
+            )
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        let updated = self
+            .transaction_repository
+            .partial_update(
+                tx.id.clone(),
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Sent),
+                    sent_at: Some(chrono::Utc::now().to_rfc3339()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        Ok(updated)
     }
 
     #[instrument(

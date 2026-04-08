@@ -763,7 +763,7 @@ impl RelayerTransactionFactory {
                 use crate::models::MidnightNetwork;
                 use crate::services::provider::{MidnightProvider, MidnightProviderTrait};
                 use crate::services::signer::MidnightSignerFactory;
-                use crate::services::sync::midnight::SyncManager;
+                use crate::services::sync::midnight::{LedgerContextManager, SyncManager};
 
                 let network_repo = network_repository
                     .get_by_name(NetworkType::Midnight, &relayer.network)
@@ -785,8 +785,26 @@ impl RelayerTransactionFactory {
                         .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?,
                 );
 
+                // Extract raw key for LedgerContext before consuming signer
+                let signer_domain: crate::models::Signer = signer.into();
+                let key_bytes: [u8; 32] = {
+                    let local_cfg = signer_domain.config.get_local().ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(
+                            "Midnight requires a local signer".into(),
+                        )
+                    })?;
+                    let key_slice = local_cfg.raw_key.borrow();
+                    <[u8; 32]>::try_from(&key_slice[..]).map_err(|_| {
+                        TransactionError::NetworkConfiguration(
+                            "Midnight signer key must be 32 bytes".into(),
+                        )
+                    })?
+                };
+
                 let midnight_signer =
-                    MidnightSignerFactory::create_midnight_signer(&signer.into())?;
+                    MidnightSignerFactory::create_midnight_signer(&signer_domain)?;
+
+                let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
 
                 // Use the shared global store set by initialize_app_state.
                 // Falls back to in-memory if the global hasn't been initialized yet
@@ -804,6 +822,7 @@ impl RelayerTransactionFactory {
                     provider,
                     Arc::new(midnight_signer),
                     sync_manager,
+                    ledger_ctx,
                     transaction_repository,
                     relayer_repository,
                     job_producer,
