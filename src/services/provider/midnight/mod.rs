@@ -1,3 +1,5 @@
+pub mod proof_server;
+pub mod subxt_client;
 pub mod tx_builder;
 
 use std::time::Duration;

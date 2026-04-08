@@ -7,7 +7,7 @@ rust-version = "1.88"         #MSRV
 [features]
 default = []
 integration-tests = []
-midnight = ["dep:tokio-tungstenite", "dep:midnight-node-ledger-helpers"]
+midnight = ["dep:tokio-tungstenite", "dep:midnight-node-ledger-helpers", "dep:midnight-node-metadata", "dep:subxt"]
 redis-tls-native = ["redis/tls-native-tls", "redis/tokio-native-tls-comp"]
 redis-tls-rustls = ["redis/tls-rustls", "redis/tokio-rustls-comp"]
 
@@ -112,6 +112,8 @@ url = "2"
 lru = "0.16"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"], optional = true }
 midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-0.22.3", features = ["can-panic"], optional = true }
+midnight-node-metadata = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-metadata", tag = "node-0.22.3", optional = true }
+subxt = { version = "0.44", optional = true }
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"

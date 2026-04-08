@@ -842,7 +842,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde",
  "alloy-sol-types",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -1021,7 +1021,7 @@ checksum = "5ce599598ef8ebe067f3627509358d9faaa1ef94f77f834a7783cd44209ef55c"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "reqwest",
  "serde_json",
  "tower 0.5.3",
@@ -5038,7 +5038,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6344,6 +6344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-node-metadata"
+version = "0.22.0"
+source = "git+https://github.com/midnightntwrk/midnight-node?tag=node-0.22.3#6f0ef437cad6342364e720486f434499df94bc0d"
+dependencies = [
+ "subxt",
+ "walkdir",
+]
+
+[[package]]
 name = "midnight-onchain-runtime"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7522,6 +7531,7 @@ dependencies = [
  "libsodium-sys",
  "lru 0.16.3",
  "midnight-node-ledger-helpers",
+ "midnight-node-metadata",
  "mockall",
  "mockito",
  "mpl-token-metadata",
@@ -7559,6 +7569,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "subtle",
+ "subxt",
  "sysinfo 0.36.1",
  "tempfile",
  "thiserror 2.0.18",
@@ -8250,7 +8261,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.36",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8289,7 +8300,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.2",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -8939,7 +8950,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13857,7 +13868,7 @@ checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
  "cfg-if",
  "digest 0.10.7",
- "rand 0.7.3",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
