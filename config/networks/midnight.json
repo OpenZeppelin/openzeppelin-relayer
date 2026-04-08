@@ -2,7 +2,7 @@
   "networks": [
     {
       "type": "midnight",
-      "network": "testnet",
+      "network": "preview",
       "rpc_urls": ["https://rpc.preview.midnight.network"],
       "explorer_urls": ["https://explorer.preview.midnight.network"],
       "average_blocktime_ms": 6000,

@@ -693,8 +693,10 @@ impl<
                     })?
                 };
 
-                let midnight_signer =
-                    MidnightSignerFactory::create_midnight_signer(&signer_domain)?;
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(
+                    &signer_domain,
+                    &network.network,
+                )?;
 
                 let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
 

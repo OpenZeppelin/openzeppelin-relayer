@@ -47,10 +47,10 @@ impl MidnightNetworkConfig {
         })?;
 
         match self.common.network.as_str() {
-            "testnet" | "mainnet" => {}
+            "preview" | "preprod" | "testnet" | "mainnet" | "devnet" => {}
             _ => {
                 return Err(ConfigFileError::InvalidFormat(format!(
-                    "Invalid network_id: {}. Must be one of: testnet, mainnet",
+                    "Invalid network_id: {}. Must be one of: preview, preprod, testnet, mainnet, devnet",
                     self.common.network
                 )))
             }

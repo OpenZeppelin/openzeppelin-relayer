@@ -51,10 +51,11 @@ pub struct MidnightSignerFactory;
 impl MidnightSignerFactory {
     pub fn create_midnight_signer(
         signer_model: &SignerDomainModel,
+        network_name: &str,
     ) -> Result<MidnightSigner, SignerFactoryError> {
         match &signer_model.config {
             SignerConfig::Local(_) => {
-                let local_signer = LocalSigner::new(signer_model)?;
+                let local_signer = LocalSigner::new(signer_model, network_name)?;
                 Ok(MidnightSigner::Local(local_signer))
             }
             _ => Err(SignerFactoryError::UnsupportedType(

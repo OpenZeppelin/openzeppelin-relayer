@@ -183,7 +183,11 @@ impl SignerFactory {
             }
             #[cfg(feature = "midnight")]
             NetworkType::Midnight => {
-                let midnight_signer = MidnightSignerFactory::create_midnight_signer(signer_model)?;
+                // Generic signer factory doesn't have network context — use env var fallback
+                let network =
+                    std::env::var("MIDNIGHT_NETWORK_HRP").unwrap_or_else(|_| "preview".into());
+                let midnight_signer =
+                    MidnightSignerFactory::create_midnight_signer(signer_model, &network)?;
                 NetworkSigner::Midnight(midnight_signer)
             }
         };

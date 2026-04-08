@@ -22,7 +22,7 @@ pub struct LocalSigner {
 }
 
 impl LocalSigner {
-    pub fn new(signer_model: &SignerDomainModel) -> Result<Self, SignerError> {
+    pub fn new(signer_model: &SignerDomainModel, network_name: &str) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_local()
@@ -35,9 +35,7 @@ impl LocalSigner {
         let signing_key = SigningKey::from_bytes(&raw_key);
 
         // Derive address and viewing key from the midnight wallet
-        let network_hrp =
-            std::env::var("MIDNIGHT_NETWORK_HRP").unwrap_or_else(|_| "preview".into());
-        let (address, viewing_key) = Self::derive_midnight_keys(&raw_key, &network_hrp)?;
+        let (address, viewing_key) = Self::derive_midnight_keys(&raw_key, network_name)?;
 
         Ok(Self {
             signing_key,
@@ -169,7 +167,7 @@ mod tests {
     #[test]
     fn test_local_signer_derives_bech32m_address() {
         let model = make_signer_model([1u8; 32]);
-        let signer = LocalSigner::new(&model).unwrap();
+        let signer = LocalSigner::new(&model, "preview").unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(signer.address()).unwrap();
         match addr {
@@ -183,7 +181,7 @@ mod tests {
     #[test]
     fn test_local_signer_derives_viewing_key() {
         let model = make_signer_model([1u8; 32]);
-        let signer = LocalSigner::new(&model).unwrap();
+        let signer = LocalSigner::new(&model, "preview").unwrap();
         let vk = signer.viewing_key();
         match vk {
             crate::services::sync::midnight::indexer::ViewingKeyFormat::Bech32m(key) => {
@@ -195,7 +193,7 @@ mod tests {
     #[tokio::test]
     async fn test_sign_transaction_produces_valid_signature() {
         let model = make_signer_model([2u8; 32]);
-        let signer = LocalSigner::new(&model).unwrap();
+        let signer = LocalSigner::new(&model, "preview").unwrap();
 
         let tx_data = NetworkTransactionData::Midnight(MidnightTransactionData {
             hash: Some("0xdeadbeef".into()),
