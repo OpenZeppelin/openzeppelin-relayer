@@ -1,8 +1,7 @@
 use async_trait::async_trait;
-use ed25519_dalek::{Signer as Ed25519Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer as Ed25519Signer, SigningKey};
 use eyre::Result;
 use sha2::{Digest, Sha256};
-use std::env;
 
 use crate::{
     domain::SignTransactionResponse,
@@ -12,20 +11,14 @@ use crate::{
 
 /// Local Midnight signer using Ed25519 keys.
 ///
-/// Midnight uses Ed25519 for transaction signing. The signing flow:
-/// 1. Extract raw transaction bytes from `NetworkTransactionData::Midnight`
-/// 2. SHA-256 hash the bytes
-/// 3. Ed25519-sign the hash
-/// 4. Return hex-encoded 64-byte signature
-///
-/// The address and viewing key can be provided via environment variables
-/// (`MIDNIGHT_ADDRESS`, `MIDNIGHT_VIEWING_KEY`) when derived externally
-/// using the `scripts/midnight-keygen` tool. If not set, a placeholder
-/// hex-based address is generated from the public key.
+/// Derives the bech32m unshielded address and viewing key directly from the
+/// wallet seed using `midnight-node-ledger-helpers` and the `bech32` crate.
+/// No external keygen script or env vars needed.
 pub struct LocalSigner {
     signing_key: SigningKey,
+    raw_key: [u8; 32],
     address: String,
-    viewing_key_override: Option<String>,
+    viewing_key: String,
 }
 
 impl LocalSigner {
@@ -36,47 +29,82 @@ impl LocalSigner {
             .ok_or_else(|| SignerError::Configuration("Local config not found".into()))?;
 
         let key_slice = config.raw_key.borrow();
-        let key_bytes: [u8; 32] = <[u8; 32]>::try_from(&key_slice[..])
+        let raw_key: [u8; 32] = <[u8; 32]>::try_from(&key_slice[..])
             .map_err(|_| SignerError::Configuration("Private key must be 32 bytes".into()))?;
 
-        let signing_key = SigningKey::from_bytes(&key_bytes);
-        let verifying_key = signing_key.verifying_key();
+        let signing_key = SigningKey::from_bytes(&raw_key);
 
-        // Use pre-derived address from env if available, otherwise fall back to hex
-        let address =
-            env::var("MIDNIGHT_ADDRESS").unwrap_or_else(|_| Self::derive_address(&verifying_key));
-
-        let viewing_key_override = env::var("MIDNIGHT_VIEWING_KEY").ok();
+        // Derive address and viewing key from the midnight wallet
+        let network_hrp =
+            std::env::var("MIDNIGHT_NETWORK_HRP").unwrap_or_else(|_| "preview".into());
+        let (address, viewing_key) = Self::derive_midnight_keys(&raw_key, &network_hrp)?;
 
         Ok(Self {
             signing_key,
+            raw_key,
             address,
-            viewing_key_override,
+            viewing_key,
         })
     }
 
-    /// Derive a Midnight-style address from the Ed25519 public key.
+    /// Derive bech32m unshielded address and viewing key from the wallet seed.
     ///
-    /// Uses a simplified hex-encoded address with `mn_` prefix.
-    /// A full bech32m implementation would be added when the midnight-node
-    /// crate types are integrated.
-    fn derive_address(verifying_key: &VerifyingKey) -> String {
-        format!("mn_{}", hex::encode(verifying_key.as_bytes()))
+    /// Uses midnight-node-ledger-helpers to derive the wallet, then bech32m-encodes
+    /// the verifying key (for address) and encryption secret key (for viewing key).
+    fn derive_midnight_keys(
+        seed: &[u8; 32],
+        network: &str,
+    ) -> Result<(String, String), SignerError> {
+        use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+
+        let wallet_seed = WalletSeed::Medium(*seed);
+        let context =
+            LedgerContext::<DefaultDB>::new_from_wallet_seeds("".to_string(), &[wallet_seed]);
+
+        // Get the unshielded verifying key bytes for the address
+        let vk_bytes = context.with_wallet_from_seed(wallet_seed, |wallet| {
+            let vk = wallet.unshielded.signing_key().verifying_key();
+            midnight_node_ledger_helpers::serialize_untagged(&vk).unwrap_or_default()
+        });
+
+        // Get the viewing key directly from the shielded wallet
+        // The wallet has a built-in viewing_key() method that returns bech32m
+        let viewing_key = context
+            .with_wallet_from_seed(wallet_seed, |wallet| wallet.shielded.viewing_key(network));
+
+        // Encode unshielded address as bech32m
+        let addr_hrp_str = match network {
+            "preview" => "mn_addr_preview",
+            "preprod" => "mn_addr_preprod",
+            "mainnet" | "" => "mn_addr",
+            other => &format!("mn_addr_{other}"),
+        };
+
+        let address = Self::bech32m_encode(&vk_bytes, addr_hrp_str)?;
+
+        Ok((address, viewing_key))
+    }
+
+    fn bech32m_encode(data: &[u8], hrp: &str) -> Result<String, SignerError> {
+        use bech32::{Bech32m, Hrp};
+
+        let hrp = Hrp::parse(hrp)
+            .map_err(|e| SignerError::Configuration(format!("Invalid HRP '{hrp}': {e}")))?;
+
+        bech32::encode::<Bech32m>(hrp, data)
+            .map_err(|e| SignerError::Configuration(format!("Bech32m encode failed: {e}")))
+    }
+
+    /// Get the raw 32-byte seed.
+    pub fn raw_key(&self) -> &[u8; 32] {
+        &self.raw_key
     }
 
     /// Return the viewing key for indexer wallet sync.
-    ///
-    /// If `MIDNIGHT_VIEWING_KEY` env var is set (derived by the keygen script),
-    /// uses that. Otherwise falls back to a placeholder that will fail at the
-    /// indexer with a bech32m validation error.
     pub fn viewing_key(&self) -> crate::services::sync::midnight::indexer::ViewingKeyFormat {
-        let key = self.viewing_key_override.clone().unwrap_or_else(|| {
-            format!(
-                "mn_shield-esk_{}",
-                hex::encode(self.signing_key.verifying_key().as_bytes())
-            )
-        });
-        crate::services::sync::midnight::indexer::ViewingKeyFormat::Bech32m(key)
+        crate::services::sync::midnight::indexer::ViewingKeyFormat::Bech32m(
+            self.viewing_key.clone(),
+        )
     }
 }
 
@@ -92,7 +120,6 @@ impl Signer for LocalSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         let raw_bytes = match &transaction {
             NetworkTransactionData::Midnight(data) => {
-                // Use pallet_hash if available, otherwise use the hash field, as the signable payload
                 let signable = data
                     .pallet_hash
                     .as_deref()
@@ -111,7 +138,6 @@ impl Signer for LocalSigner {
             }
         };
 
-        // SHA-256 hash then Ed25519-sign
         let hash = Sha256::digest(&raw_bytes);
         let signature = self.signing_key.sign(&hash);
 
@@ -141,14 +167,28 @@ mod tests {
     }
 
     #[test]
-    fn test_local_signer_creates_address() {
+    fn test_local_signer_derives_bech32m_address() {
         let model = make_signer_model([1u8; 32]);
         let signer = LocalSigner::new(&model).unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(signer.address()).unwrap();
         match addr {
-            Address::Midnight(a) => assert!(a.starts_with("mn_")),
+            Address::Midnight(a) => {
+                assert!(a.starts_with("mn_addr_"), "got: {a}");
+            }
             _ => panic!("Expected Midnight address"),
+        }
+    }
+
+    #[test]
+    fn test_local_signer_derives_viewing_key() {
+        let model = make_signer_model([1u8; 32]);
+        let signer = LocalSigner::new(&model).unwrap();
+        let vk = signer.viewing_key();
+        match vk {
+            crate::services::sync::midnight::indexer::ViewingKeyFormat::Bech32m(key) => {
+                assert!(key.starts_with("mn_shield-esk_"), "got: {key}");
+            }
         }
     }
 
@@ -169,7 +209,6 @@ mod tests {
         let response = signer.sign_transaction(tx_data).await.unwrap();
         match response {
             SignTransactionResponse::Midnight(resp) => {
-                // Ed25519 signature is 64 bytes = 128 hex chars
                 assert_eq!(resp.signature.len(), 128);
             }
             _ => panic!("Expected Midnight response"),
