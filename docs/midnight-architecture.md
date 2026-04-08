@@ -397,23 +397,39 @@ let bytes = serialize(&proven_tx)?;
 
 ## 8. Remaining Work
 
-### 8.1 LedgerContext Population (Critical)
+### 8.1 LedgerContext Population (Implemented)
 
-The LedgerContext must have chain state before transactions can be built.
-Current state: the shielded sync connects and receives events, but
-unshielded UTXOs require block-level state updates.
+The LedgerContext is now populated via a three-step bootstrap during
+relayer initialization:
 
-**Recommended approach:** Use Subxt to read the current `LedgerState`
-directly from the node's runtime storage via `state_getStorage`. This
-avoids replaying the entire chain and gives immediate access to
-parameters, network_id, and UTXO state.
+1. **Subxt runtime API** — reads `network_id` and `LedgerParameters`
+   from the node via `get_network_id()` and `get_ledger_parameters()`.
+   Requires WSS URL (auto-converted from HTTPS config).
 
-### 8.2 Subxt Extrinsic Submission
+2. **Unshielded UTXO injection** — the `unshieldedTransactions` WS
+   subscription collects full UTXO details (`owner`, `value`, `tokenType`,
+   `intentHash`, `outputIndex`). These are deserialized, wrapped as `Utxo`
+   objects, and injected into the LedgerState via serialize→modify→inject.
+
+3. **Shielded sync** (optional) — feeds shielded transaction events into
+   `LedgerContext::update_from_tx()` for ZK wallet state.
+
+After bootstrap, `StandardTrasactionInfo::build()` can find UTXOs for
+spending and compute fees/TTL from the parameters.
+
+### 8.2 Subxt Extrinsic Submission (TODO)
 
 The `MidnightSubxtClient` is built but not yet wired into
 `submit_transaction`. Currently uses JSON-RPC `author_submitExtrinsic`.
 The Subxt path (`send_mn_transaction` pallet call) is the correct
 approach used by Midnight's own toolkit.
+
+### 8.3 DUST Fee Token
+
+Every Midnight transaction requires DUST fees. The relayer needs DUST
+tokens in the wallet alongside tNIGHT. Without DUST, the
+`StandardTrasactionInfo::build()` fee payment loop will fail.
+DUST is generated from tNIGHT via the Dust registration process.
 
 ### 8.3 Multi-RPC Failover
 
