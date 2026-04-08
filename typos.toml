@@ -8,6 +8,8 @@ StandardTrasactionInfo = "StandardTrasactionInfo"
 # Technical term for "no operation" transactions
 NOOP = "NOOP"
 noop = "noop"
+# midnight-node-ledger-helpers crate has this typo in its public API
+Trasaction = "Trasaction"
 
 [default]
 # Ignore short and long SHA commit hashes (7-40 hex characters)
