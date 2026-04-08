@@ -23,6 +23,7 @@ use soroban_rs::xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
     TransactionEnvelope, WriteXdr,
 };
+use tokio::sync::OnceCell;
 use tracing::debug;
 
 pub type DefaultGoogleCloudKmsService = GoogleCloudKmsService;
@@ -32,6 +33,8 @@ where
     T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait,
 {
     google_cloud_kms_service: T,
+    /// Cached signature hint (last 4 bytes of the public key), computed once on first use.
+    cached_hint: OnceCell<SignatureHint>,
 }
 
 impl GoogleCloudKmsSigner<DefaultGoogleCloudKmsService> {
@@ -39,6 +42,7 @@ impl GoogleCloudKmsSigner<DefaultGoogleCloudKmsService> {
     pub fn new(google_cloud_kms_service: DefaultGoogleCloudKmsService) -> Self {
         Self {
             google_cloud_kms_service,
+            cached_hint: OnceCell::new(),
         }
     }
 }
@@ -49,6 +53,7 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
     pub fn new_for_testing(google_cloud_kms_service: T) -> Self {
         Self {
             google_cloud_kms_service,
+            cached_hint: OnceCell::new(),
         }
     }
 }
@@ -207,53 +212,28 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         })
     }
 
-    /// Get the signature hint for this signer (last 4 bytes of the public key)
-    /// TODO: This can be cached on a future iteration
+    /// Get the signature hint for this signer (last 4 bytes of the public key).
+    ///
+    /// The hint is computed once and cached for the lifetime of the signer,
+    /// since it is deterministic for a given KMS key.
     async fn get_signature_hint(&self) -> Result<SignatureHint, SignerError> {
-        use crate::services::GoogleCloudKmsStellarService;
+        self.cached_hint
+            .get_or_try_init(|| async {
+                use crate::services::GoogleCloudKmsStellarService;
 
-        // Get the public key to derive the signature hint
-        let stellar_address =
-            GoogleCloudKmsStellarService::get_stellar_address(&self.google_cloud_kms_service)
+                let address = GoogleCloudKmsStellarService::get_stellar_address(
+                    &self.google_cloud_kms_service,
+                )
                 .await
                 .map_err(|e| {
                     SignerError::SigningError(format!(
                         "Failed to retrieve Stellar address from Google Cloud KMS: {e}"
                     ))
                 })?;
-
-        // Extract hint from the public key (last 4 bytes of public key)
-        match stellar_address {
-            Address::Stellar(addr) => {
-                // Parse the Stellar address to get the public key
-                use stellar_strkey::ed25519::PublicKey;
-                let pk = PublicKey::from_string(&addr).map_err(|e| {
-                    SignerError::SigningError(format!(
-                        "Failed to parse Stellar address '{addr}': {e}"
-                    ))
-                })?;
-                let pk_bytes = pk.0;
-
-                // Safety check: ensure we have enough bytes for the hint
-                if pk_bytes.len() < 4 {
-                    return Err(SignerError::SigningError(format!(
-                        "Public key too short for signature hint: {} bytes",
-                        pk_bytes.len()
-                    )));
-                }
-
-                let hint_bytes: [u8; 4] =
-                    pk_bytes[pk_bytes.len() - 4..].try_into().map_err(|_| {
-                        SignerError::SigningError(
-                            "Failed to create signature hint from public key".to_string(),
-                        )
-                    })?;
-                Ok(SignatureHint(hint_bytes))
-            }
-            _ => Err(SignerError::SigningError(format!(
-                "Expected Stellar address, got: {stellar_address:?}"
-            ))),
-        }
+                super::derive_signature_hint(&address)
+            })
+            .await
+            .cloned()
     }
 }
 

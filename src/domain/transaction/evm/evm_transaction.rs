@@ -2622,6 +2622,141 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_prepare_transaction_estimates_gas_for_contract_creation() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let mock_network = MockNetworkRepository::new();
+
+        let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
+            gas_limit_estimation: Some(true),
+            min_balance: Some(100000000000000000u128),
+            ..Default::default()
+        });
+
+        let mut test_tx = create_test_transaction();
+        if let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data {
+            evm_data.to = None;
+            evm_data.data = Some("0x6080604052348015600f57600080fd5b".to_string());
+            evm_data.gas_limit = None;
+            evm_data.nonce = None;
+        }
+
+        const PROVIDER_GAS_ESTIMATE: u64 = 1500000;
+        const EXPECTED_GAS_WITH_BUFFER: u64 = 1650000;
+
+        mock_provider
+            .expect_estimate_gas()
+            .withf(|tx| tx.to.is_none())
+            .times(1)
+            .returning(move |_| Box::pin(async move { Ok(PROVIDER_GAS_ESTIMATE) }));
+
+        mock_provider
+            .expect_get_balance()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(U256::from(2000000000000000000u128)) }));
+
+        let price_params = PriceParams {
+            gas_price: Some(20_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(1900000000000000000u128),
+        };
+
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        counter_service
+            .expect_get_and_increment()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(42) }));
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xhash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(2)
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+
+                if let Some(status) = &update.status {
+                    updated_tx.status = status.clone();
+                }
+                if let Some(network_data) = &update.network_data {
+                    updated_tx.network_data = network_data.clone();
+                } else if let NetworkTransactionData::Evm(ref mut evm_data) =
+                    updated_tx.network_data
+                {
+                    if evm_data.gas_limit.is_none() {
+                        evm_data.gas_limit = Some(expected_gas_limit);
+                    }
+                }
+                if let Some(hashes) = &update.hashes {
+                    updated_tx.hashes = hashes.clone();
+                }
+
+                Ok(updated_tx)
+            });
+
+        let transaction = EvmRelayerTransaction::new(
+            relayer,
+            mock_provider,
+            Arc::new(mock_relayer),
+            Arc::new(mock_network),
+            Arc::new(mock_transaction),
+            Arc::new(counter_service),
+            Arc::new(mock_job_producer),
+            mock_price_calculator,
+            mock_signer,
+        )
+        .unwrap();
+
+        let result = transaction.prepare_transaction(test_tx).await;
+
+        assert!(result.is_ok(), "prepare_transaction should succeed");
+        let prepared_tx = result.unwrap();
+
+        if let NetworkTransactionData::Evm(evm_data) = prepared_tx.network_data {
+            assert_eq!(evm_data.to, None);
+            assert_eq!(evm_data.gas_limit, Some(EXPECTED_GAS_WITH_BUFFER));
+        } else {
+            panic!("Expected EVM network data");
+        }
+    }
+
     #[test]
     fn test_is_already_submitted_error_detection() {
         // Test "already known" variants

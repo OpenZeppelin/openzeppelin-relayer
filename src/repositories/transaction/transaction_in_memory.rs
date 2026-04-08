@@ -71,6 +71,16 @@ impl InMemoryTransactionRepository {
             .cmp(a_key) // Descending (newest first)
             .then_with(|| b.id.cmp(&a.id)) // Tie-breaker: sort by ID for deterministic ordering
     }
+
+    fn is_final_state(status: &TransactionStatus) -> bool {
+        matches!(
+            status,
+            TransactionStatus::Confirmed
+                | TransactionStatus::Failed
+                | TransactionStatus::Expired
+                | TransactionStatus::Canceled
+        )
+    }
 }
 
 // Implement both traits for InMemoryTransactionRepository
@@ -355,9 +365,100 @@ impl TransactionRepository for InMemoryTransactionRepository {
         tx_id: String,
         sent_at: String,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut tx = self.get_by_id(tx_id.clone()).await?;
-        tx.sent_at = Some(sent_at);
-        self.update(tx_id, tx).await
+        let update = TransactionUpdateRequest {
+            sent_at: Some(sent_at),
+            ..Default::default()
+        };
+        self.partial_update(tx_id, update).await
+    }
+
+    async fn increment_status_check_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.consecutive_failures = metadata.consecutive_failures.saturating_add(1);
+            metadata.total_failures = metadata.total_failures.saturating_add(1);
+            tx.metadata = Some(metadata);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
+    async fn reset_status_check_consecutive_failures(
+        &self,
+        tx_id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.consecutive_failures = 0;
+            tx.metadata = Some(metadata);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
+    async fn record_stellar_insufficient_fee_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.insufficient_fee_retries = metadata.insufficient_fee_retries.saturating_add(1);
+            tx.metadata = Some(metadata);
+            tx.sent_at = Some(sent_at);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
+    async fn record_stellar_try_again_later_retry(
+        &self,
+        tx_id: String,
+        sent_at: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if Self::is_final_state(&tx.status) {
+                return Ok(tx.clone());
+            }
+            let mut metadata = tx.metadata.clone().unwrap_or_default();
+            metadata.try_again_later_retries = metadata.try_again_later_retries.saturating_add(1);
+            tx.metadata = Some(metadata);
+            tx.sent_at = Some(sent_at);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
     }
 
     async fn set_confirmed_at(
@@ -1931,5 +2032,305 @@ mod tests {
         // relayer-2's transaction should still exist
         let remaining = repo.get_by_id("tx-relayer-2".to_string()).await.unwrap();
         assert_eq!(remaining.relayer_id, "relayer-2");
+    }
+
+    // ── increment_status_check_failures ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_increment_status_check_failures_no_prior_metadata() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("tx-inc-1");
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .increment_status_check_failures("tx-inc-1".to_string())
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.expect("metadata should be set");
+        assert_eq!(meta.consecutive_failures, 1);
+        assert_eq!(meta.total_failures, 1);
+        assert_eq!(meta.insufficient_fee_retries, 0);
+    }
+
+    #[tokio::test]
+    async fn test_increment_status_check_failures_accumulates() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("tx-inc-2");
+        repo.create(tx).await.unwrap();
+
+        repo.increment_status_check_failures("tx-inc-2".to_string())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures("tx-inc-2".to_string())
+            .await
+            .unwrap();
+        let updated = repo
+            .increment_status_check_failures("tx-inc-2".to_string())
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 3);
+        assert_eq!(meta.total_failures, 3);
+    }
+
+    #[tokio::test]
+    async fn test_increment_status_check_failures_noop_on_final_state() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-inc-final");
+        tx.status = TransactionStatus::Confirmed;
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .increment_status_check_failures("tx-inc-final".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged — no metadata set
+        assert!(result.metadata.is_none());
+        assert_eq!(result.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_increment_status_check_failures_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .increment_status_check_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── reset_status_check_consecutive_failures ─────────────────────
+
+    #[tokio::test]
+    async fn test_reset_consecutive_failures() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("tx-reset-1");
+        repo.create(tx).await.unwrap();
+
+        // Increment a few times first
+        repo.increment_status_check_failures("tx-reset-1".to_string())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures("tx-reset-1".to_string())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .reset_status_check_consecutive_failures("tx-reset-1".to_string())
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        // total_failures should be preserved
+        assert_eq!(meta.total_failures, 2);
+    }
+
+    #[tokio::test]
+    async fn test_reset_consecutive_failures_noop_on_final_state() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-reset-final");
+        tx.status = TransactionStatus::Failed;
+        tx.metadata = Some(crate::models::TransactionMetadata {
+            consecutive_failures: 5,
+            total_failures: 10,
+            insufficient_fee_retries: 0,
+            try_again_later_retries: 0,
+        });
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .reset_status_check_consecutive_failures("tx-reset-final".to_string())
+            .await
+            .unwrap();
+
+        // Should return unchanged
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 5);
+    }
+
+    #[tokio::test]
+    async fn test_reset_consecutive_failures_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .reset_status_check_consecutive_failures("nonexistent".to_string())
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_insufficient_fee_retry ───────────────────────
+
+    #[tokio::test]
+    async fn test_record_insufficient_fee_retry() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-fee-1");
+        tx.status = TransactionStatus::Sent;
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(
+                "tx-fee-1".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_record_insufficient_fee_retry_accumulates() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-fee-2");
+        tx.status = TransactionStatus::Sent;
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_insufficient_fee_retry(
+            "tx-fee-2".to_string(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_insufficient_fee_retry(
+                "tx-fee-2".to_string(),
+                "2025-03-18T10:01:00Z".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.insufficient_fee_retries, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_insufficient_fee_retry_noop_on_final_state() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-fee-final");
+        tx.status = TransactionStatus::Confirmed;
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_insufficient_fee_retry(
+                "tx-fee-final".to_string(),
+                "new-time".to_string(),
+            )
+            .await
+            .unwrap();
+
+        // Should return unchanged
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_record_insufficient_fee_retry_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .record_stellar_insufficient_fee_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── record_stellar_try_again_later_retry ───────────────────────
+
+    #[tokio::test]
+    async fn test_record_try_again_later_retry() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-tal-1");
+        tx.status = TransactionStatus::Sent;
+        tx.sent_at = None;
+        repo.create(tx).await.unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(
+                "tx-tal-1".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:00:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 1);
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_record_try_again_later_retry_accumulates() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-tal-2");
+        tx.status = TransactionStatus::Sent;
+        repo.create(tx).await.unwrap();
+
+        repo.record_stellar_try_again_later_retry(
+            "tx-tal-2".to_string(),
+            "2025-03-18T10:00:00Z".to_string(),
+        )
+        .await
+        .unwrap();
+
+        let updated = repo
+            .record_stellar_try_again_later_retry(
+                "tx-tal-2".to_string(),
+                "2025-03-18T10:01:00Z".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.sent_at.as_deref(), Some("2025-03-18T10:01:00Z"));
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.try_again_later_retries, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_try_again_later_retry_noop_on_final_state() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-tal-final");
+        tx.status = TransactionStatus::Confirmed;
+        tx.sent_at = Some("old-time".to_string());
+        repo.create(tx).await.unwrap();
+
+        let result = repo
+            .record_stellar_try_again_later_retry(
+                "tx-tal-final".to_string(),
+                "new-time".to_string(),
+            )
+            .await
+            .unwrap();
+
+        // Should return unchanged
+        assert_eq!(result.sent_at.as_deref(), Some("old-time"));
+        assert!(result.metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_record_try_again_later_retry_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .record_stellar_try_again_later_retry(
+                "nonexistent".to_string(),
+                "2025-03-18T10:00:00Z".to_string(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 }

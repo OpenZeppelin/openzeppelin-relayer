@@ -1,0 +1,13 @@
+{
+  "name": "RPC → connection reset (any method)",
+  "request": {
+    "method": "POST"
+  },
+  "response": {
+    "fault": "CONNECTION_RESET_BY_PEER"
+  },
+  "scenarioName": "rpc-connection-reset",
+  "requiredScenarioState": "armed",
+  "newScenarioState": "Started",
+  "priority": 1
+}

@@ -1,8 +1,21 @@
 use std::num::ParseIntError;
+use std::time::Duration;
+
+use once_cell::sync::Lazy;
+use reqwest::Client as ReqwestClient;
+use tracing::debug;
 
 use crate::config::ServerConfig;
-use crate::constants::{matches_known_transaction, ALREADY_SUBMITTED_PATTERNS};
+use crate::constants::{
+    matches_known_transaction, ALREADY_SUBMITTED_PATTERNS,
+    DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+    DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+    DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS, DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST,
+    DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+};
 use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
+use crate::utils::create_secure_redirect_policy;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -97,6 +110,60 @@ impl ProviderConfig {
         let server_config = ServerConfig::from_env();
         Self::from_server_config(&server_config, rpc_configs)
     }
+}
+
+/// Pre-configured `reqwest::ClientBuilder` with standard pool, keepalive, TLS,
+/// and redirect settings. Callers chain on extras (e.g., `.timeout(...)`) then `.build()`.
+fn base_rpc_client_builder() -> reqwest::ClientBuilder {
+    ReqwestClient::builder()
+        .connect_timeout(Duration::from_secs(
+            DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+        ))
+        .pool_max_idle_per_host(DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+        .pool_idle_timeout(Duration::from_secs(
+            DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
+        ))
+        .tcp_keepalive(Duration::from_secs(
+            DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+        ))
+        .http2_keep_alive_interval(Some(Duration::from_secs(
+            DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+        )))
+        .http2_keep_alive_timeout(Duration::from_secs(
+            DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+        ))
+        .use_rustls_tls()
+        .redirect(create_secure_redirect_policy())
+}
+
+/// Shared `reqwest::Client` for RPC providers that set per-request timeouts
+/// (e.g., Stellar raw HTTP). No request-level timeout is baked in.
+static SHARED_RPC_HTTP_CLIENT: Lazy<Result<ReqwestClient, String>> = Lazy::new(|| {
+    debug!("Creating shared RPC HTTP client");
+    base_rpc_client_builder()
+        .build()
+        .map_err(|e| format!("Failed to create shared RPC HTTP client: {e}"))
+});
+
+/// Get the shared RPC HTTP client (no per-request timeout).
+pub fn get_shared_rpc_http_client() -> Result<ReqwestClient, ProviderError> {
+    SHARED_RPC_HTTP_CLIENT
+        .as_ref()
+        .map(|c| c.clone())
+        .map_err(|e| ProviderError::NetworkConfiguration(e.clone()))
+}
+
+/// Build a new RPC HTTP client with standard settings plus a per-request timeout.
+/// Use when the provider needs timeouts baked into the client (e.g., EVM via alloy transport).
+pub fn build_rpc_http_client_with_timeout(
+    timeout: Duration,
+) -> Result<ReqwestClient, ProviderError> {
+    base_rpc_client_builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("Failed to build RPC HTTP client: {e}"))
+        })
 }
 
 #[derive(Error, Debug, Serialize)]
