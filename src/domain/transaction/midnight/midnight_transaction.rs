@@ -186,6 +186,23 @@ where
         // Set funding seeds so DUST fees are paid from the wallet
         tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
 
+        // Always include DUST registration — this ensures DUST generation is
+        // bootstrapped even on the first transaction. If already registered,
+        // the registration is idempotent.
+        {
+            let signing_key = context.with_wallet_from_seed(wallet_seed.clone(), |wallet| {
+                wallet.unshielded.signing_key().clone()
+            });
+            let dust_address =
+                context.with_wallet_from_seed(wallet_seed.clone(), |wallet| wallet.dust.public_key);
+
+            tx_info.add_dust_registration(midnight_node_ledger_helpers::DustRegistrationBuilder {
+                signing_key,
+                dust_address: Some(dust_address),
+                allow_fee_payment: 0,
+            });
+        }
+
         // Build unshielded offer from request data
         if let Some(ref offer_req) = midnight_data.guaranteed_offer {
             let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = Vec::new();
@@ -225,12 +242,15 @@ where
 
             let unshielded_offer = UnshieldedOfferInfo { inputs, outputs };
 
-            // Wrap in an intent and add to the transaction
+            // Wrap in an intent and add to the transaction.
+            // Use segment 1 (fallible) when DUST registration is included,
+            // since DUST actions require fallible segments only.
+            let segment_id = 1; // fallible segment
             tx_info.add_intent(
-                0, // segment 0 = guaranteed
+                segment_id,
                 Box::new(IntentInfo {
-                    guaranteed_unshielded_offer: Some(unshielded_offer),
-                    fallible_unshielded_offer: None,
+                    guaranteed_unshielded_offer: None,
+                    fallible_unshielded_offer: Some(unshielded_offer),
                     actions: vec![],
                 }),
             );
