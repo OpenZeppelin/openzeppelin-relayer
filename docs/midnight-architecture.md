@@ -47,25 +47,26 @@ midnight = [
 
 ## 2. Key Decisions & Rationale
 
-### 2.1 External Key Derivation (keygen script)
+### 2.1 Native Key Derivation in Rust
 
-**Decision:** Derive bech32m addresses and viewing keys externally via a
-TypeScript script (`scripts/midnight-keygen/keygen.mjs`) using
-`@midnight-ntwrk/ledger` WASM, then pass values via environment variables.
+**Decision:** Derive bech32m addresses and viewing keys directly in Rust
+using `midnight-node-ledger-helpers` wallet and the `bech32` crate.
 
-**Rationale:** Midnight wallets derive three subwallets (shielded, encryption,
-dust) from a seed using a specific key tree. The Rust crate can do this, but
-the TypeScript path was faster to validate and doesn't require the heavy crate
-at key generation time.
+**How it works:**
+- The keystore's 32-byte raw key IS the wallet seed
+- `LedgerContext::new_from_wallet_seeds()` derives the full wallet
+- `wallet.unshielded.signing_key().verifying_key()` → bech32m encode → unshielded address
+- `wallet.shielded.viewing_key(network)` → viewing key (built-in bech32m)
+- Network HRP is derived from the config's `network` field (e.g., "preview")
 
-**Environment variables:**
-- `MIDNIGHT_ADDRESS` — unshielded address (`mn_addr_preview...`) for funding
-- `MIDNIGHT_VIEWING_KEY` — encryption secret key (`mn_shield-esk_preview...`) for indexer sync
+**Previous approach (deprecated):** External TypeScript keygen script
+(`scripts/midnight-keygen/keygen.mjs`) + `MIDNIGHT_ADDRESS`/`MIDNIGHT_VIEWING_KEY`
+env vars. This caused seed mismatch issues because the keystore key and
+keygen seed were different. The script is still useful as a standalone tool.
 
-**Why not derive in Rust?** The `midnight-node-ledger-helpers` crate can
-create wallets from seeds, but the bech32m encoding for addresses requires
-knowledge of the exact HRP convention per network, which the TypeScript SDK
-handles natively.
+**Critical invariant:** The same 32-byte seed must be used by the signer,
+the LedgerContextManager, and the keygen script (if used). Mismatch causes
+UTXO owner validation failures during transaction building.
 
 ### 2.2 Bech32m HRP Convention (preview testnet)
 
