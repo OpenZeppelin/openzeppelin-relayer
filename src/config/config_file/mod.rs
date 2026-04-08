@@ -43,6 +43,8 @@ pub use network::{
     EvmNetworkConfig, GasPriceCacheConfig, NetworkConfigCommon, NetworkFileConfig,
     NetworksFileConfig, SolanaNetworkConfig, StellarNetworkConfig,
 };
+#[cfg(feature = "midnight")]
+pub use network::{IndexerUrls, MidnightNetworkConfig};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +52,8 @@ pub enum ConfigFileNetworkType {
     Evm,
     Stellar,
     Solana,
+    #[cfg(feature = "midnight")]
+    Midnight,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

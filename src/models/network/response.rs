@@ -58,6 +58,21 @@ pub struct NetworkResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub symbol: Option<String>,
+    /// Midnight-specific: Indexer URLs
+    #[cfg(feature = "midnight")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub indexer_urls: Option<crate::config::IndexerUrls>,
+    /// Midnight-specific: Prover URL
+    #[cfg(feature = "midnight")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub prover_url: Option<String>,
+    /// Midnight-specific: commitment tree TTL in seconds
+    #[cfg(feature = "midnight")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub commitment_tree_ttl: Option<u64>,
     /// Stellar-specific: Network passphrase
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
@@ -87,6 +102,12 @@ impl From<NetworkRepoModel> for NetworkResponse {
             required_confirmations: None,
             features: None,
             symbol: None,
+            #[cfg(feature = "midnight")]
+            indexer_urls: None,
+            #[cfg(feature = "midnight")]
+            prover_url: None,
+            #[cfg(feature = "midnight")]
+            commitment_tree_ttl: None,
             passphrase: None,
             horizon_url: None,
         };
@@ -105,6 +126,12 @@ impl From<NetworkRepoModel> for NetworkResponse {
             NetworkConfigData::Stellar(stellar_config) => {
                 response.passphrase = stellar_config.passphrase.clone();
                 response.horizon_url = stellar_config.horizon_url.clone();
+            }
+            #[cfg(feature = "midnight")]
+            NetworkConfigData::Midnight(midnight_config) => {
+                response.indexer_urls = Some(midnight_config.indexer_urls.clone());
+                response.prover_url = Some(midnight_config.prover_url.clone());
+                response.commitment_tree_ttl = midnight_config.commitment_tree_ttl;
             }
         }
 

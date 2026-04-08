@@ -23,6 +23,8 @@ pub mod common;
 pub mod evm;
 pub mod file_loading;
 pub mod inheritance;
+#[cfg(feature = "midnight")]
+pub mod midnight;
 pub mod solana;
 pub mod stellar;
 #[cfg(test)]
@@ -33,6 +35,8 @@ pub use common::*;
 pub use evm::*;
 pub use file_loading::*;
 pub use inheritance::*;
+#[cfg(feature = "midnight")]
+pub use midnight::*;
 pub use solana::*;
 pub use stellar::*;
 
@@ -52,6 +56,9 @@ pub enum NetworkFileConfig {
     Solana(SolanaNetworkConfig),
     /// Configuration for a Stellar network.
     Stellar(StellarNetworkConfig),
+    #[cfg(feature = "midnight")]
+    /// Configuration for a Midnight network.
+    Midnight(MidnightNetworkConfig),
 }
 
 impl NetworkFileConfig {
@@ -65,6 +72,8 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.validate(),
             NetworkFileConfig::Solana(network) => network.validate(),
             NetworkFileConfig::Stellar(network) => network.validate(),
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(network) => network.validate(),
         }
     }
 
@@ -77,6 +86,8 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => &network.common.network,
             NetworkFileConfig::Solana(network) => &network.common.network,
             NetworkFileConfig::Stellar(network) => &network.common.network,
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(network) => &network.common.network,
         }
     }
 
@@ -89,6 +100,8 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(_) => ConfigFileNetworkType::Evm,
             NetworkFileConfig::Solana(_) => ConfigFileNetworkType::Solana,
             NetworkFileConfig::Stellar(_) => ConfigFileNetworkType::Stellar,
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(_) => ConfigFileNetworkType::Midnight,
         }
     }
 
@@ -102,6 +115,8 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.common.is_testnet.unwrap_or(false),
             NetworkFileConfig::Solana(network) => network.common.is_testnet.unwrap_or(false),
             NetworkFileConfig::Stellar(network) => network.common.is_testnet.unwrap_or(false),
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(network) => network.common.is_testnet.unwrap_or(false),
         }
     }
 
@@ -115,6 +130,8 @@ impl NetworkFileConfig {
             NetworkFileConfig::Evm(network) => network.common.from.as_deref(),
             NetworkFileConfig::Solana(network) => network.common.from.as_deref(),
             NetworkFileConfig::Stellar(network) => network.common.from.as_deref(),
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(network) => network.common.from.as_deref(),
         }
     }
 }

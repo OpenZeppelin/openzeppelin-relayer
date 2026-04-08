@@ -204,6 +204,15 @@ where
                 horizon_url: stellar_config.horizon_url,
             })
         }
+        #[cfg(feature = "midnight")]
+        NetworkConfigData::Midnight(midnight_config) => {
+            NetworkConfigData::Midnight(crate::config::MidnightNetworkConfig {
+                common: updated_common,
+                indexer_urls: midnight_config.indexer_urls,
+                prover_url: midnight_config.prover_url,
+                commitment_tree_ttl: midnight_config.commitment_tree_ttl,
+            })
+        }
     };
 
     // Update the network model

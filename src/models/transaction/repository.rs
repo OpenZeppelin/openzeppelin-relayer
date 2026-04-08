@@ -1,4 +1,6 @@
 use super::evm::Speed;
+#[cfg(feature = "midnight")]
+use super::request::midnight::MidnightTransactionRequest;
 use crate::{
     config::ServerConfig,
     constants::{
@@ -244,6 +246,8 @@ pub enum NetworkTransactionData {
     Evm(EvmTransactionData),
     Solana(SolanaTransactionData),
     Stellar(StellarTransactionData),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightTransactionData),
 }
 
 impl NetworkTransactionData {
@@ -270,6 +274,18 @@ impl NetworkTransactionData {
             NetworkTransactionData::Stellar(data) => Ok(data.clone()),
             _ => Err(TransactionError::InvalidType(
                 "Expected Stellar transaction".to_string(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "midnight")]
+    pub fn get_midnight_transaction_data(
+        &self,
+    ) -> Result<MidnightTransactionData, TransactionError> {
+        match self {
+            NetworkTransactionData::Midnight(data) => Ok(data.clone()),
+            _ => Err(TransactionError::InvalidType(
+                "Expected Midnight transaction".to_string(),
             )),
         }
     }
@@ -620,6 +636,17 @@ pub struct StellarTransactionData {
     pub transaction_input: TransactionInput,
     pub signed_envelope_xdr: Option<String>,
     pub transaction_result_xdr: Option<String>,
+}
+
+#[cfg(feature = "midnight")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct MidnightTransactionData {
+    pub hash: Option<String>,
+    pub pallet_hash: Option<String>,
+    pub block_hash: Option<String>,
+    pub guaranteed_offer: Option<crate::models::MidnightOfferRequest>,
+    pub intents: Vec<crate::models::MidnightIntentRequest>,
+    pub fallible_offers: Vec<crate::models::MidnightFallibleOfferRequest>,
 }
 
 impl StellarTransactionData {
@@ -1020,6 +1047,36 @@ impl
                     delete_at: None,
                     network_type: NetworkType::Stellar,
                     network_data: NetworkTransactionData::Stellar(stellar_data),
+                    priced_at: None,
+                    hashes: Vec::new(),
+                    noop_count: None,
+                    is_canceled: Some(false),
+                    metadata: None,
+                })
+            }
+            #[cfg(feature = "midnight")]
+            NetworkTransactionRequest::Midnight(midnight_request) => {
+                let midnight_request: &MidnightTransactionRequest = midnight_request;
+
+                Ok(Self {
+                    id: Uuid::new_v4().to_string(),
+                    relayer_id: relayer_model.id.clone(),
+                    status: TransactionStatus::Pending,
+                    status_reason: None,
+                    created_at: now,
+                    sent_at: None,
+                    confirmed_at: None,
+                    valid_until: midnight_request.ttl.clone(),
+                    delete_at: None,
+                    network_type: NetworkType::Midnight,
+                    network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
+                        hash: None,
+                        pallet_hash: None,
+                        block_hash: None,
+                        guaranteed_offer: midnight_request.guaranteed_offer.clone(),
+                        intents: midnight_request.intents.clone(),
+                        fallible_offers: midnight_request.fallible_offers.clone(),
+                    }),
                     priced_at: None,
                     hashes: Vec::new(),
                     noop_count: None,

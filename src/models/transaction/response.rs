@@ -18,6 +18,8 @@ pub enum TransactionResponse {
     Evm(Box<EvmTransactionResponse>),
     Solana(Box<SolanaTransactionResponse>),
     Stellar(Box<StellarTransactionResponse>),
+    #[cfg(feature = "midnight")]
+    Midnight(Box<MidnightTransactionResponse>),
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -114,6 +116,25 @@ pub struct StellarTransactionResponse {
     pub transaction_result_xdr: Option<String>,
 }
 
+#[cfg(feature = "midnight")]
+#[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
+pub struct MidnightTransactionResponse {
+    pub id: String,
+    #[schema(nullable = false)]
+    pub hash: Option<String>,
+    #[schema(nullable = false)]
+    pub pallet_hash: Option<String>,
+    #[schema(nullable = false)]
+    pub block_hash: Option<String>,
+    pub status: TransactionStatus,
+    pub status_reason: Option<String>,
+    pub created_at: String,
+    #[schema(nullable = false)]
+    pub sent_at: Option<String>,
+    #[schema(nullable = false)]
+    pub confirmed_at: Option<String>,
+}
+
 impl From<TransactionRepoModel> for TransactionResponse {
     fn from(model: TransactionRepoModel) -> Self {
         match model.network_data {
@@ -167,6 +188,20 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     sequence_number: stellar_data.sequence_number.unwrap_or(0),
                     relayer_id: model.relayer_id,
                     transaction_result_xdr: stellar_data.transaction_result_xdr,
+                }))
+            }
+            #[cfg(feature = "midnight")]
+            NetworkTransactionData::Midnight(midnight_data) => {
+                TransactionResponse::Midnight(Box::new(MidnightTransactionResponse {
+                    id: model.id,
+                    hash: midnight_data.hash,
+                    pallet_hash: midnight_data.pallet_hash,
+                    block_hash: midnight_data.block_hash,
+                    status: model.status,
+                    status_reason: model.status_reason,
+                    created_at: model.created_at,
+                    sent_at: model.sent_at,
+                    confirmed_at: model.confirmed_at,
                 }))
             }
         }

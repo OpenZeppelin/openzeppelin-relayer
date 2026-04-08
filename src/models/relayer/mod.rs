@@ -49,6 +49,8 @@ pub enum RelayerNetworkType {
     Evm,
     Solana,
     Stellar,
+    #[cfg(feature = "midnight")]
+    Midnight,
 }
 
 impl Display for RelayerNetworkType {
@@ -57,6 +59,8 @@ impl Display for RelayerNetworkType {
             RelayerNetworkType::Evm => write!(f, "evm"),
             RelayerNetworkType::Solana => write!(f, "solana"),
             RelayerNetworkType::Stellar => write!(f, "stellar"),
+            #[cfg(feature = "midnight")]
+            RelayerNetworkType::Midnight => write!(f, "midnight"),
         }
     }
 }
@@ -67,6 +71,8 @@ impl From<ConfigFileNetworkType> for RelayerNetworkType {
             ConfigFileNetworkType::Evm => RelayerNetworkType::Evm,
             ConfigFileNetworkType::Solana => RelayerNetworkType::Solana,
             ConfigFileNetworkType::Stellar => RelayerNetworkType::Stellar,
+            #[cfg(feature = "midnight")]
+            ConfigFileNetworkType::Midnight => RelayerNetworkType::Midnight,
         }
     }
 }
@@ -77,6 +83,8 @@ impl From<RelayerNetworkType> for ConfigFileNetworkType {
             RelayerNetworkType::Evm => ConfigFileNetworkType::Evm,
             RelayerNetworkType::Solana => ConfigFileNetworkType::Solana,
             RelayerNetworkType::Stellar => ConfigFileNetworkType::Stellar,
+            #[cfg(feature = "midnight")]
+            RelayerNetworkType::Midnight => ConfigFileNetworkType::Midnight,
         }
     }
 }
@@ -661,6 +669,14 @@ impl RelayerStellarPolicy {
     }
 }
 
+/// Midnight-specific relayer policy configuration
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RelayerMidnightPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_balance: Option<u64>,
+}
+
 /// Network-specific policy for relayers
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "network_type")]
@@ -671,6 +687,9 @@ pub enum RelayerNetworkPolicy {
     Solana(RelayerSolanaPolicy),
     #[serde(rename = "stellar")]
     Stellar(RelayerStellarPolicy),
+    #[cfg(feature = "midnight")]
+    #[serde(rename = "midnight")]
+    Midnight(RelayerMidnightPolicy),
 }
 
 impl RelayerNetworkPolicy {
@@ -695,6 +714,14 @@ impl RelayerNetworkPolicy {
         match self {
             Self::Stellar(policy) => policy.clone(),
             _ => RelayerStellarPolicy::default(),
+        }
+    }
+
+    #[cfg(feature = "midnight")]
+    pub fn get_midnight_policy(&self) -> RelayerMidnightPolicy {
+        match self {
+            Self::Midnight(policy) => policy.clone(),
+            _ => RelayerMidnightPolicy::default(),
         }
     }
 }
@@ -807,6 +834,8 @@ impl Relayer {
             (RelayerNetworkType::Stellar, Some(RelayerNetworkPolicy::Stellar(policy))) => {
                 self.validate_stellar_policy(policy)?;
             }
+            #[cfg(feature = "midnight")]
+            (RelayerNetworkType::Midnight, Some(RelayerNetworkPolicy::Midnight(_))) => {}
             (RelayerNetworkType::Stellar, None) => {
                 return Err(RelayerValidationError::InvalidPolicy(
                     "Stellar policy is required. fee_payment_strategy is required".into(),
@@ -818,6 +847,8 @@ impl Relayer {
                     RelayerNetworkPolicy::Evm(_) => "EVM",
                     RelayerNetworkPolicy::Solana(_) => "Solana",
                     RelayerNetworkPolicy::Stellar(_) => "Stellar",
+                    #[cfg(feature = "midnight")]
+                    RelayerNetworkPolicy::Midnight(_) => "Midnight",
                 };
                 let network_type_str = format!("{network_type:?}");
                 return Err(RelayerValidationError::InvalidPolicy(format!(

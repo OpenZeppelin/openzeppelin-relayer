@@ -38,6 +38,11 @@ pub use solana::*;
 mod stellar;
 pub use stellar::*;
 
+#[cfg(feature = "midnight")]
+mod midnight;
+#[cfg(feature = "midnight")]
+pub use midnight::*;
+
 use crate::{
     domain::{
         SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest,
@@ -78,6 +83,8 @@ pub enum NetworkSigner {
     Evm(EvmSigner),
     Solana(SolanaSigner),
     Stellar(StellarSigner),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightSigner),
 }
 
 #[async_trait]
@@ -87,6 +94,8 @@ impl Signer for NetworkSigner {
             Self::Evm(signer) => signer.address().await,
             Self::Solana(signer) => signer.address().await,
             Self::Stellar(signer) => signer.address().await,
+            #[cfg(feature = "midnight")]
+            Self::Midnight(signer) => signer.address().await,
         }
     }
 
@@ -98,6 +107,8 @@ impl Signer for NetworkSigner {
             Self::Evm(signer) => signer.sign_transaction(transaction).await,
             Self::Solana(signer) => signer.sign_transaction(transaction).await,
             Self::Stellar(signer) => signer.sign_transaction(transaction).await,
+            #[cfg(feature = "midnight")]
+            Self::Midnight(signer) => signer.sign_transaction(transaction).await,
         }
     }
 }
@@ -120,6 +131,10 @@ impl DataSignerTrait for NetworkSigner {
             Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: sign data not supported".into(),
             )),
+            #[cfg(feature = "midnight")]
+            Self::Midnight(_) => Err(SignerError::UnsupportedTypeError(
+                "Midnight: sign data not supported".into(),
+            )),
         }
     }
 
@@ -137,6 +152,10 @@ impl DataSignerTrait for NetworkSigner {
             )),
             Self::Stellar(_) => Err(SignerError::UnsupportedTypeError(
                 "Stellar: Signing typed data not supported".into(),
+            )),
+            #[cfg(feature = "midnight")]
+            Self::Midnight(_) => Err(SignerError::UnsupportedTypeError(
+                "Midnight: Signing typed data not supported".into(),
             )),
         }
     }
@@ -161,6 +180,11 @@ impl SignerFactory {
             NetworkType::Stellar => {
                 let stellar_signer = StellarSignerFactory::create_stellar_signer(signer_model)?;
                 NetworkSigner::Stellar(stellar_signer)
+            }
+            #[cfg(feature = "midnight")]
+            NetworkType::Midnight => {
+                let midnight_signer = MidnightSignerFactory::create_midnight_signer(signer_model)?;
+                NetworkSigner::Midnight(midnight_signer)
             }
         };
 

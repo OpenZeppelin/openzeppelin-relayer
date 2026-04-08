@@ -17,6 +17,8 @@
 //! 2. **Recursive resolution**: Resolve parent's inheritance chain first
 //! 3. **Merging**: Combine child with resolved parent configuration
 
+#[cfg(feature = "midnight")]
+use super::MidnightNetworkConfig;
 use super::{
     ConfigFileNetworkType, EvmNetworkConfig, NetworkFileConfig, SolanaNetworkConfig,
     StellarNetworkConfig,
@@ -108,6 +110,14 @@ impl<'a> InheritanceResolver<'a> {
         Stellar,
         Stellar,
         "Stellar"
+    );
+    #[cfg(feature = "midnight")]
+    impl_inheritance_resolver!(
+        resolve_midnight_inheritance,
+        MidnightNetworkConfig,
+        Midnight,
+        Midnight,
+        "Midnight"
     );
 }
 

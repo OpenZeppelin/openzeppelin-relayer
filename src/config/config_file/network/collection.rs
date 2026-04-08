@@ -185,6 +185,12 @@ impl NetworksFileConfig {
                     resolver.resolve_stellar_inheritance(config, network_name, parent_name)?;
                 Ok(NetworkFileConfig::Stellar(resolved_config))
             }
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(config) => {
+                let resolved_config =
+                    resolver.resolve_midnight_inheritance(config, network_name, parent_name)?;
+                Ok(NetworkFileConfig::Midnight(resolved_config))
+            }
         }
     }
 

@@ -734,6 +734,19 @@ mod tests {
                 };
                 NetworkRepoModel::new_stellar(stellar_config)
             }
+            #[cfg(feature = "midnight")]
+            NetworkType::Midnight => {
+                let midnight_config = crate::config::MidnightNetworkConfig {
+                    common,
+                    indexer_urls: crate::config::IndexerUrls {
+                        http: "https://indexer.example.com/api/v4/graphql".to_string(),
+                        ws: "wss://indexer.example.com/api/v4/graphql/ws".to_string(),
+                    },
+                    prover_url: "http://localhost:6300".to_string(),
+                    commitment_tree_ttl: None,
+                };
+                NetworkRepoModel::new_midnight(midnight_config)
+            }
         }
     }
 

@@ -514,6 +514,11 @@ where
                 debug!(relayer_id = %relayer.id, "EVM relayers do not support swap; skipping");
                 continue;
             }
+            #[cfg(feature = "midnight")]
+            RelayerNetworkPolicy::Midnight(_) => {
+                debug!(relayer_id = %relayer.id, "Midnight relayers do not support swap yet; skipping");
+                continue;
+            }
         };
 
         let calendar_schedule = match apalis_cron::Schedule::from_str(&cron_schedule) {

@@ -32,6 +32,11 @@ pub use plugin::*;
 pub mod api_key;
 pub use api_key::*;
 
+#[cfg(feature = "midnight")]
+pub mod relayer_state;
+#[cfg(feature = "midnight")]
+pub use relayer_state::*;
+
 // Redis base utilities for shared functionality
 pub mod redis_base;
 

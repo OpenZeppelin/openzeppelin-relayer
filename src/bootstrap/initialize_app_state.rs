@@ -132,6 +132,8 @@ pub async fn initialize_app_state(
         RepositoryStorageType::InMemory => None,
     };
 
+    #[cfg(feature = "midnight")]
+    let midnight_connections = repo_connections.clone();
     let repositories = initialize_repositories(&server_config, repo_connections).await?;
 
     let queue_backend = create_queue_backend(redis_connections).await?;
@@ -147,6 +149,27 @@ pub async fn initialize_app_state(
         job_producer,
         plugin_repository: repositories.plugin,
         api_key_repository: repositories.api_key,
+        #[cfg(feature = "midnight")]
+        relayer_state_repository: {
+            let store = match server_config.repository_storage_type {
+                RepositoryStorageType::Redis => Arc::new(
+                    crate::repositories::RelayerStateRepositoryStorage::new_redis(
+                        midnight_connections
+                            .clone()
+                            .expect("Redis connections required"),
+                        server_config.redis_key_prefix.clone(),
+                    )
+                    .expect("Failed to create Redis relayer state repository"),
+                ),
+                RepositoryStorageType::InMemory => {
+                    Arc::new(crate::repositories::RelayerStateRepositoryStorage::new_in_memory())
+                }
+            };
+            // Register as the process-wide shared instance so the transaction
+            // factory uses the same store as the relayer path.
+            crate::repositories::relayer_state::set_shared_store(store.clone());
+            store
+        },
     });
 
     Ok(app_state)

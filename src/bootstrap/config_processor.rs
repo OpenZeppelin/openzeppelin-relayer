@@ -843,6 +843,10 @@ mod tests {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         }
     }
 
@@ -1635,6 +1639,10 @@ mod tests {
             job_producer: job_producer.clone(),
             plugin_repository: plugin_repo.clone(),
             api_key_repository: api_key_repo.clone(),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         });
 
         // Process the entire config file

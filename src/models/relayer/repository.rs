@@ -1,3 +1,5 @@
+#[cfg(feature = "midnight")]
+use crate::models::RelayerMidnightPolicy;
 use crate::models::{
     DisabledReason, Relayer, RelayerError, RelayerEvmPolicy, RelayerSolanaPolicy,
     RelayerStellarPolicy,
@@ -121,6 +123,10 @@ impl From<Relayer> for RelayerRepoModel {
                     }
                     RelayerNetworkType::Stellar => {
                         RelayerNetworkPolicy::Stellar(RelayerStellarPolicy::default())
+                    }
+                    #[cfg(feature = "midnight")]
+                    RelayerNetworkType::Midnight => {
+                        RelayerNetworkPolicy::Midnight(RelayerMidnightPolicy::default())
                     }
                 }
             }),

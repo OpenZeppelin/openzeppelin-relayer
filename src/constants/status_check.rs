@@ -61,6 +61,23 @@ pub const SOLANA_MAX_CONSECUTIVE_STATUS_FAILURES: u32 = 38;
 pub const SOLANA_MAX_TOTAL_STATUS_FAILURES: u32 = 115;
 
 // =============================================================================
+// Midnight Constants
+// =============================================================================
+
+/// Maximum consecutive status check failures before forcing finalization for Midnight.
+///
+/// Midnight has ~6s block time, similar to Stellar. With worker backoff capped at
+/// ~3s, 100 failures ≈ 5 minutes of monitoring.
+#[cfg(feature = "midnight")]
+pub const MIDNIGHT_MAX_CONSECUTIVE_STATUS_FAILURES: u32 = 100;
+
+/// Maximum total status check failures before forcing finalization for Midnight.
+///
+/// With worker backoff capped at ~3s, 300 failures ≈ 15 minutes of monitoring.
+#[cfg(feature = "midnight")]
+pub const MIDNIGHT_MAX_TOTAL_STATUS_FAILURES: u32 = 300;
+
+// =============================================================================
 // Helper Functions
 // =============================================================================
 
@@ -88,6 +105,8 @@ pub fn get_max_consecutive_status_failures(network_type: NetworkType) -> u32 {
         NetworkType::Evm => EVM_MAX_CONSECUTIVE_STATUS_FAILURES,
         NetworkType::Stellar => STELLAR_MAX_CONSECUTIVE_STATUS_FAILURES,
         NetworkType::Solana => SOLANA_MAX_CONSECUTIVE_STATUS_FAILURES,
+        #[cfg(feature = "midnight")]
+        NetworkType::Midnight => MIDNIGHT_MAX_CONSECUTIVE_STATUS_FAILURES,
     }
 }
 
@@ -108,6 +127,8 @@ pub fn get_max_total_status_failures(network_type: NetworkType) -> u32 {
         NetworkType::Evm => EVM_MAX_TOTAL_STATUS_FAILURES,
         NetworkType::Stellar => STELLAR_MAX_TOTAL_STATUS_FAILURES,
         NetworkType::Solana => SOLANA_MAX_TOTAL_STATUS_FAILURES,
+        #[cfg(feature = "midnight")]
+        NetworkType::Midnight => MIDNIGHT_MAX_TOTAL_STATUS_FAILURES,
     }
 }
 

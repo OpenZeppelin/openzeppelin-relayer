@@ -43,11 +43,15 @@ use async_trait::async_trait;
 use eyre::Result;
 
 mod evm;
+#[cfg(feature = "midnight")]
+mod midnight;
 mod solana;
 mod stellar;
 mod util;
 
 pub use evm::*;
+#[cfg(feature = "midnight")]
+pub use midnight::*;
 pub use solana::*;
 pub use stellar::*;
 pub use util::*;
@@ -258,6 +262,8 @@ pub enum NetworkRelayer<
     Evm(Box<DefaultEvmRelayer<J, T, RR, NR, TCR>>),
     Solana(DefaultSolanaRelayer<J, T, RR, NR>),
     Stellar(DefaultStellarRelayer<J, T, NR, RR, TCR>),
+    #[cfg(feature = "midnight")]
+    Midnight(DefaultMidnightRelayer<J, T, RR, NR>),
 }
 
 #[async_trait]
@@ -281,6 +287,10 @@ impl<
             NetworkRelayer::Stellar(relayer) => {
                 relayer.process_transaction_request(tx_request).await
             }
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => {
+                relayer.process_transaction_request(tx_request).await
+            }
         }
     }
 
@@ -289,6 +299,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.get_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.get_balance().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_balance().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.get_balance().await,
         }
     }
 
@@ -299,6 +311,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.delete_pending_transactions().await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.delete_pending_transactions().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.delete_pending_transactions().await,
         }
     }
 
@@ -307,6 +321,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.sign_data(request).await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_data(request).await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.sign_data(request).await,
         }
     }
 
@@ -318,6 +334,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.sign_typed_data(request).await,
             NetworkRelayer::Solana(_) => solana_not_supported_relayer(),
             NetworkRelayer::Stellar(relayer) => relayer.sign_typed_data(request).await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.sign_typed_data(request).await,
         }
     }
 
@@ -329,6 +347,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Solana(relayer) => relayer.rpc(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.rpc(request).await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.rpc(request).await,
         }
     }
 
@@ -337,6 +357,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.get_status().await,
             NetworkRelayer::Solana(relayer) => relayer.get_status().await,
             NetworkRelayer::Stellar(relayer) => relayer.get_status().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.get_status().await,
         }
     }
 
@@ -345,6 +367,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.validate_min_balance().await,
             NetworkRelayer::Solana(relayer) => relayer.validate_min_balance().await,
             NetworkRelayer::Stellar(relayer) => relayer.validate_min_balance().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.validate_min_balance().await,
         }
     }
 
@@ -353,6 +377,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.initialize_relayer().await,
             NetworkRelayer::Solana(relayer) => relayer.initialize_relayer().await,
             NetworkRelayer::Stellar(relayer) => relayer.initialize_relayer().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.initialize_relayer().await,
         }
     }
 
@@ -361,6 +387,8 @@ impl<
             NetworkRelayer::Evm(relayer) => relayer.check_health().await,
             NetworkRelayer::Solana(relayer) => relayer.check_health().await,
             NetworkRelayer::Stellar(relayer) => relayer.check_health().await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.check_health().await,
         }
     }
 
@@ -374,6 +402,8 @@ impl<
             )),
             NetworkRelayer::Solana(relayer) => relayer.sign_transaction(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(relayer) => relayer.sign_transaction(request).await,
         }
     }
 }
@@ -406,6 +436,10 @@ impl<
                 NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
                     "Gas abstraction not supported for EVM relayers".to_string(),
                 )),
+                #[cfg(feature = "midnight")]
+                NetworkRelayer::Midnight(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for Midnight relayers".to_string(),
+                )),
             },
             SponsoredTransactionQuoteRequest::Stellar(params) => match self {
                 NetworkRelayer::Stellar(relayer) => {
@@ -420,6 +454,10 @@ impl<
                 )),
                 NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
                     "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+                #[cfg(feature = "midnight")]
+                NetworkRelayer::Midnight(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for Midnight relayers".to_string(),
                 )),
             },
         }
@@ -444,6 +482,10 @@ impl<
                 NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
                     "Gas abstraction not supported for EVM relayers".to_string(),
                 )),
+                #[cfg(feature = "midnight")]
+                NetworkRelayer::Midnight(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for Midnight relayers".to_string(),
+                )),
             },
             SponsoredTransactionBuildRequest::Stellar(params) => match self {
                 NetworkRelayer::Stellar(relayer) => {
@@ -458,6 +500,10 @@ impl<
                 )),
                 NetworkRelayer::Evm(_) => Err(RelayerError::NotSupported(
                     "Gas abstraction not supported for EVM relayers".to_string(),
+                )),
+                #[cfg(feature = "midnight")]
+                NetworkRelayer::Midnight(_) => Err(RelayerError::NotSupported(
+                    "Gas abstraction not supported for Midnight relayers".to_string(),
                 )),
             },
         }
@@ -488,6 +534,10 @@ impl<
             )),
             NetworkRelayer::Solana(relayer) => relayer.handle_token_swap_request(relayer_id).await,
             NetworkRelayer::Stellar(relayer) => relayer.handle_token_swap_request(relayer_id).await,
+            #[cfg(feature = "midnight")]
+            NetworkRelayer::Midnight(_) => Err(RelayerError::NotSupported(
+                "Token swap not supported for Midnight relayers".to_string(),
+            )),
         }
     }
 }
@@ -604,6 +654,72 @@ impl<
                 .await?;
                 Ok(NetworkRelayer::Stellar(stellar_relayer))
             }
+            #[cfg(feature = "midnight")]
+            NetworkType::Midnight => {
+                use crate::models::MidnightNetwork;
+                use crate::services::provider::{MidnightProvider, MidnightProviderTrait};
+                use crate::services::signer::MidnightSignerFactory;
+                use crate::services::sync::midnight::{LedgerContextManager, SyncManager};
+
+                let network_repo = state
+                    .network_repository()
+                    .get_by_name(NetworkType::Midnight, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(format!(
+                            "Midnight network '{}' not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = MidnightNetwork::try_from(network_repo)?;
+                let provider = Arc::new(MidnightProvider::new(network.clone())?);
+
+                // Extract the raw 32-byte key for LedgerContext before consuming the signer
+                let signer_domain: crate::models::Signer = signer.into();
+                let key_bytes: [u8; 32] = {
+                    let local_cfg = signer_domain.config.get_local().ok_or_else(|| {
+                        RelayerError::NetworkConfiguration(
+                            "Midnight requires a local signer with raw key".into(),
+                        )
+                    })?;
+                    let key_slice = local_cfg.raw_key.borrow();
+                    <[u8; 32]>::try_from(&key_slice[..]).map_err(|_| {
+                        RelayerError::NetworkConfiguration(
+                            "Midnight signer key must be 32 bytes".into(),
+                        )
+                    })?
+                };
+
+                let midnight_signer =
+                    MidnightSignerFactory::create_midnight_signer(&signer_domain)?;
+
+                let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
+
+                let sync_state_store = state.relayer_state_repository();
+                let sync_manager = SyncManager::new(
+                    provider.get_indexer_client().clone(),
+                    sync_state_store,
+                    relayer.id.clone(),
+                );
+
+                let midnight_relayer = MidnightRelayer::new(
+                    relayer,
+                    network,
+                    provider,
+                    Arc::new(midnight_signer),
+                    sync_manager,
+                    ledger_ctx,
+                    state.relayer_repository(),
+                    state.network_repository(),
+                    state.transaction_repository(),
+                    state.job_producer(),
+                )?;
+
+                Ok(NetworkRelayer::Midnight(midnight_relayer))
+            }
         }
     }
 }
@@ -683,11 +799,19 @@ pub struct SignXdrTransactionResponseStellar {
     pub signature: DecoratedSignature,
 }
 
+#[cfg(feature = "midnight")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SignTransactionResponseMidnight {
+    pub signature: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SignTransactionResponse {
     Evm(SignTransactionResponseEvm),
     Solana(SignTransactionResponseSolana),
     Stellar(SignTransactionResponseStellar),
+    #[cfg(feature = "midnight")]
+    Midnight(SignTransactionResponseMidnight),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -1,3 +1,5 @@
+#[cfg(feature = "midnight")]
+use crate::config::MidnightNetworkConfig;
 use crate::{
     config::{
         EvmNetworkConfig, NetworkConfigCommon, NetworkFileConfig, SolanaNetworkConfig,
@@ -17,6 +19,9 @@ pub enum NetworkConfigData {
     Solana(SolanaNetworkConfig),
     /// Stellar network configuration
     Stellar(StellarNetworkConfig),
+    /// Midnight network configuration
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightNetworkConfig),
 }
 
 impl NetworkConfigData {
@@ -26,6 +31,8 @@ impl NetworkConfigData {
             NetworkConfigData::Evm(config) => &config.common,
             NetworkConfigData::Solana(config) => &config.common,
             NetworkConfigData::Stellar(config) => &config.common,
+            #[cfg(feature = "midnight")]
+            NetworkConfigData::Midnight(config) => &config.common,
         }
     }
 
@@ -35,6 +42,8 @@ impl NetworkConfigData {
             NetworkConfigData::Evm(_) => NetworkType::Evm,
             NetworkConfigData::Solana(_) => NetworkType::Solana,
             NetworkConfigData::Stellar(_) => NetworkType::Stellar,
+            #[cfg(feature = "midnight")]
+            NetworkConfigData::Midnight(_) => NetworkType::Midnight,
         }
     }
 
@@ -115,6 +124,18 @@ impl NetworkRepoModel {
         }
     }
 
+    #[cfg(feature = "midnight")]
+    pub fn new_midnight(config: MidnightNetworkConfig) -> Self {
+        let name = config.common.network.clone();
+        let id = format!("midnight:{name}").to_lowercase();
+        Self {
+            id,
+            name,
+            network_type: NetworkType::Midnight,
+            config: NetworkConfigData::Midnight(config),
+        }
+    }
+
     /// Creates an ID string from network type and name.
     ///
     /// # Arguments
@@ -153,6 +174,8 @@ impl TryFrom<NetworkFileConfig> for NetworkRepoModel {
             NetworkFileConfig::Evm(evm_config) => Ok(Self::new_evm(evm_config)),
             NetworkFileConfig::Solana(solana_config) => Ok(Self::new_solana(solana_config)),
             NetworkFileConfig::Stellar(stellar_config) => Ok(Self::new_stellar(stellar_config)),
+            #[cfg(feature = "midnight")]
+            NetworkFileConfig::Midnight(midnight_config) => Ok(Self::new_midnight(midnight_config)),
         }
     }
 }

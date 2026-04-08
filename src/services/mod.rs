@@ -4,6 +4,8 @@
 
 pub mod provider;
 pub mod signer;
+#[cfg(feature = "midnight")]
+pub mod sync;
 
 mod notification;
 pub use notification::*;

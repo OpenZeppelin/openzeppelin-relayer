@@ -1,0 +1,17 @@
+{
+  "networks": [
+    {
+      "type": "midnight",
+      "network": "testnet",
+      "rpc_urls": ["https://rpc.preview.midnight.network"],
+      "explorer_urls": ["https://explorer.preview.midnight.network"],
+      "average_blocktime_ms": 6000,
+      "is_testnet": true,
+      "indexer_urls": {
+        "http": "https://indexer.preview.midnight.network/api/v4/graphql",
+        "ws": "wss://indexer.preview.midnight.network/api/v4/graphql/ws"
+      },
+      "prover_url": "https://lace-proof-pub.preview.midnight.network"
+    }
+  ]
+}

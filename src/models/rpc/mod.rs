@@ -33,6 +33,11 @@ pub use stellar::{
     StellarRpcRequest, StellarRpcResult,
 };
 
+#[cfg(feature = "midnight")]
+mod midnight;
+#[cfg(feature = "midnight")]
+pub use midnight::{MidnightRpcRequest, MidnightRpcResult};
+
 mod evm;
 pub use evm::*;
 
@@ -47,6 +52,8 @@ pub enum NetworkRpcResult {
     Solana(SolanaRpcResult),
     Stellar(StellarRpcResult),
     Evm(EvmRpcResult),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightRpcResult),
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, PartialEq)]
@@ -56,6 +63,8 @@ pub enum NetworkRpcRequest {
     Solana(SolanaRpcRequest),
     Stellar(StellarRpcRequest),
     Evm(EvmRpcRequest),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightRpcRequest),
 }
 
 /// Converts a raw JSON-RPC request to the internal NetworkRpcRequest format.
@@ -195,6 +204,14 @@ pub fn convert_to_internal_rpc_request(
                 id,
             })
         }
+        #[cfg(feature = "midnight")]
+        crate::models::NetworkType::Midnight => Ok(JsonRpcRequest {
+            jsonrpc,
+            params: NetworkRpcRequest::Midnight(
+                crate::models::MidnightRpcRequest::GenericRpcRequest(method.to_string()),
+            ),
+            id,
+        }),
     }
 }
 

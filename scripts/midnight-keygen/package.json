@@ -1,0 +1,14 @@
+{
+  "name": "midnight-keygen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "keygen": "node keygen.mjs"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/ledger": "4.0.0",
+    "@midnight-ntwrk/wallet": "5.0.0",
+    "bech32": "^2.0.0"
+  }
+}

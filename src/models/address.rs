@@ -9,6 +9,9 @@ pub enum Address {
     Stellar(String),
     /// Solana address (Base58-encoded string)
     Solana(String),
+    /// Midnight address (bech32m-encoded string, e.g. `mn_shield-addr_test1…`)
+    #[cfg(feature = "midnight")]
+    Midnight(String),
 }
 
 impl fmt::Display for Address {
@@ -17,6 +20,8 @@ impl fmt::Display for Address {
             Address::Evm(addr) => write!(f, "0x{}", hex::encode(addr)),
             Address::Stellar(addr) => write!(f, "{addr}"),
             Address::Solana(addr) => write!(f, "{addr}"),
+            #[cfg(feature = "midnight")]
+            Address::Midnight(addr) => write!(f, "{addr}"),
         }
     }
 }
@@ -33,6 +38,8 @@ impl Address {
             Address::Solana(addr) => {
                 addr.len() <= 44 && addr.chars().all(|c| c.is_ascii_alphanumeric())
             }
+            #[cfg(feature = "midnight")]
+            Address::Midnight(addr) => addr.starts_with("mn_"),
         }
     }
 }

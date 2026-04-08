@@ -41,6 +41,8 @@ use tracing::instrument;
 
 pub mod common;
 pub mod evm;
+#[cfg(feature = "midnight")]
+pub mod midnight;
 pub mod solana;
 pub mod stellar;
 
@@ -51,6 +53,8 @@ pub use util::*;
 pub use common::is_final_state;
 pub use common::*;
 pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRelayerTransaction};
+#[cfg(feature = "midnight")]
+pub use midnight::*;
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
@@ -185,6 +189,8 @@ pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
     Solana(DefaultSolanaTransaction),
     Stellar(DefaultStellarTransaction),
+    #[cfg(feature = "midnight")]
+    Midnight(DefaultMidnightTransaction),
 }
 
 #[async_trait]
@@ -217,6 +223,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.prepare_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.prepare_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.prepare_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.prepare_transaction(tx).await,
         }
     }
 
@@ -248,6 +256,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.submit_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.submit_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.submit_transaction(tx).await,
         }
     }
     /// Resubmits a transaction with updated parameters based on the network type.
@@ -278,6 +288,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.resubmit_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.resubmit_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.resubmit_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.resubmit_transaction(tx).await,
         }
     }
 
@@ -320,6 +332,10 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Stellar(relayer) => {
                 relayer.handle_transaction_status(tx, context).await
             }
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => {
+                relayer.handle_transaction_status(tx, context).await
+            }
         }
     }
 
@@ -351,6 +367,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.cancel_transaction(tx).await,
             NetworkTransaction::Solana(_) => solana_not_supported_transaction(),
             NetworkTransaction::Stellar(relayer) => relayer.cancel_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.cancel_transaction(tx).await,
         }
     }
 
@@ -388,6 +406,10 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Stellar(relayer) => {
                 relayer.replace_transaction(old_tx, new_tx_request).await
             }
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => {
+                relayer.replace_transaction(old_tx, new_tx_request).await
+            }
         }
     }
 
@@ -419,6 +441,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.sign_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.sign_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.sign_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.sign_transaction(tx).await,
         }
     }
 
@@ -451,6 +475,8 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Evm(relayer) => relayer.validate_transaction(tx).await,
             NetworkTransaction::Solana(relayer) => relayer.validate_transaction(tx).await,
             NetworkTransaction::Stellar(relayer) => relayer.validate_transaction(tx).await,
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => relayer.validate_transaction(tx).await,
         }
     }
 }
@@ -730,6 +756,57 @@ impl RelayerTransactionFactory {
                     stellar_provider,
                     transaction_counter_store,
                     dex_service,
+                )?))
+            }
+            #[cfg(feature = "midnight")]
+            NetworkType::Midnight => {
+                use crate::models::MidnightNetwork;
+                use crate::services::provider::{MidnightProvider, MidnightProviderTrait};
+                use crate::services::signer::MidnightSignerFactory;
+                use crate::services::sync::midnight::SyncManager;
+
+                let network_repo = network_repository
+                    .get_by_name(NetworkType::Midnight, &relayer.network)
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        TransactionError::NetworkConfiguration(format!(
+                            "Midnight network '{}' not found",
+                            relayer.network
+                        ))
+                    })?;
+
+                let network = MidnightNetwork::try_from(network_repo)
+                    .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?;
+
+                let provider = Arc::new(
+                    MidnightProvider::new(network.clone())
+                        .map_err(|e| TransactionError::NetworkConfiguration(e.to_string()))?,
+                );
+
+                let midnight_signer =
+                    MidnightSignerFactory::create_midnight_signer(&signer.into())?;
+
+                // Use the shared global store set by initialize_app_state.
+                // Falls back to in-memory if the global hasn't been initialized yet
+                // (e.g., in tests).
+                let sync_state_store = crate::repositories::relayer_state::get_shared_store();
+                let sync_manager = SyncManager::new(
+                    provider.get_indexer_client().clone(),
+                    sync_state_store,
+                    relayer.id.clone(),
+                );
+
+                Ok(NetworkTransaction::Midnight(MidnightTransaction::new(
+                    relayer,
+                    network,
+                    provider,
+                    Arc::new(midnight_signer),
+                    sync_manager,
+                    transaction_repository,
+                    relayer_repository,
+                    job_producer,
                 )?))
             }
         }

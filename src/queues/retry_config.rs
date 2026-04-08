@@ -89,6 +89,8 @@ pub fn status_backoff_config(network_type: Option<NetworkType>) -> RetryBackoffC
     match network_type {
         Some(NetworkType::Evm) => STATUS_EVM_BACKOFF,
         Some(NetworkType::Stellar) => STATUS_STELLAR_BACKOFF,
+        #[cfg(feature = "midnight")]
+        Some(NetworkType::Midnight) => STATUS_GENERIC_BACKOFF,
         Some(NetworkType::Solana) | None => STATUS_GENERIC_BACKOFF,
     }
 }

@@ -23,6 +23,11 @@ use alloy::transports::RpcError;
 pub mod evm;
 pub use evm::*;
 
+#[cfg(feature = "midnight")]
+mod midnight;
+#[cfg(feature = "midnight")]
+pub use midnight::*;
+
 mod solana;
 pub use solana::*;
 

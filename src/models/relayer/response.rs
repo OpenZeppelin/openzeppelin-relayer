@@ -11,6 +11,8 @@
 //! These models handle API-specific formatting and serialization while working
 //! with the domain model for business logic.
 
+#[cfg(feature = "midnight")]
+use super::RelayerMidnightPolicy;
 use super::{
     DisabledReason, MaskedRpcConfig, Relayer, RelayerEvmPolicy, RelayerNetworkPolicy,
     RelayerNetworkType, RelayerRepoModel, RelayerSolanaPolicy, RelayerSolanaSwapConfig,
@@ -44,6 +46,8 @@ pub enum RelayerNetworkPolicyResponse {
     Stellar(StellarPolicyResponse),
     // Solana has many fields but some overlap with others, so it should be tried last
     Solana(SolanaPolicyResponse),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightPolicyResponse),
 }
 
 impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
@@ -57,6 +61,10 @@ impl From<RelayerNetworkPolicy> for RelayerNetworkPolicyResponse {
             }
             RelayerNetworkPolicy::Stellar(stellar_policy) => {
                 RelayerNetworkPolicyResponse::Stellar(stellar_policy.into())
+            }
+            #[cfg(feature = "midnight")]
+            RelayerNetworkPolicy::Midnight(midnight_policy) => {
+                RelayerNetworkPolicyResponse::Midnight(midnight_policy.into())
             }
         }
     }
@@ -145,6 +153,16 @@ pub enum RelayerStatus {
         system_disabled: bool,
         paused: bool,
     },
+    #[cfg(feature = "midnight")]
+    #[serde(rename = "midnight")]
+    Midnight {
+        balance: String,
+        pending_transactions_count: u64,
+        last_confirmed_transaction_timestamp: Option<String>,
+        system_disabled: bool,
+        paused: bool,
+        nonce: String,
+    },
 }
 
 /// Convert RelayerNetworkPolicy to RelayerNetworkPolicyResponse based on network type
@@ -162,6 +180,10 @@ fn convert_policy_to_response(
         (RelayerNetworkPolicy::Stellar(stellar_policy), RelayerNetworkType::Stellar) => {
             RelayerNetworkPolicyResponse::Stellar(StellarPolicyResponse::from(stellar_policy))
         }
+        #[cfg(feature = "midnight")]
+        (RelayerNetworkPolicy::Midnight(midnight_policy), RelayerNetworkType::Midnight) => {
+            RelayerNetworkPolicyResponse::Midnight(MidnightPolicyResponse::from(midnight_policy))
+        }
         // Handle mismatched cases by falling back to the policy type
         (RelayerNetworkPolicy::Evm(evm_policy), _) => {
             RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse::from(evm_policy))
@@ -171,6 +193,10 @@ fn convert_policy_to_response(
         }
         (RelayerNetworkPolicy::Stellar(stellar_policy), _) => {
             RelayerNetworkPolicyResponse::Stellar(StellarPolicyResponse::from(stellar_policy))
+        }
+        #[cfg(feature = "midnight")]
+        (RelayerNetworkPolicy::Midnight(midnight_policy), _) => {
+            RelayerNetworkPolicyResponse::Midnight(MidnightPolicyResponse::from(midnight_policy))
         }
     }
 }
@@ -272,6 +298,13 @@ impl<'de> serde::Deserialize<'de> for RelayerResponse {
                                 .map_err(D::Error::custom)?;
                         RelayerNetworkPolicyResponse::Stellar(stellar_policy)
                     }
+                    #[cfg(feature = "midnight")]
+                    RelayerNetworkType::Midnight => {
+                        let midnight_policy: MidnightPolicyResponse =
+                            serde_json::from_value(policies_value.clone())
+                                .map_err(D::Error::custom)?;
+                        RelayerNetworkPolicyResponse::Midnight(midnight_policy)
+                    }
                 };
                 Some(policy_response)
             }
@@ -362,6 +395,8 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
                 && stellar_policy.fee_margin_percentage.is_none()
                 && stellar_policy.swap_config.is_none()
         }
+        #[cfg(feature = "midnight")]
+        RelayerNetworkPolicy::Midnight(midnight_policy) => midnight_policy.min_balance.is_none(),
     }
 }
 
@@ -500,6 +535,15 @@ pub struct StellarPolicyResponse {
     pub swap_config: Option<RelayerStellarSwapConfig>,
 }
 
+#[cfg(feature = "midnight")]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MidnightPolicyResponse {
+    #[serde(default)]
+    #[schema(nullable = false)]
+    pub min_balance: u64,
+}
+
 impl From<RelayerEvmPolicy> for EvmPolicyResponse {
     fn from(policy: RelayerEvmPolicy) -> Self {
         Self {
@@ -547,6 +591,15 @@ impl From<RelayerStellarPolicy> for StellarPolicyResponse {
             slippage_percentage: policy.slippage_percentage,
             fee_margin_percentage: policy.fee_margin_percentage,
             swap_config: policy.swap_config,
+        }
+    }
+}
+
+#[cfg(feature = "midnight")]
+impl From<RelayerMidnightPolicy> for MidnightPolicyResponse {
+    fn from(policy: RelayerMidnightPolicy) -> Self {
+        Self {
+            min_balance: policy.min_balance.unwrap_or_default(),
         }
     }
 }

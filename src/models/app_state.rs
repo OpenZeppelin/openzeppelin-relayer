@@ -52,6 +52,9 @@ pub struct AppState<
     pub plugin_repository: Arc<PR>,
     /// Repository for managing api keys.
     pub api_key_repository: Arc<AKR>,
+    /// Repository for managing Midnight relayer sync state.
+    #[cfg(feature = "midnight")]
+    pub relayer_state_repository: Arc<crate::repositories::RelayerStateRepositoryStorage>,
 }
 
 // Manual Clone implementation since all fields are Arc (cheap to clone)
@@ -78,6 +81,8 @@ where
             transaction_counter_store: Arc::clone(&self.transaction_counter_store),
             plugin_repository: Arc::clone(&self.plugin_repository),
             api_key_repository: Arc::clone(&self.api_key_repository),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::clone(&self.relayer_state_repository),
         }
     }
 }
@@ -190,6 +195,13 @@ impl<
     pub fn api_key_repository(&self) -> Arc<AKR> {
         Arc::clone(&self.api_key_repository)
     }
+
+    #[cfg(feature = "midnight")]
+    pub fn relayer_state_repository(
+        &self,
+    ) -> Arc<crate::repositories::RelayerStateRepositoryStorage> {
+        Arc::clone(&self.relayer_state_repository)
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +254,10 @@ mod tests {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         }
     }
 

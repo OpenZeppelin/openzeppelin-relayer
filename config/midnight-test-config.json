@@ -1,0 +1,31 @@
+{
+  "relayers": [
+    {
+      "id": "midnight-testnet",
+      "name": "Midnight Testnet Relayer",
+      "network": "testnet",
+      "paused": false,
+      "signer_id": "midnight-signer",
+      "network_type": "midnight",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "midnight-signer",
+      "type": "local",
+      "config": {
+        "path": "tests/utils/test_keys/unit-test-local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}

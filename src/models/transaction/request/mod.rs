@@ -1,4 +1,6 @@
 pub mod evm;
+#[cfg(feature = "midnight")]
+pub mod midnight;
 pub mod solana;
 pub mod stellar;
 
@@ -10,6 +12,11 @@ use crate::models::{ApiError, NetworkType, RelayerRepoModel};
 use serde::{Deserialize, Serialize};
 
 pub use evm::EvmTransactionRequest;
+#[cfg(feature = "midnight")]
+pub use midnight::{
+    MidnightContractAction, MidnightFallibleOfferRequest, MidnightInputRequest,
+    MidnightIntentRequest, MidnightOfferRequest, MidnightOutputRequest, MidnightTransactionRequest,
+};
 pub use solana::SolanaTransactionRequest;
 pub use stellar::StellarTransactionRequest;
 use utoipa::ToSchema;
@@ -20,6 +27,8 @@ pub enum NetworkTransactionRequest {
     Evm(EvmTransactionRequest),
     Solana(SolanaTransactionRequest),
     Stellar(StellarTransactionRequest),
+    #[cfg(feature = "midnight")]
+    Midnight(MidnightTransactionRequest),
 }
 
 impl NetworkTransactionRequest {
@@ -37,6 +46,10 @@ impl NetworkTransactionRequest {
             NetworkType::Stellar => Ok(Self::Stellar(
                 serde_json::from_value(json).map_err(|e| ApiError::BadRequest(e.to_string()))?,
             )),
+            #[cfg(feature = "midnight")]
+            NetworkType::Midnight => Ok(Self::Midnight(
+                serde_json::from_value(json).map_err(|e| ApiError::BadRequest(e.to_string()))?,
+            )),
         }
     }
 
@@ -45,6 +58,8 @@ impl NetworkTransactionRequest {
             NetworkTransactionRequest::Evm(request) => request.validate(relayer),
             NetworkTransactionRequest::Stellar(request) => request.validate(),
             NetworkTransactionRequest::Solana(request) => request.validate(relayer),
+            #[cfg(feature = "midnight")]
+            NetworkTransactionRequest::Midnight(request) => request.validate(relayer),
         }
     }
 }
