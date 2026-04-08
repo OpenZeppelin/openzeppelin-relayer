@@ -302,13 +302,25 @@ where
             .to_string();
 
         match self.sync_manager.sync_unshielded_balance(&address).await {
-            Ok(balance) => {
+            Ok(result) => {
                 info!(
                     relayer_id = %self.relayer.id,
                     block_number = block,
-                    balance,
+                    balance = result.balance,
+                    utxos = result.created_utxos.len(),
                     "Midnight relayer initialized with balance sync"
                 );
+
+                // Inject the discovered UTXOs into the LedgerContext
+                if !result.created_utxos.is_empty() {
+                    if let Err(e) = self.ledger_ctx.inject_utxos(&result.created_utxos) {
+                        warn!(
+                            relayer_id = %self.relayer.id,
+                            error = %e,
+                            "Failed to inject UTXOs into LedgerContext"
+                        );
+                    }
+                }
             }
             Err(e) => {
                 warn!(

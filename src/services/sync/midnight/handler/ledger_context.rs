@@ -234,6 +234,70 @@ impl LedgerContextManager {
         Ok(())
     }
 
+    /// Inject unshielded UTXOs into the LedgerState from indexer data.
+    ///
+    /// This populates the UTXO set so that `UtxoSpendInfo` can find
+    /// matching UTXOs for spending during transaction building.
+    pub fn inject_utxos(
+        &self,
+        utxos: &[super::manager::UtxoDetail],
+    ) -> Result<(), LedgerContextError> {
+        use midnight_node_ledger_helpers::{
+            HashOutput, IntentHash, LedgerState, Sp, Timestamp, UserAddress, Utxo, NIGHT,
+        };
+        // UtxoMeta is not directly re-exported; access via the structure module
+        use midnight_node_ledger_helpers::mn_ledger::structure::UtxoMeta;
+
+        if utxos.is_empty() {
+            return Ok(());
+        }
+
+        // Deserialize current state, inject UTXOs, re-serialize and inject
+        let current_bytes = self.serialize_state()?;
+        let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
+            midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
+                .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+
+        for detail in utxos {
+            let owner = self
+                .context
+                .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                    UserAddress::from(wallet.unshielded.signing_key().verifying_key())
+                });
+
+            let intent_hash_bytes = hex::decode(&detail.intent_hash).unwrap_or_default();
+            let mut hash_arr = [0u8; 32];
+            let copy_len = intent_hash_bytes.len().min(32);
+            hash_arr[..copy_len].copy_from_slice(&intent_hash_bytes[..copy_len]);
+
+            let utxo = Utxo {
+                value: detail.value,
+                owner,
+                type_: NIGHT,
+                intent_hash: IntentHash(HashOutput(hash_arr)),
+                output_no: detail.output_index,
+            };
+
+            let meta = UtxoMeta {
+                ctime: Timestamp::from_secs(0),
+            };
+
+            state.utxo = Sp::new(state.utxo.insert(utxo, meta));
+        }
+
+        // Re-serialize and inject
+        let new_bytes = midnight_node_ledger_helpers::serialize(&state)
+            .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+        self.context.update_ledger_state_from_bytes(&new_bytes);
+
+        info!(
+            utxo_count = utxos.len(),
+            "Injected unshielded UTXOs into LedgerContext"
+        );
+
+        Ok(())
+    }
+
     /// List unshielded UTXOs for the wallet.
     pub fn unshielded_utxos(&self) -> Vec<midnight_node_ledger_helpers::Utxo> {
         self.context

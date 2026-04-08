@@ -201,12 +201,14 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         Ok(result)
     }
 
-    /// Sync unshielded balance using the WebSocket `unshieldedTransactions` subscription.
+    /// Sync unshielded balance and collect UTXO details using WebSocket subscription.
     ///
-    /// Connects to the indexer via WS, subscribes to unshielded transaction events
-    /// for the given address, sums up created/spent UTXOs, and persists the balance
-    /// in the sync state's ledger_context field.
-    pub async fn sync_unshielded_balance(&self, address: &str) -> Result<u128, SyncError> {
+    /// Returns the balance and a list of created/spent UTXOs with full details
+    /// needed for UTXO injection into the LedgerContext.
+    pub async fn sync_unshielded_balance(
+        &self,
+        address: &str,
+    ) -> Result<UnshieldedSyncResult, SyncError> {
         let ws_url = self.indexer_client.ws_url();
         info!(
             relayer_id = %self.relayer_id,
@@ -284,7 +286,7 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             "type": "subscribe",
             "payload": {
                 "query": format!(
-                    "subscription {{ unshieldedTransactions(address: \"{address}\") {{ ... on UnshieldedTransaction {{ createdUtxos {{ owner value tokenType }} spentUtxos {{ owner value tokenType }} }} ... on UnshieldedTransactionsProgress {{ highestTransactionId }} }} }}"
+                    "subscription {{ unshieldedTransactions(address: \"{address}\") {{ ... on UnshieldedTransaction {{ createdUtxos {{ owner value tokenType intentHash outputIndex }} spentUtxos {{ owner value tokenType intentHash outputIndex }} }} ... on UnshieldedTransactionsProgress {{ highestTransactionId }} }} }}"
                 )
             }
         });
@@ -299,6 +301,8 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         // Collect events with a timeout — the subscription will replay history then go live
         let mut balance: i128 = 0;
         let mut event_count: u64 = 0;
+        let mut created_utxos: Vec<UtxoDetail> = Vec::new();
+        let mut spent_utxos: Vec<UtxoDetail> = Vec::new();
         let idle_timeout = tokio::time::Duration::from_secs(5);
 
         loop {
@@ -315,28 +319,26 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
                                         .and_then(|p| p.get("data"))
                                         .and_then(|d| d.get("unshieldedTransactions"))
                                     {
-                                        // Sum created UTXOs
+                                        // Collect created UTXOs with full details
                                         if let Some(created) =
                                             data.get("createdUtxos").and_then(|c| c.as_array())
                                         {
                                             for utxo in created {
-                                                if let Some(val_str) =
-                                                    utxo.get("value").and_then(|v| v.as_str())
-                                                {
-                                                    balance += val_str.parse::<i128>().unwrap_or(0);
+                                                if let Some(detail) = UtxoDetail::from_json(utxo) {
+                                                    balance += detail.value as i128;
+                                                    created_utxos.push(detail);
                                                     event_count += 1;
                                                 }
                                             }
                                         }
-                                        // Subtract spent UTXOs
+                                        // Collect spent UTXOs
                                         if let Some(spent) =
                                             data.get("spentUtxos").and_then(|s| s.as_array())
                                         {
                                             for utxo in spent {
-                                                if let Some(val_str) =
-                                                    utxo.get("value").and_then(|v| v.as_str())
-                                                {
-                                                    balance -= val_str.parse::<i128>().unwrap_or(0);
+                                                if let Some(detail) = UtxoDetail::from_json(utxo) {
+                                                    balance -= detail.value as i128;
+                                                    spent_utxos.push(detail);
                                                     event_count += 1;
                                                 }
                                             }
@@ -394,10 +396,16 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             relayer_id = %self.relayer_id,
             balance = final_balance,
             events = event_count,
+            created = created_utxos.len(),
+            spent = spent_utxos.len(),
             "Unshielded balance synced"
         );
 
-        Ok(final_balance)
+        Ok(UnshieldedSyncResult {
+            balance: final_balance,
+            created_utxos,
+            spent_utxos,
+        })
     }
 
     /// Sync the shielded wallet state using the `shieldedTransactions` WebSocket subscription.
@@ -673,4 +681,34 @@ pub struct SyncResult {
     pub transactions_found: u64,
     pub merkle_updates: u64,
     pub highest_index: u64,
+}
+
+/// Result of unshielded balance sync with full UTXO details.
+#[derive(Debug, Clone)]
+pub struct UnshieldedSyncResult {
+    pub balance: u128,
+    pub created_utxos: Vec<UtxoDetail>,
+    pub spent_utxos: Vec<UtxoDetail>,
+}
+
+/// Full details of an unshielded UTXO from the indexer.
+#[derive(Debug, Clone)]
+pub struct UtxoDetail {
+    pub owner: String,
+    pub value: u128,
+    pub token_type: String,
+    pub intent_hash: String,
+    pub output_index: u32,
+}
+
+impl UtxoDetail {
+    pub fn from_json(val: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            owner: val.get("owner")?.as_str()?.to_string(),
+            value: val.get("value")?.as_str()?.parse().ok()?,
+            token_type: val.get("tokenType")?.as_str().unwrap_or("").to_string(),
+            intent_hash: val.get("intentHash")?.as_str().unwrap_or("").to_string(),
+            output_index: val.get("outputIndex")?.as_u64().unwrap_or(0) as u32,
+        })
+    }
 }
