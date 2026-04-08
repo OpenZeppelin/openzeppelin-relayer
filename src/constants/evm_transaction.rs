@@ -144,7 +144,6 @@ pub const HEALTH_CHECK_ACTION_NONCE_HEALTH: &str = "nonce_health";
 /// so the scan range includes the hinted nonce. This handles the case where the
 /// counter was reset (e.g., after a restart) but a tx at a higher nonce still exists.
 pub const HEALTH_CHECK_NONCE_HINT_KEY: &str = "nonce_hint";
-
 /// Checks if a lowercased message matches "known transaction" without matching
 /// "unknown transaction" (substring false positive).
 pub fn matches_known_transaction(msg_lower: &str) -> bool {
