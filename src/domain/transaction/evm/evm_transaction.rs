@@ -11,7 +11,10 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    constants::{DEFAULT_EVM_GAS_LIMIT_ESTIMATION, GAS_LIMIT_BUFFER_MULTIPLIER},
+    constants::{
+        matches_known_transaction, ALREADY_SUBMITTED_PATTERNS, DEFAULT_EVM_GAS_LIMIT_ESTIMATION,
+        GAS_LIMIT_BUFFER_MULTIPLIER,
+    },
     domain::{
         evm::is_noop,
         transaction::{
@@ -145,11 +148,15 @@ where
 
     /// Checks if a provider error indicates the transaction was already submitted to the blockchain.
     /// This handles cases where the transaction was submitted by another instance or in a previous retry.
+    ///
+    /// Uses the shared `ALREADY_SUBMITTED_PATTERNS` from constants, consistent with
+    /// `is_non_retriable_transaction_rpc_message` in `services::provider`.
     fn is_already_submitted_error(error: &impl std::fmt::Display) -> bool {
         let error_msg = error.to_string().to_lowercase();
-        error_msg.contains("already known")
-            || error_msg.contains("nonce too low")
-            || error_msg.contains("replacement transaction underpriced")
+        ALREADY_SUBMITTED_PATTERNS
+            .iter()
+            .any(|p| error_msg.contains(p))
+            || matches_known_transaction(&error_msg)
     }
 
     /// Helper method to schedule a transaction status check job.
@@ -2774,12 +2781,33 @@ mod tests {
             &"Error: nonce too low"
         ));
 
+        // Test "nonce is too low" variants (some providers use this wording)
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"nonce is too low"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Error: nonce is too low"
+        ));
+
+        // Test "known transaction" variants (Besu)
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"known transaction"
+        ));
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"Known Transaction"
+        ));
+
         // Test "replacement transaction underpriced" variants
         assert!(DefaultEvmTransaction::is_already_submitted_error(
             &"replacement transaction underpriced"
         ));
         assert!(DefaultEvmTransaction::is_already_submitted_error(
             &"Replacement Transaction Underpriced"
+        ));
+
+        // Test "same hash was already imported" (OpenEthereum)
+        assert!(DefaultEvmTransaction::is_already_submitted_error(
+            &"same hash was already imported"
         ));
 
         // Test non-matching errors
@@ -2794,6 +2822,10 @@ mod tests {
         ));
         assert!(!DefaultEvmTransaction::is_already_submitted_error(
             &"timeout"
+        ));
+        // "unknown transaction" must NOT match "known transaction"
+        assert!(!DefaultEvmTransaction::is_already_submitted_error(
+            &"Unknown transaction status"
         ));
     }
 
