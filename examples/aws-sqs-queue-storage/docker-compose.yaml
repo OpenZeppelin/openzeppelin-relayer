@@ -56,7 +56,7 @@ services:
       - metrics-network
     restart: on-failure:5
   localstack:
-    image: localstack/localstack:3
+    image: localstack/localstack:2026
     environment:
       SERVICES: sqs
       AWS_DEFAULT_REGION: us-east-1
@@ -75,7 +75,7 @@ services:
       - relayer-network
     restart: on-failure:5
   sqs-init:
-    image: amazon/aws-cli:2.17.39
+    image: amazon/aws-cli:2.34.26
     environment:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
