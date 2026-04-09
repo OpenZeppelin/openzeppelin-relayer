@@ -16,14 +16,21 @@ pub enum MidnightSigner {
 }
 
 impl MidnightSigner {
-    /// Return the viewing key for this signer's wallet.
-    ///
-    /// The viewing key is used by the indexer to filter blockchain events
-    /// relevant to this wallet. In production this will be a bech32m-encoded
-    /// encryption secret key; for now we derive it from the public key.
     pub fn viewing_key(&self) -> crate::services::sync::midnight::indexer::ViewingKeyFormat {
         match self {
             Self::Local(s) => s.viewing_key(),
+        }
+    }
+
+    pub fn shielded_address(&self) -> &str {
+        match self {
+            Self::Local(s) => s.shielded_address(),
+        }
+    }
+
+    pub fn dust_address(&self) -> &str {
+        match self {
+            Self::Local(s) => s.dust_address(),
         }
     }
 }

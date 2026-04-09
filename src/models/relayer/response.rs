@@ -156,7 +156,16 @@ pub enum RelayerStatus {
     #[cfg(feature = "midnight")]
     #[serde(rename = "midnight")]
     Midnight {
+        /// Unshielded tNIGHT balance
         balance: String,
+        /// DUST fee token balance
+        dust_balance: String,
+        /// Unshielded address (for tNIGHT transfers)
+        unshielded_address: String,
+        /// Shielded address (for private transfers)
+        shielded_address: String,
+        /// DUST address (for fee generation)
+        dust_address: String,
         pending_transactions_count: u64,
         last_confirmed_transaction_timestamp: Option<String>,
         system_disabled: bool,

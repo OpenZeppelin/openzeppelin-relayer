@@ -239,8 +239,33 @@ where
             .await
             .unwrap_or(0);
 
+        // Get addresses from the signer
+        let unshielded_address = self
+            .signer
+            .address()
+            .await
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+        let shielded_address = self.signer.shielded_address().to_string();
+        let dust_address = self.signer.dust_address().to_string();
+
+        // DUST balance: check from the LedgerContext's wallet state.
+        // If the wallet hasn't synced DUST events, this will be "0".
+        let dust_balance = self.ledger_ctx.context().with_wallet_from_seed(
+            self.ledger_ctx.wallet_seed().clone(),
+            |wallet| {
+                // DustWallet fields are private, so we can't read the balance directly.
+                // Use a placeholder until DUST sync is implemented.
+                "0".to_string()
+            },
+        );
+
         Ok(RelayerStatus::Midnight {
             balance: balance.to_string(),
+            dust_balance,
+            unshielded_address,
+            shielded_address,
+            dust_address,
             pending_transactions_count: pending_count,
             last_confirmed_transaction_timestamp: None,
             system_disabled: self.relayer.system_disabled,

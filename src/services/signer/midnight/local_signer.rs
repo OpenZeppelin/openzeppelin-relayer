@@ -9,6 +9,14 @@ use crate::{
     services::signer::Signer,
 };
 
+/// All derived addresses and keys for a Midnight wallet.
+struct MidnightWalletKeys {
+    unshielded_address: String,
+    shielded_address: String,
+    dust_address: String,
+    viewing_key: String,
+}
+
 /// Local Midnight signer using Ed25519 keys.
 ///
 /// Derives the bech32m unshielded address and viewing key directly from the
@@ -18,6 +26,8 @@ pub struct LocalSigner {
     signing_key: SigningKey,
     raw_key: [u8; 32],
     address: String,
+    shielded_address: String,
+    dust_address: String,
     viewing_key: String,
 }
 
@@ -35,13 +45,15 @@ impl LocalSigner {
         let signing_key = SigningKey::from_bytes(&raw_key);
 
         // Derive address and viewing key from the midnight wallet
-        let (address, viewing_key) = Self::derive_midnight_keys(&raw_key, network_name)?;
+        let keys = Self::derive_midnight_keys(&raw_key, network_name)?;
 
         Ok(Self {
             signing_key,
             raw_key,
-            address,
-            viewing_key,
+            address: keys.unshielded_address,
+            shielded_address: keys.shielded_address,
+            dust_address: keys.dust_address,
+            viewing_key: keys.viewing_key,
         })
     }
 
@@ -52,26 +64,31 @@ impl LocalSigner {
     fn derive_midnight_keys(
         seed: &[u8; 32],
         network: &str,
-    ) -> Result<(String, String), SignerError> {
+    ) -> Result<MidnightWalletKeys, SignerError> {
         use midnight_node_ledger_helpers::{
-            DefaultDB, IntoWalletAddress, LedgerContext, WalletSeed,
+            DefaultDB, DustWallet, IntoWalletAddress, LedgerContext, ShieldedWallet,
+            UnshieldedWallet, WalletSeed,
         };
 
         let wallet_seed = WalletSeed::Medium(*seed);
         let context =
             LedgerContext::<DefaultDB>::new_from_wallet_seeds("".to_string(), &[wallet_seed]);
 
-        // Get the canonical unshielded address using the wallet's built-in method.
-        // This matches what the midnight-dust-generator and Lace produce.
-        let address = context.with_wallet_from_seed(wallet_seed, |wallet| {
-            wallet.unshielded.address(network).to_bech32()
-        });
+        let (unshielded_address, shielded_address, dust_address, viewing_key) = context
+            .with_wallet_from_seed(wallet_seed, |wallet| {
+                let unshielded = wallet.unshielded.address(network).to_bech32();
+                let shielded = wallet.shielded.address(network).to_bech32();
+                let dust = wallet.dust.address(network).to_bech32();
+                let vk = wallet.shielded.viewing_key(network);
+                (unshielded, shielded, dust, vk)
+            });
 
-        // Get the viewing key directly from the shielded wallet
-        let viewing_key = context
-            .with_wallet_from_seed(wallet_seed, |wallet| wallet.shielded.viewing_key(network));
-
-        Ok((address, viewing_key))
+        Ok(MidnightWalletKeys {
+            unshielded_address,
+            shielded_address,
+            dust_address,
+            viewing_key,
+        })
     }
 
     fn bech32m_encode(data: &[u8], hrp: &str) -> Result<String, SignerError> {
@@ -87,6 +104,16 @@ impl LocalSigner {
     /// Get the raw 32-byte seed.
     pub fn raw_key(&self) -> &[u8; 32] {
         &self.raw_key
+    }
+
+    /// Shielded address (for private ZK transfers).
+    pub fn shielded_address(&self) -> &str {
+        &self.shielded_address
+    }
+
+    /// DUST address (for fee token generation).
+    pub fn dust_address(&self) -> &str {
+        &self.dust_address
     }
 
     /// Return the viewing key for indexer wallet sync.
