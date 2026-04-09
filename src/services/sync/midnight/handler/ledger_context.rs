@@ -338,30 +338,49 @@ impl LedgerContextManager {
             return Ok(());
         }
 
-        let mut events: Vec<Event<DefaultDB>> = Vec::new();
-        for raw_hex in raw_events {
-            let bytes = hex::decode(raw_hex.trim_start_matches("0x"))
-                .map_err(|e| LedgerContextError::DeserializationError(format!("hex: {e}")))?;
-            let event: Event<DefaultDB> =
-                midnight_node_ledger_helpers::deserialize(&mut &bytes[..]).map_err(|e| {
-                    LedgerContextError::DeserializationError(format!("dust event: {e}"))
-                })?;
-            events.push(event);
-        }
+        // Process events one at a time to maintain correct merkle tree state.
+        // The DustWallet's replay_events builds the tree incrementally.
+        let mut applied = 0u64;
+        let mut errors = 0u64;
 
-        // Feed events into the wallet's DustWallet
         self.context
             .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
-                if let Err(e) = wallet.update_dust_from_tx(&events) {
-                    warn!(error = ?e, "Failed to apply DUST events to wallet");
+                for raw_hex in raw_events {
+                    let bytes = match hex::decode(raw_hex.trim_start_matches("0x")) {
+                        Ok(b) => b,
+                        Err(_) => {
+                            errors += 1;
+                            continue;
+                        }
+                    };
+                    let event: Event<DefaultDB> =
+                        match midnight_node_ledger_helpers::deserialize(&mut &bytes[..]) {
+                            Ok(e) => e,
+                            Err(_) => {
+                                errors += 1;
+                                continue;
+                            }
+                        };
+
+                    // Apply single event to maintain tree ordering
+                    if let Err(_) = wallet.update_dust_from_tx(&[event]) {
+                        errors += 1;
+                    } else {
+                        applied += 1;
+                    }
                 }
-                // Update the wallet's dust sync time to match the current block.
-                // This prevents timestamp disagreements during DUST spend verification.
+
+                // Advance DUST timing to current block
                 let tblock = self.context.latest_block_context().tblock;
                 wallet.dust.process_ttls(tblock);
             });
 
-        info!(events = raw_events.len(), "Applied DUST events to wallet");
+        info!(
+            applied,
+            errors,
+            total = raw_events.len(),
+            "Applied DUST events to wallet"
+        );
         Ok(())
     }
 
