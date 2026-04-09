@@ -162,5 +162,9 @@ path = "helpers/verify_eip712.rs"
 name = "sign_soroban_auth_entry"
 path = "helpers/sign_soroban_auth_entry.rs"
 
+[[example]]
+name = "midnight_dust_prep"
+path = "helpers/midnight_dust_prep.rs"
+
 [lib]
 path = "src/lib.rs"

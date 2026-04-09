@@ -183,14 +183,9 @@ where
         let mut tx_info =
             StandardTrasactionInfo::new_from_context(context.clone(), proof_server, None);
 
-        // NOTE: We intentionally do NOT set funding_seeds or dust_registrations here.
-        // This skips DUST fee payment, producing a zero-fee transaction.
-        // The chain may reject zero-fee transactions, but this allows testing
-        // the full proof→serialize→submit pipeline.
-        //
-        // When DUST is available (via Lace registration or cNgD staking),
-        // uncomment the following to enable fee payment:
-        // tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
+        // Pay DUST fees from the wallet. Requires DUST to have been
+        // registered and generated via the midnight-dust-generator tool.
+        tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
 
         // Build unshielded offer from request data
         if let Some(ref offer_req) = midnight_data.guaranteed_offer {

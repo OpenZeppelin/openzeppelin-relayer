@@ -53,32 +53,23 @@ impl LocalSigner {
         seed: &[u8; 32],
         network: &str,
     ) -> Result<(String, String), SignerError> {
-        use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
+        use midnight_node_ledger_helpers::{
+            DefaultDB, IntoWalletAddress, LedgerContext, WalletSeed,
+        };
 
         let wallet_seed = WalletSeed::Medium(*seed);
         let context =
             LedgerContext::<DefaultDB>::new_from_wallet_seeds("".to_string(), &[wallet_seed]);
 
-        // Get the unshielded verifying key bytes for the address
-        let vk_bytes = context.with_wallet_from_seed(wallet_seed, |wallet| {
-            let vk = wallet.unshielded.signing_key().verifying_key();
-            midnight_node_ledger_helpers::serialize_untagged(&vk).unwrap_or_default()
+        // Get the canonical unshielded address using the wallet's built-in method.
+        // This matches what the midnight-dust-generator and Lace produce.
+        let address = context.with_wallet_from_seed(wallet_seed, |wallet| {
+            wallet.unshielded.address(network).to_bech32()
         });
 
         // Get the viewing key directly from the shielded wallet
-        // The wallet has a built-in viewing_key() method that returns bech32m
         let viewing_key = context
             .with_wallet_from_seed(wallet_seed, |wallet| wallet.shielded.viewing_key(network));
-
-        // Encode unshielded address as bech32m
-        let addr_hrp_str = match network {
-            "preview" => "mn_addr_preview",
-            "preprod" => "mn_addr_preprod",
-            "mainnet" | "" => "mn_addr",
-            other => &format!("mn_addr_{other}"),
-        };
-
-        let address = Self::bech32m_encode(&vk_bytes, addr_hrp_str)?;
 
         Ok((address, viewing_key))
     }

@@ -99,3 +99,28 @@ Target direction:
 - Verify end-to-end behavior.
 - Revalidate fee assumptions.
 - Update docs/examples for current Midnight infrastructure.
+
+## Utility: DUST Registration Payload
+
+For testnet setups where Lace cannot produce DUST registration inputs, use the local
+example utility to derive the required DUST public key payload from a relayer seed:
+
+From seed:
+`cargo run --example midnight_dust_prep --features midnight -- --seed-hex <64-hex-seed> --network preview`
+
+From existing keystore:
+`cargo run --example midnight_dust_prep --features midnight -- --keystore-path tests/utils/test_keys/unit-test-local-signer.json --passphrase <passphrase> --network preview`
+
+Output fields:
+- wallet fields for funding/verification:
+  - `shielded_address`
+  - `viewing_key`
+  - `unshielded_address`
+  - `dust_address`
+  - `midnight_address_hex` (raw unshielded user address bytes; used by Cardano registration)
+  - `coin_public_key_hex` (debug/parity with Midnight toolkit)
+- `raw_dust_public_key_hex`: direct serialized public key bytes.
+- `registration_dust_public_key_hex`: registration-safe encoding (adds a trailing `00`
+  byte when the raw payload is 32 bytes, matching Midnight e2e behavior).
+
+Use `registration_dust_public_key_hex` in the Cardano-side registration flow.
