@@ -356,6 +356,35 @@ where
             }
         }
 
+        // Sync DUST ledger events to populate the wallet's DUST balance
+        match self.sync_manager.sync_dust_events().await {
+            Ok(events) if !events.is_empty() => {
+                if let Err(e) = self.ledger_ctx.apply_dust_events(&events) {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "Failed to apply DUST events"
+                    );
+                } else {
+                    info!(
+                        relayer_id = %self.relayer.id,
+                        events = events.len(),
+                        "DUST events synced and applied"
+                    );
+                }
+            }
+            Ok(_) => {
+                debug!(relayer_id = %self.relayer.id, "No DUST events found");
+            }
+            Err(e) => {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    error = %e,
+                    "DUST sync failed (non-fatal)"
+                );
+            }
+        }
+
         // Attempt shielded sync — populates the LedgerContext with wallet state.
         // This is the critical step that enables transaction building.
         let viewing_key = self.signer.viewing_key();

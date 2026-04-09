@@ -326,6 +326,41 @@ impl LedgerContextManager {
         Ok(())
     }
 
+    /// Apply raw DUST ledger events to the wallet's DustWallet.
+    ///
+    /// Each event is a hex-encoded serialized `Event<DefaultDB>` from the
+    /// indexer's `dustLedgerEvents` subscription. These update the wallet's
+    /// DUST UTXO set, enabling fee payment.
+    pub fn apply_dust_events(&self, raw_events: &[String]) -> Result<(), LedgerContextError> {
+        use midnight_node_ledger_helpers::Event;
+
+        if raw_events.is_empty() {
+            return Ok(());
+        }
+
+        let mut events: Vec<Event<DefaultDB>> = Vec::new();
+        for raw_hex in raw_events {
+            let bytes = hex::decode(raw_hex.trim_start_matches("0x"))
+                .map_err(|e| LedgerContextError::DeserializationError(format!("hex: {e}")))?;
+            let event: Event<DefaultDB> = midnight_node_ledger_helpers::deserialize_untagged(
+                &mut &bytes[..],
+            )
+            .map_err(|e| LedgerContextError::DeserializationError(format!("dust event: {e}")))?;
+            events.push(event);
+        }
+
+        // Feed events into the wallet's DustWallet
+        self.context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                if let Err(e) = wallet.update_dust_from_tx(&events) {
+                    warn!(error = ?e, "Failed to apply DUST events to wallet");
+                }
+            });
+
+        info!(events = raw_events.len(), "Applied DUST events to wallet");
+        Ok(())
+    }
+
     /// List unshielded UTXOs for the wallet.
     pub fn unshielded_utxos(&self) -> Vec<midnight_node_ledger_helpers::Utxo> {
         self.context

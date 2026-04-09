@@ -645,6 +645,147 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
 
         Ok(result)
     }
+
+    /// Sync DUST ledger events via WebSocket subscription.
+    ///
+    /// Subscribes to `dustLedgerEvents` and collects the raw event hex data.
+    /// Returns the collected events for the caller to feed into the LedgerContext.
+    pub async fn sync_dust_events(&self) -> Result<Vec<String>, SyncError> {
+        let ws_url = self.indexer_client.ws_url();
+
+        info!(
+            relayer_id = %self.relayer_id,
+            "Starting DUST ledger events sync via WebSocket"
+        );
+
+        let ws_request = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(ws_url)
+            .header("Sec-WebSocket-Protocol", "graphql-transport-ws")
+            .header(
+                "Host",
+                reqwest::Url::parse(ws_url)
+                    .map(|u| u.host_str().unwrap_or("").to_string())
+                    .unwrap_or_default(),
+            )
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header(
+                "Sec-WebSocket-Key",
+                tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+            )
+            .body(())
+            .map_err(|e| SyncError::SyncState(format!("WS request build failed: {e}")))?;
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_request)
+            .await
+            .map_err(|e| SyncError::SyncState(format!("WebSocket connect failed: {e}")))?;
+
+        let (mut write, mut read) = ws_stream.split();
+
+        // connection_init
+        let init = serde_json::json!({"type": "connection_init"});
+        write
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                init.to_string().into(),
+            ))
+            .await
+            .map_err(|e| SyncError::SyncState(format!("WS init failed: {e}")))?;
+
+        // Wait for ack
+        let timeout = tokio::time::Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout(timeout, read.next()).await {
+                Ok(Some(Ok(msg))) => {
+                    if let tokio_tungstenite::tungstenite::Message::Text(text) = &msg {
+                        if text.contains("connection_ack") {
+                            break;
+                        }
+                    }
+                }
+                _ => return Err(SyncError::SyncState("WS connection_ack timeout".into())),
+            }
+        }
+
+        // Subscribe to dustLedgerEvents
+        let sub_msg = serde_json::json!({
+            "id": "dust-1",
+            "type": "subscribe",
+            "payload": {
+                "query": "subscription { dustLedgerEvents { ... on DustInitialUtxo { id raw } ... on DustGenerationDtimeUpdate { id raw } ... on DustSpendProcessed { id raw } ... on ParamChange { id raw } } }"
+            }
+        });
+
+        write
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                sub_msg.to_string().into(),
+            ))
+            .await
+            .map_err(|e| SyncError::SyncState(format!("WS subscribe failed: {e}")))?;
+
+        let mut raw_events: Vec<String> = Vec::new();
+        let idle_timeout = tokio::time::Duration::from_secs(5);
+
+        loop {
+            match tokio::time::timeout(idle_timeout, read.next()).await {
+                Ok(Some(Ok(msg))) => {
+                    if let tokio_tungstenite::tungstenite::Message::Text(text) = &msg {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                            let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            match msg_type {
+                                "next" => {
+                                    if let Some(raw) = val
+                                        .get("payload")
+                                        .and_then(|p| p.get("data"))
+                                        .and_then(|d| d.get("dustLedgerEvents"))
+                                        .and_then(|e| e.get("raw"))
+                                        .and_then(|r| r.as_str())
+                                    {
+                                        raw_events.push(raw.to_string());
+                                    }
+                                }
+                                "complete" => break,
+                                "error" => {
+                                    let err = val
+                                        .get("payload")
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default();
+                                    warn!(error = %err, "DUST subscription error");
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    warn!(error = %e, "WS read error");
+                    break;
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    debug!(
+                        relayer_id = %self.relayer_id,
+                        events = raw_events.len(),
+                        "DUST sync idle timeout"
+                    );
+                    break;
+                }
+            }
+        }
+
+        let _ = write
+            .send(tokio_tungstenite::tungstenite::Message::Close(None))
+            .await;
+
+        info!(
+            relayer_id = %self.relayer_id,
+            events = raw_events.len(),
+            "DUST ledger events synced"
+        );
+
+        Ok(raw_events)
+    }
 }
 
 /// Events emitted during shielded wallet sync.
