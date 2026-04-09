@@ -200,7 +200,67 @@ impl LedgerContextManager {
 
         info!(network_id = %network_id, "Got network_id from node");
 
-        // Read ledger parameters via runtime API
+        // Read the full ledger state from on-chain storage.
+        // The state_key() returns a Substrate storage key (not the state itself).
+        // We use it to fetch the actual serialized LedgerState bytes via
+        // the Subxt storage API which handles SCALE decoding.
+        //
+        // The state_key contains the raw serialized LedgerState as stored
+        // in the Midnight pallet's storage. The .0 field is the raw bytes.
+        let state_query = mn_meta::storage().midnight().state_key();
+        let storage = api
+            .storage()
+            .at_latest()
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("Subxt at_latest: {e}")))?;
+
+        // Use fetch_raw to get the raw storage bytes.
+        // Subxt's address() gives us the storage key, and fetch_raw
+        // returns the raw SCALE-encoded value.
+        let raw_bytes = storage
+            .fetch_raw(state_query.to_root_bytes())
+            .await
+            .map_err(|e| LedgerContextError::ContextError(format!("fetch_raw failed: {e}")))?;
+
+        match raw_bytes {
+            Some(bytes) => {
+                info!(
+                    network_id = %network_id,
+                    raw_bytes = bytes.len(),
+                    "Read raw ledger state from chain storage"
+                );
+
+                // The raw storage value contains the SCALE-encoded LedgerState.
+                // Try to deserialize with the tagged format that
+                // update_ledger_state_from_bytes expects.
+                // If the raw bytes start with the midnight tag, use directly.
+                // Otherwise, fall back to parameters-only bootstrap.
+                let tag_prefix = b"midnight:ledger-state";
+                if bytes.len() > 20 && bytes.starts_with(tag_prefix) {
+                    self.context.update_ledger_state_from_bytes(&bytes);
+                    info!("LedgerContext bootstrapped with full chain state");
+                } else {
+                    warn!(
+                        prefix = hex::encode(&bytes[..bytes.len().min(30)]),
+                        "Storage bytes don't have expected tag, falling back to params"
+                    );
+                    Self::bootstrap_params_only(&api, &self.context, &network_id).await?;
+                }
+            }
+            None => {
+                warn!("No ledger state in storage");
+                Self::bootstrap_params_only(&api, &self.context, &network_id).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn bootstrap_params_only(
+        api: &subxt::OnlineClient<subxt::PolkadotConfig>,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        network_id: &str,
+    ) -> Result<(), LedgerContextError> {
         let params_call = mn_meta::apis()
             .midnight_runtime_api()
             .get_ledger_parameters();
@@ -208,45 +268,25 @@ impl LedgerContextManager {
             .runtime_api()
             .at_latest()
             .await
-            .map_err(|e| LedgerContextError::ContextError(format!("Subxt at_latest: {e}")))?
+            .map_err(|e| LedgerContextError::ContextError(format!("Subxt: {e}")))?
             .call(params_call)
             .await
-            .map_err(|e| {
-                LedgerContextError::ContextError(format!("get_ledger_parameters failed: {e}"))
-            })?;
-
-        let params_bytes = params_bytes.map_err(|e| {
-            LedgerContextError::ContextError(format!("Ledger params API error: {e:?}"))
-        })?;
+            .map_err(|e| LedgerContextError::ContextError(format!("params: {e}")))?
+            .map_err(|e| LedgerContextError::ContextError(format!("params err: {e:?}")))?;
 
         let parameters: LedgerParameters =
-            midnight_node_ledger_helpers::deserialize(&mut &params_bytes[..]).map_err(|e| {
-                LedgerContextError::DeserializationError(format!(
-                    "LedgerParameters deserialize: {e}"
-                ))
-            })?;
+            midnight_node_ledger_helpers::deserialize(&mut &params_bytes[..])
+                .map_err(|e| LedgerContextError::DeserializationError(format!("params: {e}")))?;
 
-        // Build a fresh LedgerState with the correct network_id and parameters.
-        // Use LedgerState::blank() as the base and set the fields.
         use midnight_node_ledger_helpers::LedgerState;
-        let mut new_state = LedgerState::<DefaultDB>::new(network_id.clone());
+        let mut new_state = LedgerState::<DefaultDB>::new(network_id);
         new_state.parameters = midnight_node_ledger_helpers::Sp::new(parameters);
 
-        // Serialize (tagged) and inject via update_ledger_state_from_bytes
-        // which uses tagged deserialization internally
-        let state_bytes = midnight_node_ledger_helpers::serialize(&new_state).map_err(|e| {
-            LedgerContextError::SerializationError(format!(
-                "Failed to serialize bootstrapped state: {e}"
-            ))
-        })?;
+        let bytes = midnight_node_ledger_helpers::serialize(&new_state)
+            .map_err(|e| LedgerContextError::SerializationError(format!("serialize: {e}")))?;
+        context.update_ledger_state_from_bytes(&bytes);
 
-        self.context.update_ledger_state_from_bytes(&state_bytes);
-
-        info!(
-            network_id = %network_id,
-            "LedgerContext bootstrapped with chain parameters"
-        );
-
+        info!("LedgerContext bootstrapped with parameters only");
         Ok(())
     }
 
