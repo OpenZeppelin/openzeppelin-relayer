@@ -342,10 +342,10 @@ impl LedgerContextManager {
         for raw_hex in raw_events {
             let bytes = hex::decode(raw_hex.trim_start_matches("0x"))
                 .map_err(|e| LedgerContextError::DeserializationError(format!("hex: {e}")))?;
-            let event: Event<DefaultDB> = midnight_node_ledger_helpers::deserialize_untagged(
-                &mut &bytes[..],
-            )
-            .map_err(|e| LedgerContextError::DeserializationError(format!("dust event: {e}")))?;
+            let event: Event<DefaultDB> =
+                midnight_node_ledger_helpers::deserialize(&mut &bytes[..]).map_err(|e| {
+                    LedgerContextError::DeserializationError(format!("dust event: {e}"))
+                })?;
             events.push(event);
         }
 
