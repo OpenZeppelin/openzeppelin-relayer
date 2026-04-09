@@ -11,7 +11,7 @@
         "http": "https://indexer.preview.midnight.network/api/v4/graphql",
         "ws": "wss://indexer.preview.midnight.network/api/v4/graphql/ws"
       },
-      "prover_url": "https://lace-proof-pub.preview.midnight.network"
+      "prover_url": "http://localhost:6300"
     }
   ]
 }

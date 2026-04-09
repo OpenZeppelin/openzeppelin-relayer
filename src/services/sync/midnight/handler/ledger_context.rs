@@ -355,6 +355,10 @@ impl LedgerContextManager {
                 if let Err(e) = wallet.update_dust_from_tx(&events) {
                     warn!(error = ?e, "Failed to apply DUST events to wallet");
                 }
+                // Update the wallet's dust sync time to match the current block.
+                // This prevents timestamp disagreements during DUST spend verification.
+                let tblock = self.context.latest_block_context().tblock;
+                wallet.dust.process_ttls(tblock);
             });
 
         info!(events = raw_events.len(), "Applied DUST events to wallet");
