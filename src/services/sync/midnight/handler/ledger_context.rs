@@ -248,8 +248,51 @@ impl LedgerContextManager {
                 }
             }
             None => {
-                warn!("No ledger state in storage");
+                warn!("No ledger state in storage, using block sync");
                 Self::bootstrap_params_only(&api, &self.context, &network_id).await?;
+            }
+        }
+
+        // After basic bootstrap, run block sync to build full state
+        // including DUST merkle trees. Uses cached checkpoint if available.
+        let current_height = {
+            let header: serde_json::Value = reqwest::Client::new()
+                .post(rpc_url.replace("wss://", "https://").replace("ws://", "http://"))
+                .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"chain_getHeader","params":[]}))
+                .send().await
+                .map_err(|e| LedgerContextError::ContextError(format!("getHeader: {e}")))?
+                .json().await
+                .map_err(|e| LedgerContextError::ContextError(format!("json: {e}")))?;
+            let hex = header
+                .get("result")
+                .and_then(|r| r.get("number"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("0x0");
+            u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+        };
+
+        if current_height > 0 {
+            let http_rpc = rpc_url
+                .replace("wss://", "https://")
+                .replace("ws://", "http://");
+            info!(
+                current_height,
+                "Starting block sync to build full LedgerState"
+            );
+            match super::block_sync::sync_blocks(&self.context, &api, &http_rpc, 0, current_height)
+                .await
+            {
+                Ok(result) => {
+                    info!(
+                        blocks = result.blocks_processed,
+                        txs = result.transactions_applied,
+                        skipped = result.blocks_skipped,
+                        "Block sync completed"
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "Block sync failed (non-fatal)");
+                }
             }
         }
 
@@ -421,6 +464,13 @@ impl LedgerContextManager {
             total = raw_events.len(),
             "Applied DUST events to wallet"
         );
+
+        // NOTE: The wallet's DUST trees are populated from events, but the
+        // LedgerState's DUST trees remain empty. The sync_dust_trees_to_ledger
+        // approach is blocked by private fields on DustLocalState.
+        // The workaround is to use mock_proofs_for_fees in the transaction builder
+        // which skips real DUST proof verification during fee estimation.
+
         Ok(())
     }
 

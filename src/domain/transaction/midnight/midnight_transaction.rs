@@ -187,6 +187,12 @@ where
         // registered and generated via the midnight-dust-generator tool.
         tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
 
+        // Use mock proofs for fee estimation. The LedgerState's DUST merkle
+        // trees aren't populated (private DustLocalState fields prevent sync),
+        // so real DUST proof verification fails. Mock proofs skip verification
+        // during fee estimation, then real proofs are generated for the final tx.
+        tx_info.use_mock_proofs_for_fees(true);
+
         // Build unshielded offer from request data
         if let Some(ref offer_req) = midnight_data.guaranteed_offer {
             let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = Vec::new();
