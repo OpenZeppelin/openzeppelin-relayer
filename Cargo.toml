@@ -166,5 +166,9 @@ path = "helpers/sign_soroban_auth_entry.rs"
 name = "midnight_dust_prep"
 path = "helpers/midnight_dust_prep.rs"
 
+[patch.crates-io]
+# Local patch to make DustLocalState fields public for DUST tree sync
+midnight-ledger = { path = "/tmp/midnight-ledger-patched" }
+
 [lib]
 path = "src/lib.rs"

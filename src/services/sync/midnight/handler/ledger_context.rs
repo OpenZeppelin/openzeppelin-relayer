@@ -253,48 +253,8 @@ impl LedgerContextManager {
             }
         }
 
-        // After basic bootstrap, run block sync to build full state
-        // including DUST merkle trees. Uses cached checkpoint if available.
-        let current_height = {
-            let header: serde_json::Value = reqwest::Client::new()
-                .post(rpc_url.replace("wss://", "https://").replace("ws://", "http://"))
-                .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"chain_getHeader","params":[]}))
-                .send().await
-                .map_err(|e| LedgerContextError::ContextError(format!("getHeader: {e}")))?
-                .json().await
-                .map_err(|e| LedgerContextError::ContextError(format!("json: {e}")))?;
-            let hex = header
-                .get("result")
-                .and_then(|r| r.get("number"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("0x0");
-            u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-        };
-
-        if current_height > 0 {
-            let http_rpc = rpc_url
-                .replace("wss://", "https://")
-                .replace("ws://", "http://");
-            info!(
-                current_height,
-                "Starting block sync to build full LedgerState"
-            );
-            match super::block_sync::sync_blocks(&self.context, &api, &http_rpc, 0, current_height)
-                .await
-            {
-                Ok(result) => {
-                    info!(
-                        blocks = result.blocks_processed,
-                        txs = result.transactions_applied,
-                        skipped = result.blocks_skipped,
-                        "Block sync completed"
-                    );
-                }
-                Err(e) => {
-                    warn!(error = %e, "Block sync failed (non-fatal)");
-                }
-            }
-        }
+        // Block sync disabled — panics on DUST-spending transactions.
+        // DUST state is synced via event replay + tree sync instead.
 
         Ok(())
     }
@@ -465,11 +425,84 @@ impl LedgerContextManager {
             "Applied DUST events to wallet"
         );
 
-        // NOTE: The wallet's DUST trees are populated from events, but the
-        // LedgerState's DUST trees remain empty. The sync_dust_trees_to_ledger
-        // approach is blocked by private fields on DustLocalState.
-        // The workaround is to use mock_proofs_for_fees in the transaction builder
-        // which skips real DUST proof verification during fee estimation.
+        // Sync the wallet's DUST trees into the LedgerState so that
+        // proof verification can find matching commitment roots.
+        if applied > 0 {
+            if let Err(e) = self.sync_dust_trees_to_ledger() {
+                warn!(error = %e, "Failed to sync DUST trees to ledger");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Sync the wallet's DUST merkle trees into the LedgerState.
+    ///
+    /// Copies commitment_tree and generating_tree from the wallet's
+    /// DustLocalState into the LedgerState's DustState, and adds the
+    /// current roots to root_history for proof verification.
+    fn sync_dust_trees_to_ledger(&self) -> Result<(), LedgerContextError> {
+        use midnight_node_ledger_helpers::Sp;
+
+        // Read wallet's DUST tree data (fields are now pub via patched crate)
+        let wallet_dust = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                wallet.dust.dust_local_state.as_ref().map(|state| {
+                    (
+                        state.commitment_tree.clone(),
+                        state.commitment_tree_first_free,
+                        state.generating_tree.clone(),
+                        state.generating_tree_first_free,
+                    )
+                })
+            });
+
+        let Some((commitment_tree, commitment_ff, generating_tree, generating_ff)) = wallet_dust
+        else {
+            debug!("No DUST local state to sync");
+            return Ok(());
+        };
+
+        // Deserialize current LedgerState, update DUST fields, re-inject
+        let current_bytes = self.serialize_state()?;
+        let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
+            midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
+                .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+
+        let mut dust_state = (*state.dust).clone();
+
+        // Copy commitment tree
+        dust_state.utxo.commitments = commitment_tree;
+        dust_state.utxo.commitments_first_free = commitment_ff;
+
+        // Add current root to root_history for proof verification
+        let tblock = self.context.latest_block_context().tblock;
+        if let Some(commit_root) = dust_state.utxo.commitments.root() {
+            dust_state.utxo.root_history = dust_state.utxo.root_history.insert(tblock, commit_root);
+        }
+
+        // Copy generating tree
+        dust_state.generation.generating_tree = generating_tree;
+        dust_state.generation.generating_tree_first_free = generating_ff;
+
+        if let Some(gen_root) = dust_state.generation.generating_tree.root() {
+            dust_state.generation.root_history =
+                dust_state.generation.root_history.insert(tblock, gen_root);
+        }
+
+        state.dust = Sp::new(dust_state);
+
+        // Re-serialize and inject
+        let new_bytes = midnight_node_ledger_helpers::serialize(&state)
+            .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+        self.context.update_ledger_state_from_bytes(&new_bytes);
+
+        info!(
+            commitment_first_free = commitment_ff,
+            generating_first_free = generating_ff,
+            "Synced DUST trees to LedgerState"
+        );
 
         Ok(())
     }
