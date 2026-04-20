@@ -249,16 +249,9 @@ where
         let shielded_address = self.signer.shielded_address().to_string();
         let dust_address = self.signer.dust_address().to_string();
 
-        // DUST balance: check from the LedgerContext's wallet state.
-        // If the wallet hasn't synced DUST events, this will be "0".
-        let dust_balance = self.ledger_ctx.context().with_wallet_from_seed(
-            self.ledger_ctx.wallet_seed().clone(),
-            |wallet| {
-                // DustWallet fields are private, so we can't read the balance directly.
-                // Use a placeholder until DUST sync is implemented.
-                "0".to_string()
-            },
-        );
+        // DUST balance: sum spendable DUST from the wallet's DustLocalState.
+        // Returns "0" if DUST events haven't been synced yet (wallet state empty).
+        let dust_balance = self.ledger_ctx.dust_balance().to_string();
 
         Ok(RelayerStatus::Midnight {
             balance: balance.to_string(),

@@ -1,0 +1,24 @@
+{
+  "name": "midnight-dust-register",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "register": "node register.mjs"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/ledger-v8": "^8.0.3",
+    "@midnight-ntwrk/midnight-js-network-id": "^4.0.0",
+    "@midnight-ntwrk/midnight-js-utils": "^4.0.4",
+    "@midnight-ntwrk/wallet-sdk-address-format": "^3.1.0",
+    "@midnight-ntwrk/wallet-sdk-dust-wallet": "^3.0.0",
+    "@midnight-ntwrk/wallet-sdk-facade": "^3.0.0",
+    "@midnight-ntwrk/wallet-sdk-hd": "^3.0.1",
+    "@midnight-ntwrk/wallet-sdk-shielded": "^2.0.0",
+    "@midnight-ntwrk/wallet-sdk-unshielded-wallet": "^2.1.0",
+    "@noble/hashes": "^1.8.0",
+    "bech32": "^2.0.0",
+    "rxjs": "^7.8.1",
+    "ws": "^8.17.0"
+  }
+}

@@ -6,12 +6,14 @@ pub use proof_server::RemoteProofServer;
 pub use subxt_client::MidnightSubxtClient;
 pub use tx_builder::MidnightTxBuilder;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::OnceCell;
 
 use crate::models::{MidnightNetwork, RpcConfig};
 use crate::services::provider::ProviderError;
@@ -41,6 +43,7 @@ pub struct MidnightProvider {
     network: MidnightNetwork,
     rpc_client: Client,
     indexer_client: MidnightIndexerClient,
+    subxt_cell: Arc<OnceCell<MidnightSubxtClient>>,
 }
 
 impl MidnightProvider {
@@ -55,7 +58,22 @@ impl MidnightProvider {
             network,
             rpc_client,
             indexer_client,
+            subxt_cell: Arc::new(OnceCell::new()),
         })
+    }
+
+    /// Lazily connect a Subxt client to the node. Subxt needs a WebSocket
+    /// endpoint while the HTTP RPC in config uses https — convert on first use.
+    async fn subxt_client(&self) -> Result<&MidnightSubxtClient, ProviderError> {
+        self.subxt_cell
+            .get_or_try_init(|| async {
+                let url = self.first_rpc_url()?;
+                let ws_url = url
+                    .replace("https://", "wss://")
+                    .replace("http://", "ws://");
+                MidnightSubxtClient::connect(&ws_url).await
+            })
+            .await
     }
 
     pub fn network(&self) -> &MidnightNetwork {
@@ -169,14 +187,15 @@ impl MidnightProviderTrait for MidnightProvider {
         &self,
         encoded_extrinsic: &str,
     ) -> Result<TransactionSubmissionResult, ProviderError> {
-        let extrinsic_tx_hash: String = self
-            .rpc_call("author_submitExtrinsic", json!([encoded_extrinsic]))
-            .await?;
+        // Midnight transaction bytes are NOT a valid Substrate OpaqueExtrinsic
+        // on their own — author_submitExtrinsic rejects them with JSON-RPC 1040
+        // "Could not decode OpaqueExtrinsic.0". Instead, wrap the bytes in the
+        // Midnight pallet's send_mn_transaction call and submit as an unsigned
+        // extrinsic via Subxt.
+        let bytes = hex::decode(encoded_extrinsic.trim_start_matches("0x"))
+            .map_err(|e| ProviderError::Other(format!("Invalid extrinsic hex: {e}")))?;
 
-        Ok(TransactionSubmissionResult {
-            extrinsic_tx_hash,
-            pallet_tx_hash: None,
-        })
+        self.subxt_client().await?.submit_transaction(bytes).await
     }
 
     fn get_indexer_client(&self) -> &MidnightIndexerClient {

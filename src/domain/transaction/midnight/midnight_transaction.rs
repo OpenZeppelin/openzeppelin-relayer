@@ -5,7 +5,7 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     domain::Transaction,
-    jobs::{JobProducerTrait, StatusCheckContext, TransactionStatusCheck},
+    jobs::{JobProducerTrait, StatusCheckContext, TransactionSend, TransactionStatusCheck},
     models::{
         MidnightNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
         TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
@@ -171,9 +171,10 @@ where
         // Create proof provider and transaction builder
         use midnight_node_ledger_helpers::{
             BuildUtxoOutput, BuildUtxoSpend, DefaultDB, FromContext, IntentInfo,
-            StandardTrasactionInfo, UnshieldedOfferInfo, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
-            NIGHT,
+            StandardTrasactionInfo, UnshieldedOfferInfo, UnshieldedWallet, UtxoOutputInfo,
+            UtxoSpendInfo, WalletAddress, WalletSeed, NIGHT,
         };
+        use std::str::FromStr;
 
         let proof_server = Arc::new(crate::services::provider::RemoteProofServer::new(
             self.network.prover_url.clone(),
@@ -203,6 +204,10 @@ where
                     ))
                 })?;
 
+                // The relayer can only spend UTXOs owned by its own wallet.
+                // `origin` is accepted for API symmetry but the owner is always
+                // the relayer's wallet_seed — any other value would be a request
+                // the relayer cannot fulfill.
                 inputs.push(Box::new(UtxoSpendInfo {
                     value,
                     owner: wallet_seed.clone(),
@@ -220,11 +225,35 @@ where
                     ))
                 })?;
 
-                outputs.push(Box::new(UtxoOutputInfo {
-                    value,
-                    owner: wallet_seed.clone(),
-                    token_type: NIGHT,
-                }));
+                // Destinations other than "self" must be an unshielded bech32m
+                // address (e.g. mn_addr_preview1…). "self" loops back to the
+                // relayer's own wallet (useful for tests and change outputs).
+                if output.destination == "self" {
+                    outputs.push(Box::new(UtxoOutputInfo {
+                        value,
+                        owner: wallet_seed.clone(),
+                        token_type: NIGHT,
+                    }));
+                } else {
+                    let wallet_addr =
+                        WalletAddress::from_str(&output.destination).map_err(|e| {
+                            TransactionError::ValidationError(format!(
+                                "Invalid destination address {}: {e}",
+                                output.destination
+                            ))
+                        })?;
+                    let unshielded = UnshieldedWallet::try_from(&wallet_addr).map_err(|e| {
+                        TransactionError::ValidationError(format!(
+                            "Destination {} is not an unshielded address: {e:?}",
+                            output.destination
+                        ))
+                    })?;
+                    outputs.push(Box::new(UtxoOutputInfo {
+                        value,
+                        owner: unshielded,
+                        token_type: NIGHT,
+                    }));
+                }
             }
 
             let unshielded_offer = UnshieldedOfferInfo { inputs, outputs };
@@ -274,11 +303,15 @@ where
             "Midnight transaction prepared and serialized"
         );
 
-        // Store the serialized transaction and pallet hash in network data
+        // Store the serialized transaction and pallet hash in network data.
+        // `hash` stays None until submit_transaction records the extrinsic hash
+        // from Substrate — keeping serialized bytes out of the hash field keeps
+        // the API surface honest and lets callers distinguish prepared vs sent.
         let updated_network_data = crate::models::MidnightTransactionData {
-            hash: Some(serialized_hex),
+            hash: None,
             pallet_hash: Some(pallet_hash),
             block_hash: None,
+            serialized_tx: Some(serialized_hex),
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),
@@ -305,6 +338,19 @@ where
             .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
 
+        // Enqueue the submit job so the prepared transaction gets pushed to
+        // the node. Every other network does this at the tail of prepare;
+        // without it the tx would sit in Sent forever.
+        self.job_producer
+            .produce_submit_transaction_job(
+                TransactionSend::submit(updated.id.clone(), updated.relayer_id.clone()),
+                None,
+            )
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to enqueue submit job: {e}"))
+            })?;
+
         Ok(updated)
     }
 
@@ -324,7 +370,7 @@ where
         // If prepare hasn't run or didn't produce serialized data, fail explicitly.
         let midnight_data = tx.network_data.get_midnight_transaction_data()?;
 
-        let serialized_hex = midnight_data.hash.as_deref().ok_or_else(|| {
+        let serialized_hex = midnight_data.serialized_tx.as_deref().ok_or_else(|| {
             TransactionError::NotSupported(
                 "Midnight transaction has no serialized extrinsic. \
                      prepare_transaction must serialize the proven transaction first."
@@ -349,11 +395,17 @@ where
         let mut hashes = tx.hashes.clone();
         hashes.push(result.extrinsic_tx_hash.clone());
 
-        // Store pallet hash separately in network data for status queries
+        // Preserve serialized_tx so resubmit paths can replay without re-proving.
+        // The pallet_hash set during prepare is authoritative for indexer queries;
+        // prefer it over whatever the provider returned.
         let updated_network_data = crate::models::MidnightTransactionData {
             hash: Some(result.extrinsic_tx_hash.clone()),
-            pallet_hash: result.pallet_tx_hash.clone(),
+            pallet_hash: midnight_data
+                .pallet_hash
+                .clone()
+                .or(result.pallet_tx_hash.clone()),
             block_hash: midnight_data.block_hash.clone(),
+            serialized_tx: midnight_data.serialized_tx.clone(),
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),

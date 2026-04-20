@@ -217,6 +217,7 @@ mod tests {
             hash: Some("0xdeadbeef".into()),
             pallet_hash: None,
             block_hash: None,
+            serialized_tx: None,
             guaranteed_offer: None,
             intents: vec![],
             fallible_offers: vec![],

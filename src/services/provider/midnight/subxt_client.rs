@@ -11,6 +11,7 @@ use super::TransactionSubmissionResult;
 use crate::services::provider::ProviderError;
 
 /// Wraps a Subxt `OnlineClient` for Midnight-specific operations.
+#[derive(Debug, Clone)]
 pub struct MidnightSubxtClient {
     api: OnlineClient<PolkadotConfig>,
 }
@@ -48,11 +49,14 @@ impl MidnightSubxtClient {
 
         debug!("Submitting unsigned Midnight extrinsic");
 
-        // Submit and get the extrinsic hash
+        // Submit and get the extrinsic hash. Use {:?} for the error so we
+        // surface the JSON-RPC `data` field (Substrate's detailed reason for
+        // InvalidTransaction variants); the default Display only shows the
+        // generic code/message.
         let tx_hash = unsigned_extrinsic
             .submit()
             .await
-            .map_err(|e| ProviderError::Other(format!("Extrinsic submission failed: {e}")))?;
+            .map_err(|e| ProviderError::Other(format!("Extrinsic submission failed: {e:?}")))?;
 
         let extrinsic_hash = format!("0x{}", hex::encode(tx_hash.0));
 

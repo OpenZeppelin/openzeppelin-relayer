@@ -111,8 +111,8 @@ reqwest-middleware = { version = "0.4.2", default-features = false, features = [
 url = "2"
 lru = "0.16"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"], optional = true }
-midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-0.22.3", features = ["can-panic"], optional = true }
-midnight-node-metadata = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-metadata", tag = "node-0.22.3", optional = true }
+midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-1.0.0-rc.1", features = ["can-panic"], optional = true }
+midnight-node-metadata = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-metadata", tag = "node-1.0.0-rc.1", optional = true }
 subxt = { version = "0.44", optional = true }
 bech32 = { version = "0.11", optional = true }
 
@@ -167,7 +167,10 @@ name = "midnight_dust_prep"
 path = "helpers/midnight_dust_prep.rs"
 
 [patch.crates-io]
-# Local patch to make DustLocalState fields public for DUST tree sync
+# Local patch exposing DustLocalState tree fields as pub so our sync code
+# can write wallet-side DUST merkle state back into LedgerState.
+# See scripts/README or docs/midnight-migration-guide.md for how to recreate
+# the patched dir if /tmp gets wiped.
 midnight-ledger = { path = "/tmp/midnight-ledger-patched" }
 
 [lib]

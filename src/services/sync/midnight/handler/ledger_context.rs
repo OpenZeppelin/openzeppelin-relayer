@@ -106,7 +106,14 @@ impl LedgerContextManager {
 
         // Apply the transaction to the ledger context.
         // This updates both the ledger state and the wallet state.
-        let (events, _cost) = self.context.update_from_tx(&tx, &block_context);
+        // In ledger-helpers 1.0.0+ this returns Result; treat failures as
+        // deserialization errors (the tx shape didn't match chain expectations).
+        let (events, _cost) = self
+            .context
+            .update_from_tx(&tx, &block_context)
+            .map_err(|e| {
+                LedgerContextError::DeserializationError(format!("update_from_tx: {e}"))
+            })?;
 
         debug!(
             network_id = %self.network_id,
@@ -513,6 +520,30 @@ impl LedgerContextManager {
             .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
                 self.context
                     .with_ledger_state(|state| wallet.unshielded_utxos(state))
+            })
+    }
+
+    /// Sum the spendable DUST across the wallet's DustLocalState.
+    ///
+    /// DUST amounts grow over time, so each UTXO's current value depends
+    /// on the evaluation timestamp — we use the latest observed block's
+    /// `tblock`, matching what `speculative_spend` uses during fee payment.
+    /// Returns 0 when DUST state is absent (no events replayed yet).
+    pub fn dust_balance(&self) -> u128 {
+        use midnight_node_ledger_helpers::DustOutput;
+        let ctime = self.context.latest_block_context().tblock;
+        self.context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                let Some(state) = wallet.dust.dust_local_state.as_ref() else {
+                    return 0u128;
+                };
+                state
+                    .utxos()
+                    .filter_map(|qdo| {
+                        let gen_info = state.generation_info(&qdo)?;
+                        Some(DustOutput::from(qdo).updated_value(&gen_info, ctime, &state.params))
+                    })
+                    .sum()
             })
     }
 }
