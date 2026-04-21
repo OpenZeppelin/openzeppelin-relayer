@@ -349,87 +349,80 @@ where
             }
         }
 
-        // Sync DUST ledger events to populate the wallet's DUST balance
-        match self.sync_manager.sync_dust_events().await {
-            Ok(events) if !events.is_empty() => {
-                if let Err(e) = self.ledger_ctx.apply_dust_events(&events) {
-                    warn!(
-                        relayer_id = %self.relayer.id,
-                        error = %e,
-                        "Failed to apply DUST events"
-                    );
-                } else {
-                    info!(
-                        relayer_id = %self.relayer.id,
-                        events = events.len(),
-                        "DUST events synced and applied"
-                    );
-                }
-            }
-            Ok(_) => {
-                debug!(relayer_id = %self.relayer.id, "No DUST events found");
-            }
-            Err(e) => {
+        // DUST sync via the process-wide sync task. Use the seed-aware
+        // dispatch so runtime-added relayers (whose seed isn't in the shared
+        // slot's list) resolve to their own isolated slot instead of falling
+        // through. If neither shared nor isolated exists yet, the factory
+        // will have registered an isolated slot during relayer construction;
+        // we still guard for missing with a warn + skip.
+        let wallet_seed_for_sync = self.ledger_ctx.wallet_seed().clone();
+        if let Some(slot) = crate::services::sync::midnight::get_slot_for_seed(
+            &self.network.network,
+            &wallet_seed_for_sync,
+        ) {
+            let handle = slot
+                .task
+                .subscribe_wallet(self.ledger_ctx.wallet_seed().clone());
+
+            // Mark the relayer as syncing up front; handlers already reject
+            // tx requests for `system_disabled` relayers via
+            // `validate_active_state`.
+            if let Err(e) = self
+                .relayer_repository
+                .disable_relayer(
+                    self.relayer.id.clone(),
+                    crate::models::DisabledReason::Syncing("initial DUST catch-up".into()),
+                )
+                .await
+            {
                 warn!(
                     relayer_id = %self.relayer.id,
                     error = %e,
-                    "DUST sync failed (non-fatal)"
+                    "failed to mark relayer as Syncing; wallet subscription still armed"
                 );
             }
-        }
 
-        // Anchor `latest_block_context` to the chain's current block. The
-        // library's `pay_fees` reads this tblock as the DUST spend's `ctime`
-        // — chain-side validation does `root_history.get(ctime)` with
-        // predecessor-by-time semantics, so declared ctime must match the
-        // block our wallet synced to, not wall-clock now. Without this,
-        // chain's get(wall_now) returns chain's latest root (newer than
-        // ours) → proof mismatch → InvalidDustSpendProof (error 170).
-        let indexer = self.provider.get_indexer_client();
-        let mut anchor_result: Option<u64> = None;
-        for attempt in 1..=5u32 {
-            match indexer.get_latest_block().await {
-                Ok(Some(block)) => {
-                    if let Some(tblock_ms) = block.timestamp {
-                        let tblock_secs = tblock_ms / 1000;
-                        self.ledger_ctx.set_latest_block(
-                            tblock_secs,
-                            [0u8; 32],
-                            tblock_secs.saturating_sub(6),
-                        );
-                        anchor_result = Some(tblock_secs);
-                        break;
+            // Background watcher: when the shared task signals Ready, clear
+            // the disabled flag; on failure, surface it as SyncFailed so the
+            // operator can see it in /status.
+            let relayer_id = self.relayer.id.clone();
+            let relayer_repo = self.relayer_repository.clone();
+            tokio::spawn(async move {
+                match handle.await_ready().await {
+                    Ok(()) => {
+                        if let Err(e) = relayer_repo.enable_relayer(relayer_id.clone()).await {
+                            warn!(
+                                relayer_id = %relayer_id,
+                                error = %e,
+                                "failed to mark relayer Ready after DUST sync"
+                            );
+                        } else {
+                            info!(
+                                relayer_id = %relayer_id,
+                                "Midnight relayer wallet Ready"
+                            );
+                        }
                     }
-                    warn!(
-                        relayer_id = %self.relayer.id,
-                        block_hash = %block.hash,
-                        "indexer latest block has no timestamp"
-                    );
-                    break;
+                    Err(reason) => {
+                        warn!(
+                            relayer_id = %relayer_id,
+                            reason = %reason,
+                            "Midnight shared DUST sync failed"
+                        );
+                        let _ = relayer_repo
+                            .disable_relayer(
+                                relayer_id.clone(),
+                                crate::models::DisabledReason::SyncFailed(reason),
+                            )
+                            .await;
+                    }
                 }
-                Ok(None) => {
-                    warn!(
-                        relayer_id = %self.relayer.id,
-                        "indexer returned null latest block"
-                    );
-                    break;
-                }
-                Err(e) => {
-                    warn!(
-                        relayer_id = %self.relayer.id,
-                        attempt,
-                        error = %e,
-                        "failed to fetch chain latest block for ctime anchor — retrying"
-                    );
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
-                        .await;
-                }
-            }
-        }
-        if anchor_result.is_none() {
+            });
+        } else {
             warn!(
                 relayer_id = %self.relayer.id,
-                "ctime anchor not established; DUST spend proofs may be rejected (error 170)"
+                network_id = %self.network.network,
+                "shared Midnight sync slot not found; DUST state will be stale"
             );
         }
 

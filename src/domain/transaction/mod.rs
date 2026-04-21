@@ -806,13 +806,17 @@ impl RelayerTransactionFactory {
                     &network.network,
                 )?;
 
-                // Use the shared LedgerContext from the relayer factory.
-                // Falls back to a fresh instance if the relayer hasn't initialized yet.
-                let ledger_ctx =
-                    crate::services::sync::midnight::ledger_context::get_shared_ledger_ctx()
-                        .unwrap_or_else(|| {
-                            Arc::new(LedgerContextManager::new(&key_bytes, &network.network))
-                        });
+                let wallet_seed = midnight_node_ledger_helpers::WalletSeed::Medium(key_bytes);
+                let slot = crate::services::sync::midnight::get_or_register_slot(
+                    &network.network,
+                    wallet_seed.clone(),
+                    provider.get_indexer_client().clone(),
+                );
+                let ledger_ctx = Arc::new(LedgerContextManager::from_shared_context(
+                    wallet_seed,
+                    slot.context.clone(),
+                    &network.network,
+                ));
 
                 // Use the shared global store set by initialize_app_state.
                 // Falls back to in-memory if the global hasn't been initialized yet

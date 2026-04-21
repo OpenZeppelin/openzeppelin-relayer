@@ -90,6 +90,12 @@ async fn main() -> Result<()> {
 
     process_config_file(config_file, server_config.clone(), &app_state).await?;
 
+    // Start the per-network Midnight DUST shared sync task(s) so per-relayer
+    // init can subscribe instead of each running its own one-shot sync.
+    // No-op when no midnight relayers are configured.
+    #[cfg(feature = "midnight")]
+    openzeppelin_relayer::bootstrap::initialize_midnight_shared_sync(app_state.clone()).await?;
+
     info!("Initializing relayers");
     // Initialize relayers: sync and validate relayers
     initialize_relayers(app_state.clone()).await?;

@@ -134,6 +134,13 @@ pub enum DisabledReason {
     BalanceCheckFailed(String),
     /// Sequence number synchronization failed (Stellar)
     SequenceSyncFailed(String),
+    /// Midnight wallet state is catching up with the chain via the shared
+    /// DUST sync task. The inner string is a progress hint; transitions to
+    /// `None` automatically once the wallet is caught up; transactions are
+    /// rejected while in this state.
+    Syncing(String),
+    /// Midnight shared DUST sync task reported an unrecoverable failure.
+    SyncFailed(String),
     /// Multiple failures occurred simultaneously
     #[schema(value_type = Vec<String>)]
     Multiple(Vec<DisabledReason>),
@@ -165,6 +172,14 @@ impl Serialize for DisabledReason {
             DisabledReason::SequenceSyncFailed(_) => {
                 state.serialize_field("type", "SequenceSyncFailed")?;
                 state.serialize_field("details", "Sequence synchronization failed")?;
+            }
+            DisabledReason::Syncing(_) => {
+                state.serialize_field("type", "Syncing")?;
+                state.serialize_field("details", "Relayer is catching up with chain state")?;
+            }
+            DisabledReason::SyncFailed(_) => {
+                state.serialize_field("type", "SyncFailed")?;
+                state.serialize_field("details", "Chain synchronization failed")?;
             }
             DisabledReason::Multiple(reasons) => {
                 state.serialize_field("type", "Multiple")?;
@@ -231,6 +246,8 @@ impl DisabledReason {
             DisabledReason::RpcValidationFailed(e) => format!("RPC validation failed: {e}"),
             DisabledReason::BalanceCheckFailed(e) => format!("Balance check failed: {e}"),
             DisabledReason::SequenceSyncFailed(e) => format!("Sequence sync failed: {e}"),
+            DisabledReason::Syncing(_) => "Catching up with chain state".to_string(),
+            DisabledReason::SyncFailed(e) => format!("Chain sync failed: {e}"),
             DisabledReason::Multiple(reasons) => reasons
                 .iter()
                 .map(|r| r.description())
@@ -247,6 +264,8 @@ impl DisabledReason {
             DisabledReason::RpcValidationFailed(_) => "RPC endpoint validation failed".to_string(),
             DisabledReason::BalanceCheckFailed(_) => "Insufficient balance".to_string(),
             DisabledReason::SequenceSyncFailed(_) => "Sequence synchronization failed".to_string(),
+            DisabledReason::Syncing(_) => "Catching up with chain state".to_string(),
+            DisabledReason::SyncFailed(_) => "Chain synchronization failed".to_string(),
             DisabledReason::Multiple(reasons) => reasons
                 .iter()
                 .map(|r| r.safe_description())

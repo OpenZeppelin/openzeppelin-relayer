@@ -26,22 +26,6 @@ type MnSerdeTransaction = midnight_node_ledger_helpers::SerdeTransaction<
     DefaultDB,
 >;
 
-/// Process-wide shared LedgerContextManager.
-/// Set by the relayer factory, read by the transaction factory.
-static SHARED_LEDGER_CTX: std::sync::OnceLock<Arc<LedgerContextManager>> =
-    std::sync::OnceLock::new();
-
-/// Set the shared LedgerContextManager (called from relayer factory).
-pub fn set_shared_ledger_ctx(ctx: Arc<LedgerContextManager>) {
-    let _ = SHARED_LEDGER_CTX.set(ctx);
-}
-
-/// Get the shared LedgerContextManager (called from transaction factory).
-/// Returns None if not initialized.
-pub fn get_shared_ledger_ctx() -> Option<Arc<LedgerContextManager>> {
-    SHARED_LEDGER_CTX.get().cloned()
-}
-
 /// Manages the LedgerContext lifecycle for a Midnight relayer.
 ///
 /// This struct owns the `LedgerContext` and provides methods to:
@@ -57,6 +41,12 @@ pub struct LedgerContextManager {
 
 impl LedgerContextManager {
     /// Create a new context manager with a fresh LedgerContext.
+    ///
+    /// **Legacy constructor** — each instance owns its own `LedgerContext`,
+    /// so concurrent relayers on the same network do NOT share tree state.
+    /// Retained for existing tests; production code should use
+    /// [`from_shared_context`](Self::from_shared_context) and let the
+    /// process-wide `SharedDustSyncTask` own the context.
     pub fn new(seed_bytes: &[u8; 32], network_id: &str) -> Self {
         let wallet_seed = WalletSeed::Medium(*seed_bytes);
         let context =
@@ -65,6 +55,25 @@ impl LedgerContextManager {
         Self {
             context: Arc::new(context),
             wallet_seed,
+            network_id: network_id.to_string(),
+            applied_tx_count: 0,
+        }
+    }
+
+    /// Build a manager backed by a shared `LedgerContext`.
+    ///
+    /// The caller must have already registered `seed` with the context (via
+    /// `LedgerContext::new_from_wallet_seeds(... &[...seed...])`). The
+    /// process-wide shared task maintains the context's DUST state; this
+    /// manager is a per-relayer handle that scopes reads to `seed`.
+    pub fn from_shared_context(
+        seed: WalletSeed,
+        shared: Arc<LedgerContext<DefaultDB>>,
+        network_id: &str,
+    ) -> Self {
+        Self {
+            context: shared,
+            wallet_seed: seed,
             network_id: network_id.to_string(),
             applied_tx_count: 0,
         }
@@ -171,50 +180,6 @@ impl LedgerContextManager {
         self.context.update_ledger_state_from_bytes(bytes);
         info!("LedgerContext state restored from persisted bytes");
         Ok(())
-    }
-
-    /// Align `latest_block_context` to the chain's current block.
-    ///
-    /// Without this, `latest_block_context().tblock` defaults to
-    /// `SystemTime::now()` (wall-clock) via the library fallback, and the
-    /// library's `pay_fees` picks up that wall-clock value as the DUST
-    /// transaction's `ctime`. Chain-side validation does
-    /// `root_history.get(tx.ctime)` with predecessor-by-time semantics — so
-    /// with a wall-clock-future ctime, chain returns its LATEST block root,
-    /// which diverges from whatever block our wallet last synced to. That
-    /// mismatch causes MalformedTransaction::InvalidDustSpendProof (error 170).
-    ///
-    /// Passing chain's actual latest block tblock (fetched via indexer) keeps
-    /// our declared ctime and chain's root-history lookup anchored to the
-    /// same block, and makes the DUST-spend zk-proof's commitment_root PI
-    /// match what chain recomputes.
-    pub fn set_latest_block(
-        &self,
-        block_tblock_secs: u64,
-        parent_block_hash: [u8; 32],
-        last_block_time_secs: u64,
-    ) {
-        use midnight_node_ledger_helpers::{
-            make_block_context, HashOutput, SerdeTransaction, Signature, Timestamp,
-        };
-        let block_context = make_block_context(
-            Timestamp::from_secs(block_tblock_secs),
-            HashOutput(parent_block_hash),
-            Timestamp::from_secs(last_block_time_secs),
-        );
-        // Empty-tx update_from_block sets `latest_block_context` and advances
-        // `process_ttls` on every wallet. `post_block_update` reruns on an
-        // already-rehashed tree (idempotent) and appends a new root_history
-        // entry at this tblock — harmless for our local checks.
-        let empty_txs: Vec<
-            SerdeTransaction<Signature, midnight_node_ledger_helpers::ProofMarker, DefaultDB>,
-        > = Vec::new();
-        self.context
-            .update_from_block(&empty_txs, &block_context, None, None);
-        info!(
-            tblock = block_tblock_secs,
-            "LedgerContext latest_block_context aligned to chain block"
-        );
     }
 
     /// Get the number of transactions applied since creation/restore.
@@ -353,7 +318,7 @@ impl LedgerContextManager {
         utxos: &[super::manager::UtxoDetail],
     ) -> Result<(), LedgerContextError> {
         use midnight_node_ledger_helpers::{
-            HashOutput, IntentHash, LedgerState, Sp, Timestamp, UserAddress, Utxo, NIGHT,
+            HashOutput, IntentHash, Sp, Timestamp, UserAddress, Utxo, NIGHT,
         };
         // UtxoMeta is not directly re-exported; access via the structure module
         use midnight_node_ledger_helpers::mn_ledger::structure::UtxoMeta;
@@ -420,222 +385,6 @@ impl LedgerContextManager {
         Ok(())
     }
 
-    /// Apply raw DUST ledger events to the wallet's DustWallet.
-    ///
-    /// Each event is a hex-encoded serialized `Event<DefaultDB>` from the
-    /// indexer's `dustLedgerEvents` subscription. These update the wallet's
-    /// DUST UTXO set, enabling fee payment.
-    pub fn apply_dust_events(&self, raw_events: &[String]) -> Result<(), LedgerContextError> {
-        use midnight_node_ledger_helpers::Event;
-
-        if raw_events.is_empty() {
-            return Ok(());
-        }
-
-        // Deserialize events up-front, then replay them as a SINGLE batch.
-        //
-        // DustLocalState::replay_events defers generation-tree collapses to the
-        // end of the batch (see midnight-ledger dust.rs:1691 comment: "carry
-        // out generation collapses *after* applying all the events, because
-        // otherwise we might not have information around to process partial
-        // dtime updates…"). Per-event invocation would collapse slots
-        // prematurely, corrupting subsequent DustGenerationDtimeUpdate events
-        // and yielding a tree root that never existed on chain — which is the
-        // InvalidDustSpendProof / error 170 we hit on submit.
-        let mut applied = 0u64;
-        let mut errors = 0u64;
-        let mut first_errors: Vec<(usize, String)> = Vec::new();
-        let mut events: Vec<Event<DefaultDB>> = Vec::with_capacity(raw_events.len());
-
-        for (idx, raw_hex) in raw_events.iter().enumerate() {
-            let bytes = match hex::decode(raw_hex.trim_start_matches("0x")) {
-                Ok(b) => b,
-                Err(e) => {
-                    errors += 1;
-                    if first_errors.len() < 5 {
-                        first_errors.push((idx, format!("hex: {e}")));
-                    }
-                    continue;
-                }
-            };
-            match midnight_node_ledger_helpers::deserialize::<Event<DefaultDB>, _>(&mut &bytes[..])
-            {
-                Ok(e) => events.push(e),
-                Err(e) => {
-                    errors += 1;
-                    if first_errors.len() < 5 {
-                        first_errors.push((idx, format!("deserialize: {e}")));
-                    }
-                }
-            }
-        }
-
-        self.context
-            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
-                // Single batched replay — generation collapses stay deferred.
-                match wallet.update_dust_from_tx(&events) {
-                    Ok(()) => applied = events.len() as u64,
-                    Err(e) => {
-                        errors += events.len() as u64;
-                        first_errors.push((0, format!("batch replay: {e:?}")));
-                    }
-                }
-
-                // Advance DUST timing to current block
-                let tblock = self.context.latest_block_context().tblock;
-                wallet.dust.process_ttls(tblock);
-            });
-
-        // Peek at the wallet's DUST state AFTER replay. Also capture tree roots
-        // so they can be diffed against the chain's `Dust.root_history` storage
-        // — mismatch means our root never was a chain block root (H1/H2 from
-        // the InvalidDustSpendProof diagnostic plan).
-        let (utxo_count, comm_first_free, gen_first_free, comm_root_hex, gen_root_hex) = self
-            .context
-            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
-                wallet
-                    .dust
-                    .dust_local_state
-                    .as_ref()
-                    .map(|s| {
-                        let comm_root = s
-                            .commitment_tree
-                            .root()
-                            .map(|r| {
-                                hex::encode(
-                                    midnight_node_ledger_helpers::serialize(&r).unwrap_or_default(),
-                                )
-                            })
-                            .unwrap_or_else(|| "<empty>".into());
-                        let gen_root = s
-                            .generating_tree
-                            .root()
-                            .map(|r| {
-                                hex::encode(
-                                    midnight_node_ledger_helpers::serialize(&r).unwrap_or_default(),
-                                )
-                            })
-                            .unwrap_or_else(|| "<empty>".into());
-                        (
-                            s.utxos().count(),
-                            s.commitment_tree_first_free,
-                            s.generating_tree_first_free,
-                            comm_root,
-                            gen_root,
-                        )
-                    })
-                    .unwrap_or((0, 0, 0, String::new(), String::new()))
-            });
-
-        info!(
-            applied,
-            errors,
-            total = raw_events.len(),
-            utxos_after = utxo_count,
-            commitment_tree_first_free = comm_first_free,
-            generating_tree_first_free = gen_first_free,
-            commitment_root = %comm_root_hex,
-            generating_root = %gen_root_hex,
-            first_errors = ?first_errors,
-            "Applied DUST events to wallet"
-        );
-
-        // Sync the wallet's DUST trees into the LedgerState so that
-        // proof verification can find matching commitment roots.
-        if applied > 0 {
-            if let Err(e) = self.sync_dust_trees_to_ledger() {
-                warn!(error = %e, "Failed to sync DUST trees to ledger");
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Sync the wallet's DUST merkle trees into the LedgerState.
-    ///
-    /// Copies commitment_tree and generating_tree from the wallet's
-    /// DustLocalState into the LedgerState's DustState, and adds the
-    /// current roots to root_history for proof verification.
-    fn sync_dust_trees_to_ledger(&self) -> Result<(), LedgerContextError> {
-        use midnight_node_ledger_helpers::Sp;
-
-        // Read wallet's DUST tree data AND params (fields are pub via patched crate).
-        // Params must be synced too: `ParamChange` events update
-        // `DustLocalState.params` during replay but NOT `LedgerState.parameters.dust`,
-        // so the chain's current generation rate / caps only live in the wallet.
-        // `speculative_spend` reads `state.parameters.dust`; without propagating we
-        // compute `updated_value=0` for a UTXO that wallet_balance correctly sums,
-        // producing "Insufficient DUST" on pay_fees.
-        let wallet_dust = self
-            .context
-            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
-                wallet.dust.dust_local_state.as_ref().map(|state| {
-                    (
-                        state.commitment_tree.clone(),
-                        state.commitment_tree_first_free,
-                        state.generating_tree.clone(),
-                        state.generating_tree_first_free,
-                        state.params.clone(),
-                    )
-                })
-            });
-
-        let Some((commitment_tree, commitment_ff, generating_tree, generating_ff, dust_params)) =
-            wallet_dust
-        else {
-            debug!("No DUST local state to sync");
-            return Ok(());
-        };
-
-        // Deserialize current LedgerState, update DUST fields, re-inject
-        let current_bytes = self.serialize_state()?;
-        let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
-            midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
-                .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
-
-        // Propagate wallet's DUST params to LedgerState so downstream
-        // speculative_spend / updated_value calls agree with wallet_balance.
-        let mut params = (*state.parameters).clone();
-        params.dust = dust_params;
-        state.parameters = Sp::new(params);
-
-        let mut dust_state = (*state.dust).clone();
-
-        // Copy commitment tree
-        dust_state.utxo.commitments = commitment_tree;
-        dust_state.utxo.commitments_first_free = commitment_ff;
-
-        // Add current root to root_history for proof verification
-        let tblock = self.context.latest_block_context().tblock;
-        if let Some(commit_root) = dust_state.utxo.commitments.root() {
-            dust_state.utxo.root_history = dust_state.utxo.root_history.insert(tblock, commit_root);
-        }
-
-        // Copy generating tree
-        dust_state.generation.generating_tree = generating_tree;
-        dust_state.generation.generating_tree_first_free = generating_ff;
-
-        if let Some(gen_root) = dust_state.generation.generating_tree.root() {
-            dust_state.generation.root_history =
-                dust_state.generation.root_history.insert(tblock, gen_root);
-        }
-
-        state.dust = Sp::new(dust_state);
-
-        // Re-serialize and inject
-        let new_bytes = midnight_node_ledger_helpers::serialize(&state)
-            .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
-        self.context.update_ledger_state_from_bytes(&new_bytes);
-
-        info!(
-            commitment_first_free = commitment_ff,
-            generating_first_free = generating_ff,
-            "Synced DUST trees to LedgerState"
-        );
-
-        Ok(())
-    }
-
     /// List unshielded UTXOs for the wallet.
     pub fn unshielded_utxos(&self) -> Vec<midnight_node_ledger_helpers::Utxo> {
         self.context
@@ -691,4 +440,84 @@ pub enum LedgerContextError {
     SerializationError(String),
     #[error("Context error: {0}")]
     ContextError(String),
+}
+
+/// Sync a wallet's DUST trees + params into the shared `LedgerState`.
+///
+/// `ParamChange` events update `DustLocalState.params` but NOT
+/// `LedgerState.parameters.dust`, so the chain's current generation rate /
+/// caps only live in the wallet — which means `speculative_spend` (reads
+/// `state.parameters.dust`) computes `updated_value=0` unless we propagate.
+///
+/// Commitment root / generation root are keyed into `root_history[tblock]`
+/// using the currently-latest block tblock — this is what the chain's
+/// `dust_spend_check(ctime)` predecessor-lookup needs to find our wallet's
+/// tree state.
+pub fn sync_dust_trees_to_ledger_ctx(
+    context: &Arc<LedgerContext<DefaultDB>>,
+    seed: &WalletSeed,
+) -> Result<(), LedgerContextError> {
+    use midnight_node_ledger_helpers::Sp;
+
+    let wallet_dust = context.with_wallet_from_seed(seed.clone(), |wallet| {
+        wallet.dust.dust_local_state.as_ref().map(|state| {
+            (
+                state.commitment_tree.clone(),
+                state.commitment_tree_first_free,
+                state.generating_tree.clone(),
+                state.generating_tree_first_free,
+                state.params.clone(),
+            )
+        })
+    });
+
+    let Some((commitment_tree, commitment_ff, generating_tree, generating_ff, dust_params)) =
+        wallet_dust
+    else {
+        debug!("No DUST local state to sync");
+        return Ok(());
+    };
+
+    let current_bytes = context
+        .with_ledger_state(|state| midnight_node_ledger_helpers::serialize(state))
+        .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+    let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
+        midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
+            .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+
+    let mut params = (*state.parameters).clone();
+    params.dust = dust_params;
+    state.parameters = Sp::new(params);
+
+    let mut dust_state = (*state.dust).clone();
+
+    dust_state.utxo.commitments = commitment_tree;
+    dust_state.utxo.commitments_first_free = commitment_ff;
+
+    let tblock = context.latest_block_context().tblock;
+    if let Some(commit_root) = dust_state.utxo.commitments.root() {
+        dust_state.utxo.root_history = dust_state.utxo.root_history.insert(tblock, commit_root);
+    }
+
+    dust_state.generation.generating_tree = generating_tree;
+    dust_state.generation.generating_tree_first_free = generating_ff;
+
+    if let Some(gen_root) = dust_state.generation.generating_tree.root() {
+        dust_state.generation.root_history =
+            dust_state.generation.root_history.insert(tblock, gen_root);
+    }
+
+    state.dust = Sp::new(dust_state);
+
+    let new_bytes = midnight_node_ledger_helpers::serialize(&state)
+        .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+    context.update_ledger_state_from_bytes(&new_bytes);
+
+    debug!(
+        commitment_first_free = commitment_ff,
+        generating_first_free = generating_ff,
+        "Synced DUST trees to LedgerState"
+    );
+
+    Ok(())
 }

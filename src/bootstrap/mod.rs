@@ -25,3 +25,8 @@ pub use initialize_workers::*;
 
 mod initialize_plugins;
 pub use initialize_plugins::*;
+
+#[cfg(feature = "midnight")]
+mod initialize_midnight_sync;
+#[cfg(feature = "midnight")]
+pub use initialize_midnight_sync::*;
