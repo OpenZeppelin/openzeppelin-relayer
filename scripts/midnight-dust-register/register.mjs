@@ -28,7 +28,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import process from 'node:process';
 import { keccak_256 } from '@noble/hashes/sha3';
-import { WebSocket } from 'ws';
+import WS, { WebSocket } from 'ws';
 globalThis.WebSocket ??= WebSocket;
 
 import * as Rx from 'rxjs';
@@ -205,6 +205,107 @@ async function buildWallet(args, keys) {
 }
 
 // ---------------------------------------------------------------------------
+// Diagnostic: raw WS dump of dustLedgerEvents
+//
+// Mirrors the wallet-sdk-indexer-client subscription shape
+// (`{ type: __typename, id, raw, maxId, protocolVersion }`) so we can compare
+// what the indexer emits against what Rust's sync_dust_events receives.
+// Runs as a one-shot: subscribes, collects until idle, logs a summary.
+// ---------------------------------------------------------------------------
+
+async function dumpRawDustEvents(args, { idleSecs = 6, sampleCount = 3 } = {}) {
+  const ws = new WS(args.indexerWs, 'graphql-transport-ws');
+  await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+  ws.send(JSON.stringify({ type: 'connection_init' }));
+
+  const events = [];
+  let settled = false;
+  let idleTimer;
+
+  const resetIdle = (onIdle) => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(onIdle, idleSecs * 1000);
+  };
+
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(idleTimer);
+      try { ws.send(JSON.stringify({ id: 'diag-1', type: 'complete' })); } catch {}
+      ws.close();
+      resolve(events);
+    };
+
+    ws.on('error', (e) => { if (!settled) { settled = true; reject(e); } });
+    ws.on('close', () => { if (!settled) { settled = true; resolve(events); } });
+
+    ws.on('message', (data) => {
+      let msg;
+      try { msg = JSON.parse(data.toString()); } catch { return; }
+      if (msg.type === 'connection_ack') {
+        ws.send(JSON.stringify({
+          id: 'diag-1',
+          type: 'subscribe',
+          payload: {
+            query: `subscription DiagDustLedgerEvents {
+              dustLedgerEvents {
+                type: __typename
+                id
+                maxId
+                protocolVersion
+                raw
+              }
+            }`,
+          },
+        }));
+        resetIdle(finish);
+        return;
+      }
+      if (msg.type === 'next' && msg.payload?.data?.dustLedgerEvents) {
+        events.push(msg.payload.data.dustLedgerEvents);
+        resetIdle(finish);
+        return;
+      }
+      if (msg.type === 'error' || msg.type === 'complete') finish();
+    });
+  }).then((collected) => {
+    // Summarize
+    const byType = {};
+    const pvs = new Set();
+    const maxIds = new Set();
+    let minId = Infinity, maxId = -Infinity;
+    for (const ev of collected) {
+      byType[ev.type] = (byType[ev.type] ?? 0) + 1;
+      pvs.add(ev.protocolVersion);
+      maxIds.add(ev.maxId);
+      if (typeof ev.id === 'number') {
+        if (ev.id < minId) minId = ev.id;
+        if (ev.id > maxId) maxId = ev.id;
+      }
+    }
+    console.error('--- TS raw DUST events diagnostic ---');
+    console.error(`total: ${collected.length}`);
+    console.error(`byType: ${JSON.stringify(byType)}`);
+    console.error(`id_range: [${minId}..${maxId}]`);
+    console.error(`protocolVersions: ${JSON.stringify([...pvs])}`);
+    console.error(`maxIds_seen: ${JSON.stringify([...maxIds])}`);
+    const firstN = collected.slice(0, sampleCount).map((e) => ({
+      type: e.type, id: e.id, maxId: e.maxId, pv: e.protocolVersion,
+      raw_len: e.raw?.length ?? 0, raw_prefix: e.raw?.slice(0, 64),
+    }));
+    const lastN = collected.slice(-sampleCount).map((e) => ({
+      type: e.type, id: e.id, maxId: e.maxId, pv: e.protocolVersion,
+      raw_len: e.raw?.length ?? 0, raw_prefix: e.raw?.slice(0, 64),
+    }));
+    console.error(`first_${sampleCount}: ${JSON.stringify(firstN, null, 2)}`);
+    console.error(`last_${sampleCount}:  ${JSON.stringify(lastN, null, 2)}`);
+    console.error('--- end TS raw DUST events diagnostic ---');
+    return { collected, byType, pvs: [...pvs], idRange: [minId, maxId] };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Main flow
 // ---------------------------------------------------------------------------
 
@@ -212,6 +313,14 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const seed = resolveSeed(args);
   console.error(`seed loaded (${seed.length} bytes)`);
+
+  // Run the raw DUST events diagnostic BEFORE wallet build so we capture
+  // the indexer's full emission for comparison with Rust's sync.
+  try {
+    await dumpRawDustEvents(args);
+  } catch (e) {
+    console.error(`raw dust events dump failed (non-fatal): ${e?.message ?? e}`);
+  }
 
   const keys = deriveKeys(seed);
   const { wallet, unshieldedKeystore } = await buildWallet(args, keys);
@@ -238,6 +347,23 @@ async function main() {
   const nightBalance = synced.unshielded.balances[unshieldedToken().raw] ?? 0n;
   const dustBalance = synced.dust.balance(new Date());
   console.error(`NIGHT: ${nightBalance}   DUST: ${dustBalance}`);
+
+  // Diagnostic: dump what the TS wallet SDK reconstructed in its local DUST
+  // state — the coin set Rust's DustLocalState is supposed to mirror.
+  try {
+    const dustCoins = synced.dust.availableCoins ?? [];
+    console.error('--- TS wallet reconstructed DUST UTXOs ---');
+    console.error(`availableCoins count: ${dustCoins.length}`);
+    for (const [i, c] of dustCoins.entries()) {
+      const fields = Object.fromEntries(
+        Object.entries(c).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v]),
+      );
+      console.error(`  [${i}] ${JSON.stringify(fields)}`);
+    }
+    console.error('--- end TS wallet reconstructed DUST UTXOs ---');
+  } catch (e) {
+    console.error(`dust coin dump failed (non-fatal): ${e?.message ?? e}`);
+  }
 
   if (nightBalance === 0n) {
     throw new Error('Unshielded NIGHT balance is 0 — fund the unshielded address before registering');

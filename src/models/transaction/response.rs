@@ -120,10 +120,14 @@ pub struct StellarTransactionResponse {
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
 pub struct MidnightTransactionResponse {
     pub id: String,
+    /// Midnight application-level transaction hash — the value to paste into
+    /// midnightexplorer.com. Consistent with `hash` semantics on other networks.
     #[schema(nullable = false)]
     pub hash: Option<String>,
+    /// Substrate extrinsic hash (node-level identifier). Use for mempool /
+    /// substrate RPC debugging; the explorer does not recognize this hash.
     #[schema(nullable = false)]
-    pub pallet_hash: Option<String>,
+    pub extrinsic_hash: Option<String>,
     #[schema(nullable = false)]
     pub block_hash: Option<String>,
     pub status: TransactionStatus,
@@ -195,7 +199,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                 TransactionResponse::Midnight(Box::new(MidnightTransactionResponse {
                     id: model.id,
                     hash: midnight_data.hash,
-                    pallet_hash: midnight_data.pallet_hash,
+                    extrinsic_hash: midnight_data.extrinsic_hash,
                     block_hash: midnight_data.block_hash,
                     status: model.status,
                     status_reason: model.status_reason,

@@ -136,13 +136,9 @@ impl Signer for LocalSigner {
     ) -> Result<SignTransactionResponse, SignerError> {
         let raw_bytes = match &transaction {
             NetworkTransactionData::Midnight(data) => {
-                let signable = data
-                    .pallet_hash
-                    .as_deref()
-                    .or(data.hash.as_deref())
-                    .ok_or_else(|| {
-                        SignerError::SigningError("Midnight transaction has no hash to sign".into())
-                    })?;
+                let signable = data.hash.as_deref().ok_or_else(|| {
+                    SignerError::SigningError("Midnight transaction has no hash to sign".into())
+                })?;
                 hex::decode(signable.trim_start_matches("0x")).map_err(|e| {
                     SignerError::SigningError(format!("Invalid hex in transaction hash: {e}"))
                 })?

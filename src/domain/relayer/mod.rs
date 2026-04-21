@@ -698,11 +698,23 @@ impl<
                     &network.network,
                 )?;
 
-                let ledger_ctx = Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
-                // Register as shared so transaction factory uses the same instance
-                crate::services::sync::midnight::ledger_context::set_shared_ledger_ctx(
-                    ledger_ctx.clone(),
-                );
+                // Reuse the shared manager when it already exists — the factory
+                // runs once per API request, but wallet state (DUST replay)
+                // lives in the manager's `wallets` HashMap and must persist
+                // across requests. The first caller (startup) creates it; every
+                // subsequent caller picks up the same instance.
+                let ledger_ctx =
+                    match crate::services::sync::midnight::ledger_context::get_shared_ledger_ctx() {
+                        Some(existing) => existing,
+                        None => {
+                            let new_ctx =
+                                Arc::new(LedgerContextManager::new(&key_bytes, &network.network));
+                            crate::services::sync::midnight::ledger_context::set_shared_ledger_ctx(
+                                new_ctx.clone(),
+                            );
+                            new_ctx
+                        }
+                    };
 
                 let sync_state_store = state.relayer_state_repository();
                 let sync_manager = SyncManager::new(

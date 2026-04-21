@@ -167,13 +167,17 @@ impl MidnightIndexerClient {
         &self,
         hash: &str,
     ) -> Result<Option<TransactionData>, IndexerError> {
+        // Preview testnet's v4 indexer schema does NOT expose `transactionResult`
+        // or `applyStage` on Transaction. Presence in the `transactions` query
+        // (with a `block`) is the strongest signal we have that the tx was
+        // included; we infer SucceedEntirely from that. Failed txs that never
+        // make it into a block simply never appear here.
         let query = r#"
             query TransactionByHash($hash: HexEncoded!) {
                 transactions(offset: { hash: $hash }) {
                     id
                     hash
                     protocolVersion
-                    raw
                     block {
                         hash
                         height
@@ -186,25 +190,59 @@ impl MidnightIndexerClient {
             .execute_query(query, Some(json!({ "hash": hash })))
             .await?;
 
-        // The v4 API returns a single transaction object (not an array)
+        // v4 returns `transactions: [Transaction!]` — always an array. An empty
+        // array means the tx hasn't been indexed yet (Ok(None) so the caller
+        // reschedules). A non-empty array: take the first (and only) match.
         let tx_value = response
             .get("data")
             .and_then(|data| data.get("transactions"));
 
-        match tx_value {
-            Some(Value::Null) | None => Ok(None),
-            Some(val) => {
-                // Flatten the nested block into the transaction data
-                let mut tx: TransactionData = serde_json::from_value(val.clone())?;
-                if let Some(block) = val.get("block") {
-                    tx.block_hash = block.get("hash").and_then(Value::as_str).map(String::from);
-                    tx.block_height = block.get("height").and_then(Value::as_u64);
-                }
-                // Do NOT default apply_stage — absence means the status is unknown.
-                // The caller must handle None explicitly to avoid false confirmations.
-                Ok(Some(tx))
-            }
+        let first = match tx_value {
+            Some(Value::Array(arr)) if !arr.is_empty() => &arr[0],
+            _ => return Ok(None),
+        };
+
+        let mut tx: TransactionData = serde_json::from_value(first.clone())?;
+        if let Some(block) = first.get("block") {
+            tx.block_hash = block.get("hash").and_then(Value::as_str).map(String::from);
+            tx.block_height = block.get("height").and_then(Value::as_u64);
         }
+        // Preview indexer doesn't surface success/failure. If the tx is
+        // indexed with a block, it was included and (by chain construction)
+        // applied — treat as SucceedEntirely. Callers that see `apply_stage:
+        // None` will reschedule; returning None here means "not indexed yet".
+        if tx.block_hash.is_some() {
+            tx.apply_stage = Some(super::types::ApplyStage::SucceedEntirely);
+        }
+        Ok(Some(tx))
+    }
+
+    /// Fetch the chain's latest block — used to cross-check our local
+    /// `latest_block_context().tblock` (wall-clock fallback) against the real
+    /// chain block tblock. A mismatch on the ~second scale is expected; a
+    /// mismatch of minutes+ indicates our time source is stale and would
+    /// cause zk-proof `ctime` public-input mismatch (error 170).
+    pub async fn get_latest_block(&self) -> Result<Option<BlockData>, IndexerError> {
+        let query = r#"
+            query LatestBlock {
+                block(offset: null) {
+                    hash
+                    height
+                    protocolVersion
+                    timestamp
+                }
+            }
+        "#;
+
+        let response = self.execute_query(query, None).await?;
+
+        response
+            .get("data")
+            .and_then(|data| data.get("block"))
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(IndexerError::from)
     }
 
     /// Query a block by hash from the indexer.

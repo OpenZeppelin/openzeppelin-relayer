@@ -184,6 +184,35 @@ where
         let mut tx_info =
             StandardTrasactionInfo::new_from_context(context.clone(), proof_server, None);
 
+        // Diagnostic: log the `ctime` that pay_fees will use for DUST proof
+        // construction. `pay_fees` internally does
+        // `let now = self.context.latest_block_context().tblock;`
+        // which is our LedgerContext's `latest_block_context().tblock`. The
+        // chain-side proof verifier uses the block's actual tblock when
+        // validating — if ours and chain's disagree, the zk public-input
+        // `ctime` differs and the proof fails with InvalidDustSpendProof
+        // (error 170). Log both our value and wall-clock so we can diff.
+        let prepare_tblock = context.latest_block_context().tblock;
+        let wall_now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let chain_latest = self
+            .provider
+            .get_indexer_client()
+            .get_latest_block()
+            .await
+            .ok()
+            .flatten();
+        info!(
+            tx_id = %tx.id,
+            prepare_tblock = ?prepare_tblock,
+            wall_now_secs,
+            chain_latest_height = ?chain_latest.as_ref().and_then(|b| b.height),
+            chain_latest_timestamp = ?chain_latest.as_ref().and_then(|b| b.timestamp),
+            "ctime sources at prepare start"
+        );
+
         // Pay DUST fees from the wallet. Requires DUST to have been
         // registered and generated via the midnight-dust-generator tool.
         tx_info.set_funding_seeds(vec![wallet_seed.clone()]);
@@ -303,13 +332,13 @@ where
             "Midnight transaction prepared and serialized"
         );
 
-        // Store the serialized transaction and pallet hash in network data.
-        // `hash` stays None until submit_transaction records the extrinsic hash
-        // from Substrate — keeping serialized bytes out of the hash field keeps
-        // the API surface honest and lets callers distinguish prepared vs sent.
+        // Store the pallet-level (application) hash in `hash` — the value
+        // users paste into midnightexplorer.com. Matches EVM/Stellar semantics
+        // of "`hash` = explorer-searchable identifier". The substrate extrinsic
+        // hash is stored separately in `extrinsic_hash` at submit time.
         let updated_network_data = crate::models::MidnightTransactionData {
-            hash: None,
-            pallet_hash: Some(pallet_hash),
+            hash: Some(pallet_hash),
+            extrinsic_hash: None,
             block_hash: None,
             serialized_tx: Some(serialized_hex),
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
@@ -396,14 +425,12 @@ where
         hashes.push(result.extrinsic_tx_hash.clone());
 
         // Preserve serialized_tx so resubmit paths can replay without re-proving.
-        // The pallet_hash set during prepare is authoritative for indexer queries;
-        // prefer it over whatever the provider returned.
+        // `hash` (set during prepare as pallet_hash) is the explorer-searchable
+        // identifier; the substrate extrinsic hash goes into `extrinsic_hash`
+        // for node-level lookups.
         let updated_network_data = crate::models::MidnightTransactionData {
-            hash: Some(result.extrinsic_tx_hash.clone()),
-            pallet_hash: midnight_data
-                .pallet_hash
-                .clone()
-                .or(result.pallet_tx_hash.clone()),
+            hash: midnight_data.hash.clone().or(result.pallet_tx_hash.clone()),
+            extrinsic_hash: Some(result.extrinsic_tx_hash.clone()),
             block_hash: midnight_data.block_hash.clone(),
             serialized_tx: midnight_data.serialized_tx.clone(),
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
@@ -459,13 +486,13 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let midnight_data = tx.network_data.get_midnight_transaction_data()?;
 
-        // The indexer's `transactions(offset: { hash })` accepts both extrinsic
-        // and pallet hashes. Prefer pallet_hash (application-level, more stable)
-        // and fall back to the extrinsic hash stored in hashes[].
+        // Preview indexer's `transactions(offset: { hash })` accepts ONLY the
+        // pallet/application-level hash — querying by substrate extrinsic hash
+        // returns an empty array. Use `midnight_data.hash` (the pallet hash
+        // stored under the canonical `hash` field post-swap).
         let query_hash = midnight_data
-            .pallet_hash
+            .hash
             .as_deref()
-            .or(midnight_data.hash.as_deref())
             .or(tx.hashes.last().map(String::as_str))
             .ok_or_else(|| {
                 TransactionError::UnexpectedError(
@@ -481,26 +508,32 @@ where
             .await
             .map_err(|e| TransactionError::UnexpectedError(format!("Indexer query failed: {e}")))?;
 
-        let (new_status, status_reason) = match tx_data {
-            Some(data) => match data.apply_stage {
-                Some(ApplyStage::SucceedEntirely) => (
-                    TransactionStatus::Confirmed,
-                    Some("Transaction succeeded entirely".into()),
-                ),
-                Some(ApplyStage::SucceedPartially) => (
-                    TransactionStatus::Confirmed,
-                    Some("Transaction partially succeeded".into()),
-                ),
-                Some(ApplyStage::FailEntirely) => (
-                    TransactionStatus::Failed,
-                    Some("Transaction failed entirely".into()),
-                ),
-                Some(ApplyStage::Pending) | None => {
-                    debug!(tx_id = %tx.id, "Transaction still pending, scheduling recheck");
-                    self.schedule_status_check(&tx).await?;
-                    return Ok(tx);
+        let (new_status, status_reason, block_hash) = match tx_data {
+            Some(data) => {
+                let block_hash = data.block_hash.clone();
+                match data.apply_stage {
+                    Some(ApplyStage::SucceedEntirely) => (
+                        TransactionStatus::Confirmed,
+                        Some("Transaction succeeded entirely".into()),
+                        block_hash,
+                    ),
+                    Some(ApplyStage::SucceedPartially) => (
+                        TransactionStatus::Confirmed,
+                        Some("Transaction partially succeeded".into()),
+                        block_hash,
+                    ),
+                    Some(ApplyStage::FailEntirely) => (
+                        TransactionStatus::Failed,
+                        Some("Transaction failed entirely".into()),
+                        block_hash,
+                    ),
+                    Some(ApplyStage::Pending) | None => {
+                        debug!(tx_id = %tx.id, "Transaction still pending, scheduling recheck");
+                        self.schedule_status_check(&tx).await?;
+                        return Ok(tx);
+                    }
                 }
-            },
+            }
             None => {
                 // Transaction not found in indexer yet — re-check later
                 debug!(tx_id = %tx.id, "Transaction not found in indexer yet");
@@ -512,8 +545,32 @@ where
         info!(
             tx_id = %tx.id,
             status = ?new_status,
+            block_hash = ?block_hash,
             "Midnight transaction reached final state"
         );
+
+        // Propagate block_hash into MidnightTransactionData so the API surfaces
+        // where on-chain the tx landed. The indexer already returned it in the
+        // status query; update_network_data is the only write path for it.
+        if let Some(bh) = block_hash.as_ref() {
+            let current = tx.network_data.get_midnight_transaction_data()?;
+            let updated_network_data = crate::models::MidnightTransactionData {
+                hash: current.hash.clone(),
+                extrinsic_hash: current.extrinsic_hash.clone(),
+                block_hash: Some(bh.clone()),
+                serialized_tx: current.serialized_tx.clone(),
+                guaranteed_offer: current.guaranteed_offer.clone(),
+                intents: current.intents.clone(),
+                fallible_offers: current.fallible_offers.clone(),
+            };
+            self.transaction_repository
+                .update_network_data(
+                    tx.id.clone(),
+                    crate::models::NetworkTransactionData::Midnight(updated_network_data),
+                )
+                .await
+                .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+        }
 
         let confirmed_at = if new_status == TransactionStatus::Confirmed {
             Some(chrono::Utc::now().to_rfc3339())

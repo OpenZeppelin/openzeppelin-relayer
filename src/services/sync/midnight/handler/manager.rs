@@ -707,12 +707,14 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             }
         }
 
-        // Subscribe to dustLedgerEvents
+        // Subscribe to dustLedgerEvents — pull the same fields the TS wallet
+        // SDK pulls (type, id, maxId, protocolVersion, raw) so we can compare
+        // decoded-event metadata across stacks to triage the zero-balance bug.
         let sub_msg = serde_json::json!({
             "id": "dust-1",
             "type": "subscribe",
             "payload": {
-                "query": "subscription { dustLedgerEvents { ... on DustInitialUtxo { id raw } ... on DustGenerationDtimeUpdate { id raw } ... on DustSpendProcessed { id raw } ... on ParamChange { id raw } } }"
+                "query": "subscription { dustLedgerEvents { type: __typename id maxId protocolVersion raw } }"
             }
         });
 
@@ -724,34 +726,130 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .map_err(|e| SyncError::SyncState(format!("WS subscribe failed: {e}")))?;
 
         let mut raw_events: Vec<String> = Vec::new();
-        let idle_timeout = tokio::time::Duration::from_secs(5);
 
-        loop {
-            match tokio::time::timeout(idle_timeout, read.next()).await {
+        // Termination strategy (Option 3 Part A): stop only once we've observed
+        // an event whose `id == maxId` (i.e. chain's last emitted DUST event)
+        // AND a short quiet period confirms no further events are in-flight.
+        //
+        // `maxId` is the chain's DUST-event high-water-mark at emission time.
+        // When we receive an event where `id == maxId`, our wallet is caught
+        // up to what the indexer has; waiting a couple seconds past that rules
+        // out a stray straggler mid-block. The resulting tree root equals the
+        // chain's most recent block-end root — the only state chain's
+        // `root_history` records, which is what the DUST spend proof needs.
+        //
+        // If we never catch up (e.g. chain way ahead, indexer lagging), we
+        // fall through the longer `not_caught_up_idle` timeout so the sync
+        // still returns rather than hang forever.
+        let caught_up_quiet = tokio::time::Duration::from_secs(2);
+        let not_caught_up_idle = tokio::time::Duration::from_secs(30);
+        let absolute_timeout = tokio::time::Duration::from_secs(300);
+        let start = tokio::time::Instant::now();
+        let mut is_caught_up = false;
+        let mut caught_up_clean = false;
+
+        // Diagnostic accumulators: per-variant counts, id range, distinct
+        // protocolVersion / maxId values, and first/last raw-hex samples.
+        let mut type_counts: std::collections::BTreeMap<String, u32> =
+            std::collections::BTreeMap::new();
+        let mut protocol_versions: std::collections::BTreeSet<i64> =
+            std::collections::BTreeSet::new();
+        let mut max_ids_seen: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
+        let mut min_event_id: Option<i64> = None;
+        let mut max_event_id: Option<i64> = None;
+        const SAMPLE_CAP: usize = 3;
+        let mut first_samples: Vec<serde_json::Value> = Vec::new();
+        let mut last_samples: std::collections::VecDeque<serde_json::Value> =
+            std::collections::VecDeque::new();
+
+        'read_loop: loop {
+            if start.elapsed() > absolute_timeout {
+                warn!(
+                    relayer_id = %self.relayer_id,
+                    events = raw_events.len(),
+                    is_caught_up,
+                    "DUST sync hit absolute timeout"
+                );
+                break;
+            }
+            let timeout = if is_caught_up {
+                caught_up_quiet
+            } else {
+                not_caught_up_idle
+            };
+            match tokio::time::timeout(timeout, read.next()).await {
                 Ok(Some(Ok(msg))) => {
                     if let tokio_tungstenite::tungstenite::Message::Text(text) = &msg {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
                             let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
                             match msg_type {
                                 "next" => {
-                                    if let Some(raw) = val
+                                    let ev = val
                                         .get("payload")
                                         .and_then(|p| p.get("data"))
-                                        .and_then(|d| d.get("dustLedgerEvents"))
-                                        .and_then(|e| e.get("raw"))
-                                        .and_then(|r| r.as_str())
-                                    {
-                                        raw_events.push(raw.to_string());
+                                        .and_then(|d| d.get("dustLedgerEvents"));
+                                    if let Some(ev) = ev {
+                                        if let Some(raw) = ev.get("raw").and_then(|r| r.as_str()) {
+                                            raw_events.push(raw.to_string());
+
+                                            let ev_type = ev
+                                                .get("type")
+                                                .and_then(|t| t.as_str())
+                                                .unwrap_or("unknown")
+                                                .to_string();
+                                            *type_counts.entry(ev_type.clone()).or_insert(0) += 1;
+
+                                            if let Some(pv) =
+                                                ev.get("protocolVersion").and_then(|v| v.as_i64())
+                                            {
+                                                protocol_versions.insert(pv);
+                                            }
+                                            let ev_max_id =
+                                                ev.get("maxId").and_then(|v| v.as_i64());
+                                            if let Some(mx) = ev_max_id {
+                                                max_ids_seen.insert(mx);
+                                            }
+                                            let ev_id = ev.get("id").and_then(|v| v.as_i64());
+                                            if let Some(id) = ev_id {
+                                                min_event_id =
+                                                    Some(min_event_id.map_or(id, |m| m.min(id)));
+                                                max_event_id =
+                                                    Some(max_event_id.map_or(id, |m| m.max(id)));
+                                            }
+
+                                            // Caught-up signal: chain's max == the event's own id.
+                                            // Any later event that bumps maxId drops us back
+                                            // into "catching up" mode until we next see equality.
+                                            if let (Some(id), Some(mx)) = (ev_id, ev_max_id) {
+                                                is_caught_up = id == mx;
+                                            }
+
+                                            let sample = serde_json::json!({
+                                                "type": ev_type,
+                                                "id": ev.get("id"),
+                                                "maxId": ev.get("maxId"),
+                                                "pv": ev.get("protocolVersion"),
+                                                "raw_len": raw.len(),
+                                                "raw_prefix": raw.chars().take(64).collect::<String>(),
+                                            });
+                                            if first_samples.len() < SAMPLE_CAP {
+                                                first_samples.push(sample.clone());
+                                            }
+                                            last_samples.push_back(sample);
+                                            if last_samples.len() > SAMPLE_CAP {
+                                                last_samples.pop_front();
+                                            }
+                                        }
                                     }
                                 }
-                                "complete" => break,
+                                "complete" => break 'read_loop,
                                 "error" => {
                                     let err = val
                                         .get("payload")
                                         .map(|p| p.to_string())
                                         .unwrap_or_default();
                                     warn!(error = %err, "DUST subscription error");
-                                    break;
+                                    break 'read_loop;
                                 }
                                 _ => {}
                             }
@@ -764,11 +862,26 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
                 }
                 Ok(None) => break,
                 Err(_) => {
-                    debug!(
-                        relayer_id = %self.relayer_id,
-                        events = raw_events.len(),
-                        "DUST sync idle timeout"
-                    );
+                    // Idle. If caught up, this is the clean stop — chain has
+                    // emitted no new events for `caught_up_quiet`, confirming
+                    // our tree root equals the most recent block-end root.
+                    // Otherwise we fall out on `not_caught_up_idle` as a
+                    // safety net (don't block the startup path forever).
+                    if is_caught_up {
+                        caught_up_clean = true;
+                        debug!(
+                            relayer_id = %self.relayer_id,
+                            events = raw_events.len(),
+                            id_max = ?max_event_id,
+                            "DUST sync caught up — quiet period elapsed"
+                        );
+                    } else {
+                        warn!(
+                            relayer_id = %self.relayer_id,
+                            events = raw_events.len(),
+                            "DUST sync idle without catching up — tree may be stale"
+                        );
+                    }
                     break;
                 }
             }
@@ -777,6 +890,28 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         let _ = write
             .send(tokio_tungstenite::tungstenite::Message::Close(None))
             .await;
+
+        // Structured diagnostic summary — mirrors the TS register.mjs dump so
+        // the two can be diffed side-by-side.
+        let type_counts_json = serde_json::to_string(&type_counts).unwrap_or_default();
+        let pvs_json = serde_json::to_string(&protocol_versions).unwrap_or_default();
+        let max_ids_json = serde_json::to_string(&max_ids_seen).unwrap_or_default();
+        let first_json = serde_json::to_string(&first_samples).unwrap_or_default();
+        let last_json =
+            serde_json::to_string(&last_samples.iter().collect::<Vec<_>>()).unwrap_or_default();
+        info!(
+            relayer_id = %self.relayer_id,
+            total = raw_events.len(),
+            caught_up_clean,
+            by_type = %type_counts_json,
+            id_min = ?min_event_id,
+            id_max = ?max_event_id,
+            protocol_versions = %pvs_json,
+            max_ids_seen = %max_ids_json,
+            first_samples = %first_json,
+            last_samples = %last_json,
+            "Rust raw DUST events diagnostic"
+        );
 
         info!(
             relayer_id = %self.relayer_id,

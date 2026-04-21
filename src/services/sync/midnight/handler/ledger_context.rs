@@ -173,6 +173,50 @@ impl LedgerContextManager {
         Ok(())
     }
 
+    /// Align `latest_block_context` to the chain's current block.
+    ///
+    /// Without this, `latest_block_context().tblock` defaults to
+    /// `SystemTime::now()` (wall-clock) via the library fallback, and the
+    /// library's `pay_fees` picks up that wall-clock value as the DUST
+    /// transaction's `ctime`. Chain-side validation does
+    /// `root_history.get(tx.ctime)` with predecessor-by-time semantics — so
+    /// with a wall-clock-future ctime, chain returns its LATEST block root,
+    /// which diverges from whatever block our wallet last synced to. That
+    /// mismatch causes MalformedTransaction::InvalidDustSpendProof (error 170).
+    ///
+    /// Passing chain's actual latest block tblock (fetched via indexer) keeps
+    /// our declared ctime and chain's root-history lookup anchored to the
+    /// same block, and makes the DUST-spend zk-proof's commitment_root PI
+    /// match what chain recomputes.
+    pub fn set_latest_block(
+        &self,
+        block_tblock_secs: u64,
+        parent_block_hash: [u8; 32],
+        last_block_time_secs: u64,
+    ) {
+        use midnight_node_ledger_helpers::{
+            make_block_context, HashOutput, SerdeTransaction, Signature, Timestamp,
+        };
+        let block_context = make_block_context(
+            Timestamp::from_secs(block_tblock_secs),
+            HashOutput(parent_block_hash),
+            Timestamp::from_secs(last_block_time_secs),
+        );
+        // Empty-tx update_from_block sets `latest_block_context` and advances
+        // `process_ttls` on every wallet. `post_block_update` reruns on an
+        // already-rehashed tree (idempotent) and appends a new root_history
+        // entry at this tblock — harmless for our local checks.
+        let empty_txs: Vec<
+            SerdeTransaction<Signature, midnight_node_ledger_helpers::ProofMarker, DefaultDB>,
+        > = Vec::new();
+        self.context
+            .update_from_block(&empty_txs, &block_context, None, None);
+        info!(
+            tblock = block_tblock_secs,
+            "LedgerContext latest_block_context aligned to chain block"
+        );
+    }
+
     /// Get the number of transactions applied since creation/restore.
     pub fn applied_tx_count(&self) -> u64 {
         self.applied_tx_count
@@ -388,35 +432,52 @@ impl LedgerContextManager {
             return Ok(());
         }
 
-        // Process events one at a time to maintain correct merkle tree state.
-        // The DustWallet's replay_events builds the tree incrementally.
+        // Deserialize events up-front, then replay them as a SINGLE batch.
+        //
+        // DustLocalState::replay_events defers generation-tree collapses to the
+        // end of the batch (see midnight-ledger dust.rs:1691 comment: "carry
+        // out generation collapses *after* applying all the events, because
+        // otherwise we might not have information around to process partial
+        // dtime updates…"). Per-event invocation would collapse slots
+        // prematurely, corrupting subsequent DustGenerationDtimeUpdate events
+        // and yielding a tree root that never existed on chain — which is the
+        // InvalidDustSpendProof / error 170 we hit on submit.
         let mut applied = 0u64;
         let mut errors = 0u64;
+        let mut first_errors: Vec<(usize, String)> = Vec::new();
+        let mut events: Vec<Event<DefaultDB>> = Vec::with_capacity(raw_events.len());
+
+        for (idx, raw_hex) in raw_events.iter().enumerate() {
+            let bytes = match hex::decode(raw_hex.trim_start_matches("0x")) {
+                Ok(b) => b,
+                Err(e) => {
+                    errors += 1;
+                    if first_errors.len() < 5 {
+                        first_errors.push((idx, format!("hex: {e}")));
+                    }
+                    continue;
+                }
+            };
+            match midnight_node_ledger_helpers::deserialize::<Event<DefaultDB>, _>(&mut &bytes[..])
+            {
+                Ok(e) => events.push(e),
+                Err(e) => {
+                    errors += 1;
+                    if first_errors.len() < 5 {
+                        first_errors.push((idx, format!("deserialize: {e}")));
+                    }
+                }
+            }
+        }
 
         self.context
             .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
-                for raw_hex in raw_events {
-                    let bytes = match hex::decode(raw_hex.trim_start_matches("0x")) {
-                        Ok(b) => b,
-                        Err(_) => {
-                            errors += 1;
-                            continue;
-                        }
-                    };
-                    let event: Event<DefaultDB> =
-                        match midnight_node_ledger_helpers::deserialize(&mut &bytes[..]) {
-                            Ok(e) => e,
-                            Err(_) => {
-                                errors += 1;
-                                continue;
-                            }
-                        };
-
-                    // Apply single event to maintain tree ordering
-                    if let Err(_) = wallet.update_dust_from_tx(&[event]) {
-                        errors += 1;
-                    } else {
-                        applied += 1;
+                // Single batched replay — generation collapses stay deferred.
+                match wallet.update_dust_from_tx(&events) {
+                    Ok(()) => applied = events.len() as u64,
+                    Err(e) => {
+                        errors += events.len() as u64;
+                        first_errors.push((0, format!("batch replay: {e:?}")));
                     }
                 }
 
@@ -425,10 +486,57 @@ impl LedgerContextManager {
                 wallet.dust.process_ttls(tblock);
             });
 
+        // Peek at the wallet's DUST state AFTER replay. Also capture tree roots
+        // so they can be diffed against the chain's `Dust.root_history` storage
+        // — mismatch means our root never was a chain block root (H1/H2 from
+        // the InvalidDustSpendProof diagnostic plan).
+        let (utxo_count, comm_first_free, gen_first_free, comm_root_hex, gen_root_hex) = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                wallet
+                    .dust
+                    .dust_local_state
+                    .as_ref()
+                    .map(|s| {
+                        let comm_root = s
+                            .commitment_tree
+                            .root()
+                            .map(|r| {
+                                hex::encode(
+                                    midnight_node_ledger_helpers::serialize(&r).unwrap_or_default(),
+                                )
+                            })
+                            .unwrap_or_else(|| "<empty>".into());
+                        let gen_root = s
+                            .generating_tree
+                            .root()
+                            .map(|r| {
+                                hex::encode(
+                                    midnight_node_ledger_helpers::serialize(&r).unwrap_or_default(),
+                                )
+                            })
+                            .unwrap_or_else(|| "<empty>".into());
+                        (
+                            s.utxos().count(),
+                            s.commitment_tree_first_free,
+                            s.generating_tree_first_free,
+                            comm_root,
+                            gen_root,
+                        )
+                    })
+                    .unwrap_or((0, 0, 0, String::new(), String::new()))
+            });
+
         info!(
             applied,
             errors,
             total = raw_events.len(),
+            utxos_after = utxo_count,
+            commitment_tree_first_free = comm_first_free,
+            generating_tree_first_free = gen_first_free,
+            commitment_root = %comm_root_hex,
+            generating_root = %gen_root_hex,
+            first_errors = ?first_errors,
             "Applied DUST events to wallet"
         );
 
@@ -451,7 +559,13 @@ impl LedgerContextManager {
     fn sync_dust_trees_to_ledger(&self) -> Result<(), LedgerContextError> {
         use midnight_node_ledger_helpers::Sp;
 
-        // Read wallet's DUST tree data (fields are now pub via patched crate)
+        // Read wallet's DUST tree data AND params (fields are pub via patched crate).
+        // Params must be synced too: `ParamChange` events update
+        // `DustLocalState.params` during replay but NOT `LedgerState.parameters.dust`,
+        // so the chain's current generation rate / caps only live in the wallet.
+        // `speculative_spend` reads `state.parameters.dust`; without propagating we
+        // compute `updated_value=0` for a UTXO that wallet_balance correctly sums,
+        // producing "Insufficient DUST" on pay_fees.
         let wallet_dust = self
             .context
             .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
@@ -461,11 +575,13 @@ impl LedgerContextManager {
                         state.commitment_tree_first_free,
                         state.generating_tree.clone(),
                         state.generating_tree_first_free,
+                        state.params.clone(),
                     )
                 })
             });
 
-        let Some((commitment_tree, commitment_ff, generating_tree, generating_ff)) = wallet_dust
+        let Some((commitment_tree, commitment_ff, generating_tree, generating_ff, dust_params)) =
+            wallet_dust
         else {
             debug!("No DUST local state to sync");
             return Ok(());
@@ -476,6 +592,12 @@ impl LedgerContextManager {
         let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
             midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
                 .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+
+        // Propagate wallet's DUST params to LedgerState so downstream
+        // speculative_spend / updated_value calls agree with wallet_balance.
+        let mut params = (*state.parameters).clone();
+        params.dust = dust_params;
+        state.parameters = Sp::new(params);
 
         let mut dust_state = (*state.dust).clone();
 
@@ -530,20 +652,33 @@ impl LedgerContextManager {
     /// `tblock`, matching what `speculative_spend` uses during fee payment.
     /// Returns 0 when DUST state is absent (no events replayed yet).
     pub fn dust_balance(&self) -> u128 {
-        use midnight_node_ledger_helpers::DustOutput;
-        let ctime = self.context.latest_block_context().tblock;
+        use midnight_node_ledger_helpers::Timestamp;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let ctime = Timestamp::from_secs(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        );
+        let tblock_fallback = self.context.latest_block_context().tblock;
+
         self.context
             .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
                 let Some(state) = wallet.dust.dust_local_state.as_ref() else {
+                    debug!("dust_balance: no DustLocalState");
                     return 0u128;
                 };
-                state
-                    .utxos()
-                    .filter_map(|qdo| {
-                        let gen_info = state.generation_info(&qdo)?;
-                        Some(DustOutput::from(qdo).updated_value(&gen_info, ctime, &state.params))
-                    })
-                    .sum()
+                let utxo_count = state.utxos().count();
+                let balance = state.wallet_balance(ctime);
+                debug!(
+                    utxo_count,
+                    balance,
+                    ctime = ?ctime,
+                    tblock_fallback = ?tblock_fallback,
+                    "dust_balance computed"
+                );
+                balance
             })
     }
 }

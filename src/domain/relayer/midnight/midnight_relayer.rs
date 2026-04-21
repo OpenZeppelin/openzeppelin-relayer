@@ -378,6 +378,61 @@ where
             }
         }
 
+        // Anchor `latest_block_context` to the chain's current block. The
+        // library's `pay_fees` reads this tblock as the DUST spend's `ctime`
+        // — chain-side validation does `root_history.get(ctime)` with
+        // predecessor-by-time semantics, so declared ctime must match the
+        // block our wallet synced to, not wall-clock now. Without this,
+        // chain's get(wall_now) returns chain's latest root (newer than
+        // ours) → proof mismatch → InvalidDustSpendProof (error 170).
+        let indexer = self.provider.get_indexer_client();
+        let mut anchor_result: Option<u64> = None;
+        for attempt in 1..=5u32 {
+            match indexer.get_latest_block().await {
+                Ok(Some(block)) => {
+                    if let Some(tblock_ms) = block.timestamp {
+                        let tblock_secs = tblock_ms / 1000;
+                        self.ledger_ctx.set_latest_block(
+                            tblock_secs,
+                            [0u8; 32],
+                            tblock_secs.saturating_sub(6),
+                        );
+                        anchor_result = Some(tblock_secs);
+                        break;
+                    }
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        block_hash = %block.hash,
+                        "indexer latest block has no timestamp"
+                    );
+                    break;
+                }
+                Ok(None) => {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        "indexer returned null latest block"
+                    );
+                    break;
+                }
+                Err(e) => {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        attempt,
+                        error = %e,
+                        "failed to fetch chain latest block for ctime anchor — retrying"
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
+                }
+            }
+        }
+        if anchor_result.is_none() {
+            warn!(
+                relayer_id = %self.relayer.id,
+                "ctime anchor not established; DUST spend proofs may be rejected (error 170)"
+            );
+        }
+
         // Attempt shielded sync — populates the LedgerContext with wallet state.
         // This is the critical step that enables transaction building.
         let viewing_key = self.signer.viewing_key();

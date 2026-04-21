@@ -641,8 +641,14 @@ pub struct StellarTransactionData {
 #[cfg(feature = "midnight")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct MidnightTransactionData {
+    /// Midnight application-level transaction hash — the value users paste
+    /// into midnightexplorer.com. Matches EVM/Stellar/Solana semantics of
+    /// "`hash` = explorer-searchable identifier". Computed via
+    /// `proven_tx.transaction_hash()` in prepare_transaction.
     pub hash: Option<String>,
-    pub pallet_hash: Option<String>,
+    /// Substrate extrinsic hash returned by `subxt::tx().submit()`. Kept for
+    /// node-level debugging (mempool lookup via substrate RPC).
+    pub extrinsic_hash: Option<String>,
     pub block_hash: Option<String>,
     pub serialized_tx: Option<String>,
     pub guaranteed_offer: Option<crate::models::MidnightOfferRequest>,
@@ -1072,7 +1078,7 @@ impl
                     network_type: NetworkType::Midnight,
                     network_data: NetworkTransactionData::Midnight(MidnightTransactionData {
                         hash: None,
-                        pallet_hash: None,
+                        extrinsic_hash: None,
                         block_hash: None,
                         serialized_tx: None,
                         guaranteed_offer: midnight_request.guaranteed_offer.clone(),
