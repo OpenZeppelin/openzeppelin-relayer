@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 pub use evm::EvmTransactionRequest;
 #[cfg(feature = "midnight")]
 pub use midnight::{
-    MidnightContractAction, MidnightFallibleOfferRequest, MidnightInputRequest,
-    MidnightIntentRequest, MidnightOfferRequest, MidnightOutputRequest, MidnightTransactionRequest,
+    MidnightContractAction, MidnightFallibleOfferRequest, MidnightIntentRequest,
+    MidnightOfferRequest, MidnightShieldedInputRequest, MidnightShieldedOutputRequest,
+    MidnightTransactionRequest, MidnightUnshieldedInputRequest, MidnightUnshieldedOutputRequest,
 };
 pub use solana::SolanaTransactionRequest;
 pub use stellar::StellarTransactionRequest;

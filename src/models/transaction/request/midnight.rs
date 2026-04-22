@@ -1,6 +1,15 @@
 use crate::models::{ApiError, RelayerRepoModel};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use utoipa::ToSchema;
+
+/// Segment ID used for the top-level `guaranteed_offer` field.
+///
+/// Despite its API name, the top-level `guaranteed_offer` is routed through a
+/// **fallible** segment — DUST fee handling currently requires fallible
+/// segments, so the simplest-case transfer lives on segment 1. Intents and
+/// `fallible_offers` cannot reuse segment 1 when `guaranteed_offer` is set.
+pub const GUARANTEED_OFFER_SEGMENT_ID: u16 = 1;
 
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -13,30 +22,80 @@ pub struct MidnightTransactionRequest {
     pub ttl: Option<String>,
 }
 
+/// A single intent, bundling offers and/or contract actions under one segment.
+///
+/// An intent must contribute at least one offer or one action — an otherwise
+/// empty intent is rejected at [`MidnightTransactionRequest::validate`].
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MidnightIntentRequest {
     pub segment_id: u16,
     #[serde(default)]
+    pub guaranteed_unshielded_offer: Option<MidnightOfferRequest>,
+    #[serde(default)]
+    pub fallible_unshielded_offer: Option<MidnightOfferRequest>,
+    #[serde(default)]
+    pub guaranteed_shielded_offer: Option<MidnightOfferRequest>,
+    #[serde(default)]
+    pub fallible_shielded_offer: Option<MidnightOfferRequest>,
+    #[serde(default)]
     pub actions: Vec<MidnightContractAction>,
 }
 
+/// Offer payload, discriminated by `kind` so a single offer type can carry
+/// either unshielded or shielded data without ambiguity.
+///
+/// **Breaking change note**: this replaces the pre-PR-1 flat
+/// `{inputs, outputs}` payload. Callers must include `"kind": "unshielded" | "shielded"`.
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct MidnightOfferRequest {
-    #[serde(default)]
-    pub inputs: Vec<MidnightInputRequest>,
-    #[serde(default)]
-    pub outputs: Vec<MidnightOutputRequest>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MidnightOfferRequest {
+    Unshielded {
+        #[serde(default)]
+        inputs: Vec<MidnightUnshieldedInputRequest>,
+        #[serde(default)]
+        outputs: Vec<MidnightUnshieldedOutputRequest>,
+    },
+    /// Accepted by the API today, rejected by the builder until PR-3 lands
+    /// shielded sync + `ZswapOffer` construction.
+    Shielded {
+        #[serde(default)]
+        inputs: Vec<MidnightShieldedInputRequest>,
+        #[serde(default)]
+        outputs: Vec<MidnightShieldedOutputRequest>,
+    },
 }
 
+impl MidnightOfferRequest {
+    pub fn input_count(&self) -> usize {
+        match self {
+            Self::Unshielded { inputs, .. } => inputs.len(),
+            Self::Shielded { inputs, .. } => inputs.len(),
+        }
+    }
+    pub fn output_count(&self) -> usize {
+        match self {
+            Self::Unshielded { outputs, .. } => outputs.len(),
+            Self::Shielded { outputs, .. } => outputs.len(),
+        }
+    }
+    pub fn is_shielded(&self) -> bool {
+        matches!(self, Self::Shielded { .. })
+    }
+}
+
+/// Contract invocation action inside a `MidnightIntentRequest`.
+///
+/// Accepted as an empty struct in PR-1 (schema placeholder). PR-2 flips this
+/// to a tagged enum with a `Call` variant that carries contract address,
+/// entry point, arguments, and a `key_location` for VK resolution.
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct MidnightContractAction {}
 
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct MidnightInputRequest {
+pub struct MidnightUnshieldedInputRequest {
     pub origin: String,
     pub token_type: String,
     pub value: String,
@@ -44,7 +103,23 @@ pub struct MidnightInputRequest {
 
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct MidnightOutputRequest {
+pub struct MidnightUnshieldedOutputRequest {
+    pub destination: String,
+    pub token_type: String,
+    pub value: String,
+}
+
+#[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MidnightShieldedInputRequest {
+    pub origin: String,
+    pub token_type: String,
+    pub value: String,
+}
+
+#[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MidnightShieldedOutputRequest {
     pub destination: String,
     pub token_type: String,
     pub value: String,
@@ -75,38 +150,108 @@ impl MidnightTransactionRequest {
             ));
         }
 
-        // The builder currently only honors `guaranteed_offer`. Accepting
-        // non-empty `intents` / `fallible_offers` would silently drop the
-        // caller's data (the builder stores them but never feeds them to
-        // `tx_info`), so reject explicitly until intent/fallible-segment
-        // wiring lands. See docs/midnight-architecture.md for the roadmap.
-        if !self.intents.is_empty() {
-            return Err(ApiError::BadRequest(
-                "intents are not yet supported by the Midnight transaction builder".to_string(),
-            ));
+        let mut seen_segments: HashSet<u16> = HashSet::new();
+        if self.guaranteed_offer.is_some() {
+            seen_segments.insert(GUARANTEED_OFFER_SEGMENT_ID);
         }
-        if !self.fallible_offers.is_empty() {
-            return Err(ApiError::BadRequest(
-                "fallible_offers are not yet supported by the Midnight transaction builder"
-                    .to_string(),
-            ));
+        for (idx, f) in self.fallible_offers.iter().enumerate() {
+            if !seen_segments.insert(f.segment_id) {
+                return Err(ApiError::BadRequest(format!(
+                    "fallible_offers[{idx}].segment_id {} is already in use (segment {} is reserved for the top-level guaranteed_offer)",
+                    f.segment_id, GUARANTEED_OFFER_SEGMENT_ID,
+                )));
+            }
+        }
+        for (idx, intent) in self.intents.iter().enumerate() {
+            if !seen_segments.insert(intent.segment_id) {
+                return Err(ApiError::BadRequest(format!(
+                    "intents[{idx}].segment_id {} is already in use (segment {} is reserved for the top-level guaranteed_offer)",
+                    intent.segment_id, GUARANTEED_OFFER_SEGMENT_ID,
+                )));
+            }
         }
 
         if let Some(offer) = &self.guaranteed_offer {
-            if offer.inputs.len() > MAX_OFFER_ENTRIES {
-                return Err(ApiError::BadRequest(format!(
-                    "guaranteed_offer.inputs exceeds limit of {MAX_OFFER_ENTRIES}"
-                )));
-            }
-            if offer.outputs.len() > MAX_OFFER_ENTRIES {
-                return Err(ApiError::BadRequest(format!(
-                    "guaranteed_offer.outputs exceeds limit of {MAX_OFFER_ENTRIES}"
-                )));
-            }
+            validate_offer(offer, "guaranteed_offer")?;
+        }
+        for (idx, f) in self.fallible_offers.iter().enumerate() {
+            validate_offer(&f.offer, &format!("fallible_offers[{idx}].offer"))?;
+        }
+        for (idx, intent) in self.intents.iter().enumerate() {
+            validate_intent(intent, idx)?;
         }
 
         Ok(())
     }
+}
+
+/// Per-offer size caps and builder-feature gates.
+///
+/// Shielded offers are accepted by the schema but rejected here until the
+/// builder learns to construct `ZswapOffer` in PR-3.
+fn validate_offer(offer: &MidnightOfferRequest, loc: &str) -> Result<(), ApiError> {
+    if offer.input_count() > MAX_OFFER_ENTRIES {
+        return Err(ApiError::BadRequest(format!(
+            "{loc}.inputs exceeds limit of {MAX_OFFER_ENTRIES}"
+        )));
+    }
+    if offer.output_count() > MAX_OFFER_ENTRIES {
+        return Err(ApiError::BadRequest(format!(
+            "{loc}.outputs exceeds limit of {MAX_OFFER_ENTRIES}"
+        )));
+    }
+    if offer.is_shielded() {
+        return Err(ApiError::BadRequest(format!(
+            "{loc}: shielded offers are not yet supported by the Midnight transaction builder",
+        )));
+    }
+    Ok(())
+}
+
+fn validate_intent(intent: &MidnightIntentRequest, idx: usize) -> Result<(), ApiError> {
+    let prefix = format!("intents[{idx}]");
+    let slots: [(&Option<MidnightOfferRequest>, &str); 4] = [
+        (
+            &intent.guaranteed_unshielded_offer,
+            "guaranteed_unshielded_offer",
+        ),
+        (
+            &intent.fallible_unshielded_offer,
+            "fallible_unshielded_offer",
+        ),
+        (
+            &intent.guaranteed_shielded_offer,
+            "guaranteed_shielded_offer",
+        ),
+        (&intent.fallible_shielded_offer, "fallible_shielded_offer"),
+    ];
+    for (offer_opt, slot_name) in slots {
+        if let Some(offer) = offer_opt {
+            let loc = format!("{prefix}.{slot_name}");
+            if slot_name.contains("shielded") && !slot_name.contains("unshielded") {
+                return Err(ApiError::BadRequest(format!(
+                    "{loc}: shielded offers are not yet supported by the Midnight transaction builder"
+                )));
+            }
+            validate_offer(offer, &loc)?;
+        }
+    }
+    if !intent.actions.is_empty() {
+        return Err(ApiError::BadRequest(format!(
+            "{prefix}.actions: contract actions are not yet supported by the Midnight transaction builder",
+        )));
+    }
+    if intent.guaranteed_unshielded_offer.is_none()
+        && intent.fallible_unshielded_offer.is_none()
+        && intent.guaranteed_shielded_offer.is_none()
+        && intent.fallible_shielded_offer.is_none()
+        && intent.actions.is_empty()
+    {
+        return Err(ApiError::BadRequest(format!(
+            "{prefix}: intent must contain at least one offer or action",
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -127,15 +272,26 @@ mod tests {
         }
     }
 
-    fn simple_offer() -> MidnightOfferRequest {
-        MidnightOfferRequest {
-            inputs: vec![MidnightInputRequest {
+    fn simple_unshielded_offer() -> MidnightOfferRequest {
+        MidnightOfferRequest::Unshielded {
+            inputs: vec![MidnightUnshieldedInputRequest {
                 origin: "self".into(),
                 token_type: "NIGHT".into(),
                 value: "1000000".into(),
             }],
-            outputs: vec![MidnightOutputRequest {
+            outputs: vec![MidnightUnshieldedOutputRequest {
                 destination: "self".into(),
+                token_type: "NIGHT".into(),
+                value: "1000000".into(),
+            }],
+        }
+    }
+
+    fn simple_shielded_offer() -> MidnightOfferRequest {
+        MidnightOfferRequest::Shielded {
+            inputs: vec![],
+            outputs: vec![MidnightShieldedOutputRequest {
+                destination: "mn_shield-addr_preview1abc".into(),
                 token_type: "NIGHT".into(),
                 value: "1000000".into(),
             }],
@@ -157,7 +313,7 @@ mod tests {
     #[test]
     fn accepts_guaranteed_offer_only() {
         let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(simple_offer()),
+            guaranteed_offer: Some(simple_unshielded_offer()),
             intents: vec![],
             fallible_offers: vec![],
             ttl: None,
@@ -166,11 +322,106 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_empty_intents() {
+    fn accepts_multi_fallible_with_distinct_segments() {
         let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(simple_offer()),
+            guaranteed_offer: None,
+            intents: vec![],
+            fallible_offers: vec![
+                MidnightFallibleOfferRequest {
+                    segment_id: 2,
+                    offer: simple_unshielded_offer(),
+                },
+                MidnightFallibleOfferRequest {
+                    segment_id: 3,
+                    offer: simple_unshielded_offer(),
+                },
+            ],
+            ttl: None,
+        };
+        assert!(req.validate(&relayer()).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_fallible_segment_ids() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: None,
+            intents: vec![],
+            fallible_offers: vec![
+                MidnightFallibleOfferRequest {
+                    segment_id: 2,
+                    offer: simple_unshielded_offer(),
+                },
+                MidnightFallibleOfferRequest {
+                    segment_id: 2,
+                    offer: simple_unshielded_offer(),
+                },
+            ],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(ref m) if m.contains("already in use")));
+    }
+
+    #[test]
+    fn rejects_fallible_using_guaranteed_reserved_segment() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: Some(simple_unshielded_offer()),
+            intents: vec![],
+            fallible_offers: vec![MidnightFallibleOfferRequest {
+                segment_id: GUARANTEED_OFFER_SEGMENT_ID,
+                offer: simple_unshielded_offer(),
+            }],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(ref m) if m.contains("reserved")));
+    }
+
+    #[test]
+    fn rejects_shielded_offer_until_pr3() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: Some(simple_shielded_offer()),
+            intents: vec![],
+            fallible_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("shielded offers are not yet supported"))
+        );
+    }
+
+    #[test]
+    fn rejects_non_empty_actions_until_pr2() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: None,
             intents: vec![MidnightIntentRequest {
-                segment_id: 1,
+                segment_id: 5,
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: Some(simple_unshielded_offer()),
+                guaranteed_shielded_offer: None,
+                fallible_shielded_offer: None,
+                actions: vec![MidnightContractAction::default()],
+            }],
+            fallible_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("contract actions are not yet supported"))
+        );
+    }
+
+    #[test]
+    fn rejects_empty_intent() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: None,
+            intents: vec![MidnightIntentRequest {
+                segment_id: 5,
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: None,
+                guaranteed_shielded_offer: None,
+                fallible_shielded_offer: None,
                 actions: vec![],
             }],
             fallible_offers: vec![],
@@ -178,36 +429,19 @@ mod tests {
         };
         let err = req.validate(&relayer()).unwrap_err();
         assert!(
-            matches!(err, ApiError::BadRequest(ref m) if m.contains("intents are not yet supported"))
-        );
-    }
-
-    #[test]
-    fn rejects_non_empty_fallible_offers() {
-        let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(simple_offer()),
-            intents: vec![],
-            fallible_offers: vec![MidnightFallibleOfferRequest {
-                segment_id: 2,
-                offer: simple_offer(),
-            }],
-            ttl: None,
-        };
-        let err = req.validate(&relayer()).unwrap_err();
-        assert!(
-            matches!(err, ApiError::BadRequest(ref m) if m.contains("fallible_offers are not yet supported"))
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("must contain at least one"))
         );
     }
 
     #[test]
     fn rejects_oversized_inputs() {
-        let input = MidnightInputRequest {
+        let input = MidnightUnshieldedInputRequest {
             origin: "self".into(),
             token_type: "NIGHT".into(),
             value: "1".into(),
         };
         let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(MidnightOfferRequest {
+            guaranteed_offer: Some(MidnightOfferRequest::Unshielded {
                 inputs: vec![input; MAX_OFFER_ENTRIES + 1],
                 outputs: vec![],
             }),
@@ -221,13 +455,13 @@ mod tests {
 
     #[test]
     fn rejects_oversized_outputs() {
-        let output = MidnightOutputRequest {
+        let output = MidnightUnshieldedOutputRequest {
             destination: "self".into(),
             token_type: "NIGHT".into(),
             value: "1".into(),
         };
         let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(MidnightOfferRequest {
+            guaranteed_offer: Some(MidnightOfferRequest::Unshielded {
                 inputs: vec![],
                 outputs: vec![output; MAX_OFFER_ENTRIES + 1],
             }),
@@ -241,13 +475,13 @@ mod tests {
 
     #[test]
     fn accepts_at_limit_boundary() {
-        let input = MidnightInputRequest {
+        let input = MidnightUnshieldedInputRequest {
             origin: "self".into(),
             token_type: "NIGHT".into(),
             value: "1".into(),
         };
         let req = MidnightTransactionRequest {
-            guaranteed_offer: Some(MidnightOfferRequest {
+            guaranteed_offer: Some(MidnightOfferRequest::Unshielded {
                 inputs: vec![input; MAX_OFFER_ENTRIES],
                 outputs: vec![],
             }),
@@ -265,6 +499,36 @@ mod tests {
         // the attribute is caught by a test failure rather than a silent
         // accept-then-ignore.
         let json = r#"{"guaranteed_offer": null, "mystery_field": 1}"#;
+        let parsed: Result<MidnightTransactionRequest, _> = serde_json::from_str(json);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn parses_tagged_unshielded_offer_from_json() {
+        let json = r#"{
+            "guaranteed_offer": {
+                "kind": "unshielded",
+                "inputs":  [{"origin":"self","token_type":"NIGHT","value":"1"}],
+                "outputs": [{"destination":"self","token_type":"NIGHT","value":"1"}]
+            }
+        }"#;
+        let req: MidnightTransactionRequest = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            req.guaranteed_offer.as_ref().unwrap(),
+            MidnightOfferRequest::Unshielded { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_kind_discriminator_at_parse_time() {
+        // A flat offer body without `"kind"` is the pre-PR-1 shape. After
+        // PR-1 it must fail to deserialize (tagged enum requires the tag).
+        let json = r#"{
+            "guaranteed_offer": {
+                "inputs":  [{"origin":"self","token_type":"NIGHT","value":"1"}],
+                "outputs": [{"destination":"self","token_type":"NIGHT","value":"1"}]
+            }
+        }"#;
         let parsed: Result<MidnightTransactionRequest, _> = serde_json::from_str(json);
         assert!(parsed.is_err());
     }

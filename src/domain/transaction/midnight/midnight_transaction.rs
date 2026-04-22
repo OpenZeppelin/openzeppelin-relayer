@@ -169,12 +169,7 @@ where
         }
 
         // Create proof provider and transaction builder
-        use midnight_node_ledger_helpers::{
-            BuildUtxoOutput, BuildUtxoSpend, DefaultDB, FromContext, IntentInfo,
-            StandardTrasactionInfo, UnshieldedOfferInfo, UnshieldedWallet, UtxoOutputInfo,
-            UtxoSpendInfo, WalletAddress, WalletSeed, NIGHT,
-        };
-        use std::str::FromStr;
+        use midnight_node_ledger_helpers::{FromContext, IntentInfo, StandardTrasactionInfo};
 
         let proof_server = Arc::new(crate::services::provider::RemoteProofServer::new(
             self.network.prover_url.clone(),
@@ -220,82 +215,65 @@ where
         // DUST trees are synced from wallet to LedgerState via the patched
         // midnight-ledger crate (DustLocalState fields made pub).
 
-        // Build unshielded offer from request data
-        if let Some(ref offer_req) = midnight_data.guaranteed_offer {
-            let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = Vec::new();
-            let mut outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = Vec::new();
+        // Build intents from the request's three surfaces:
+        //
+        // 1. `guaranteed_offer` — sugar for a single fallible unshielded offer
+        //    at `GUARANTEED_OFFER_SEGMENT_ID` (segment 1). Named "guaranteed"
+        //    at the API layer for caller-facing simplicity, but routed through
+        //    a fallible segment because DUST fee payment requires it.
+        // 2. `fallible_offers[]` — one intent per offer, each at its own
+        //    segment_id, with `fallible_unshielded_offer: Some(...)`.
+        // 3. `intents[]` — general case; callers choose which offer slots to
+        //    populate. `guaranteed_unshielded_offer` + `fallible_unshielded_offer`
+        //    within the same intent are both allowed by the library.
+        //
+        // Shielded offers and contract actions are rejected at the API layer
+        // in PR-1; PR-2 lifts the action gate, PR-3 lifts the shielded gate.
+        use crate::models::transaction::request::midnight::GUARANTEED_OFFER_SEGMENT_ID;
 
-            for input in &offer_req.inputs {
-                let value: u128 = input.value.parse().map_err(|_| {
-                    TransactionError::ValidationError(format!(
-                        "Invalid input value: {}",
-                        input.value
-                    ))
-                })?;
-
-                // The relayer can only spend UTXOs owned by its own wallet.
-                // `origin` is accepted for API symmetry but the owner is always
-                // the relayer's wallet_seed — any other value would be a request
-                // the relayer cannot fulfill.
-                inputs.push(Box::new(UtxoSpendInfo {
-                    value,
-                    owner: wallet_seed.clone(),
-                    token_type: NIGHT,
-                    intent_hash: None,
-                    output_number: None,
-                }));
-            }
-
-            for output in &offer_req.outputs {
-                let value: u128 = output.value.parse().map_err(|_| {
-                    TransactionError::ValidationError(format!(
-                        "Invalid output value: {}",
-                        output.value
-                    ))
-                })?;
-
-                // Destinations other than "self" must be an unshielded bech32m
-                // address (e.g. mn_addr_preview1…). "self" loops back to the
-                // relayer's own wallet (useful for tests and change outputs).
-                if output.destination == "self" {
-                    outputs.push(Box::new(UtxoOutputInfo {
-                        value,
-                        owner: wallet_seed.clone(),
-                        token_type: NIGHT,
-                    }));
-                } else {
-                    let wallet_addr =
-                        WalletAddress::from_str(&output.destination).map_err(|e| {
-                            TransactionError::ValidationError(format!(
-                                "Invalid destination address {}: {e}",
-                                output.destination
-                            ))
-                        })?;
-                    let unshielded = UnshieldedWallet::try_from(&wallet_addr).map_err(|e| {
-                        TransactionError::ValidationError(format!(
-                            "Destination {} is not an unshielded address: {e:?}",
-                            output.destination
-                        ))
-                    })?;
-                    outputs.push(Box::new(UtxoOutputInfo {
-                        value,
-                        owner: unshielded,
-                        token_type: NIGHT,
-                    }));
-                }
-            }
-
-            let unshielded_offer = UnshieldedOfferInfo { inputs, outputs };
-
-            // Wrap in an intent and add to the transaction.
-            // Use segment 1 (fallible) when DUST registration is included,
-            // since DUST actions require fallible segments only.
-            let segment_id = 1; // fallible segment
+        if let Some(offer_req) = midnight_data.guaranteed_offer.as_ref() {
+            let offer = build_unshielded_offer(offer_req, &wallet_seed)?;
             tx_info.add_intent(
-                segment_id,
+                GUARANTEED_OFFER_SEGMENT_ID,
                 Box::new(IntentInfo {
                     guaranteed_unshielded_offer: None,
-                    fallible_unshielded_offer: Some(unshielded_offer),
+                    fallible_unshielded_offer: Some(offer),
+                    actions: vec![],
+                }),
+            );
+        }
+
+        for fallible in &midnight_data.fallible_offers {
+            let offer = build_unshielded_offer(&fallible.offer, &wallet_seed)?;
+            tx_info.add_intent(
+                fallible.segment_id,
+                Box::new(IntentInfo {
+                    guaranteed_unshielded_offer: None,
+                    fallible_unshielded_offer: Some(offer),
+                    actions: vec![],
+                }),
+            );
+        }
+
+        for intent in &midnight_data.intents {
+            let guaranteed = intent
+                .guaranteed_unshielded_offer
+                .as_ref()
+                .map(|o| build_unshielded_offer(o, &wallet_seed))
+                .transpose()?;
+            let fallible = intent
+                .fallible_unshielded_offer
+                .as_ref()
+                .map(|o| build_unshielded_offer(o, &wallet_seed))
+                .transpose()?;
+            // Shielded-offer slots and contract actions are gated at
+            // `validate()` until PR-3 / PR-2 respectively; reaching here means
+            // they're empty / None.
+            tx_info.add_intent(
+                intent.segment_id,
+                Box::new(IntentInfo {
+                    guaranteed_unshielded_offer: guaranteed,
+                    fallible_unshielded_offer: fallible,
                     actions: vec![],
                 }),
             );
@@ -659,4 +637,93 @@ where
         // Basic validation — a full implementation would check TTL, offer structure, etc.
         Ok(true)
     }
+}
+
+/// Translate one API `MidnightOfferRequest::Unshielded` into a library
+/// `UnshieldedOfferInfo`, routing all spent inputs to the relayer's own
+/// wallet seed and parsing destinations as bech32m unshielded addresses (or
+/// the literal `"self"` loop-back).
+///
+/// Returns a `ValidationError` if the offer carries a shielded variant
+/// (shouldn't happen post-`validate()`) or an input/output value that's not a
+/// valid `u128`. The `token_type` field is presently hardcoded to `NIGHT`;
+/// custom-token support lands in a follow-up once the builder-side parsing
+/// helper exists.
+fn build_unshielded_offer(
+    offer: &crate::models::MidnightOfferRequest,
+    wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
+) -> Result<
+    midnight_node_ledger_helpers::UnshieldedOfferInfo<midnight_node_ledger_helpers::DefaultDB>,
+    TransactionError,
+> {
+    use crate::models::MidnightOfferRequest;
+    use midnight_node_ledger_helpers::{
+        BuildUtxoOutput, BuildUtxoSpend, DefaultDB, UnshieldedOfferInfo, UnshieldedWallet,
+        UtxoOutputInfo, UtxoSpendInfo, WalletAddress, NIGHT,
+    };
+    use std::str::FromStr;
+
+    let (inputs_req, outputs_req) = match offer {
+        MidnightOfferRequest::Unshielded { inputs, outputs } => (inputs, outputs),
+        MidnightOfferRequest::Shielded { .. } => {
+            // `validate()` rejects shielded offers until PR-3; reaching here
+            // indicates a validation bypass. Report as a clean error rather
+            // than panicking.
+            return Err(TransactionError::ValidationError(
+                "shielded offers are not yet supported by the Midnight transaction builder".into(),
+            ));
+        }
+    };
+
+    let mut inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
+    let mut outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> =
+        Vec::with_capacity(outputs_req.len());
+
+    for input in inputs_req {
+        let value: u128 = input.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!("Invalid input value: {}", input.value))
+        })?;
+        // The relayer can only spend UTXOs owned by its own wallet; `origin`
+        // is accepted for API symmetry but coerced to the relayer's seed.
+        inputs.push(Box::new(UtxoSpendInfo {
+            value,
+            owner: wallet_seed.clone(),
+            token_type: NIGHT,
+            intent_hash: None,
+            output_number: None,
+        }));
+    }
+
+    for output in outputs_req {
+        let value: u128 = output.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!("Invalid output value: {}", output.value))
+        })?;
+        if output.destination == "self" {
+            outputs.push(Box::new(UtxoOutputInfo {
+                value,
+                owner: wallet_seed.clone(),
+                token_type: NIGHT,
+            }));
+        } else {
+            let wallet_addr = WalletAddress::from_str(&output.destination).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Invalid destination address {}: {e}",
+                    output.destination
+                ))
+            })?;
+            let unshielded = UnshieldedWallet::try_from(&wallet_addr).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Destination {} is not an unshielded address: {e:?}",
+                    output.destination
+                ))
+            })?;
+            outputs.push(Box::new(UtxoOutputInfo {
+                value,
+                owner: unshielded,
+                token_type: NIGHT,
+            }));
+        }
+    }
+
+    Ok(UnshieldedOfferInfo { inputs, outputs })
 }
