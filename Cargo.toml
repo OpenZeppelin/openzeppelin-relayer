@@ -167,10 +167,10 @@ name = "midnight_dust_prep"
 path = "helpers/midnight_dust_prep.rs"
 
 [patch.crates-io]
-# Local patch exposing DustLocalState tree fields as pub so our sync code
-# can write wallet-side DUST merkle state back into LedgerState.
-# See scripts/README or docs/midnight-migration-guide.md for how to recreate
-# the patched dir if /tmp gets wiped.
+# Local patch exposing DustLocalState tree fields as pub and fixing the
+# transaction tag version so our sync code can write wallet-side DUST merkle
+# state back into LedgerState.
+# Recreate with: ./patches/apply.sh
 midnight-ledger = { path = "/tmp/midnight-ledger-patched" }
 
 [lib]

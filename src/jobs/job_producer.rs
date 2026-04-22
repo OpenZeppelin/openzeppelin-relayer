@@ -464,6 +464,8 @@ mod tests {
                 Some(NetworkType::Evm) => &mut queue.transaction_status_queue_evm,
                 Some(NetworkType::Stellar) => &mut queue.transaction_status_queue_stellar,
                 Some(NetworkType::Solana) => &mut queue.transaction_status_queue, // Use default queue
+                #[cfg(feature = "midnight")]
+                Some(NetworkType::Midnight) => &mut queue.transaction_status_queue, // Use default queue (test fixture)
                 None => &mut queue.transaction_status_queue, // Legacy messages without network_type
             };
 

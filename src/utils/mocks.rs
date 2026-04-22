@@ -286,6 +286,10 @@ pub mod mockutils {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository,
             api_key_repository,
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         }
     }
 

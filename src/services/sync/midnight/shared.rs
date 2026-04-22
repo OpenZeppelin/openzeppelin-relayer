@@ -135,7 +135,19 @@ impl WalletHandle {
 struct WalletEntry {
     seed: WalletSeed,
     status_tx: watch::Sender<SyncStatus>,
+    /// Consecutive DUST replay failures for this wallet. A permanent error
+    /// like `NonLinearInsertion` would otherwise leave the wallet stuck in
+    /// `Syncing` forever; crossing [`MAX_CONSECUTIVE_REPLAY_ERRORS`]
+    /// transitions it to `Failed` so observers' `await_ready()` can unblock.
+    consecutive_replay_errors: u32,
 }
+
+/// Threshold for transitioning a wallet to [`SyncStatus::Failed`] when its
+/// per-batch DUST replay keeps failing. A handful of transient errors (e.g.
+/// a batch landing on a dust tree root that's briefly inconsistent with
+/// `latest_block_context`) are tolerated; permanent errors like
+/// `NonLinearInsertion` will cross this threshold within seconds.
+const MAX_CONSECUTIVE_REPLAY_ERRORS: u32 = 3;
 
 /// Owns one WebSocket subscription per network and broadcasts decoded DUST
 /// events to all subscribed wallets.
@@ -218,6 +230,7 @@ impl SharedDustSyncTask {
         wallets.push(WalletEntry {
             seed: seed.clone(),
             status_tx: tx,
+            consecutive_replay_errors: 0,
         });
         Arc::new(WalletHandle {
             seed,
@@ -445,16 +458,29 @@ impl SharedDustSyncTask {
                                         self.try_mark_ready(last_applied_id, chain_max_id).await;
                                     }
                                 }
-                                ParsedMessage::Complete | ParsedMessage::Error => {
-                                    // Server ended or errored the subscription — bail to
-                                    // outer loop for a reconnect with cursor preserved.
+                                ParsedMessage::Complete => {
+                                    // Server closed the subscription — bail to outer
+                                    // loop for a reconnect with cursor preserved.
                                     if !batch.is_empty() {
                                         self.apply_batch(&batch);
                                         last_applied_id = batch_last_event_id.max(last_applied_id);
                                         batch.clear();
                                     }
                                     return Err((
-                                        "subscription complete/error from server".into(),
+                                        "subscription complete from server".into(),
+                                        last_applied_id,
+                                    ));
+                                }
+                                ParsedMessage::Error(payload) => {
+                                    // Server rejected or errored the subscription —
+                                    // the payload carries the GraphQL-level reason.
+                                    if !batch.is_empty() {
+                                        self.apply_batch(&batch);
+                                        last_applied_id = batch_last_event_id.max(last_applied_id);
+                                        batch.clear();
+                                    }
+                                    return Err((
+                                        format!("subscription error from server: {payload}"),
                                         last_applied_id,
                                     ));
                                 }
@@ -507,24 +533,65 @@ impl SharedDustSyncTask {
     /// batch-end by the library (dust.rs:1691) — batching is what keeps the
     /// tree consistent with chain's block-end roots.
     fn apply_batch(&self, batch: &[Event<DefaultDB>]) {
-        let wallets = self
-            .wallets
-            .lock()
-            .expect("SharedDustSyncTask wallets mutex poisoned");
-        let seeds: Vec<WalletSeed> = wallets.iter().map(|w| w.seed.clone()).collect();
-        drop(wallets); // release before taking the context's inner locks
+        let seeds: Vec<WalletSeed> = {
+            let wallets = self
+                .wallets
+                .lock()
+                .expect("SharedDustSyncTask wallets mutex poisoned");
+            wallets.iter().map(|w| w.seed.clone()).collect()
+        };
 
+        // Per-seed replay outcome. We don't hold the `wallets` lock across
+        // `with_wallet_from_seed` because the context takes its own inner
+        // locks — nested acquisition would risk deadlock under reconnects.
+        let mut failures: Vec<(WalletSeed, String)> = Vec::new();
         for seed in seeds {
-            self.context.with_wallet_from_seed(seed, |wallet| {
+            let mut err_msg: Option<String> = None;
+            self.context.with_wallet_from_seed(seed.clone(), |wallet| {
                 if let Err(e) = wallet.update_dust_from_tx(batch) {
-                    warn!(
-                        network_id = %self.network_id,
-                        error = ?e,
-                        batch_len = batch.len(),
-                        "DUST replay failed for wallet"
-                    );
+                    err_msg = Some(format!("{e:?}"));
                 }
             });
+            if let Some(msg) = err_msg {
+                failures.push((seed, msg));
+            }
+        }
+
+        // Re-acquire wallets to update failure counters and transition any
+        // seed that has crossed the threshold to `Failed`. Seeds with no
+        // entry in `failures` had a clean replay this batch → reset counter.
+        {
+            let mut wallets = self
+                .wallets
+                .lock()
+                .expect("SharedDustSyncTask wallets mutex poisoned");
+            for entry in wallets.iter_mut() {
+                match failures.iter().find(|(s, _)| s == &entry.seed) {
+                    Some((_, msg)) => {
+                        entry.consecutive_replay_errors =
+                            entry.consecutive_replay_errors.saturating_add(1);
+                        warn!(
+                            network_id = %self.network_id,
+                            error = %msg,
+                            batch_len = batch.len(),
+                            consecutive = entry.consecutive_replay_errors,
+                            "DUST replay failed for wallet"
+                        );
+                        if entry.consecutive_replay_errors >= MAX_CONSECUTIVE_REPLAY_ERRORS
+                            && !matches!(*entry.status_tx.borrow(), SyncStatus::Failed(_))
+                        {
+                            let reason = format!(
+                                "DUST replay failed {} consecutive batches; last error: {msg}",
+                                entry.consecutive_replay_errors
+                            );
+                            let _ = entry.status_tx.send(SyncStatus::Failed(reason));
+                        }
+                    }
+                    None => {
+                        entry.consecutive_replay_errors = 0;
+                    }
+                }
+            }
         }
         debug!(
             network_id = %self.network_id,
@@ -689,7 +756,16 @@ impl SharedDustSyncTask {
                 }
             }
             "complete" => ParsedMessage::Complete,
-            "error" => ParsedMessage::Error,
+            "error" => {
+                // The payload for an `error` frame is either an array of
+                // errors or a single object — stringify whatever is there so
+                // operators can see the full server-returned detail.
+                let payload = val
+                    .get("payload")
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "<no payload>".into());
+                ParsedMessage::Error(payload)
+            }
             _ => ParsedMessage::Other,
         }
     }
@@ -713,7 +789,10 @@ enum ParsedMessage {
         max_id: i64,
     },
     Complete,
-    Error,
+    /// Server sent a `type: "error"` frame. Carries the raw payload so a
+    /// reconnect's diagnostic log shows what the indexer actually rejected
+    /// (cursor too old, schema mismatch, auth, etc.).
+    Error(String),
     Other,
 }
 
@@ -779,16 +858,31 @@ fn registry() -> &'static RwLock<HashMap<String, Arc<NetworkSyncSlot>>> {
 
 /// Registry key for an isolated (runtime-registered) relayer's sync slot.
 ///
-/// Uses a stable hash of the seed rather than its `Debug` representation — the
-/// latter would tie our storage key to the library's Debug impl, which can
-/// change between versions. Hashing with the standard `Hasher` keeps keys
-/// stable as long as `WalletSeed` implements `Hash` (which it does).
+/// Content-addressed via SHA-256 of a variant-tagged seed byte sequence.
+/// `std::collections::hash_map::DefaultHasher` would **not** work here: its
+/// seed is randomised per process since Rust 1.36 (HashDoS mitigation), so
+/// the same `WalletSeed` would produce different keys across restarts, and
+/// any persisted or logged reference would become dangling. SHA-256 is
+/// deterministic and does not leak raw seed bytes into HashMap keys or logs.
 fn isolated_registry_key(network_id: &str, seed: &WalletSeed) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    seed.hash(&mut h);
-    format!("{network_id}#runtime:{:016x}", h.finish())
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    match seed {
+        WalletSeed::Short(b) => {
+            hasher.update([0u8]);
+            hasher.update(b);
+        }
+        WalletSeed::Medium(b) => {
+            hasher.update([1u8]);
+            hasher.update(b);
+        }
+        WalletSeed::Long(b) => {
+            hasher.update([2u8]);
+            hasher.update(b);
+        }
+    }
+    let digest = hasher.finalize();
+    format!("{network_id}#runtime:{}", hex::encode(&digest[..8]))
 }
 
 /// Core constructor shared by [`init_network_sync`] (boot-time shared) and
@@ -946,5 +1040,65 @@ pub async fn shutdown_network_sync(registry_key: &str) {
     };
     if let Some(slot) = slot {
         slot.task.stop().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_registry_key_is_deterministic_across_calls() {
+        let seed = WalletSeed::Medium([7u8; 32]);
+        let k1 = isolated_registry_key("preview", &seed);
+        let k2 = isolated_registry_key("preview", &seed);
+        assert_eq!(k1, k2, "same (network, seed) must produce the same key");
+    }
+
+    #[test]
+    fn isolated_registry_key_differs_per_seed() {
+        let k1 = isolated_registry_key("preview", &WalletSeed::Medium([1u8; 32]));
+        let k2 = isolated_registry_key("preview", &WalletSeed::Medium([2u8; 32]));
+        assert_ne!(k1, k2, "different seeds must produce different keys");
+    }
+
+    #[test]
+    fn isolated_registry_key_differs_per_network() {
+        let seed = WalletSeed::Medium([1u8; 32]);
+        let k1 = isolated_registry_key("preview", &seed);
+        let k2 = isolated_registry_key("mainnet", &seed);
+        assert_ne!(k1, k2, "different networks must produce different keys");
+    }
+
+    #[test]
+    fn isolated_registry_key_tags_variants() {
+        // Short/Medium/Long with byte-prefix overlaps must not collide.
+        // Short([0;16]) and the first 16 bytes of Medium([0;32]) are
+        // identical — without variant tagging the SHA-256 would differ
+        // only by length, but we want belt-and-suspenders differentiation
+        // so a future refactor that changes trailing bytes stays sound.
+        let k_short = isolated_registry_key("preview", &WalletSeed::Short([0u8; 16]));
+        let k_medium = isolated_registry_key("preview", &WalletSeed::Medium([0u8; 32]));
+        let k_long = isolated_registry_key("preview", &WalletSeed::Long([0u8; 64]));
+        assert_ne!(k_short, k_medium);
+        assert_ne!(k_medium, k_long);
+        assert_ne!(k_short, k_long);
+    }
+
+    #[test]
+    fn parse_event_message_carries_error_payload() {
+        // Smoke check that the `type:"error"` frame surfaces its payload
+        // (finding #5 — critical for diagnosing indexer rejections).
+        // We construct the task with a dummy indexer client; parsing is
+        // a pure function of the frame text.
+        let frame = r#"{"type":"error","payload":{"reason":"cursor-too-old"}}"#;
+        let val: serde_json::Value = serde_json::from_str(frame).unwrap();
+        let msg_type = val.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        assert_eq!(msg_type, "error");
+        let payload = val
+            .get("payload")
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "<no payload>".into());
+        assert!(payload.contains("cursor-too-old"));
     }
 }

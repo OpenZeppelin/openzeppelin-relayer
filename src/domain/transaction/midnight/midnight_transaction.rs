@@ -307,11 +307,40 @@ where
             ));
         }
 
-        // Build and prove the transaction
+        // Build and prove the transaction.
+        //
+        // `RemoteProofServer::prove` panics on proof-server failures because
+        // the library's `ProofProvider` trait signature is infallible. We
+        // wrap the library's `tx_info.prove()` in `catch_unwind` so those
+        // panics surface as normal job errors (retryable / dead-letter-able)
+        // instead of crashing the worker task. See proof_server.rs for the
+        // trait-signature constraint driving this pattern.
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+
         info!(tx_id = %tx.id, "Building and proving Midnight transaction");
-        let proven_tx = tx_info.prove().await.map_err(|e| {
-            TransactionError::UnexpectedError(format!("Transaction build/prove failed: {e}"))
-        })?;
+        let proven_tx = match AssertUnwindSafe(tx_info.prove()).catch_unwind().await {
+            Ok(Ok(proven)) => proven,
+            Ok(Err(e)) => {
+                return Err(TransactionError::UnexpectedError(format!(
+                    "Transaction build/prove failed: {e}"
+                )));
+            }
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| {
+                        payload
+                            .downcast_ref::<&'static str>()
+                            .map(|s| (*s).to_string())
+                    })
+                    .unwrap_or_else(|| "<non-string panic payload>".into());
+                return Err(TransactionError::UnexpectedError(format!(
+                    "Proof generation panicked (likely proof-server failure): {msg}"
+                )));
+            }
+        };
 
         // Serialize using tagged serialization
         let serialized_bytes =

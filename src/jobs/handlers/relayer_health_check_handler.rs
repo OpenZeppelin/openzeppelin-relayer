@@ -379,6 +379,10 @@ mod tests {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         });
 
         // Create job
@@ -478,6 +482,10 @@ mod tests {
             job_producer: Arc::new(mock_job_producer),
             plugin_repository: Arc::new(PluginRepositoryStorage::new_in_memory()),
             api_key_repository: Arc::new(ApiKeyRepositoryStorage::new_in_memory()),
+            #[cfg(feature = "midnight")]
+            relayer_state_repository: Arc::new(
+                crate::repositories::RelayerStateRepositoryStorage::new_in_memory(),
+            ),
         };
 
         // Create health check data

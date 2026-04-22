@@ -164,16 +164,14 @@ impl Signer for LocalSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        transaction::repository::MidnightTransactionData, LocalSignerConfig, SignerConfig,
-    };
-    use secrecy::SecretVec;
+    use crate::models::{LocalSignerConfig, MidnightTransactionData, SignerConfig};
+    use secrets::SecretVec;
 
     fn make_signer_model(key: [u8; 32]) -> crate::models::Signer {
         crate::models::Signer {
             id: "test-midnight-signer".into(),
             config: SignerConfig::Local(LocalSignerConfig {
-                raw_key: SecretVec::new(key.to_vec()),
+                raw_key: SecretVec::new(32, |v| v.copy_from_slice(&key)),
             }),
         }
     }
@@ -211,7 +209,7 @@ mod tests {
 
         let tx_data = NetworkTransactionData::Midnight(MidnightTransactionData {
             hash: Some("0xdeadbeef".into()),
-            pallet_hash: None,
+            extrinsic_hash: None,
             block_hash: None,
             serialized_tx: None,
             guaranteed_offer: None,
