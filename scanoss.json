@@ -1,0 +1,7 @@
+{
+  "bom": {
+    "include": [
+      {"purl":"pkg:github/OpenZeppelin/openzeppelin-relayer","comment":"Known AGPL upstream fork"}
+    ]
+  }
+}
