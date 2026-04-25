@@ -1,0 +1,50 @@
+THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+============================================================
+
+Project: openzeppelin-relayer
+Generated: 2026-04-24
+Tool: SCANOSS (snippet detection with License dataset)
+Components: 2
+
+This file lists all third-party software components detected
+in this repository, along with their licenses and copyright
+notices as required by those licenses.
+
+------------------------------------------------------------
+
+LICENSE SUMMARY
+
+  AGPL-3.0-only [COPYLEFT]: 1 component(s)
+  CC0-1.0: 1 component(s)
+
+------------------------------------------------------------
+
+COMPONENT ATTRIBUTIONS
+
+  network.wasm
+  Version: v1.0.0
+  Source: https://github.com/hazae41/network.wasm
+  PURL: pkg:github/hazae41/network.wasm
+  License: CC0-1.0
+
+  openzeppelin-relayer
+  Version: v0.1.0
+  Source: https://github.com/openzeppelin/openzeppelin-relayer
+  PURL: pkg:github/openzeppelin/openzeppelin-relayer
+  Copyright:
+    Copyright 2007 Free Software Foundation Inc.  https:  fsf.org
+  License: AGPL-3.0-only
+
+------------------------------------------------------------
+
+FULL LICENSE TEXTS
+
+--- CC0-1.0 ---
+
+Full license text available at: https://spdx.org/licenses/CC0-1.0.html
+
+
+--- AGPL-3.0-only ---
+
+Full license text available at: https://spdx.org/licenses/AGPL-3.0-only.html
+
