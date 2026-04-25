@@ -2,7 +2,7 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ============================================================
 
 Project: openzeppelin-relayer
-Generated: 2026-04-24
+Generated: 2026-04-25
 Tool: SCANOSS (snippet detection with License dataset)
 Components: 2
 
@@ -41,10 +41,29 @@ FULL LICENSE TEXTS
 
 --- CC0-1.0 ---
 
-Full license text available at: https://spdx.org/licenses/CC0-1.0.html
+The person who associated a work with this deed has dedicated the work to
+the public domain by waiving all of his or her rights to the work worldwide
+under copyright law, including all related and neighboring rights, to the
+extent allowed by law.
+
+You can copy, modify, distribute and perform the work, even for commercial
+purposes, all without asking permission.
+
+Full license text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
 
 
 --- AGPL-3.0-only ---
 
-Full license text available at: https://spdx.org/licenses/AGPL-3.0-only.html
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, version 3 of the License.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+Full license text: https://www.gnu.org/licenses/gpl-3.0.html
 
