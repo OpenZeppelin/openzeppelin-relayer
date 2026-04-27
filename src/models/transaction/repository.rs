@@ -654,6 +654,8 @@ pub struct MidnightTransactionData {
     pub guaranteed_offer: Option<crate::models::MidnightOfferRequest>,
     pub intents: Vec<crate::models::MidnightIntentRequest>,
     pub fallible_offers: Vec<crate::models::MidnightFallibleOfferRequest>,
+    #[serde(default)]
+    pub fallible_shielded_offers: Vec<crate::models::MidnightFallibleOfferRequest>,
 }
 
 impl StellarTransactionData {
@@ -1084,6 +1086,7 @@ impl
                         guaranteed_offer: midnight_request.guaranteed_offer.clone(),
                         intents: midnight_request.intents.clone(),
                         fallible_offers: midnight_request.fallible_offers.clone(),
+                        fallible_shielded_offers: midnight_request.fallible_shielded_offers.clone(),
                     }),
                     priced_at: None,
                     hashes: Vec::new(),

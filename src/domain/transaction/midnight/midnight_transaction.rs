@@ -232,15 +232,24 @@ where
         use crate::models::transaction::request::midnight::GUARANTEED_OFFER_SEGMENT_ID;
 
         if let Some(offer_req) = midnight_data.guaranteed_offer.as_ref() {
-            let offer = build_unshielded_offer(offer_req, &wallet_seed)?;
-            tx_info.add_intent(
-                GUARANTEED_OFFER_SEGMENT_ID,
-                Box::new(IntentInfo {
-                    guaranteed_unshielded_offer: None,
-                    fallible_unshielded_offer: Some(offer),
-                    actions: vec![],
-                }),
-            );
+            if offer_req.is_shielded() {
+                // Route shielded top-level offer to the tx's guaranteed
+                // shielded slot (`StandardTransaction.guaranteed_coins`).
+                // `validate()` guarantees this is the only place shielded
+                // can appear in PR-3 v1, so there's no collision to guard.
+                let shielded = build_shielded_offer(offer_req, &wallet_seed)?;
+                tx_info.set_guaranteed_offer(shielded);
+            } else {
+                let offer = build_unshielded_offer(offer_req, &wallet_seed)?;
+                tx_info.add_intent(
+                    GUARANTEED_OFFER_SEGMENT_ID,
+                    Box::new(IntentInfo {
+                        guaranteed_unshielded_offer: None,
+                        fallible_unshielded_offer: Some(offer),
+                        actions: vec![],
+                    }),
+                );
+            }
         }
 
         for fallible in &midnight_data.fallible_offers {
@@ -266,9 +275,6 @@ where
                 .as_ref()
                 .map(|o| build_unshielded_offer(o, &wallet_seed))
                 .transpose()?;
-            // Shielded-offer slots and contract actions are gated at
-            // `validate()` until PR-3 / PR-2 respectively; reaching here means
-            // they're empty / None.
             tx_info.add_intent(
                 intent.segment_id,
                 Box::new(IntentInfo {
@@ -277,6 +283,29 @@ where
                     actions: vec![],
                 }),
             );
+        }
+
+        // PR-3 v2: fallible shielded offers — build each entry with
+        // retargeting BuildInput/BuildOutput wrappers (§11 / §12 of the
+        // architecture doc). These bypass the helpers' Segment::Guaranteed
+        // hardcode by wrapping helpers' InputInfo/OutputInfo::build and
+        // calling `retarget_segment(segment_id)` on the produced
+        // zswap Input/Output. The resulting OfferInfo's Offer has its
+        // Input/Output segment correctly tagged as fallible-N.
+        if !midnight_data.fallible_shielded_offers.is_empty() {
+            let mut shielded_fallible_map: std::collections::HashMap<
+                u16,
+                midnight_node_ledger_helpers::OfferInfo<midnight_node_ledger_helpers::DefaultDB>,
+            > = std::collections::HashMap::new();
+            for fallible in &midnight_data.fallible_shielded_offers {
+                let offer = build_fallible_shielded_offer(
+                    &fallible.offer,
+                    &wallet_seed,
+                    fallible.segment_id,
+                )?;
+                shielded_fallible_map.insert(fallible.segment_id, offer);
+            }
+            tx_info.set_fallible_offers(shielded_fallible_map);
         }
 
         if tx_info.is_empty() {
@@ -351,6 +380,7 @@ where
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),
+            fallible_shielded_offers: midnight_data.fallible_shielded_offers.clone(),
         };
 
         self.transaction_repository
@@ -443,6 +473,7 @@ where
             guaranteed_offer: midnight_data.guaranteed_offer.clone(),
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),
+            fallible_shielded_offers: midnight_data.fallible_shielded_offers.clone(),
         };
 
         self.transaction_repository
@@ -569,6 +600,7 @@ where
                 guaranteed_offer: current.guaranteed_offer.clone(),
                 intents: current.intents.clone(),
                 fallible_offers: current.fallible_offers.clone(),
+                fallible_shielded_offers: current.fallible_shielded_offers.clone(),
             };
             self.transaction_repository
                 .update_network_data(
@@ -666,11 +698,12 @@ fn build_unshielded_offer(
     let (inputs_req, outputs_req) = match offer {
         MidnightOfferRequest::Unshielded { inputs, outputs } => (inputs, outputs),
         MidnightOfferRequest::Shielded { .. } => {
-            // `validate()` rejects shielded offers until PR-3; reaching here
-            // indicates a validation bypass. Report as a clean error rather
-            // than panicking.
-            return Err(TransactionError::ValidationError(
-                "shielded offers are not yet supported by the Midnight transaction builder".into(),
+            // Caller should dispatch to `build_shielded_offer` on
+            // `offer.is_shielded()` — reaching here is a builder-dispatch
+            // bug, not a user-input failure. Surface it clearly so the
+            // test suite catches it instead of producing a wrong tx.
+            return Err(TransactionError::UnexpectedError(
+                "build_unshielded_offer called with a shielded offer variant".into(),
             ));
         }
     };
@@ -726,4 +759,344 @@ fn build_unshielded_offer(
     }
 
     Ok(UnshieldedOfferInfo { inputs, outputs })
+}
+
+/// Translate one API `MidnightOfferRequest::Shielded` into a library
+/// `OfferInfo`, producing a shielded (ZSWAP) offer.
+///
+/// PR-3 v1 constraint: the helpers' `BuildOutput` impls hardcode
+/// `Segment::Guaranteed` inside `build()`, so the only correct home for
+/// the resulting offer is `StandardTrasactionInfo::set_guaranteed_offer`.
+/// Fallible-shielded offers would require bypassing these helpers and
+/// going directly to the zswap crate's API — deferred until there's a
+/// real caller need.
+///
+/// Inputs reference the relayer's own wallet seed; the library's
+/// `InputInfo<WalletSeed>` selects a spendable coin from
+/// `wallet.shielded.state.coins` at build time. If no matching coin is
+/// available the library **panics** (`min_match_coin` panics on empty
+/// iter, `state.spend` panics on failure). Those panics are caught by
+/// the `AssertUnwindSafe(tx_info.prove()).catch_unwind()` wrapper at the
+/// call site and surface as `TransactionError::UnexpectedError`.
+///
+/// `token_type` is hardcoded to shielded NIGHT
+/// (`ShieldedTokenType(HashOutput([0u8; 32]))`); custom shielded tokens
+/// aren't yet a relayer feature.
+fn build_shielded_offer(
+    offer: &crate::models::MidnightOfferRequest,
+    wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
+) -> Result<
+    midnight_node_ledger_helpers::OfferInfo<midnight_node_ledger_helpers::DefaultDB>,
+    TransactionError,
+> {
+    use crate::models::MidnightOfferRequest;
+    use midnight_node_ledger_helpers::{
+        BuildInput, BuildOutput, DefaultDB, HashOutput, InputInfo, OfferInfo, OutputInfo,
+        ShieldedTokenType, ShieldedWallet, WalletAddress,
+    };
+    use std::str::FromStr;
+
+    let (inputs_req, outputs_req) = match offer {
+        MidnightOfferRequest::Shielded { inputs, outputs } => (inputs, outputs),
+        MidnightOfferRequest::Unshielded { .. } => {
+            // Should not reach here when the caller dispatches on `is_shielded()`.
+            return Err(TransactionError::ValidationError(
+                "build_shielded_offer called with an unshielded offer variant".into(),
+            ));
+        }
+    };
+
+    let shielded_night = ShieldedTokenType(HashOutput([0u8; 32]));
+
+    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
+    let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
+
+    for input in inputs_req {
+        let value: u128 = input.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Invalid shielded input value: {}",
+                input.value
+            ))
+        })?;
+        // `origin` is accepted for API symmetry but coerced to the relayer's
+        // own seed — the relayer can only spend notes it controls.
+        inputs.push(Box::new(InputInfo {
+            origin: wallet_seed.clone(),
+            token_type: shielded_night,
+            value,
+            nullifier: None,
+        }));
+    }
+
+    for output in outputs_req {
+        let value: u128 = output.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Invalid shielded output value: {}",
+                output.value
+            ))
+        })?;
+        if output.destination == "self" {
+            outputs.push(Box::new(OutputInfo {
+                destination: wallet_seed.clone(),
+                token_type: shielded_night,
+                value,
+            }));
+        } else {
+            // Parse as bech32m `mn_shield-addr_*` → WalletAddress →
+            // ShieldedWallet. Rejects unshielded addresses.
+            let wallet_addr = WalletAddress::from_str(&output.destination).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Invalid shielded destination address {}: {e}",
+                    output.destination
+                ))
+            })?;
+            let shielded: ShieldedWallet<DefaultDB> = ShieldedWallet::try_from(&wallet_addr)
+                .map_err(|e| {
+                    TransactionError::ValidationError(format!(
+                        "Destination {} is not a shielded address: {e:?}",
+                        output.destination
+                    ))
+                })?;
+            outputs.push(Box::new(OutputInfo {
+                destination: shielded,
+                token_type: shielded_night,
+                value,
+            }));
+        }
+    }
+
+    Ok(OfferInfo {
+        inputs,
+        outputs,
+        transients: Vec::new(),
+    })
+}
+
+// ============================================================================
+// PR-3 v2: Fallible-shielded offer support via segment retargeting
+// ============================================================================
+//
+// The helpers crate's `InputInfo<WalletSeed>` / `OutputInfo<WalletSeed>` impls
+// of `BuildInput` / `BuildOutput` hardcode `Segment::Guaranteed` when calling
+// the underlying zswap `Input::new` / `Output::new`. This makes it impossible
+// to go through the `OfferInfo::build` → `tx_info.set_fallible_offers` path
+// for shielded offers at a fallible segment — the ZK proof's segment tag
+// would be `Guaranteed` but the storage HashMap key says `N`, and the chain
+// rejects the mismatch.
+//
+// The zswap crate exposes `Input::retarget_segment(u16)` and
+// `Output::retarget_segment(u16)` (construct.rs:103 / :243) which rewrite the
+// transcript segment bytes without re-proving. We compose: call the helpers'
+// impls to get a `Guaranteed`-tagged Input/Output, then `retarget` it to the
+// target fallible segment. The resulting ZK proof is still valid; only the
+// public-transcript `segment` field changes.
+//
+// This implements `BuildInput<D>` / `BuildOutput<D>` traits on our wrapper
+// types, so they can be stuffed into `OfferInfo { inputs: Vec<Box<dyn
+// BuildInput>>, outputs: Vec<Box<dyn BuildOutput>>, ... }` and driven by the
+// helpers' `OfferInfo::build` loop normally.
+
+struct RetargetingShieldedInput {
+    inner: midnight_node_ledger_helpers::InputInfo<midnight_node_ledger_helpers::WalletSeed>,
+    segment_id: u16,
+}
+
+impl midnight_node_ledger_helpers::TokenInfo for RetargetingShieldedInput {
+    fn token_type(&self) -> midnight_node_ledger_helpers::ShieldedTokenType {
+        self.inner.token_type
+    }
+    fn value(&self) -> u128 {
+        self.inner.value
+    }
+}
+
+impl<D: midnight_node_ledger_helpers::DB + Clone> midnight_node_ledger_helpers::BuildInput<D>
+    for RetargetingShieldedInput
+{
+    fn build(
+        &mut self,
+        rng: &mut midnight_node_ledger_helpers::StdRng,
+        context: std::sync::Arc<midnight_node_ledger_helpers::LedgerContext<D>>,
+    ) -> midnight_node_ledger_helpers::Input<midnight_node_ledger_helpers::ProofPreimage, D> {
+        let guaranteed_input = <midnight_node_ledger_helpers::InputInfo<
+            midnight_node_ledger_helpers::WalletSeed,
+        > as midnight_node_ledger_helpers::BuildInput<D>>::build(
+            &mut self.inner, rng, context
+        );
+        guaranteed_input.retarget_segment(self.segment_id)
+    }
+}
+
+struct RetargetingShieldedOutputSelf {
+    inner: midnight_node_ledger_helpers::OutputInfo<midnight_node_ledger_helpers::WalletSeed>,
+    segment_id: u16,
+}
+
+impl midnight_node_ledger_helpers::TokenInfo for RetargetingShieldedOutputSelf {
+    fn token_type(&self) -> midnight_node_ledger_helpers::ShieldedTokenType {
+        self.inner.token_type
+    }
+    fn value(&self) -> u128 {
+        self.inner.value
+    }
+}
+
+impl<D: midnight_node_ledger_helpers::DB + Clone> midnight_node_ledger_helpers::BuildOutput<D>
+    for RetargetingShieldedOutputSelf
+{
+    fn build(
+        &self,
+        rng: &mut midnight_node_ledger_helpers::StdRng,
+        context: std::sync::Arc<midnight_node_ledger_helpers::LedgerContext<D>>,
+    ) -> midnight_node_ledger_helpers::Output<midnight_node_ledger_helpers::ProofPreimage, D> {
+        let guaranteed_output = <midnight_node_ledger_helpers::OutputInfo<
+            midnight_node_ledger_helpers::WalletSeed,
+        > as midnight_node_ledger_helpers::BuildOutput<D>>::build(
+            &self.inner, rng, context
+        );
+        guaranteed_output.retarget_segment(self.segment_id)
+    }
+}
+
+struct RetargetingShieldedOutputExternal {
+    inner: midnight_node_ledger_helpers::OutputInfo<
+        midnight_node_ledger_helpers::ShieldedWallet<midnight_node_ledger_helpers::DefaultDB>,
+    >,
+    segment_id: u16,
+}
+
+impl midnight_node_ledger_helpers::TokenInfo for RetargetingShieldedOutputExternal {
+    fn token_type(&self) -> midnight_node_ledger_helpers::ShieldedTokenType {
+        self.inner.token_type
+    }
+    fn value(&self) -> u128 {
+        self.inner.value
+    }
+}
+
+impl midnight_node_ledger_helpers::BuildOutput<midnight_node_ledger_helpers::DefaultDB>
+    for RetargetingShieldedOutputExternal
+{
+    fn build(
+        &self,
+        rng: &mut midnight_node_ledger_helpers::StdRng,
+        context: std::sync::Arc<
+            midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>,
+        >,
+    ) -> midnight_node_ledger_helpers::Output<
+        midnight_node_ledger_helpers::ProofPreimage,
+        midnight_node_ledger_helpers::DefaultDB,
+    > {
+        let guaranteed_output =
+            <midnight_node_ledger_helpers::OutputInfo<
+                midnight_node_ledger_helpers::ShieldedWallet<
+                    midnight_node_ledger_helpers::DefaultDB,
+                >,
+            > as midnight_node_ledger_helpers::BuildOutput<
+                midnight_node_ledger_helpers::DefaultDB,
+            >>::build(&self.inner, rng, context);
+        guaranteed_output.retarget_segment(self.segment_id)
+    }
+}
+
+/// Translate an API shielded offer into an `OfferInfo` whose produced
+/// zswap Inputs/Outputs are tagged with `segment_id` (fallible), not
+/// `Segment::Guaranteed`. Used for shield-ops where the shielded half
+/// of the tx lives in a fallible segment alongside an unshielded input
+/// half in the same segment.
+///
+/// See the "PR-3 v2" comment block in this file for the segment-retarget
+/// pattern explanation.
+fn build_fallible_shielded_offer(
+    offer: &crate::models::MidnightOfferRequest,
+    wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
+    segment_id: u16,
+) -> Result<
+    midnight_node_ledger_helpers::OfferInfo<midnight_node_ledger_helpers::DefaultDB>,
+    TransactionError,
+> {
+    use crate::models::MidnightOfferRequest;
+    use midnight_node_ledger_helpers::{
+        BuildInput, BuildOutput, DefaultDB, HashOutput, InputInfo, OfferInfo, OutputInfo,
+        ShieldedTokenType, ShieldedWallet, WalletAddress,
+    };
+    use std::str::FromStr;
+
+    let (inputs_req, outputs_req) = match offer {
+        MidnightOfferRequest::Shielded { inputs, outputs } => (inputs, outputs),
+        MidnightOfferRequest::Unshielded { .. } => {
+            return Err(TransactionError::UnexpectedError(
+                "build_fallible_shielded_offer called with an unshielded offer variant".into(),
+            ));
+        }
+    };
+
+    let shielded_night = ShieldedTokenType(HashOutput([0u8; 32]));
+    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
+    let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
+
+    for input in inputs_req {
+        let value: u128 = input.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Invalid shielded input value: {}",
+                input.value
+            ))
+        })?;
+        inputs.push(Box::new(RetargetingShieldedInput {
+            inner: InputInfo {
+                origin: wallet_seed.clone(),
+                token_type: shielded_night,
+                value,
+                nullifier: None,
+            },
+            segment_id,
+        }));
+    }
+
+    for output in outputs_req {
+        let value: u128 = output.value.parse().map_err(|_| {
+            TransactionError::ValidationError(format!(
+                "Invalid shielded output value: {}",
+                output.value
+            ))
+        })?;
+        if output.destination == "self" {
+            outputs.push(Box::new(RetargetingShieldedOutputSelf {
+                inner: OutputInfo {
+                    destination: wallet_seed.clone(),
+                    token_type: shielded_night,
+                    value,
+                },
+                segment_id,
+            }));
+        } else {
+            let wallet_addr = WalletAddress::from_str(&output.destination).map_err(|e| {
+                TransactionError::ValidationError(format!(
+                    "Invalid shielded destination address {}: {e}",
+                    output.destination
+                ))
+            })?;
+            let shielded: ShieldedWallet<DefaultDB> = ShieldedWallet::try_from(&wallet_addr)
+                .map_err(|e| {
+                    TransactionError::ValidationError(format!(
+                        "Destination {} is not a shielded address: {e:?}",
+                        output.destination
+                    ))
+                })?;
+            outputs.push(Box::new(RetargetingShieldedOutputExternal {
+                inner: OutputInfo {
+                    destination: shielded,
+                    token_type: shielded_night,
+                    value,
+                },
+                segment_id,
+            }));
+        }
+    }
+
+    Ok(OfferInfo {
+        inputs,
+        outputs,
+        transients: Vec::new(),
+    })
 }

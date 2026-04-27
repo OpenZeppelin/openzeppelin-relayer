@@ -19,6 +19,15 @@ pub struct MidnightTransactionRequest {
     pub intents: Vec<MidnightIntentRequest>,
     #[serde(default)]
     pub fallible_offers: Vec<MidnightFallibleOfferRequest>,
+    /// Fallible shielded offers keyed by segment_id. Separate from
+    /// `fallible_offers` because shielded and unshielded fallibles live
+    /// in different slots of the `StandardTransaction` — unshielded on
+    /// intent, shielded on `fallible_coins`. Pairing the same
+    /// `segment_id` across both lists is how a shield-op is expressed
+    /// (unshielded input in one list, shielded output in the other,
+    /// balanced by the chain at segment boundary).
+    #[serde(default)]
+    pub fallible_shielded_offers: Vec<MidnightFallibleOfferRequest>,
     pub ttl: Option<String>,
 }
 
@@ -143,9 +152,10 @@ impl MidnightTransactionRequest {
         if self.guaranteed_offer.is_none()
             && self.intents.is_empty()
             && self.fallible_offers.is_empty()
+            && self.fallible_shielded_offers.is_empty()
         {
             return Err(ApiError::BadRequest(
-                "At least one of guaranteed_offer, intents, or fallible_offers must be provided"
+                "At least one of guaranteed_offer, intents, fallible_offers, or fallible_shielded_offers must be provided"
                     .to_string(),
             ));
         }
@@ -172,13 +182,44 @@ impl MidnightTransactionRequest {
         }
 
         if let Some(offer) = &self.guaranteed_offer {
-            validate_offer(offer, "guaranteed_offer")?;
+            validate_offer(offer, "guaranteed_offer", /*allow_shielded*/ true)?;
         }
         for (idx, f) in self.fallible_offers.iter().enumerate() {
-            validate_offer(&f.offer, &format!("fallible_offers[{idx}].offer"))?;
+            validate_offer(
+                &f.offer,
+                &format!("fallible_offers[{idx}].offer"),
+                /*allow_shielded*/ false,
+            )?;
         }
         for (idx, intent) in self.intents.iter().enumerate() {
             validate_intent(intent, idx)?;
+        }
+
+        // PR-3 v2: `fallible_shielded_offers` lives in a separate
+        // segment-id namespace from `fallible_offers` / `intents` because
+        // the shielded fallible slot is `StandardTransaction.fallible_coins`
+        // not an intent's unshielded offer. Each entry must be kind:shielded
+        // and segment_ids within this list are unique (but may collide
+        // with unshielded fallibles at the same segment — that's the
+        // shield-op pairing).
+        let mut shielded_seen: HashSet<u16> = HashSet::new();
+        for (idx, f) in self.fallible_shielded_offers.iter().enumerate() {
+            if !f.offer.is_shielded() {
+                return Err(ApiError::BadRequest(format!(
+                    "fallible_shielded_offers[{idx}].offer: must be `kind: \"shielded\"`; use `fallible_offers` for unshielded"
+                )));
+            }
+            if !shielded_seen.insert(f.segment_id) {
+                return Err(ApiError::BadRequest(format!(
+                    "fallible_shielded_offers[{idx}].segment_id {} is already in use in the shielded fallible list",
+                    f.segment_id
+                )));
+            }
+            validate_offer(
+                &f.offer,
+                &format!("fallible_shielded_offers[{idx}].offer"),
+                /*allow_shielded*/ true,
+            )?;
         }
 
         Ok(())
@@ -187,9 +228,16 @@ impl MidnightTransactionRequest {
 
 /// Per-offer size caps and builder-feature gates.
 ///
-/// Shielded offers are accepted by the schema but rejected here until the
-/// builder learns to construct `ZswapOffer` in PR-3.
-fn validate_offer(offer: &MidnightOfferRequest, loc: &str) -> Result<(), ApiError> {
+/// `allow_shielded`: PR-3 v1 only accepts shielded offers in the top-level
+/// `guaranteed_offer` slot, because the helpers' `BuildOutput::build`
+/// hardcodes `Segment::Guaranteed`. All other positions (fallible_offers
+/// entries, intent-nested offer slots) still reject shielded with a clear
+/// "not yet supported" message.
+fn validate_offer(
+    offer: &MidnightOfferRequest,
+    loc: &str,
+    allow_shielded: bool,
+) -> Result<(), ApiError> {
     if offer.input_count() > MAX_OFFER_ENTRIES {
         return Err(ApiError::BadRequest(format!(
             "{loc}.inputs exceeds limit of {MAX_OFFER_ENTRIES}"
@@ -200,9 +248,9 @@ fn validate_offer(offer: &MidnightOfferRequest, loc: &str) -> Result<(), ApiErro
             "{loc}.outputs exceeds limit of {MAX_OFFER_ENTRIES}"
         )));
     }
-    if offer.is_shielded() {
+    if offer.is_shielded() && !allow_shielded {
         return Err(ApiError::BadRequest(format!(
-            "{loc}: shielded offers are not yet supported by the Midnight transaction builder",
+            "{loc}: shielded offers are only supported today in the top-level `guaranteed_offer`; fallible-shielded and intent-nested-shielded are follow-ups",
         )));
     }
     Ok(())
@@ -228,12 +276,14 @@ fn validate_intent(intent: &MidnightIntentRequest, idx: usize) -> Result<(), Api
     for (offer_opt, slot_name) in slots {
         if let Some(offer) = offer_opt {
             let loc = format!("{prefix}.{slot_name}");
+            // Intent-nested shielded slots aren't wire-able in PR-3 v1 (same
+            // `Segment::Guaranteed` hardcode constraint as fallible_offers).
             if slot_name.contains("shielded") && !slot_name.contains("unshielded") {
                 return Err(ApiError::BadRequest(format!(
-                    "{loc}: shielded offers are not yet supported by the Midnight transaction builder"
+                    "{loc}: intent-nested shielded offers are not yet supported; use the top-level `guaranteed_offer` with `kind: \"shielded\"` instead"
                 )));
             }
-            validate_offer(offer, &loc)?;
+            validate_offer(offer, &loc, /*allow_shielded*/ false)?;
         }
     }
     if !intent.actions.is_empty() {
@@ -304,6 +354,7 @@ mod tests {
             guaranteed_offer: None,
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -316,6 +367,7 @@ mod tests {
             guaranteed_offer: Some(simple_unshielded_offer()),
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         assert!(req.validate(&relayer()).is_ok());
@@ -336,6 +388,7 @@ mod tests {
                     offer: simple_unshielded_offer(),
                 },
             ],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         assert!(req.validate(&relayer()).is_ok());
@@ -356,6 +409,7 @@ mod tests {
                     offer: simple_unshielded_offer(),
                 },
             ],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -371,6 +425,7 @@ mod tests {
                 segment_id: GUARANTEED_OFFER_SEGMENT_ID,
                 offer: simple_unshielded_offer(),
             }],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -378,16 +433,60 @@ mod tests {
     }
 
     #[test]
-    fn rejects_shielded_offer_until_pr3() {
+    fn accepts_shielded_top_level_guaranteed_offer() {
+        // PR-3 v1: shielded offers are wire-able at the top-level
+        // `guaranteed_offer` slot (they route to `set_guaranteed_offer` on
+        // the tx). The `rejects_shielded_offer_until_pr3` test that used to
+        // guard this assertion is intentionally removed.
         let req = MidnightTransactionRequest {
             guaranteed_offer: Some(simple_shielded_offer()),
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            ttl: None,
+        };
+        assert!(req.validate(&relayer()).is_ok());
+    }
+
+    #[test]
+    fn rejects_shielded_offer_in_fallible_offers() {
+        // Fallible-shielded still rejected in PR-3 v1 (helpers hardcode
+        // `Segment::Guaranteed`; would need direct zswap crate usage).
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: None,
+            intents: vec![],
+            fallible_offers: vec![MidnightFallibleOfferRequest {
+                segment_id: 2,
+                offer: simple_shielded_offer(),
+            }],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
         assert!(
-            matches!(err, ApiError::BadRequest(ref m) if m.contains("shielded offers are not yet supported"))
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("shielded offers are only supported today in the top-level"))
+        );
+    }
+
+    #[test]
+    fn rejects_shielded_offer_in_intent_slots() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: None,
+            intents: vec![MidnightIntentRequest {
+                segment_id: 5,
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: None,
+                guaranteed_shielded_offer: Some(simple_shielded_offer()),
+                fallible_shielded_offer: None,
+                actions: vec![],
+            }],
+            fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("intent-nested shielded offers are not yet supported"))
         );
     }
 
@@ -404,6 +503,7 @@ mod tests {
                 actions: vec![MidnightContractAction::default()],
             }],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -425,6 +525,7 @@ mod tests {
                 actions: vec![],
             }],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -447,6 +548,7 @@ mod tests {
             }),
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -467,6 +569,7 @@ mod tests {
             }),
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         let err = req.validate(&relayer()).unwrap_err();
@@ -487,6 +590,7 @@ mod tests {
             }),
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
             ttl: None,
         };
         assert!(req.validate(&relayer()).is_ok());

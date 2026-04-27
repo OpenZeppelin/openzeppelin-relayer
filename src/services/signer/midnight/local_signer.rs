@@ -215,6 +215,7 @@ mod tests {
             guaranteed_offer: None,
             intents: vec![],
             fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
         });
 
         let response = signer.sign_transaction(tx_data).await.unwrap();
