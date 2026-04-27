@@ -462,12 +462,15 @@ relayer initialization:
 After bootstrap, `StandardTrasactionInfo::build()` can find UTXOs for
 spending and compute fees/TTL from the parameters.
 
-### 8.2 Subxt Extrinsic Submission (TODO)
+### 8.2 Subxt Extrinsic Submission (Implemented)
 
-The `MidnightSubxtClient` is built but not yet wired into
-`submit_transaction`. Currently uses JSON-RPC `author_submitExtrinsic`.
-The Subxt path (`send_mn_transaction` pallet call) is the correct
-approach used by Midnight's own toolkit.
+`MidnightProvider::send_raw_extrinsic` submits via the lazily-connected
+`MidnightSubxtClient`, calling `mn_meta::tx().midnight().send_mn_transaction(bytes)`
+and `create_unsigned()` per the Midnight pallet contract. The earlier
+`author_submitExtrinsic` JSON-RPC path was rejected by the node with
+"Could not decode OpaqueExtrinsic.0" because Midnight transaction bytes
+are not a valid Substrate `OpaqueExtrinsic` on their own — they need
+the pallet wrapper. Connect-time URL failover added in §8.4.
 
 ### 8.3 DUST Fee Token
 
@@ -476,10 +479,16 @@ tokens in the wallet alongside tNIGHT. Without DUST, the
 `StandardTrasactionInfo::build()` fee payment loop will fail.
 DUST is generated from tNIGHT via the Dust registration process.
 
-### 8.4 Multi-RPC Failover
+### 8.4 Multi-RPC Failover (Implemented)
 
-Midnight provider uses `first_rpc_url()` only. Should use the weighted
-RPC selector pattern from other networks.
+`MidnightProvider` uses the shared `RpcSelector` for both HTTP
+`rpc_call` (per-call failover; provider-level errors mark URL failed,
+application-level errors propagate) and Subxt WS connect (connect-time
+failover only). Mid-session WS failover (recovering from a node going
+down after Subxt connected) requires invalidating the cached
+`OnceCell<MidnightSubxtClient>` and reconnecting — left for a future
+PR; current behaviour requires a relayer restart if the connected node
+disappears.
 
 ### 8.5 Contract Call Relaying (Deferred)
 
