@@ -16,7 +16,9 @@ use crate::{
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionCommand, TransactionSend},
+    jobs::{
+        handle_result, mark_tx_failed_on_final_attempt, Job, TransactionCommand, TransactionSend,
+    },
     metrics::{observe_processing_time, STAGE_SUBMISSION_QUEUE_DWELL, STAGE_SUBMIT_DURATION},
     models::DefaultAppState,
     observability::request_id::set_request_id,
@@ -53,16 +55,35 @@ pub async fn transaction_submission_handler(
     );
 
     let command = job.data.command.clone();
+    let tx_id = job.data.transaction_id.clone();
     let job_timestamp = job.timestamp.clone();
+    let max_retries = get_max_retries(&command);
     let result = handle_request(job.data, &state, &job_timestamp).await;
 
+    // Bridge job-attempt counter to tx-row state on retry exhaustion.
+    // Only Submit and Resend mark Failed: those commands haven't reached
+    // the chain (or are retrying a chain-untouched tx), so a permanent
+    // failure means the tx will never confirm. Cancel and Resubmit fail
+    // independently of the original tx — the original might still be in
+    // flight, so the status checker handles its eventual state.
+    if let Err(ref err) = result {
+        if matches!(
+            command,
+            TransactionCommand::Submit | TransactionCommand::Resend
+        ) {
+            mark_tx_failed_on_final_attempt(
+                &tx_id,
+                state.transaction_repository.as_ref(),
+                &err.to_string(),
+                &ctx,
+                max_retries,
+            )
+            .await;
+        }
+    }
+
     // Handle result with command-specific retry logic
-    handle_result(
-        result,
-        &ctx,
-        "Transaction Submission",
-        get_max_retries(&command),
-    )
+    handle_result(result, &ctx, "Transaction Submission", max_retries)
 }
 
 /// Get max retry count based on command type
