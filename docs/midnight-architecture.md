@@ -913,3 +913,117 @@ transfer).
 - **Revisit when:** a user wants to do a shield/unshield op through
   the relayer, or once we have shielded funds in a dev wallet and
   want to exercise the shielded-to-shielded path.
+
+---
+
+## 14. `Transient` Primitive Spike — Ruled Out as Shield-Op Path
+
+§13.4 hypothesised that the unused `transient` field on
+`zswap::Offer` (paired with helpers'
+`impl BuildTransient<D> for TransientInfo<WalletSeed, WalletSeed>`)
+might model the shield op (unshielded coin in → shielded coin out).
+Reading the source resolved this: it does not.
+
+### 14.1 What `Transient` actually is
+
+From `midnight-zswap-8.0.0/src/structure.rs:381-415` and
+`construct.rs:386-453`:
+
+```rust
+pub struct Transient<P, D> {
+    pub nullifier: Nullifier,            // input-side: spend
+    pub coin_com: Commitment,            // output-side: create
+    pub value_commitment_input: Pedersen,
+    pub value_commitment_output: Pedersen,
+    // ... proofs
+}
+
+impl Transient<P, D> {
+    pub fn as_input(&self) -> Input<P, D> {
+        // merkle_tree_root is a one-leaf virtual tree containing
+        // *only* this transient's coin_com — meaning the coin
+        // exists only inside this transaction.
+        merkle_tree_root: MerkleTree::blank(ZSWAP_TREE_HEIGHT)
+            .update_hash(0, self.coin_com.0, ())
+        ...
+    }
+}
+```
+
+A `Transient` is **shielded-internal**: it creates a coin commitment
+and immediately spends it within the same transaction, against a
+virtual single-leaf merkle tree whose only entry is the just-created
+commit. Net shielded-balance change is **zero**. It's the primitive
+for atomic shielded swaps and contract intermediaries — *not* for
+crossing the privacy boundary.
+
+The helpers' `BuildTransient` impl
+(`helpers/src/versions/common/transient.rs:34-108`) confirms this
+shape: `let inputs = vec![]` (line 40), only the output gets
+proof-built, then `state.spend_from_output(...)` consumes it
+in-place. The impl is also visibly experimental — uncommented
+"Alternative #1/#2", `???? Not sure` markers, panicking
+`expect("Invalid Transient arguments")` — and the segment is again
+hardcoded to `Segment::Guaranteed.into()` (line 71) so the
+retargeting wrapper would still be needed even if the semantics had
+worked.
+
+### 14.2 Why a real shield-op isn't expressible
+
+The chain treats unshielded and shielded as fully separate balance
+domains:
+
+- `StandardTransaction.guaranteed_unshielded_offers` (Substrate
+  UnshieldedOffer)
+- `StandardTransaction.guaranteed_coins` (zswap ZswapOffer)
+- Balance enforcement: `(inputs − outputs)` must be ≥ 0
+  **per token, per privacy-kind, per segment** independently
+  (the `invalid balance -1000000 for token Shielded(...) in segment 1`
+  finding in §13.3).
+
+There is no library primitive — `Transient`, `Input`, `Output`,
+`UtxoSpend`, `UtxoOutput`, or otherwise — that consumes from one
+domain and credits the other in a single proof. Lace's UI presents
+shield/unshield as a single user-action, but the underlying
+machinery is opaque to the helpers crate; either the chain has a
+system-level pallet not exposed via helpers, or Lace executes it as
+a coordinated multi-tx sequence.
+
+### 14.3 What this means for the relayer
+
+**PR-3 is functionally complete for the v2 scope.** Without a
+shield-op primitive:
+
+1. The relayer cannot bootstrap a shielded balance from its own
+   unshielded funds.
+2. Shielded-to-shielded relaying via PR-3 v2 retargeting *will*
+   work, but only once shielded funds reach the relayer wallet
+   from an external source (Lace shield op, another wallet, faucet).
+3. Unshielded-to-shielded ("send some private funds to X") and
+   shielded-to-unshielded conversions are **not relayable** with
+   the current Midnight library shape.
+
+### 14.4 Practical paths forward (not in this PR)
+
+| Path | What | Status |
+|---|---|---|
+| **A. External shield op** | User uses Lace to shield funds → transfers to relayer's shielded address → relayer can then relay shielded transfers | Workable today; only path to exercise PR-3 v2 end-to-end |
+| **B. Upstream ask** | Contact Midnight Foundation re: expected dApp pattern for shield/unshield, whether a non-helpers pallet path exists | Worth one email; no shipping deliverable |
+| **C. Wait for upstream** | Midnight may publish a `ShieldAction` / `Mint` / cross-domain offer primitive in a future ledger version | Passive; revisit on each release |
+| **D. Direct Substrate call** | Read the `midnight` pallet metadata to see if there's a `shield` / `unshield` extrinsic outside helpers | Investigation — may yield path A automation, may yield nothing |
+
+### 14.5 Decision log
+
+- **Date:** 2026-04-27
+- **Decision:** Do not build PR-3 v3. The `Transient` primitive
+  does not model unshielded↔shielded conversion; the library has no
+  alternative primitive for it.
+- **Rationale:** Shipping `Transient` as `shield_actions` would
+  produce transactions that build (proof server happy) but drain a
+  shielded coin to nowhere — net-zero shielded balance change with
+  publicly-visible nullifier — which is at best useless and at worst
+  fund-destroying. Better to surface the limitation than to ship a
+  misleading API.
+- **Revisit when:** Midnight ships a cross-domain offer primitive,
+  or path D (direct Substrate pallet exploration) reveals a
+  helpers-bypassing route.
