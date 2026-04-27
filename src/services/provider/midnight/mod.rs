@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::OnceCell;
+use tokio::sync::RwLock;
 
 use crate::models::{MidnightNetwork, RpcConfig};
 use crate::services::provider::rpc_selector::RpcSelector;
@@ -45,7 +45,13 @@ pub struct MidnightProvider {
     network: MidnightNetwork,
     rpc_client: Client,
     indexer_client: MidnightIndexerClient,
-    subxt_cell: Arc<OnceCell<MidnightSubxtClient>>,
+    /// Lazily-connected Subxt client. Held in a `RwLock<Option<...>>`
+    /// rather than a `OnceCell` so a transport-level failure can clear
+    /// the cache and force a reconnect via the selector. `Clone` is
+    /// cheap on `MidnightSubxtClient` (the inner `OnlineClient` shares
+    /// state via Arc), so callers take an owned copy and release the
+    /// lock before doing network IO.
+    subxt_state: Arc<RwLock<Option<MidnightSubxtClient>>>,
     selector: RpcSelector,
 }
 
@@ -66,50 +72,65 @@ impl MidnightProvider {
             network,
             rpc_client,
             indexer_client,
-            subxt_cell: Arc::new(OnceCell::new()),
+            subxt_state: Arc::new(RwLock::new(None)),
             selector,
         })
     }
 
-    /// Lazily connect a Subxt client to the node. Subxt needs a WebSocket
-    /// endpoint while the HTTP RPC in config uses https — convert on first use.
-    ///
-    /// Connect-time failover: walks the selector until one URL connects.
-    /// Mid-session failover would require invalidating the `OnceCell` and
-    /// reconnecting — out of scope here; if the connected node disappears,
-    /// the relayer needs a restart for now.
-    async fn subxt_client(&self) -> Result<&MidnightSubxtClient, ProviderError> {
-        self.subxt_cell
-            .get_or_try_init(|| async {
-                let mut tried: HashSet<String> = HashSet::new();
-                let mut last_err: Option<ProviderError> = None;
-                for _ in 0..self.selector.provider_count() {
-                    let url = match self.selector.get_next_url(&tried) {
-                        Ok(u) => u,
-                        Err(e) => {
-                            last_err = Some(ProviderError::NetworkConfiguration(e.to_string()));
-                            break;
-                        }
-                    };
-                    let ws_url = url
-                        .replace("https://", "wss://")
-                        .replace("http://", "ws://");
-                    match MidnightSubxtClient::connect(&ws_url).await {
-                        Ok(c) => return Ok(c),
-                        Err(e) => {
-                            self.selector.mark_current_as_failed();
-                            tried.insert(url);
-                            last_err = Some(e);
-                        }
-                    }
+    /// Get a connected Subxt client, connecting (with selector failover)
+    /// if one isn't cached. Returned by value (cheap clone) so the lock
+    /// is released before any network IO on the client.
+    async fn subxt_client(&self) -> Result<MidnightSubxtClient, ProviderError> {
+        if let Some(c) = self.subxt_state.read().await.clone() {
+            return Ok(c);
+        }
+        let mut guard = self.subxt_state.write().await;
+        if let Some(c) = guard.clone() {
+            return Ok(c);
+        }
+        let fresh = self.connect_subxt().await?;
+        *guard = Some(fresh.clone());
+        Ok(fresh)
+    }
+
+    /// Drop the cached Subxt client so the next `subxt_client()` call
+    /// reconnects. Used after a transport-level failure to recover from
+    /// a node that went away mid-session.
+    async fn invalidate_subxt(&self) {
+        *self.subxt_state.write().await = None;
+    }
+
+    /// Walk the selector until a URL connects via WebSocket. Subxt needs
+    /// a WS endpoint while the HTTP RPC in config uses https — converted
+    /// per-URL.
+    async fn connect_subxt(&self) -> Result<MidnightSubxtClient, ProviderError> {
+        let mut tried: HashSet<String> = HashSet::new();
+        let mut last_err: Option<ProviderError> = None;
+        for _ in 0..self.selector.provider_count() {
+            let url = match self.selector.get_next_url(&tried) {
+                Ok(u) => u,
+                Err(e) => {
+                    last_err = Some(ProviderError::NetworkConfiguration(e.to_string()));
+                    break;
                 }
-                Err(last_err.unwrap_or_else(|| {
-                    ProviderError::NetworkConfiguration(
-                        "Midnight network has no RPC URLs configured".to_string(),
-                    )
-                }))
-            })
-            .await
+            };
+            let ws_url = url
+                .replace("https://", "wss://")
+                .replace("http://", "ws://");
+            match MidnightSubxtClient::connect(&ws_url).await {
+                Ok(c) => return Ok(c),
+                Err(e) => {
+                    self.selector.mark_current_as_failed();
+                    tried.insert(url);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            ProviderError::NetworkConfiguration(
+                "Midnight network has no RPC URLs configured".to_string(),
+            )
+        }))
     }
 
     pub fn network(&self) -> &MidnightNetwork {
@@ -220,6 +241,45 @@ impl MidnightProvider {
     }
 }
 
+/// Heuristic: does this `ProviderError` from `MidnightSubxtClient::submit_transaction`
+/// look like a WS/transport failure (worth invalidating + reconnecting) rather
+/// than a chain-level rejection (InvalidTransaction, decode error, etc.)?
+///
+/// `subxt::Error::Rpc(_)`, `Io`, `WebSocket`, "connection closed", and
+/// "subscription dropped" all appear in subxt's debug output via the `{e:?}`
+/// format used in `MidnightSubxtClient::submit_transaction`. Chain rejections
+/// look like `InvalidTransaction(...)`, `Custom(...)`, or carry a Substrate
+/// error code — those should propagate without retry to avoid duplicate
+/// submission attempts.
+fn is_subxt_transport_error(err: &ProviderError) -> bool {
+    let msg = match err {
+        ProviderError::Other(s) => s.as_str(),
+        ProviderError::NetworkConfiguration(s) => s.as_str(),
+        ProviderError::Timeout => return true,
+        ProviderError::TransportError(_) => return true,
+        _ => return false,
+    };
+    let m = msg.to_ascii_lowercase();
+    // Match only on substrings that clearly indicate a connection/IO layer
+    // failure. We deliberately do NOT match `rpc(` because that prefix also
+    // wraps chain-rejection envelopes like
+    // `Rpc(JsonRpcError { code: 1010, message: "Invalid Transaction" })`,
+    // which we must NOT retry — duplicate-submission risk.
+    [
+        "websocket",
+        "connection",
+        "transport",
+        "io(",
+        "disconnected",
+        "subscription",
+        "eof",
+        "reset by peer",
+        "broken pipe",
+    ]
+    .iter()
+    .any(|needle| m.contains(needle))
+}
+
 /// Classify whether a `ProviderError` indicates the *provider* (RPC node)
 /// is unhealthy and should be skipped in favor of the next URL.
 ///
@@ -281,7 +341,20 @@ impl MidnightProviderTrait for MidnightProvider {
         let bytes = hex::decode(encoded_extrinsic.trim_start_matches("0x"))
             .map_err(|e| ProviderError::Other(format!("Invalid extrinsic hex: {e}")))?;
 
-        self.subxt_client().await?.submit_transaction(bytes).await
+        let client = self.subxt_client().await?;
+        match client.submit_transaction(bytes.clone()).await {
+            Ok(r) => Ok(r),
+            Err(e) if is_subxt_transport_error(&e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Subxt transport failure on submit; invalidating client and reconnecting"
+                );
+                self.invalidate_subxt().await;
+                let fresh = self.subxt_client().await?;
+                fresh.submit_transaction(bytes).await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn get_indexer_client(&self) -> &MidnightIndexerClient {
@@ -324,5 +397,43 @@ mod tests {
         }));
         assert!(is_provider_failure(&ProviderError::BadGateway));
         assert!(is_provider_failure(&ProviderError::RateLimited));
+    }
+
+    #[test]
+    fn subxt_transport_substrings_trigger_reconnect() {
+        // Sample error strings that should look transport-y (modeled on
+        // subxt's actual debug output).
+        let cases = [
+            "Extrinsic submission failed: Rpc(ClientError(WebSocket(IoError(Os { code: 32, kind: BrokenPipe }))))",
+            "Extrinsic submission failed: Io(Custom { kind: ConnectionReset })",
+            "Extrinsic submission failed: Subscription dropped before response",
+            "Extrinsic submission failed: connection closed by remote peer",
+            "Extrinsic submission failed: Transport(Custom { ... })",
+            "Extrinsic submission failed: unexpected EOF",
+        ];
+        for c in cases {
+            let err = ProviderError::Other(c.into());
+            assert!(
+                is_subxt_transport_error(&err),
+                "expected transport hit for: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn subxt_chain_rejection_does_not_trigger_reconnect() {
+        // These look like node-rejected the transaction — must not loop on retry.
+        let cases = [
+            "Extrinsic submission failed: Rpc(JsonRpcError { code: 1010, message: \"Invalid Transaction\", data: \"BadProof\" })",
+            "Extrinsic submission failed: InvalidTransaction(Custom(170))",
+            "Extrinsic submission failed: Decode(Could not decode OpaqueExtrinsic.0)",
+        ];
+        for c in cases {
+            let err = ProviderError::Other(c.into());
+            assert!(
+                !is_subxt_transport_error(&err),
+                "did not expect transport hit for: {c}"
+            );
+        }
     }
 }
