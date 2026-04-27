@@ -9,7 +9,7 @@ use tracing::instrument;
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
     domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
-    jobs::{handle_result, Job, TransactionRequest},
+    jobs::{handle_result, mark_tx_failed_on_final_attempt, Job, TransactionRequest},
     metrics::{observe_processing_time, STAGE_PREPARE_DURATION, STAGE_REQUEST_QUEUE_DWELL},
     models::DefaultAppState,
     observability::request_id::set_request_id,
@@ -44,7 +44,19 @@ pub async fn transaction_request_handler(
         "handling transaction request"
     );
 
+    let tx_id = job.data.transaction_id.clone();
     let result = handle_request(job.data, &state).await;
+
+    if let Err(ref err) = result {
+        mark_tx_failed_on_final_attempt(
+            &tx_id,
+            state.transaction_repository.as_ref(),
+            &err.to_string(),
+            &ctx,
+            WORKER_TRANSACTION_REQUEST_RETRIES,
+        )
+        .await;
+    }
 
     handle_result(
         result,

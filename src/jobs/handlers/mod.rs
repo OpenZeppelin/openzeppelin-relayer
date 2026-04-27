@@ -1,9 +1,11 @@
 use eyre::Report;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
+    models::{TransactionRepoModel, TransactionStatus, TransactionUpdateRequest},
     observability::request_id::get_request_id,
     queues::{HandlerError, WorkerContext},
+    repositories::{transaction::TransactionRepository, Repository},
 };
 
 mod transaction_request_handler;
@@ -78,6 +80,50 @@ pub fn handle_result(
     ))
 }
 
+/// Mark a transaction as `Failed` once retries are exhausted.
+///
+/// Bridges apalis's job-attempt counter to the TransactionRepository
+/// row state. Without this, a tx whose `prepare_transaction` fails
+/// permanently has no path from `Pending` → `Failed` — the job dies in
+/// apalis but the row stays at the pre-prepare status forever, and the
+/// API surfaces a stuck-pending tx.
+///
+/// No-op when not on the final attempt; the next retry may succeed.
+pub async fn mark_tx_failed_on_final_attempt<TR>(
+    tx_id: &str,
+    transaction_repository: &TR,
+    err: &str,
+    ctx: &WorkerContext,
+    max_attempts: usize,
+) where
+    TR: TransactionRepository + Repository<TransactionRepoModel, String>,
+{
+    if ctx.attempt < max_attempts {
+        return;
+    }
+
+    let update = TransactionUpdateRequest {
+        status: Some(TransactionStatus::Failed),
+        status_reason: Some(format!("Job aborted after {max_attempts} attempts: {err}")),
+        ..Default::default()
+    };
+
+    match transaction_repository
+        .partial_update(tx_id.to_string(), update)
+        .await
+    {
+        Ok(_) => info!(
+            tx_id = %tx_id,
+            "marked tx as Failed after exhausting job retries"
+        ),
+        Err(e) => error!(
+            tx_id = %tx_id,
+            error = %e,
+            "failed to mark tx as Failed on final-attempt abort"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +168,43 @@ mod tests {
 
         assert!(handled.is_err());
         assert!(matches!(handled, Err(HandlerError::Abort(_))));
+    }
+
+    #[tokio::test]
+    async fn test_mark_tx_failed_no_op_before_final_attempt() {
+        use crate::repositories::TransactionRepositoryStorage;
+        let repo = TransactionRepositoryStorage::new_in_memory();
+        let tx = crate::utils::mocks::mockutils::create_mock_transaction();
+        let tx_id = tx.id.clone();
+        let initial_status = tx.status.clone();
+        repo.create(tx).await.unwrap();
+
+        let ctx = WorkerContext::new(0, "test-task".into());
+        mark_tx_failed_on_final_attempt(&tx_id, &repo, "boom", &ctx, 3).await;
+
+        let after = repo.get_by_id(tx_id).await.unwrap();
+        assert_eq!(
+            after.status, initial_status,
+            "should not modify status before final attempt"
+        );
+        assert!(after.status_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mark_tx_failed_on_final_attempt_writes_failed_status() {
+        use crate::repositories::TransactionRepositoryStorage;
+        let repo = TransactionRepositoryStorage::new_in_memory();
+        let tx = crate::utils::mocks::mockutils::create_mock_transaction();
+        let tx_id = tx.id.clone();
+        repo.create(tx).await.unwrap();
+
+        let ctx = WorkerContext::new(3, "test-task".into());
+        mark_tx_failed_on_final_attempt(&tx_id, &repo, "build error", &ctx, 3).await;
+
+        let after = repo.get_by_id(tx_id).await.unwrap();
+        assert!(matches!(after.status, TransactionStatus::Failed));
+        let reason = after.status_reason.expect("status_reason should be set");
+        assert!(reason.contains("Job aborted after 3 attempts"));
+        assert!(reason.contains("build error"));
     }
 }
