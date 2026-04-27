@@ -377,6 +377,7 @@ where
         Ok(BalanceResponse {
             balance,
             unit: EVM_SMALLEST_UNIT_NAME.to_string(),
+            balances: None,
         })
     }
 

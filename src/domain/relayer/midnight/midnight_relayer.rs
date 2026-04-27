@@ -177,15 +177,36 @@ where
     }
 
     async fn get_balance(&self) -> Result<BalanceResponse, RelayerError> {
+        use crate::domain::relayer::{TokenBalance, TokenPrivacy};
+
         let balance = self
             .sync_manager
             .get_unshielded_balance()
             .await
             .unwrap_or(0);
+        let dust = self.ledger_ctx.dust_balance();
+
+        // Multi-token breakdown — surface tNIGHT and DUST under the same
+        // shape so callers don't need a second round-trip to /status to
+        // see whether the relayer has DUST. Shielded NIGHT will be added
+        // here when shield-op funding lands (architecture §13/§14).
+        let balances = vec![
+            TokenBalance {
+                token: "tNIGHT".to_string(),
+                balance: balance.to_string(),
+                privacy: Some(TokenPrivacy::Unshielded),
+            },
+            TokenBalance {
+                token: "DUST".to_string(),
+                balance: dust.to_string(),
+                privacy: Some(TokenPrivacy::Unshielded),
+            },
+        ];
 
         Ok(BalanceResponse {
             balance,
             unit: "tNIGHT".to_string(),
+            balances: Some(balances),
         })
     }
 

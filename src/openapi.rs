@@ -106,6 +106,7 @@ impl Modify for SecurityAddon {
     ),
     components(schemas(
         models::RelayerResponse,
+        models::RelayerAddresses,
         models::CreateRelayerRequest,
         models::NetworkPolicyResponse,
         models::EvmPolicyResponse,
@@ -119,6 +120,9 @@ impl Modify for SecurityAddon {
         domain::SignTypedDataRequest,
         domain::SignTransactionRequest,
         domain::SignTransactionExternalResponse,
+        domain::BalanceResponse,
+        domain::TokenBalance,
+        domain::TokenPrivacy,
         models::PluginCallRequest,
         models::PluginMetadata,
         models::UpdatePluginRequest,

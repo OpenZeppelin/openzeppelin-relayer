@@ -574,6 +574,7 @@ where
         Ok(BalanceResponse {
             balance: account_entry.balance as u128,
             unit: STELLAR_SMALLEST_UNIT_NAME.to_string(),
+            balances: None,
         })
     }
 

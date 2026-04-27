@@ -4628,6 +4628,13 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "balances": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TokenBalance"
+                },
+                "description": "Per-token balance breakdown for multi-token networks. `None` for\nsingle-token networks (EVM, Solana, Stellar) where `balance + unit`\nfully describes the holdings. Populated for Midnight to surface\ntNIGHT and DUST (and shielded balances if any) in one response."
+              },
               "unit": {
                 "type": "string",
                 "example": "wei"
@@ -5077,6 +5084,10 @@
             "properties": {
               "address": {
                 "type": "string"
+              },
+              "addresses": {
+                "$ref": "#/components/schemas/RelayerAddresses",
+                "description": "Network-specific address breakdown. For single-address networks\n(EVM, Solana, Stellar) this mirrors the `address` field. For\nMidnight, the `unshielded` member always matches `address`; the\n`shielded` and `dust` members are populated from the signer at\nthe per-relayer endpoints (`/relayers/:id`, `/relayers/:id/status`)\nand may be `None` in list/aggregate views that don't have signer\naccess. The legacy `address` field stays as the primary identity\n— this field is additive and backward-compatible."
               },
               "custom_rpc_urls": {
                 "type": "array",
@@ -5711,6 +5722,10 @@
                 "address": {
                   "type": "string"
                 },
+                "addresses": {
+                  "$ref": "#/components/schemas/RelayerAddresses",
+                  "description": "Network-specific address breakdown. For single-address networks\n(EVM, Solana, Stellar) this mirrors the `address` field. For\nMidnight, the `unshielded` member always matches `address`; the\n`shielded` and `dust` members are populated from the signer at\nthe per-relayer endpoints (`/relayers/:id`, `/relayers/:id/status`)\nand may be `None` in list/aggregate views that don't have signer\naccess. The legacy `address` field stays as the primary identity\n— this field is additive and backward-compatible."
+                },
                 "custom_rpc_urls": {
                   "type": "array",
                   "items": {
@@ -6016,6 +6031,13 @@
             "type": "integer",
             "minimum": 0
           },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TokenBalance"
+            },
+            "description": "Per-token balance breakdown for multi-token networks. `None` for\nsingle-token networks (EVM, Solana, Stellar) where `balance + unit`\nfully describes the holdings. Populated for Midnight to surface\ntNIGHT and DUST (and shielded balances if any) in one response."
+          },
           "unit": {
             "type": "string",
             "example": "wei"
@@ -6285,6 +6307,46 @@
                 "type": "string",
                 "enum": [
                   "SequenceSyncFailed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Midnight wallet state is catching up with the chain via the shared\nDUST sync task. The inner string is a progress hint; transitions to\n`None` automatically once the wallet is caught up; transactions are\nrejected while in this state.",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Midnight wallet state is catching up with the chain via the shared\nDUST sync task. The inner string is a progress hint; transitions to\n`None` automatically once the wallet is caught up; transactions are\nrejected while in this state."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Syncing"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Midnight shared DUST sync task reported an unrecoverable failure.",
+            "required": [
+              "details",
+              "type"
+            ],
+            "properties": {
+              "details": {
+                "type": "string",
+                "description": "Midnight shared DUST sync task reported an unrecoverable failure."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SyncFailed"
                 ]
               }
             }
@@ -7702,6 +7764,65 @@
           }
         }
       },
+      "RelayerAddresses": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "address",
+              "network_type"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "network_type": {
+                "type": "string",
+                "enum": [
+                  "evm"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "address",
+              "network_type"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "network_type": {
+                "type": "string",
+                "enum": [
+                  "solana"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "address",
+              "network_type"
+            ],
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "network_type": {
+                "type": "string",
+                "enum": [
+                  "stellar"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Network-tagged address breakdown for [`RelayerResponse`]."
+      },
       "RelayerEvmPolicy": {
         "type": "object",
         "description": "EVM-specific relayer policy configuration",
@@ -7855,6 +7976,10 @@
         "properties": {
           "address": {
             "type": "string"
+          },
+          "addresses": {
+            "$ref": "#/components/schemas/RelayerAddresses",
+            "description": "Network-specific address breakdown. For single-address networks\n(EVM, Solana, Stellar) this mirrors the `address` field. For\nMidnight, the `unshielded` member always matches `address`; the\n`shielded` and `dust` members are populated from the signer at\nthe per-relayer endpoints (`/relayers/:id`, `/relayers/:id/status`)\nand may be `None` in list/aggregate views that don't have signer\naccess. The legacy `address` field stays as the primary identity\n— this field is additive and backward-compatible."
           },
           "custom_rpc_urls": {
             "type": "array",
@@ -9998,6 +10123,34 @@
             "$ref": "#/components/schemas/ComponentStatus"
           }
         }
+      },
+      "TokenBalance": {
+        "type": "object",
+        "required": [
+          "token",
+          "balance"
+        ],
+        "properties": {
+          "balance": {
+            "type": "string",
+            "description": "Stringified u128 — preserves precision across JSON."
+          },
+          "privacy": {
+            "$ref": "#/components/schemas/TokenPrivacy",
+            "description": "Whether this balance is held in the unshielded (public) or shielded\n(private) domain. Omitted for networks without a privacy split."
+          },
+          "token": {
+            "type": "string",
+            "description": "Token symbol (e.g. \"tNIGHT\", \"DUST\") or hex token-type identifier."
+          }
+        }
+      },
+      "TokenPrivacy": {
+        "type": "string",
+        "enum": [
+          "unshielded",
+          "shielded"
+        ]
       },
       "TransactionResponse": {
         "oneOf": [

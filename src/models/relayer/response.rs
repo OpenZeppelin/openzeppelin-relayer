@@ -96,11 +96,50 @@ pub struct RelayerResponse {
     // Runtime fields from repository model
     #[schema(nullable = false)]
     pub address: Option<String>,
+    /// Network-specific address breakdown. For single-address networks
+    /// (EVM, Solana, Stellar) this mirrors the `address` field. For
+    /// Midnight, the `unshielded` member always matches `address`; the
+    /// `shielded` and `dust` members are populated from the signer at
+    /// the per-relayer endpoints (`/relayers/:id`, `/relayers/:id/status`)
+    /// and may be `None` in list/aggregate views that don't have signer
+    /// access. The legacy `address` field stays as the primary identity
+    /// — this field is additive and backward-compatible.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub addresses: Option<RelayerAddresses>,
     #[schema(nullable = false)]
     pub system_disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub disabled_reason: Option<DisabledReason>,
+}
+
+/// Network-tagged address breakdown for [`RelayerResponse`].
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+#[serde(tag = "network_type", rename_all = "snake_case")]
+pub enum RelayerAddresses {
+    Evm {
+        address: String,
+    },
+    Solana {
+        address: String,
+    },
+    Stellar {
+        address: String,
+    },
+    #[cfg(feature = "midnight")]
+    Midnight {
+        /// tNIGHT/unshielded address — always present; equals
+        /// `RelayerResponse.address` for Midnight relayers.
+        unshielded: String,
+        /// Shielded (privacy) address. `None` when produced by a
+        /// converter that lacks signer access.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shielded: Option<String>,
+        /// DUST (fee-token) address. Same caveat as `shielded`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dust: Option<String>,
+    },
 }
 
 #[cfg(test)]
@@ -117,6 +156,7 @@ impl Default for RelayerResponse {
             notification_id: None,
             custom_rpc_urls: None,
             address: None,
+            addresses: None,
             system_disabled: None,
             disabled_reason: None,
         }
@@ -227,6 +267,7 @@ impl From<Relayer> for RelayerResponse {
                 .custom_rpc_urls
                 .map(|urls| urls.into_iter().map(MaskedRpcConfig::from).collect()),
             address: None,
+            addresses: None,
             system_disabled: None,
             disabled_reason: None,
         }
@@ -244,6 +285,7 @@ impl From<RelayerRepoModel> for RelayerResponse {
                 model.network_type,
             ))
         };
+        let addresses = addresses_from_repo_model(&model);
 
         Self {
             id: model.id,
@@ -258,9 +300,36 @@ impl From<RelayerRepoModel> for RelayerResponse {
                 .custom_rpc_urls
                 .map(|urls| urls.into_iter().map(MaskedRpcConfig::from).collect()),
             address: Some(model.address),
+            addresses,
             system_disabled: Some(model.system_disabled),
             disabled_reason: model.disabled_reason,
         }
+    }
+}
+
+/// Build the network-tagged address breakdown from what's available on
+/// the repo model. Single-address networks fully populate; Midnight
+/// fills `unshielded` from `model.address` and leaves the others `None`
+/// for the universal converter (callers with signer access — e.g. the
+/// per-relayer status path — can enrich them).
+fn addresses_from_repo_model(model: &RelayerRepoModel) -> Option<RelayerAddresses> {
+    use crate::models::NetworkType;
+    match model.network_type {
+        NetworkType::Evm => Some(RelayerAddresses::Evm {
+            address: model.address.clone(),
+        }),
+        NetworkType::Solana => Some(RelayerAddresses::Solana {
+            address: model.address.clone(),
+        }),
+        NetworkType::Stellar => Some(RelayerAddresses::Stellar {
+            address: model.address.clone(),
+        }),
+        #[cfg(feature = "midnight")]
+        NetworkType::Midnight => Some(RelayerAddresses::Midnight {
+            unshielded: model.address.clone(),
+            shielded: None,
+            dust: None,
+        }),
     }
 }
 
@@ -355,6 +424,10 @@ impl<'de> serde::Deserialize<'de> for RelayerResponse {
                 .unwrap_or(None),
             address: value
                 .get("address")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(None),
+            addresses: value
+                .get("addresses")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or(None),
             system_disabled: value

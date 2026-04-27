@@ -859,4 +859,31 @@ pub struct BalanceResponse {
     pub balance: u128,
     #[schema(example = "wei")]
     pub unit: String,
+    /// Per-token balance breakdown for multi-token networks. `None` for
+    /// single-token networks (EVM, Solana, Stellar) where `balance + unit`
+    /// fully describes the holdings. Populated for Midnight to surface
+    /// tNIGHT and DUST (and shielded balances if any) in one response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub balances: Option<Vec<TokenBalance>>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone, PartialEq)]
+pub struct TokenBalance {
+    /// Token symbol (e.g. "tNIGHT", "DUST") or hex token-type identifier.
+    pub token: String,
+    /// Stringified u128 — preserves precision across JSON.
+    pub balance: String,
+    /// Whether this balance is held in the unshielded (public) or shielded
+    /// (private) domain. Omitted for networks without a privacy split.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub privacy: Option<TokenPrivacy>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenPrivacy {
+    Unshielded,
+    Shielded,
 }

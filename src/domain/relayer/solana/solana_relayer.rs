@@ -730,6 +730,7 @@ where
         Ok(BalanceResponse {
             balance: balance as u128,
             unit: SOLANA_SMALLEST_UNIT_NAME.to_string(),
+            balances: None,
         })
     }
 
