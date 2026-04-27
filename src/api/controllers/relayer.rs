@@ -37,6 +37,83 @@ use crate::{
 use actix_web::{web, HttpResponse};
 use eyre::Result;
 
+/// Enrich a `RelayerResponse` with signer-derived addresses that aren't
+/// stored on `RelayerRepoModel`. The universal `From<RelayerRepoModel>`
+/// only knows the *primary* address (line `address: model.address` —
+/// for Midnight that's the unshielded one). The shielded and DUST
+/// addresses live on the signer; this helper builds the signer and
+/// fills `RelayerAddresses::Midnight.{shielded, dust}`.
+///
+/// Soft-fail on signer lookup/build: leaves the fields as `None` rather
+/// than failing the response. Caller still gets the unshielded address.
+///
+/// No-op for non-Midnight networks and for builds without the
+/// `midnight` feature (see the cfg-stub at the bottom of this file).
+#[cfg(feature = "midnight")]
+async fn enrich_midnight_addresses<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    response: &mut RelayerResponse,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    use crate::models::RelayerAddresses;
+    use crate::services::signer::NetworkSigner;
+
+    if response.network_type != crate::models::RelayerNetworkType::Midnight {
+        return;
+    }
+    let Some(RelayerAddresses::Midnight { shielded, dust, .. }) = response.addresses.as_mut()
+    else {
+        return;
+    };
+
+    let Ok(signer_model) = state
+        .signer_repository
+        .get_by_id(response.signer_id.clone())
+        .await
+    else {
+        return;
+    };
+    let Ok(signer) = SignerFactory::create_signer(
+        &NetworkType::Midnight,
+        &SignerDomainModel::from(signer_model),
+    )
+    .await
+    else {
+        return;
+    };
+
+    if let NetworkSigner::Midnight(midnight_signer) = signer {
+        *shielded = Some(midnight_signer.shielded_address().to_string());
+        *dust = Some(midnight_signer.dust_address().to_string());
+    }
+}
+
+#[cfg(not(feature = "midnight"))]
+async fn enrich_midnight_addresses<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    _response: &mut RelayerResponse,
+    _state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+}
+
 /// Lists all relayers with pagination support.
 ///
 /// # Arguments
@@ -104,7 +181,8 @@ where
 {
     let relayer = get_relayer_by_id(relayer_id, &state).await?;
 
-    let relayer_response: RelayerResponse = relayer.into();
+    let mut relayer_response: RelayerResponse = relayer.into();
+    enrich_midnight_addresses(&mut relayer_response, &state).await;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
@@ -210,7 +288,8 @@ where
 
     relayer.initialize_relayer().await?;
 
-    let response = RelayerResponse::from(created_relayer);
+    let mut response = RelayerResponse::from(created_relayer);
+    enrich_midnight_addresses(&mut response, &state).await;
     Ok(HttpResponse::Created().json(ApiResponse::success(response)))
 }
 
@@ -278,7 +357,8 @@ where
         .update(relayer_id.clone(), updated_repo_model)
         .await?;
 
-    let relayer_response: RelayerResponse = saved_relayer.into();
+    let mut relayer_response: RelayerResponse = saved_relayer.into();
+    enrich_midnight_addresses(&mut relayer_response, &state).await;
     Ok(HttpResponse::Ok().json(ApiResponse::success(relayer_response)))
 }
 
@@ -1009,6 +1089,32 @@ mod tests {
                 horizon_url: Some("https://horizon-testnet.stellar.org".to_string()),
             }),
         }
+    }
+
+    // ENRICH MIDNIGHT ADDRESSES TESTS
+
+    /// Verify the helper is a no-op for non-Midnight networks: the
+    /// `addresses` field stays exactly as the universal converter set it
+    /// (an `RelayerAddresses::Evm` with the same address mirror).
+    #[actix_web::test]
+    async fn test_enrich_midnight_addresses_no_op_for_evm() {
+        let _lock = ENV_MUTEX.lock().await;
+        setup_test_env();
+        let signer = create_mock_signer();
+        let app_state =
+            create_mock_app_state(None, None, Some(vec![signer]), None, None, None).await;
+
+        let evm_relayer = create_mock_relayer("evm-test".into(), false);
+        let mut response: RelayerResponse = evm_relayer.into();
+        let addresses_before = response.addresses.clone();
+
+        enrich_midnight_addresses(&mut response, &actix_web::web::ThinData(app_state)).await;
+
+        assert_eq!(
+            response.addresses, addresses_before,
+            "EVM addresses should be untouched by midnight enrichment"
+        );
+        cleanup_test_env();
     }
 
     // CREATE RELAYER TESTS
