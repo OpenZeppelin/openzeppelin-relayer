@@ -11,7 +11,7 @@
         "http": "https://indexer.preview.midnight.network/api/v4/graphql",
         "ws": "wss://indexer.preview.midnight.network/api/v4/graphql/ws"
       },
-      "prover_url": "http://localhost:6300"
+      "prover_url": "https://proof-server.preview.midnight.network"
     },
     {
       "type": "midnight",
@@ -24,7 +24,20 @@
         "http": "https://indexer.preprod.midnight.network/api/v4/graphql",
         "ws": "wss://indexer.preprod.midnight.network/api/v4/graphql/ws"
       },
-      "prover_url": "http://localhost:6300"
+      "prover_url": "https://proof-server.preprod.midnight.network"
+    },
+    {
+      "type": "midnight",
+      "network": "mainnet",
+      "rpc_urls": ["https://rpc.mainnet.midnight.network"],
+      "explorer_urls": ["https://mainnet.midnightexplorer.com"],
+      "average_blocktime_ms": 6000,
+      "is_testnet": false,
+      "indexer_urls": {
+        "http": "https://indexer.mainnet.midnight.network/api/v4/graphql",
+        "ws": "wss://indexer.mainnet.midnight.network/api/v4/graphql/ws"
+      },
+      "prover_url": "https://indexer.mainnet.midnight.network/api/v4/graphql"
     }
   ]
 }
