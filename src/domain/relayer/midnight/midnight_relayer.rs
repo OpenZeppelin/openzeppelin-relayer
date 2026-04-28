@@ -188,9 +188,13 @@ where
 
         // Multi-token breakdown — surface tNIGHT and DUST under the same
         // shape so callers don't need a second round-trip to /status to
-        // see whether the relayer has DUST. Shielded NIGHT will be added
-        // here when shield-op funding lands (architecture §13/§14).
-        let balances = vec![
+        // see whether the relayer has DUST. Shielded balances (any token
+        // ever received via shielded transfer) are appended below with
+        // `privacy: Shielded` and the raw 32-byte token-type hex as the
+        // identifier — the chain treats unshielded NIGHT and shielded
+        // NIGHT as separate token types (architecture doc §13.3), so we
+        // can't collapse them into a single "NIGHT" entry.
+        let mut balances = vec![
             TokenBalance {
                 token: "tNIGHT".to_string(),
                 balance: balance.to_string(),
@@ -202,6 +206,13 @@ where
                 privacy: Some(TokenPrivacy::Unshielded),
             },
         ];
+        for (token_hex, value) in self.ledger_ctx.shielded_balances() {
+            balances.push(TokenBalance {
+                token: token_hex,
+                balance: value.to_string(),
+                privacy: Some(TokenPrivacy::Shielded),
+            });
+        }
 
         Ok(BalanceResponse {
             balance,
@@ -474,11 +485,22 @@ where
                         use crate::services::sync::midnight::ShieldedEvent;
                         match &event {
                             ShieldedEvent::Transaction { raw_hex, .. } => {
-                                // Feed transaction into LedgerContext.
-                                // Use current time as approximate block timestamp.
-                                let now_secs = chrono::Utc::now().timestamp() as u64;
-                                if let Err(e) = ledger_ctx.apply_transaction(raw_hex, now_secs) {
-                                    warn!(error = %e, "Failed to apply tx to LedgerContext");
+                                // PR-3 v3: route observed shielded txs through the
+                                // verification-skipping wallet apply path
+                                // (`apply_observed_tx_offers`) instead of the strict
+                                // `update_from_tx`. Strict re-verification rejects
+                                // foreign txs with InvalidDustSpendProof because our
+                                // local DUST/tblock state can't reproduce the
+                                // sender's proof reference. Mirrors the TS reference
+                                // `CoreWallet.replayEventsWithChanges` pattern.
+                                match ledger_ctx.apply_observed_tx_offers(raw_hex) {
+                                    Ok(n) if n > 0 => {
+                                        debug!(offers = n, "Applied shielded offers to wallet");
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        warn!(error = %e, "Failed to apply observed tx offers");
+                                    }
                                 }
                             }
                             ShieldedEvent::MerkleUpdate {

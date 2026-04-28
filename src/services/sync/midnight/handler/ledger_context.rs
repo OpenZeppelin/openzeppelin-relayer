@@ -133,6 +133,110 @@ impl LedgerContextManager {
         Ok(())
     }
 
+    /// Apply an observed transaction to the wallet's shielded state ONLY,
+    /// bypassing the strict full-tx verification path.
+    ///
+    /// `update_from_tx` strict-verifies every proof in a tx (DUST, signatures,
+    /// native, contract). For txs **we observe** off the indexer (someone
+    /// else's tx, already accepted by the chain), that strict re-verification
+    /// is needless and fails on `InvalidDustSpendProof` because the
+    /// LedgerContext's local DUST/tblock state can't reproduce the proof's
+    /// expected reference state.
+    ///
+    /// This method takes the same path the helpers' `update_from_tx` takes
+    /// AFTER successful verification: extract the shielded offers, apply
+    /// them directly to each registered wallet's `shielded.state` via
+    /// `Wallet::update_state_from_offers`. The chain has already validated
+    /// the tx; we just need the offers' coin commitments to land in the
+    /// wallet's state so they're spendable. Mirrors the TS reference
+    /// `CoreWallet.replayEventsWithChanges` shape.
+    ///
+    /// Returns the number of offers applied.
+    pub fn apply_observed_tx_offers(&self, raw_hex: &str) -> Result<usize, LedgerContextError> {
+        use midnight_node_ledger_helpers::Transaction;
+
+        let bytes = hex::decode(raw_hex.trim_start_matches("0x"))
+            .map_err(|e| LedgerContextError::DeserializationError(format!("hex decode: {e}")))?;
+        let tx: MnFinalizedTransaction =
+            midnight_node_ledger_helpers::deserialize(bytes.as_slice()).map_err(|e| {
+                LedgerContextError::DeserializationError(format!("tx deserialize: {e}"))
+            })?;
+
+        // Only Standard txs carry shielded offers; ClaimRewards has none.
+        let stx = match &tx {
+            Transaction::Standard(stx) => stx,
+            Transaction::ClaimRewards(_) => return Ok(0),
+        };
+
+        // Collect every shielded offer in the tx: the guaranteed slot plus
+        // all fallible segments. We apply them all unconditionally — the
+        // indexer only delivers txs the chain accepted, so partial-success
+        // filtering on our side isn't necessary for state-tracking.
+        let mut offers = Vec::new();
+        if let Some(guaranteed) = &stx.guaranteed_coins {
+            offers.push((**guaranteed).clone());
+        }
+        for entry in stx.fallible_coins.iter() {
+            // storage::Map's iter yields `(K, Sp<V>)` — single deref to
+            // unwrap Sp, then clone the inner Offer.
+            offers.push((*entry.1).clone());
+        }
+        if offers.is_empty() {
+            return Ok(0);
+        }
+        let n = offers.len();
+
+        // Apply to OUR wallet's shielded state. `update_state_from_offers`
+        // calls `state.apply(secret_keys, offer)` per offer — decrypts
+        // outputs the secret keys can read, registers commitments, etc.
+        // No proof verification.
+        self.context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                wallet.update_state_from_offers(&offers);
+            });
+
+        debug!(
+            network_id = %self.network_id,
+            offers_applied = n,
+            "Applied observed tx offers to wallet shielded state"
+        );
+
+        Ok(n)
+    }
+
+    /// Sum the wallet's shielded coin balances by token type.
+    ///
+    /// Reads the wallet's `shielded.state.coins` map (the spendable set),
+    /// excludes coins flagged as pending-spend (already nullified in an
+    /// in-flight tx the indexer hasn't echoed back yet), and aggregates
+    /// per `ShieldedTokenType`. Token types are returned as 64-char hex.
+    pub fn shielded_balances(&self) -> std::collections::HashMap<String, u128> {
+        let mut totals: std::collections::HashMap<String, u128> = std::collections::HashMap::new();
+        self.context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                for entry in wallet.shielded.state.coins.iter() {
+                    let nullifier = entry.0;
+                    // Skip coins that already have a pending nullifier (we've
+                    // built a tx spending them but the chain hasn't confirmed
+                    // it yet) — same logic the TS reference's
+                    // `availableCoins` filter applies via `pendingSpends`.
+                    if wallet
+                        .shielded
+                        .state
+                        .pending_spends
+                        .contains_key(&nullifier)
+                    {
+                        continue;
+                    }
+                    let qcoin = &entry.1;
+                    let token_hex = hex::encode(qcoin.type_.0 .0);
+                    let total = totals.entry(token_hex).or_insert(0u128);
+                    *total = total.saturating_add(qcoin.value);
+                }
+            });
+        totals
+    }
+
     /// Apply a collapsed merkle tree update.
     ///
     /// These updates come between transactions and keep the merkle tree
