@@ -779,9 +779,45 @@ fn build_unshielded_offer(
 /// the `AssertUnwindSafe(tx_info.prove()).catch_unwind()` wrapper at the
 /// call site and surface as `TransactionError::UnexpectedError`.
 ///
-/// `token_type` is hardcoded to shielded NIGHT
-/// (`ShieldedTokenType(HashOutput([0u8; 32]))`); custom shielded tokens
-/// aren't yet a relayer feature.
+/// `token_type` is parsed per-input/output via [`parse_shielded_token_type`]:
+/// `"NIGHT"` shorthand maps to all-zeros, otherwise a 64-char hex string
+/// is decoded to the 32-byte `ShieldedTokenType` hash.
+/// Parse the request's `token_type` string into a `ShieldedTokenType`.
+///
+/// Accepts either of:
+///   - `"NIGHT"` (case-insensitive) — the chain's primary shielded token,
+///     stored as the all-zero `HashOutput([0u8; 32])`.
+///   - 64-character hex (with optional `0x` prefix) — any other shielded
+///     token type, decoded into the 32-byte hash that names it.
+///
+/// Used by both `build_shielded_offer` and `build_fallible_shielded_offer`
+/// so the API surface accepts arbitrary token types instead of hardcoding
+/// the relayer to NIGHT-only.
+fn parse_shielded_token_type(
+    s: &str,
+) -> Result<midnight_node_ledger_helpers::ShieldedTokenType, TransactionError> {
+    use midnight_node_ledger_helpers::{HashOutput, ShieldedTokenType};
+
+    let trimmed = s.trim().trim_start_matches("0x");
+    if trimmed.eq_ignore_ascii_case("NIGHT") {
+        return Ok(ShieldedTokenType(HashOutput([0u8; 32])));
+    }
+    let bytes = hex::decode(trimmed).map_err(|e| {
+        TransactionError::ValidationError(format!(
+            "token_type must be 'NIGHT' or 64-char hex; failed to decode '{s}': {e}"
+        ))
+    })?;
+    if bytes.len() != 32 {
+        return Err(TransactionError::ValidationError(format!(
+            "token_type hex must be 32 bytes (64 chars); got {} bytes",
+            bytes.len()
+        )));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(ShieldedTokenType(HashOutput(arr)))
+}
+
 fn build_shielded_offer(
     offer: &crate::models::MidnightOfferRequest,
     wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
@@ -806,8 +842,6 @@ fn build_shielded_offer(
         }
     };
 
-    let shielded_night = ShieldedTokenType(HashOutput([0u8; 32]));
-
     let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
     let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
 
@@ -818,11 +852,12 @@ fn build_shielded_offer(
                 input.value
             ))
         })?;
+        let token_type = parse_shielded_token_type(&input.token_type)?;
         // `origin` is accepted for API symmetry but coerced to the relayer's
         // own seed — the relayer can only spend notes it controls.
         inputs.push(Box::new(InputInfo {
             origin: wallet_seed.clone(),
-            token_type: shielded_night,
+            token_type,
             value,
             nullifier: None,
         }));
@@ -835,10 +870,11 @@ fn build_shielded_offer(
                 output.value
             ))
         })?;
+        let token_type = parse_shielded_token_type(&output.token_type)?;
         if output.destination == "self" {
             outputs.push(Box::new(OutputInfo {
                 destination: wallet_seed.clone(),
-                token_type: shielded_night,
+                token_type,
                 value,
             }));
         } else {
@@ -859,7 +895,7 @@ fn build_shielded_offer(
                 })?;
             outputs.push(Box::new(OutputInfo {
                 destination: shielded,
-                token_type: shielded_night,
+                token_type,
                 value,
             }));
         }
@@ -1031,7 +1067,6 @@ fn build_fallible_shielded_offer(
         }
     };
 
-    let shielded_night = ShieldedTokenType(HashOutput([0u8; 32]));
     let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
     let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
 
@@ -1042,10 +1077,11 @@ fn build_fallible_shielded_offer(
                 input.value
             ))
         })?;
+        let token_type = parse_shielded_token_type(&input.token_type)?;
         inputs.push(Box::new(RetargetingShieldedInput {
             inner: InputInfo {
                 origin: wallet_seed.clone(),
-                token_type: shielded_night,
+                token_type,
                 value,
                 nullifier: None,
             },
@@ -1060,11 +1096,12 @@ fn build_fallible_shielded_offer(
                 output.value
             ))
         })?;
+        let token_type = parse_shielded_token_type(&output.token_type)?;
         if output.destination == "self" {
             outputs.push(Box::new(RetargetingShieldedOutputSelf {
                 inner: OutputInfo {
                     destination: wallet_seed.clone(),
-                    token_type: shielded_night,
+                    token_type,
                     value,
                 },
                 segment_id,
@@ -1086,7 +1123,7 @@ fn build_fallible_shielded_offer(
             outputs.push(Box::new(RetargetingShieldedOutputExternal {
                 inner: OutputInfo {
                     destination: shielded,
-                    token_type: shielded_night,
+                    token_type,
                     value,
                 },
                 segment_id,
