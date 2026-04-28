@@ -18,6 +18,15 @@ pub enum SyncError {
     SyncState(String),
 }
 
+fn build_zswap_events_subscription(start_index: Option<u64>) -> String {
+    match start_index {
+        Some(idx) if idx > 0 => format!(
+            "subscription {{ zswapLedgerEvents(id: {idx}) {{ id protocolVersion maxId raw }} }}"
+        ),
+        _ => "subscription { zswapLedgerEvents { id protocolVersion maxId raw } }".to_string(),
+    }
+}
+
 /// Midnight sync manager coordinating wallet state synchronization.
 ///
 /// The sync flow:
@@ -408,19 +417,16 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         })
     }
 
-    /// Sync the shielded wallet state using the `shieldedTransactions` WebSocket subscription.
+    /// Sync the shielded wallet state using the `zswapLedgerEvents` WebSocket subscription.
     ///
-    /// This feeds transaction data and merkle tree updates into the `LedgerContext`,
-    /// which is needed for constructing new transactions (the context tracks the
-    /// wallet's coins and the chain's merkle tree state).
-    ///
-    /// The `raw_tx_handler` callback is called for each relevant transaction's raw hex.
-    /// It should deserialize and apply it to the LedgerContext.
+    /// The Midnight wallet SDK uses this event stream as the canonical input
+    /// for shielded state. Each raw ledger event carries Merkle indexes for
+    /// zswap outputs; replaying transaction offers cannot recover those indexes.
     pub async fn sync_shielded(
         &self,
         session_id: &str,
         start_index: Option<u64>,
-        mut on_event: impl FnMut(ShieldedEvent),
+        mut on_event: impl FnMut(ShieldedEvent) -> Result<(), SyncError>,
     ) -> Result<ShieldedSyncResult, SyncError> {
         let ws_url = self.indexer_client.ws_url();
 
@@ -480,12 +486,11 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             }
         }
 
-        // Build the subscription query
-        let mut query = format!("subscription {{ shieldedTransactions(sessionId: \"{session_id}\"");
-        if let Some(idx) = start_index {
-            query.push_str(&format!(", index: {idx}"));
-        }
-        query.push_str(") { ... on RelevantTransaction { transaction { id hash raw startIndex endIndex protocolVersion } collapsedMerkleTree { startIndex endIndex update protocolVersion } } ... on ShieldedTransactionsProgress { highestEndIndex highestCheckedEndIndex highestRelevantEndIndex } } }");
+        // `session_id` is retained in the signature because the caller still
+        // owns connect/disconnect lifecycle. The zswap event stream itself is
+        // global; wallet filtering happens during local replay via secret keys.
+        let _ = session_id;
+        let query = build_zswap_events_subscription(start_index);
 
         let sub_msg = serde_json::json!({
             "id": "shielded-1",
@@ -512,86 +517,44 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
 
                             match msg_type {
                                 "next" => {
-                                    if let Some(data) = val
+                                    if let Some(event) = val
                                         .get("payload")
                                         .and_then(|p| p.get("data"))
-                                        .and_then(|d| d.get("shieldedTransactions"))
+                                        .and_then(|d| d.get("zswapLedgerEvents"))
                                     {
-                                        // RelevantTransaction event
-                                        if let Some(tx) = data.get("transaction") {
-                                            let raw_hex = tx
-                                                .get("raw")
-                                                .and_then(|r| r.as_str())
-                                                .unwrap_or("");
-                                            let tx_hash = tx
-                                                .get("hash")
-                                                .and_then(|h| h.as_str())
-                                                .unwrap_or("");
-                                            let start_idx = tx
-                                                .get("startIndex")
-                                                .and_then(|s| s.as_u64())
-                                                .unwrap_or(0);
-                                            let end_idx = tx
-                                                .get("endIndex")
-                                                .and_then(|e| e.as_u64())
-                                                .unwrap_or(0);
+                                        let raw_hex =
+                                            event.get("raw").and_then(|r| r.as_str()).unwrap_or("");
+                                        let event_id =
+                                            event.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                                        let max_id = event
+                                            .get("maxId")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        let protocol_version = event
+                                            .get("protocolVersion")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0)
+                                            as u32;
 
-                                            debug!(
-                                                relayer_id = %self.relayer_id,
-                                                tx_hash,
-                                                start_idx,
-                                                end_idx,
-                                                raw_len = raw_hex.len() / 2,
-                                                "Received shielded transaction"
-                                            );
+                                        debug!(
+                                            relayer_id = %self.relayer_id,
+                                            event_id,
+                                            max_id,
+                                            protocol_version,
+                                            raw_len = raw_hex.len() / 2,
+                                            "Received zswap ledger event"
+                                        );
 
-                                            on_event(ShieldedEvent::Transaction {
-                                                raw_hex: raw_hex.to_string(),
-                                                tx_hash: tx_hash.to_string(),
-                                                start_index: start_idx,
-                                                end_index: end_idx,
-                                            });
+                                        on_event(ShieldedEvent::LedgerEvent {
+                                            raw_hex: raw_hex.to_string(),
+                                            event_id,
+                                            max_id,
+                                            protocol_version,
+                                        })?;
 
-                                            result.transactions += 1;
-                                            if end_idx > result.highest_index {
-                                                result.highest_index = end_idx;
-                                            }
-                                        }
-
-                                        // CollapsedMerkleTree update
-                                        if let Some(cmt) = data.get("collapsedMerkleTree") {
-                                            let update_hex = cmt
-                                                .get("update")
-                                                .and_then(|u| u.as_str())
-                                                .unwrap_or("");
-                                            let start_idx = cmt
-                                                .get("startIndex")
-                                                .and_then(|s| s.as_u64())
-                                                .unwrap_or(0);
-                                            let end_idx = cmt
-                                                .get("endIndex")
-                                                .and_then(|e| e.as_u64())
-                                                .unwrap_or(0);
-
-                                            on_event(ShieldedEvent::MerkleUpdate {
-                                                update_hex: update_hex.to_string(),
-                                                start_index: start_idx,
-                                                end_index: end_idx,
-                                            });
-
-                                            result.merkle_updates += 1;
-                                            if end_idx > result.highest_index {
-                                                result.highest_index = end_idx;
-                                            }
-                                        }
-
-                                        // Progress event
-                                        if let Some(highest) =
-                                            data.get("highestEndIndex").and_then(|h| h.as_u64())
-                                        {
-                                            on_event(ShieldedEvent::Progress {
-                                                highest_end_index: highest,
-                                            });
+                                        result.ledger_events += 1;
+                                        if event_id > result.highest_index {
+                                            result.highest_index = event_id;
                                         }
                                     }
                                 }
@@ -627,18 +590,9 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .send(tokio_tungstenite::tungstenite::Message::Close(None))
             .await;
 
-        // Persist sync cursor
-        if result.highest_index > 0 {
-            self.sync_state_store
-                .update_if_greater(&self.relayer_id, result.highest_index)
-                .await
-                .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        }
-
         info!(
             relayer_id = %self.relayer_id,
-            transactions = result.transactions,
-            merkle_updates = result.merkle_updates,
+            ledger_events = result.ledger_events,
             highest_index = result.highest_index,
             "Shielded sync completed"
         );
@@ -925,28 +879,19 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
 
 /// Events emitted during shielded wallet sync.
 pub enum ShieldedEvent {
-    /// A relevant transaction with raw serialized bytes.
-    Transaction {
+    /// A raw `midnight:ledger:event` payload from `zswapLedgerEvents`.
+    LedgerEvent {
         raw_hex: String,
-        tx_hash: String,
-        start_index: u64,
-        end_index: u64,
+        event_id: u64,
+        max_id: u64,
+        protocol_version: u32,
     },
-    /// A collapsed merkle tree update.
-    MerkleUpdate {
-        update_hex: String,
-        start_index: u64,
-        end_index: u64,
-    },
-    /// Sync progress indicator.
-    Progress { highest_end_index: u64 },
 }
 
 /// Result of a shielded sync operation.
 #[derive(Debug, Clone, Default)]
 pub struct ShieldedSyncResult {
-    pub transactions: u64,
-    pub merkle_updates: u64,
+    pub ledger_events: u64,
     pub highest_index: u64,
 }
 
@@ -986,5 +931,30 @@ impl UtxoDetail {
             intent_hash: val.get("intentHash")?.as_str().unwrap_or("").to_string(),
             output_index: val.get("outputIndex")?.as_u64().unwrap_or(0) as u32,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shielded_sync_subscribes_to_zswap_ledger_events() {
+        let query = build_zswap_events_subscription(Some(42));
+
+        assert!(query.contains("zswapLedgerEvents"));
+        assert!(query.contains("id protocolVersion maxId raw"));
+        assert!(query.contains("42"));
+        assert!(!query.contains("shieldedTransactions"));
+        assert!(!query.contains("collapsedMerkleTree"));
+    }
+
+    #[test]
+    fn initial_zswap_sync_omits_zero_cursor() {
+        let query = build_zswap_events_subscription(Some(0));
+
+        assert!(query.contains("zswapLedgerEvents"));
+        assert!(!query.contains("$id"));
+        assert!(!query.contains("id: 0"));
     }
 }

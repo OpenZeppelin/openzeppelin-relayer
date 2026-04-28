@@ -406,60 +406,79 @@ where
                 .task
                 .subscribe_wallet(self.ledger_ctx.wallet_seed().clone());
 
-            // Mark the relayer as syncing up front; handlers already reject
-            // tx requests for `system_disabled` relayers via
-            // `validate_active_state`.
-            if let Err(e) = self
-                .relayer_repository
-                .disable_relayer(
-                    self.relayer.id.clone(),
-                    crate::models::DisabledReason::Syncing("initial DUST catch-up".into()),
-                )
-                .await
-            {
-                warn!(
-                    relayer_id = %self.relayer.id,
-                    error = %e,
-                    "failed to mark relayer as Syncing; wallet subscription still armed"
-                );
-            }
+            // A relayer may subscribe after the shared task has already
+            // transitioned this wallet's DUST state to Ready. In that case the
+            // fresh watch handle can miss the transition, but a non-zero local
+            // DUST balance proves the wallet was already replayed into the
+            // shared LedgerContext and can pay fees.
+            if handle.is_ready() || self.ledger_ctx.dust_balance() > 0 {
+                if let Err(e) = self
+                    .relayer_repository
+                    .enable_relayer(self.relayer.id.clone())
+                    .await
+                {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "failed to mark relayer Ready after DUST sync"
+                    );
+                }
+            } else {
+                // Mark the relayer as syncing up front; handlers already reject
+                // tx requests for `system_disabled` relayers via
+                // `validate_active_state`.
+                if let Err(e) = self
+                    .relayer_repository
+                    .disable_relayer(
+                        self.relayer.id.clone(),
+                        crate::models::DisabledReason::Syncing("initial DUST catch-up".into()),
+                    )
+                    .await
+                {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "failed to mark relayer as Syncing; wallet subscription still armed"
+                    );
+                }
 
-            // Background watcher: when the shared task signals Ready, clear
-            // the disabled flag; on failure, surface it as SyncFailed so the
-            // operator can see it in /status.
-            let relayer_id = self.relayer.id.clone();
-            let relayer_repo = self.relayer_repository.clone();
-            tokio::spawn(async move {
-                match handle.await_ready().await {
-                    Ok(()) => {
-                        if let Err(e) = relayer_repo.enable_relayer(relayer_id.clone()).await {
+                // Background watcher: when the shared task signals Ready, clear
+                // the disabled flag; on failure, surface it as SyncFailed so the
+                // operator can see it in /status.
+                let relayer_id = self.relayer.id.clone();
+                let relayer_repo = self.relayer_repository.clone();
+                tokio::spawn(async move {
+                    match handle.await_ready().await {
+                        Ok(()) => {
+                            if let Err(e) = relayer_repo.enable_relayer(relayer_id.clone()).await {
+                                warn!(
+                                    relayer_id = %relayer_id,
+                                    error = %e,
+                                    "failed to mark relayer Ready after DUST sync"
+                                );
+                            } else {
+                                info!(
+                                    relayer_id = %relayer_id,
+                                    "Midnight relayer wallet Ready"
+                                );
+                            }
+                        }
+                        Err(reason) => {
                             warn!(
                                 relayer_id = %relayer_id,
-                                error = %e,
-                                "failed to mark relayer Ready after DUST sync"
+                                reason = %reason,
+                                "Midnight shared DUST sync failed"
                             );
-                        } else {
-                            info!(
-                                relayer_id = %relayer_id,
-                                "Midnight relayer wallet Ready"
-                            );
+                            let _ = relayer_repo
+                                .disable_relayer(
+                                    relayer_id.clone(),
+                                    crate::models::DisabledReason::SyncFailed(reason),
+                                )
+                                .await;
                         }
                     }
-                    Err(reason) => {
-                        warn!(
-                            relayer_id = %relayer_id,
-                            reason = %reason,
-                            "Midnight shared DUST sync failed"
-                        );
-                        let _ = relayer_repo
-                            .disable_relayer(
-                                relayer_id.clone(),
-                                crate::models::DisabledReason::SyncFailed(reason),
-                            )
-                            .await;
-                    }
-                }
-            });
+                });
+            }
         } else {
             warn!(
                 relayer_id = %self.relayer.id,
@@ -544,9 +563,8 @@ where
 ///
 /// Each iteration:
 /// 1. Open an indexer wallet session (with retry on connect failure).
-/// 2. Run `sync_shielded` from the cursor — streams events into our
-///    wallet's zswap state via `apply_observed_tx_offers` until the
-///    indexer idles ("caught up to head").
+/// 2. Run `sync_shielded` from the cursor — streams zswap ledger events
+///    into our wallet via event replay until the indexer idles.
 /// 3. Persist the updated ledger state + cursor.
 /// 4. Sleep briefly, then reconnect to pick up new txs that landed
 ///    after the previous iteration idled out.
@@ -591,39 +609,33 @@ async fn run_shielded_sync_loop<P, SS>(
         };
 
         let start_idx = sync_manager.current_index().await.unwrap_or(0);
+        let zswap_start_idx = zswap_resume_cursor(start_idx);
         let ledger_ctx_for_cb = ledger_ctx.clone();
 
         let result = sync_manager
-            .sync_shielded(&session_id, Some(start_idx), move |event| {
+            .sync_shielded(&session_id, zswap_start_idx, move |event| {
                 use crate::services::sync::midnight::ShieldedEvent;
                 match &event {
-                    ShieldedEvent::Transaction { raw_hex, .. } => {
-                        match ledger_ctx_for_cb.apply_observed_tx_offers(raw_hex) {
-                            Ok(n) if n > 0 => {
-                                debug!(
-                                    offers = n,
-                                    "Applied shielded offers to wallet (continuous)"
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                warn!(error = %e, "Failed to apply observed tx offers");
-                            }
-                        }
-                    }
-                    ShieldedEvent::MerkleUpdate {
-                        update_hex,
-                        start_index,
-                        end_index,
+                    ShieldedEvent::LedgerEvent {
+                        raw_hex,
+                        event_id,
+                        max_id,
+                        protocol_version,
                     } => {
-                        let _ = ledger_ctx_for_cb.apply_merkle_update(
-                            update_hex,
-                            *start_index,
-                            *end_index,
+                        ledger_ctx_for_cb.apply_zswap_ledger_event(raw_hex).map_err(|e| {
+                            crate::services::sync::midnight::SyncError::SyncState(format!(
+                                "zswap event replay failed at id {event_id}/{max_id} pv {protocol_version}: {e}"
+                            ))
+                        })?;
+                        debug!(
+                            event_id,
+                            max_id,
+                            protocol_version,
+                            "Applied zswap ledger event to wallet (continuous)"
                         );
                     }
-                    ShieldedEvent::Progress { .. } => {}
                 }
+                Ok(())
             })
             .await;
 
@@ -631,11 +643,10 @@ async fn run_shielded_sync_loop<P, SS>(
 
         match result {
             Ok(r) => {
-                if r.transactions > 0 || r.merkle_updates > 0 {
+                if r.ledger_events > 0 {
                     info!(
                         relayer_id = %relayer_id,
-                        transactions = r.transactions,
-                        merkle_updates = r.merkle_updates,
+                        ledger_events = r.ledger_events,
                         highest_index = r.highest_index,
                         "Shielded sync iteration completed"
                     );
@@ -662,5 +673,24 @@ async fn run_shielded_sync_loop<P, SS>(
                 tokio::time::sleep(ITERATION_FAIL_DELAY).await;
             }
         }
+    }
+}
+
+fn zswap_resume_cursor(last_applied_index: u64) -> Option<u64> {
+    (last_applied_index > 0).then_some(last_applied_index.saturating_add(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zswap_resume_cursor_omits_initial_cursor() {
+        assert_eq!(zswap_resume_cursor(0), None);
+    }
+
+    #[test]
+    fn zswap_resume_cursor_skips_last_applied_event() {
+        assert_eq!(zswap_resume_cursor(40_707), Some(40_708));
     }
 }

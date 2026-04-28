@@ -26,6 +26,18 @@ type MnSerdeTransaction = midnight_node_ledger_helpers::SerdeTransaction<
     DefaultDB,
 >;
 
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&'static str>()
+                .map(|s| (*s).to_string())
+        })
+        .unwrap_or_else(|| "<non-string panic payload>".into())
+}
+
 /// Manages the LedgerContext lifecycle for a Midnight relayer.
 ///
 /// This struct owns the `LedgerContext` and provides methods to:
@@ -204,6 +216,60 @@ impl LedgerContextManager {
         Ok(n)
     }
 
+    /// Apply one raw `zswapLedgerEvents` event to the wallet shielded state.
+    ///
+    /// Unlike replaying transaction offers, ledger events carry the canonical
+    /// Merkle leaf index (`EventDetails::ZswapOutput.mt_index`). Replaying
+    /// them through the ledger's event API keeps received coins spendable
+    /// because their local `QualifiedInfo.mt_index` matches the chain tree.
+    pub fn apply_zswap_ledger_event(&self, raw_hex: &str) -> Result<(), LedgerContextError> {
+        use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let bytes = hex::decode(raw_hex.trim_start_matches("0x"))
+            .map_err(|e| LedgerContextError::DeserializationError(format!("hex decode: {e}")))?;
+        let event: midnight_node_ledger_helpers::Event<DefaultDB> =
+            midnight_node_ledger_helpers::deserialize(&mut &bytes[..])
+                .map_err(|e| LedgerContextError::DeserializationError(format!("event: {e}")))?;
+
+        let replay = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    let secret_keys = wallet.shielded.secret_keys().clone();
+                    match wallet
+                        .shielded
+                        .state
+                        .replay_events(&secret_keys, std::iter::once(&event))
+                    {
+                        Ok(new_state) => {
+                            wallet.shielded.state = new_state;
+                            Ok(())
+                        }
+                        Err(e) => Err(LedgerContextError::ContextError(format!(
+                            "zswap event replay: {e}"
+                        ))),
+                    }
+                }))
+                .map_err(|payload| {
+                    LedgerContextError::ContextError(format!(
+                        "zswap event replay panicked: {}",
+                        panic_payload_to_string(payload)
+                    ))
+                })?
+            });
+
+        replay?;
+
+        debug!(
+            network_id = %self.network_id,
+            raw_len = bytes.len(),
+            "Applied zswap ledger event to wallet shielded state"
+        );
+
+        Ok(())
+    }
+
     /// Sum the wallet's shielded coin balances by token type.
     ///
     /// Reads the wallet's `shielded.state.coins` map (the spendable set),
@@ -237,23 +303,64 @@ impl LedgerContextManager {
         totals
     }
 
-    /// Apply a collapsed merkle tree update.
+    /// Apply a collapsed merkle-tree update to the wallet's zswap state.
     ///
-    /// These updates come between transactions and keep the merkle tree
-    /// in sync with the chain state. The `update_hex` contains the
-    /// serialized tree update data.
+    /// Between shielded transactions, the chain emits range-encoded merkle
+    /// tree deltas (`MerkleTreeCollapsedUpdate`) so consumers can keep
+    /// their local tree in sync without replaying every leaf. Without
+    /// applying these updates, the wallet's local tree falls behind the
+    /// chain's, and zswap input proofs we generate later reference an
+    /// outdated merkle root the chain rejects with `InvalidError::Zswap`
+    /// (custom code 103).
+    ///
+    /// `update_hex` is the tagged-serialized `MerkleTreeCollapsedUpdate`
+    /// the indexer delivers via the shielded sync subscription. We
+    /// deserialize, then apply via `state.apply_collapsed_update` —
+    /// the same path the TS reference uses.
     pub fn apply_merkle_update(
         &self,
         update_hex: &str,
-        _start_index: u64,
-        _end_index: u64,
+        start_index: u64,
+        end_index: u64,
     ) -> Result<(), LedgerContextError> {
-        // Merkle tree updates are applied to the ZswapChainState within the ledger.
-        // For now, we log and skip — the critical path for UTXO tracking is
-        // update_from_tx which handles merkle roots internally.
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        let bytes = hex::decode(update_hex.trim_start_matches("0x"))
+            .map_err(|e| LedgerContextError::DeserializationError(format!("hex decode: {e}")))?;
+        let update: midnight_transient_crypto::merkle_tree::MerkleTreeCollapsedUpdate =
+            midnight_node_ledger_helpers::deserialize(bytes.as_slice()).map_err(|e| {
+                LedgerContextError::DeserializationError(format!("merkle update deserialize: {e}"))
+            })?;
+
+        let apply_result = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    wallet
+                        .shielded
+                        .state
+                        .apply_collapsed_update(&update)
+                        .map(|new_state| {
+                            wallet.shielded.state = new_state;
+                        })
+                        .map_err(|e| LedgerContextError::ContextError(format!("{e:?}")))
+                }))
+                .map_err(|payload| {
+                    LedgerContextError::ContextError(format!(
+                        "collapsed merkle update panicked: {}",
+                        panic_payload_to_string(payload)
+                    ))
+                })?
+            });
+
+        apply_result?;
+
         debug!(
-            update_len = update_hex.len() / 2,
-            "Merkle tree update received (not yet applied directly)"
+            network_id = %self.network_id,
+            start_index,
+            end_index,
+            update_bytes = bytes.len(),
+            "Applied collapsed merkle update to wallet"
         );
         Ok(())
     }

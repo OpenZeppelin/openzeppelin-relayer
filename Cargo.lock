@@ -7200,6 +7200,7 @@ dependencies = [
  "lru 0.16.3",
  "midnight-node-ledger-helpers",
  "midnight-node-metadata",
+ "midnight-transient-crypto",
  "mockall",
  "mockito",
  "mpl-token-metadata",

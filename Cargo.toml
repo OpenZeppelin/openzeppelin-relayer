@@ -7,7 +7,7 @@ rust-version = "1.88"         #MSRV
 [features]
 default = []
 integration-tests = []
-midnight = ["dep:tokio-tungstenite", "dep:midnight-node-ledger-helpers", "dep:midnight-node-metadata", "dep:subxt", "dep:bech32"]
+midnight = ["dep:tokio-tungstenite", "dep:midnight-node-ledger-helpers", "dep:midnight-node-metadata", "dep:subxt", "dep:bech32", "dep:midnight-transient-crypto"]
 redis-tls-native = ["redis/tls-native-tls", "redis/tokio-native-tls-comp"]
 redis-tls-rustls = ["redis/tls-rustls", "redis/tokio-rustls-comp"]
 
@@ -113,6 +113,10 @@ lru = "0.16"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"], optional = true }
 midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-ledger-helpers", tag = "node-1.0.0-rc.1", features = ["can-panic"], optional = true }
 midnight-node-metadata = { git = "https://github.com/midnightntwrk/midnight-node", package = "midnight-node-metadata", tag = "node-1.0.0-rc.1", optional = true }
+# Direct dep for `MerkleTreeCollapsedUpdate`. helpers brings this crate in
+# transitively but doesn't re-export the type, so we pin the same version
+# (resolved from Cargo.lock) and import it directly in the apply path.
+midnight-transient-crypto = { version = "2.0.1", optional = true }
 subxt = { version = "0.44", optional = true }
 bech32 = { version = "0.11", optional = true }
 
