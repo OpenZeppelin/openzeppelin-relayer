@@ -12,6 +12,19 @@
         "ws": "wss://indexer.preview.midnight.network/api/v4/graphql/ws"
       },
       "prover_url": "http://localhost:6300"
+    },
+    {
+      "type": "midnight",
+      "network": "preprod",
+      "rpc_urls": ["https://rpc.preprod.midnight.network"],
+      "explorer_urls": ["https://preprod.midnightexplorer.com"],
+      "average_blocktime_ms": 6000,
+      "is_testnet": true,
+      "indexer_urls": {
+        "http": "https://indexer.preprod.midnight.network/api/v4/graphql",
+        "ws": "wss://indexer.preprod.midnight.network/api/v4/graphql/ws"
+      },
+      "prover_url": "http://localhost:6300"
     }
   ]
 }
