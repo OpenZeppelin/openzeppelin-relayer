@@ -216,6 +216,7 @@ mod tests {
             intents: vec![],
             fallible_offers: vec![],
             fallible_shielded_offers: vec![],
+            pending_unshielded_keys: vec![],
         });
 
         let response = signer.sign_transaction(tx_data).await.unwrap();

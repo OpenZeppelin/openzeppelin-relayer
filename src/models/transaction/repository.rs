@@ -656,6 +656,8 @@ pub struct MidnightTransactionData {
     pub fallible_offers: Vec<crate::models::MidnightFallibleOfferRequest>,
     #[serde(default)]
     pub fallible_shielded_offers: Vec<crate::models::MidnightFallibleOfferRequest>,
+    #[serde(default)]
+    pub pending_unshielded_keys: Vec<String>,
 }
 
 impl StellarTransactionData {
@@ -1087,6 +1089,7 @@ impl
                         intents: midnight_request.intents.clone(),
                         fallible_offers: midnight_request.fallible_offers.clone(),
                         fallible_shielded_offers: midnight_request.fallible_shielded_offers.clone(),
+                        pending_unshielded_keys: Vec::new(),
                     }),
                     priced_at: None,
                     hashes: Vec::new(),

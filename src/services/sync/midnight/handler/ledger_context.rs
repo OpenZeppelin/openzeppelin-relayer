@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use midnight_node_ledger_helpers::{
-    make_block_context, DefaultDB, LedgerContext, LedgerParameters, Signature, Timestamp,
-    WalletSeed,
+    make_block_context, DefaultDB, HashOutput, LedgerContext, LedgerParameters, Signature,
+    Timestamp, WalletSeed,
 };
 use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 
@@ -370,6 +370,58 @@ impl LedgerContextManager {
         &self.context
     }
 
+    /// Create an isolated context for speculative transaction building.
+    ///
+    /// The Midnight helpers mark shielded/DUST spends as pending while building
+    /// a transaction. Building on a clone keeps rejected submissions from
+    /// mutating the relayer's canonical wallet state.
+    pub fn transaction_build_context(
+        &self,
+    ) -> Result<Arc<LedgerContext<DefaultDB>>, LedgerContextError> {
+        let ledger_state = self
+            .context
+            .ledger_state
+            .lock()
+            .map_err(|e| LedgerContextError::ContextError(format!("ledger_state lock: {e:?}")))?
+            .clone();
+        let latest_block_context = self
+            .context
+            .latest_block_context
+            .lock()
+            .map_err(|e| {
+                LedgerContextError::ContextError(format!("latest_block_context lock: {e:?}"))
+            })?
+            .clone();
+        let wallets = self
+            .context
+            .wallets
+            .lock()
+            .map_err(|e| LedgerContextError::ContextError(format!("wallets lock: {e:?}")))?
+            .clone();
+
+        let scratch = LedgerContext::new(self.network_id.clone());
+        {
+            let mut scratch_state = scratch.ledger_state.lock().map_err(|e| {
+                LedgerContextError::ContextError(format!("scratch state lock: {e:?}"))
+            })?;
+            *scratch_state = ledger_state;
+        }
+        {
+            let mut scratch_latest = scratch.latest_block_context.lock().map_err(|e| {
+                LedgerContextError::ContextError(format!("scratch latest block lock: {e:?}"))
+            })?;
+            *scratch_latest = latest_block_context;
+        }
+        {
+            let mut scratch_wallets = scratch.wallets.lock().map_err(|e| {
+                LedgerContextError::ContextError(format!("scratch wallets lock: {e:?}"))
+            })?;
+            *scratch_wallets = wallets;
+        }
+
+        Ok(Arc::new(scratch))
+    }
+
     /// Get the wallet seed.
     pub fn wallet_seed(&self) -> &WalletSeed {
         &self.wallet_seed
@@ -526,7 +578,7 @@ impl LedgerContextManager {
     /// matching UTXOs for spending during transaction building.
     pub fn inject_utxos(
         &self,
-        utxos: &[super::manager::UtxoDetail],
+        utxos: &[crate::repositories::UnshieldedUtxo],
     ) -> Result<(), LedgerContextError> {
         use midnight_node_ledger_helpers::{
             HashOutput, IntentHash, Sp, Timestamp, UserAddress, Utxo, NIGHT,
@@ -596,6 +648,77 @@ impl LedgerContextManager {
         Ok(())
     }
 
+    /// Reconcile wallet-owned native NIGHT UTXOs in `LedgerState`.
+    ///
+    /// This is intentionally stronger than append-only injection: the sync
+    /// layer owns the relayer wallet's available unshielded NIGHT set, so the
+    /// transaction builder should see exactly that set and no spent leftovers.
+    pub fn reconcile_unshielded_utxos(
+        &self,
+        available_utxos: &[crate::repositories::UnshieldedUtxo],
+    ) -> Result<(), LedgerContextError> {
+        use midnight_node_ledger_helpers::mn_ledger::structure::UtxoMeta;
+        use midnight_node_ledger_helpers::{
+            HashOutput, IntentHash, Sp, Timestamp, UserAddress, Utxo, NIGHT,
+        };
+
+        let current_bytes = self.serialize_state()?;
+        let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
+            midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
+                .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+
+        let wallet_owned_utxos = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                wallet.unshielded_utxos(&state)
+            });
+
+        for utxo in wallet_owned_utxos
+            .into_iter()
+            .filter(|utxo| utxo.type_ == NIGHT)
+        {
+            state.utxo = Sp::new(state.utxo.remove(&utxo));
+        }
+
+        let owner = self
+            .context
+            .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                UserAddress::from(wallet.unshielded.signing_key().verifying_key())
+            });
+
+        for detail in available_utxos {
+            let intent_hash_bytes = hex::decode(&detail.intent_hash).unwrap_or_default();
+            let mut hash_arr = [0u8; 32];
+            let copy_len = intent_hash_bytes.len().min(32);
+            hash_arr[..copy_len].copy_from_slice(&intent_hash_bytes[..copy_len]);
+
+            let utxo = Utxo {
+                value: detail.value,
+                owner,
+                type_: NIGHT,
+                intent_hash: IntentHash(HashOutput(hash_arr)),
+                output_no: detail.output_index,
+            };
+            let meta = UtxoMeta {
+                ctime: Timestamp::from_secs(detail.ctime.unwrap_or(0)),
+            };
+            state.utxo = Sp::new(state.utxo.insert(utxo, meta));
+        }
+
+        let new_bytes = midnight_node_ledger_helpers::serialize(&state)
+            .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+        self.context
+            .update_ledger_state_from_bytes(&new_bytes)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
+
+        info!(
+            available_utxos = available_utxos.len(),
+            "Reconciled unshielded UTXOs into LedgerContext"
+        );
+
+        Ok(())
+    }
+
     /// List unshielded UTXOs for the wallet.
     pub fn unshielded_utxos(&self) -> Vec<midnight_node_ledger_helpers::Utxo> {
         self.context
@@ -603,6 +726,23 @@ impl LedgerContextManager {
                 self.context
                     .with_ledger_state(|state| wallet.unshielded_utxos(state))
             })
+    }
+
+    /// Refresh the chain-side DUST snapshot immediately before building a transaction.
+    pub fn refresh_dust_spend_state(
+        &self,
+        block_timestamp_secs: u64,
+    ) -> Result<(), LedgerContextError> {
+        let block_context = make_block_context(
+            Timestamp::from_secs(block_timestamp_secs),
+            HashOutput::default(),
+            Timestamp::from_secs(block_timestamp_secs.saturating_sub(6)),
+        );
+        let empty_txs: Vec<MnSerdeTransaction> = Vec::new();
+        self.context
+            .update_from_block(&empty_txs, &block_context, None, None)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
+        sync_dust_trees_to_ledger_ctx(&self.context, &self.wallet_seed)
     }
 
     /// Sum the spendable DUST across the wallet's DustLocalState.
@@ -722,7 +862,9 @@ pub fn sync_dust_trees_to_ledger_ctx(
 
     let new_bytes = midnight_node_ledger_helpers::serialize(&state)
         .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
-    context.update_ledger_state_from_bytes(&new_bytes);
+    context
+        .update_ledger_state_from_bytes(&new_bytes)
+        .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
 
     debug!(
         commitment_first_free = commitment_ff,
@@ -731,4 +873,56 @@ pub fn sync_dust_trees_to_ledger_ctx(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repositories::UnshieldedUtxo;
+
+    fn test_utxo(intent_hash: &str, output_index: u32, value: u128) -> UnshieldedUtxo {
+        UnshieldedUtxo {
+            owner: "owner".to_string(),
+            value,
+            token_type: "native".to_string(),
+            intent_hash: intent_hash.repeat(32),
+            output_index,
+            ctime: None,
+            registered_for_dust_generation: false,
+        }
+    }
+
+    #[test]
+    fn reconcile_unshielded_utxos_removes_spent_wallet_utxos() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let first = test_utxo("aa", 0, 5);
+        let second = test_utxo("bb", 1, 7);
+
+        manager
+            .inject_utxos(&[first.clone(), second.clone()])
+            .unwrap();
+        manager
+            .reconcile_unshielded_utxos(std::slice::from_ref(&second))
+            .unwrap();
+
+        let values: Vec<u128> = manager
+            .unshielded_utxos()
+            .iter()
+            .map(|utxo| utxo.value)
+            .collect();
+        assert_eq!(values, vec![7]);
+    }
+
+    #[test]
+    fn refresh_dust_spend_state_updates_prepare_anchor() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let tblock_secs = 1_778_000_000;
+
+        manager.refresh_dust_spend_state(tblock_secs).unwrap();
+
+        assert_eq!(
+            manager.context().latest_block_context().tblock,
+            Timestamp::from_secs(tblock_secs)
+        );
+    }
 }

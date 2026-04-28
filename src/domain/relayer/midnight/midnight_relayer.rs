@@ -353,7 +353,19 @@ where
         // Sync initial ledger index
         let block = self.sync_nonce().await?;
 
-        // Sync unshielded balance via WebSocket subscription
+        // Restore persisted ledger state before reconciling unshielded UTXOs.
+        // Otherwise restore can wipe the freshly synced native NIGHT set.
+        if let Ok(Some(state_bytes)) = self.sync_manager.load_context().await {
+            if let Err(e) = self.ledger_ctx.restore_state(&state_bytes) {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    error = %e,
+                    "Failed to restore LedgerContext state, will sync from scratch"
+                );
+            }
+        }
+
+        // Sync unshielded wallet state via WebSocket subscription.
         let address = self
             .signer
             .address()
@@ -367,19 +379,20 @@ where
                     relayer_id = %self.relayer.id,
                     block_number = block,
                     balance = result.balance,
-                    utxos = result.created_utxos.len(),
-                    "Midnight relayer initialized with balance sync"
+                    available_utxos = result.wallet_state.available_utxos.len(),
+                    pending_utxos = result.wallet_state.pending_utxos.len(),
+                    "Midnight relayer initialized with unshielded wallet sync"
                 );
 
-                // Inject the discovered UTXOs into the LedgerContext
-                if !result.created_utxos.is_empty() {
-                    if let Err(e) = self.ledger_ctx.inject_utxos(&result.created_utxos) {
-                        warn!(
-                            relayer_id = %self.relayer.id,
-                            error = %e,
-                            "Failed to inject UTXOs into LedgerContext"
-                        );
-                    }
+                if let Err(e) = self
+                    .ledger_ctx
+                    .reconcile_unshielded_utxos(&result.wallet_state.available_utxos)
+                {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "Failed to reconcile unshielded UTXOs into LedgerContext"
+                    );
                 }
             }
             Err(e) => {
@@ -487,19 +500,6 @@ where
             );
         }
 
-        // Restore persisted ledger state once (one-time, before the
-        // continuous task takes over). If restore fails, the task will
-        // sync from start_index = 0 instead.
-        if let Ok(Some(state_bytes)) = self.sync_manager.load_context().await {
-            if let Err(e) = self.ledger_ctx.restore_state(&state_bytes) {
-                warn!(
-                    relayer_id = %self.relayer.id,
-                    error = %e,
-                    "Failed to restore LedgerContext state, will sync from scratch"
-                );
-            }
-        }
-
         // Spawn the continuous shielded sync task. `sync_shielded` returns
         // when the WS subscription idles ("caught up"); the task then
         // persists state, cursors forward, briefly sleeps, and reopens
@@ -517,6 +517,19 @@ where
         tokio::spawn(async move {
             run_shielded_sync_loop(relayer_id, viewing_key, provider, sync_manager, ledger_ctx)
                 .await;
+        });
+
+        let unshielded_sync_manager = self.sync_manager.clone();
+        let unshielded_ledger_ctx = self.ledger_ctx.clone();
+        let unshielded_relayer_id = self.relayer.id.clone();
+        tokio::spawn(async move {
+            run_unshielded_sync_loop(
+                unshielded_relayer_id,
+                address,
+                unshielded_sync_manager,
+                unshielded_ledger_ctx,
+            )
+            .await;
         });
 
         Ok(())
@@ -669,6 +682,57 @@ async fn run_shielded_sync_loop<P, SS>(
                     relayer_id = %relayer_id,
                     error = %e,
                     "Shielded sync iteration failed; backing off"
+                );
+                tokio::time::sleep(ITERATION_FAIL_DELAY).await;
+            }
+        }
+    }
+}
+
+async fn run_unshielded_sync_loop<SS>(
+    relayer_id: String,
+    address: String,
+    sync_manager: SyncManager<SS>,
+    ledger_ctx: Arc<LedgerContextManager>,
+) where
+    SS: SyncStateTrait + Send + Sync + Clone + 'static,
+{
+    use std::time::Duration;
+
+    const RECONNECT_DELAY: Duration = Duration::from_secs(10);
+    const ITERATION_FAIL_DELAY: Duration = Duration::from_secs(15);
+
+    info!(relayer_id = %relayer_id, "Continuous unshielded NIGHT sync task started");
+
+    loop {
+        match sync_manager.sync_unshielded_balance(&address).await {
+            Ok(result) => {
+                if let Err(e) =
+                    ledger_ctx.reconcile_unshielded_utxos(&result.wallet_state.available_utxos)
+                {
+                    warn!(
+                        relayer_id = %relayer_id,
+                        error = %e,
+                        "Unshielded NIGHT sync reconciliation failed"
+                    );
+                    tokio::time::sleep(ITERATION_FAIL_DELAY).await;
+                    continue;
+                }
+
+                debug!(
+                    relayer_id = %relayer_id,
+                    balance = result.balance,
+                    available_utxos = result.wallet_state.available_utxos.len(),
+                    pending_utxos = result.wallet_state.pending_utxos.len(),
+                    "Unshielded NIGHT sync iteration completed"
+                );
+                tokio::time::sleep(RECONNECT_DELAY).await;
+            }
+            Err(e) => {
+                warn!(
+                    relayer_id = %relayer_id,
+                    error = %e,
+                    "Unshielded NIGHT sync iteration failed; backing off"
                 );
                 tokio::time::sleep(ITERATION_FAIL_DELAY).await;
             }

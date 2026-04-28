@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
-use crate::repositories::{RelayerStateRepositoryStorage, SyncStateTrait};
+use crate::repositories::{
+    RelayerStateRepositoryStorage, SyncStateTrait, UnshieldedUtxo, UnshieldedWalletState,
+};
 
 use super::super::indexer::{
     IndexerError, MidnightIndexerClient, ViewingKeyFormat, WalletSyncEvent, ZswapChainStateUpdate,
@@ -25,6 +27,20 @@ fn build_zswap_events_subscription(start_index: Option<u64>) -> String {
         ),
         _ => "subscription { zswapLedgerEvents { id protocolVersion maxId raw } }".to_string(),
     }
+}
+
+fn build_unshielded_transactions_subscription(
+    address: &str,
+    transaction_id: Option<u64>,
+) -> String {
+    let cursor = match transaction_id {
+        Some(id) if id > 0 => format!(", transactionId: {id}"),
+        _ => String::new(),
+    };
+
+    format!(
+        "subscription {{ unshieldedTransactions(address: \"{address}\"{cursor}) {{ ... on UnshieldedTransaction {{ transaction {{ id protocolVersion ... on RegularTransaction {{ transactionResult {{ status segments {{ id success }} }} }} }} createdUtxos {{ owner value tokenType intentHash outputIndex ctime registeredForDustGeneration }} spentUtxos {{ owner value tokenType intentHash outputIndex ctime registeredForDustGeneration }} }} ... on UnshieldedTransactionsProgress {{ highestTransactionId }} }} }}"
+    )
 }
 
 /// Midnight sync manager coordinating wallet state synchronization.
@@ -105,6 +121,39 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .get_unshielded_balance(&self.relayer_id)
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))
+    }
+
+    pub async fn get_unshielded_wallet_state(&self) -> Result<UnshieldedWalletState, SyncError> {
+        self.sync_state_store
+            .get_unshielded_wallet_state(&self.relayer_id)
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))
+    }
+
+    pub async fn mark_unshielded_pending_by_keys(
+        &self,
+        spent_keys: &[String],
+    ) -> Result<UnshieldedWalletState, SyncError> {
+        let mut wallet_state = self.get_unshielded_wallet_state().await?;
+        wallet_state.mark_pending_by_keys(spent_keys);
+        self.sync_state_store
+            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        Ok(wallet_state)
+    }
+
+    pub async fn release_unshielded_pending_by_keys(
+        &self,
+        spent_keys: &[String],
+    ) -> Result<UnshieldedWalletState, SyncError> {
+        let mut wallet_state = self.get_unshielded_wallet_state().await?;
+        wallet_state.release_pending_by_keys(spent_keys);
+        self.sync_state_store
+            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        Ok(wallet_state)
     }
 
     /// Perform an incremental sync using the indexer's wallet subscription.
@@ -219,6 +268,11 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         address: &str,
     ) -> Result<UnshieldedSyncResult, SyncError> {
         let ws_url = self.indexer_client.ws_url();
+        let mut wallet_state = self
+            .sync_state_store
+            .get_unshielded_wallet_state(&self.relayer_id)
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
         info!(
             relayer_id = %self.relayer_id,
             address,
@@ -290,13 +344,15 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         // Subscribe to unshieldedTransactions for our address.
         // The subscription returns UnshieldedTransaction (with createdUtxos/spentUtxos)
         // and UnshieldedTransactionsProgress events.
+        let query = build_unshielded_transactions_subscription(
+            address,
+            Some(wallet_state.applied_transaction_id),
+        );
         let subscribe_msg = serde_json::json!({
             "id": "unsub-1",
             "type": "subscribe",
             "payload": {
-                "query": format!(
-                    "subscription {{ unshieldedTransactions(address: \"{address}\") {{ ... on UnshieldedTransaction {{ createdUtxos {{ owner value tokenType intentHash outputIndex }} spentUtxos {{ owner value tokenType intentHash outputIndex }} }} ... on UnshieldedTransactionsProgress {{ highestTransactionId }} }} }}"
-                )
+                "query": query
             }
         });
 
@@ -308,10 +364,9 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .map_err(|e| SyncError::SyncState(format!("WS subscribe failed: {e}")))?;
 
         // Collect events with a timeout — the subscription will replay history then go live
-        let mut balance: i128 = 0;
         let mut event_count: u64 = 0;
-        let mut created_utxos: Vec<UtxoDetail> = Vec::new();
-        let mut spent_utxos: Vec<UtxoDetail> = Vec::new();
+        let mut created_utxos: Vec<UnshieldedUtxo> = Vec::new();
+        let mut spent_utxos: Vec<UnshieldedUtxo> = Vec::new();
         let idle_timeout = tokio::time::Duration::from_secs(5);
 
         loop {
@@ -328,33 +383,57 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
                                         .and_then(|p| p.get("data"))
                                         .and_then(|d| d.get("unshieldedTransactions"))
                                     {
-                                        // Collect created UTXOs with full details
-                                        if let Some(created) =
-                                            data.get("createdUtxos").and_then(|c| c.as_array())
+                                        if let Some(highest) = data
+                                            .get("highestTransactionId")
+                                            .and_then(|h| h.as_u64())
                                         {
-                                            for utxo in created {
-                                                if let Some(detail) = UtxoDetail::from_json(utxo) {
-                                                    balance += detail.value as i128;
-                                                    created_utxos.push(detail);
-                                                    event_count += 1;
-                                                }
+                                            wallet_state.apply_progress(highest);
+                                            debug!(
+                                                relayer_id = %self.relayer_id,
+                                                highest_transaction_id = highest,
+                                                "Unshielded sync progress event"
+                                            );
+                                        } else if let Some(tx) = data.get("transaction") {
+                                            let tx_id = tx
+                                                .get("id")
+                                                .and_then(|id| id.as_u64())
+                                                .unwrap_or(0);
+                                            let status = tx
+                                                .get("transactionResult")
+                                                .and_then(|r| r.get("status"))
+                                                .and_then(|s| s.as_str())
+                                                .unwrap_or("SUCCESS");
+
+                                            let created = data
+                                                .get("createdUtxos")
+                                                .and_then(|c| c.as_array())
+                                                .map(|items| {
+                                                    items
+                                                        .iter()
+                                                        .filter_map(UnshieldedUtxo::from_json)
+                                                        .collect::<Vec<_>>()
+                                                })
+                                                .unwrap_or_default();
+                                            let spent = data
+                                                .get("spentUtxos")
+                                                .and_then(|s| s.as_array())
+                                                .map(|items| {
+                                                    items
+                                                        .iter()
+                                                        .filter_map(UnshieldedUtxo::from_json)
+                                                        .collect::<Vec<_>>()
+                                                })
+                                                .unwrap_or_default();
+
+                                            created_utxos.extend(created.clone());
+                                            spent_utxos.extend(spent.clone());
+                                            event_count += 1;
+
+                                            if status == "FAILURE" {
+                                                wallet_state.apply_failed(tx_id, spent);
+                                            } else {
+                                                wallet_state.apply_success(tx_id, created, spent);
                                             }
-                                        }
-                                        // Collect spent UTXOs
-                                        if let Some(spent) =
-                                            data.get("spentUtxos").and_then(|s| s.as_array())
-                                        {
-                                            for utxo in spent {
-                                                if let Some(detail) = UtxoDetail::from_json(utxo) {
-                                                    balance -= detail.value as i128;
-                                                    spent_utxos.push(detail);
-                                                    event_count += 1;
-                                                }
-                                            }
-                                        }
-                                        // Progress events — just log
-                                        if data.get("highestTransactionId").is_some() {
-                                            debug!(relayer_id = %self.relayer_id, "Unshielded sync progress event");
                                         }
                                     }
                                 }
@@ -393,11 +472,11 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .send(tokio_tungstenite::tungstenite::Message::Close(None))
             .await;
 
-        let final_balance = balance.max(0) as u128;
+        let final_balance = wallet_state.available_balance();
 
-        // Persist balance in its own field (not ledger_context)
+        // Persist wallet state and its derived balance in one repository update.
         self.sync_state_store
-            .set_unshielded_balance(&self.relayer_id, final_balance)
+            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))?;
 
@@ -414,6 +493,7 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             balance: final_balance,
             created_utxos,
             spent_utxos,
+            wallet_state,
         })
     }
 
@@ -908,30 +988,9 @@ pub struct SyncResult {
 #[derive(Debug, Clone)]
 pub struct UnshieldedSyncResult {
     pub balance: u128,
-    pub created_utxos: Vec<UtxoDetail>,
-    pub spent_utxos: Vec<UtxoDetail>,
-}
-
-/// Full details of an unshielded UTXO from the indexer.
-#[derive(Debug, Clone)]
-pub struct UtxoDetail {
-    pub owner: String,
-    pub value: u128,
-    pub token_type: String,
-    pub intent_hash: String,
-    pub output_index: u32,
-}
-
-impl UtxoDetail {
-    pub fn from_json(val: &serde_json::Value) -> Option<Self> {
-        Some(Self {
-            owner: val.get("owner")?.as_str()?.to_string(),
-            value: val.get("value")?.as_str()?.parse().ok()?,
-            token_type: val.get("tokenType")?.as_str().unwrap_or("").to_string(),
-            intent_hash: val.get("intentHash")?.as_str().unwrap_or("").to_string(),
-            output_index: val.get("outputIndex")?.as_u64().unwrap_or(0) as u32,
-        })
-    }
+    pub created_utxos: Vec<UnshieldedUtxo>,
+    pub spent_utxos: Vec<UnshieldedUtxo>,
+    pub wallet_state: UnshieldedWalletState,
 }
 
 #[cfg(test)]
@@ -956,5 +1015,16 @@ mod tests {
         assert!(query.contains("zswapLedgerEvents"));
         assert!(!query.contains("$id"));
         assert!(!query.contains("id: 0"));
+    }
+
+    #[test]
+    fn unshielded_sync_query_uses_cursor_and_status_fields() {
+        let query = build_unshielded_transactions_subscription("mn_addr_preview1xyz", Some(77));
+
+        assert!(query.contains("unshieldedTransactions"));
+        assert!(query.contains("transactionId: 77"));
+        assert!(query.contains("transactionResult"));
+        assert!(query.contains("status"));
+        assert!(query.contains("registeredForDustGeneration"));
     }
 }

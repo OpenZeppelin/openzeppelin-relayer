@@ -5,7 +5,9 @@ use serde_json::{json, Value};
 
 use crate::config::IndexerUrls;
 
-use super::{BlockData, IndexerError, TransactionData, ViewingKeyFormat, WalletSyncEvent};
+use super::{
+    ApplyStage, BlockData, IndexerError, TransactionData, ViewingKeyFormat, WalletSyncEvent,
+};
 
 #[derive(Clone, Debug)]
 pub struct MidnightIndexerClient {
@@ -167,17 +169,21 @@ impl MidnightIndexerClient {
         &self,
         hash: &str,
     ) -> Result<Option<TransactionData>, IndexerError> {
-        // Preview testnet's v4 indexer schema does NOT expose `transactionResult`
-        // or `applyStage` on Transaction. Presence in the `transactions` query
-        // (with a `block`) is the strongest signal we have that the tx was
-        // included; we infer SucceedEntirely from that. Failed txs that never
-        // make it into a block simply never appear here.
         let query = r#"
             query TransactionByHash($hash: HexEncoded!) {
                 transactions(offset: { hash: $hash }) {
                     id
                     hash
                     protocolVersion
+                    ... on RegularTransaction {
+                        transactionResult {
+                            status
+                            segments {
+                                id
+                                success
+                            }
+                        }
+                    }
                     block {
                         hash
                         height
@@ -207,13 +213,7 @@ impl MidnightIndexerClient {
             tx.block_hash = block.get("hash").and_then(Value::as_str).map(String::from);
             tx.block_height = block.get("height").and_then(Value::as_u64);
         }
-        // Preview indexer doesn't surface success/failure. If the tx is
-        // indexed with a block, it was included and (by chain construction)
-        // applied — treat as SucceedEntirely. Callers that see `apply_stage:
-        // None` will reschedule; returning None here means "not indexed yet".
-        if tx.block_hash.is_some() {
-            tx.apply_stage = Some(super::types::ApplyStage::SucceedEntirely);
-        }
+        tx.apply_stage = infer_apply_stage(first);
         Ok(Some(tx))
     }
 
@@ -382,5 +382,49 @@ impl MidnightIndexerClient {
         }
 
         Ok(payload)
+    }
+}
+
+fn infer_apply_stage(tx: &Value) -> Option<ApplyStage> {
+    if tx
+        .get("block")
+        .and_then(|block| block.get("hash"))
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        return None;
+    }
+
+    let status = tx
+        .get("transactionResult")
+        .and_then(|result| result.get("status"))
+        .and_then(Value::as_str);
+
+    match status {
+        Some("SUCCESS") => Some(ApplyStage::SucceedEntirely),
+        Some("PARTIAL_SUCCESS") | Some("FAILURE") => Some(ApplyStage::FailEntirely),
+        _ => Some(ApplyStage::SucceedEntirely),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn infer_apply_stage_treats_failed_partial_result_as_failure() {
+        let tx = json!({
+            "block": { "hash": "abc" },
+            "transactionResult": {
+                "status": "PARTIAL_SUCCESS",
+                "segments": [
+                    { "id": 0, "success": true },
+                    { "id": 1, "success": false }
+                ]
+            }
+        });
+
+        assert_eq!(infer_apply_stage(&tx), Some(ApplyStage::FailEntirely));
     }
 }

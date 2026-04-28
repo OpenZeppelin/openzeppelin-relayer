@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     domain::Transaction,
@@ -175,10 +175,6 @@ where
             self.network.prover_url.clone(),
         ));
 
-        let wallet_seed = self.ledger_ctx.wallet_seed().clone();
-        let mut tx_info =
-            StandardTrasactionInfo::new_from_context(context.clone(), proof_server, None);
-
         // Diagnostic: log the `ctime` that pay_fees will use for DUST proof
         // construction. `pay_fees` internally does
         // `let now = self.context.latest_block_context().tblock;`
@@ -207,6 +203,25 @@ where
             chain_latest_timestamp = ?chain_latest.as_ref().and_then(|b| b.timestamp),
             "ctime sources at prepare start"
         );
+
+        if let Some(tblock_ms) = chain_latest.as_ref().and_then(|b| b.timestamp) {
+            self.ledger_ctx
+                .refresh_dust_spend_state(tblock_ms / 1000)
+                .map_err(|e| {
+                    TransactionError::UnexpectedError(format!(
+                        "Failed to refresh DUST spend state: {e}"
+                    ))
+                })?;
+        }
+
+        let wallet_seed = self.ledger_ctx.wallet_seed().clone();
+        let build_context = self.ledger_ctx.transaction_build_context().map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Failed to create isolated transaction build context: {e}"
+            ))
+        })?;
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(build_context.clone(), proof_server, None);
 
         // Pay DUST fees from the wallet. Requires DUST to have been
         // registered and generated via the midnight-dust-generator tool.
@@ -237,23 +252,21 @@ where
                 // shielded slot (`StandardTransaction.guaranteed_coins`).
                 // `validate()` guarantees this is the only place shielded
                 // can appear in PR-3 v1, so there's no collision to guard.
-                let shielded = build_shielded_offer(offer_req, &wallet_seed)?;
+                let shielded =
+                    build_shielded_offer(offer_req, &wallet_seed, build_context.clone())?;
                 tx_info.set_guaranteed_offer(shielded);
             } else {
-                let offer = build_unshielded_offer(offer_req, &wallet_seed)?;
+                let offer = build_unshielded_offer(offer_req, &wallet_seed, build_context.clone())?;
                 tx_info.add_intent(
                     GUARANTEED_OFFER_SEGMENT_ID,
-                    Box::new(IntentInfo {
-                        guaranteed_unshielded_offer: None,
-                        fallible_unshielded_offer: Some(offer),
-                        actions: vec![],
-                    }),
+                    Box::new(top_level_unshielded_intent(offer)),
                 );
             }
         }
 
         for fallible in &midnight_data.fallible_offers {
-            let offer = build_unshielded_offer(&fallible.offer, &wallet_seed)?;
+            let offer =
+                build_unshielded_offer(&fallible.offer, &wallet_seed, build_context.clone())?;
             tx_info.add_intent(
                 fallible.segment_id,
                 Box::new(IntentInfo {
@@ -268,12 +281,12 @@ where
             let guaranteed = intent
                 .guaranteed_unshielded_offer
                 .as_ref()
-                .map(|o| build_unshielded_offer(o, &wallet_seed))
+                .map(|o| build_unshielded_offer(o, &wallet_seed, build_context.clone()))
                 .transpose()?;
             let fallible = intent
                 .fallible_unshielded_offer
                 .as_ref()
-                .map(|o| build_unshielded_offer(o, &wallet_seed))
+                .map(|o| build_unshielded_offer(o, &wallet_seed, build_context.clone()))
                 .transpose()?;
             tx_info.add_intent(
                 intent.segment_id,
@@ -302,6 +315,7 @@ where
                     &fallible.offer,
                     &wallet_seed,
                     fallible.segment_id,
+                    build_context.clone(),
                 )?;
                 shielded_fallible_map.insert(fallible.segment_id, offer);
             }
@@ -349,6 +363,8 @@ where
             }
         };
 
+        let pending_unshielded_keys = collect_unshielded_spend_keys(&proven_tx);
+
         // Serialize using tagged serialization
         let serialized_bytes =
             midnight_node_ledger_helpers::serialize(&proven_tx).map_err(|e| {
@@ -381,6 +397,7 @@ where
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),
             fallible_shielded_offers: midnight_data.fallible_shielded_offers.clone(),
+            pending_unshielded_keys: pending_unshielded_keys.clone(),
         };
 
         self.transaction_repository
@@ -416,6 +433,34 @@ where
             .map_err(|e| {
                 TransactionError::UnexpectedError(format!("Failed to enqueue submit job: {e}"))
             })?;
+
+        if !pending_unshielded_keys.is_empty() {
+            match self
+                .sync_manager
+                .mark_unshielded_pending_by_keys(&pending_unshielded_keys)
+                .await
+            {
+                Ok(wallet_state) => {
+                    if let Err(e) = self
+                        .ledger_ctx
+                        .reconcile_unshielded_utxos(&wallet_state.available_utxos)
+                    {
+                        warn!(
+                            tx_id = %tx.id,
+                            error = %e,
+                            "failed to reconcile unshielded UTXOs after marking pending spends"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "failed to mark unshielded UTXOs pending after prepare"
+                    );
+                }
+            }
+        }
 
         Ok(updated)
     }
@@ -474,6 +519,7 @@ where
             intents: midnight_data.intents.clone(),
             fallible_offers: midnight_data.fallible_offers.clone(),
             fallible_shielded_offers: midnight_data.fallible_shielded_offers.clone(),
+            pending_unshielded_keys: midnight_data.pending_unshielded_keys.clone(),
         };
 
         self.transaction_repository
@@ -556,7 +602,7 @@ where
                         block_hash,
                     ),
                     Some(ApplyStage::SucceedPartially) => (
-                        TransactionStatus::Confirmed,
+                        TransactionStatus::Failed,
                         Some("Transaction partially succeeded".into()),
                         block_hash,
                     ),
@@ -601,6 +647,7 @@ where
                 intents: current.intents.clone(),
                 fallible_offers: current.fallible_offers.clone(),
                 fallible_shielded_offers: current.fallible_shielded_offers.clone(),
+                pending_unshielded_keys: current.pending_unshielded_keys.clone(),
             };
             self.transaction_repository
                 .update_network_data(
@@ -616,6 +663,36 @@ where
         } else {
             None
         };
+
+        if new_status == TransactionStatus::Failed
+            && !midnight_data.pending_unshielded_keys.is_empty()
+        {
+            match self
+                .sync_manager
+                .release_unshielded_pending_by_keys(&midnight_data.pending_unshielded_keys)
+                .await
+            {
+                Ok(wallet_state) => {
+                    if let Err(e) = self
+                        .ledger_ctx
+                        .reconcile_unshielded_utxos(&wallet_state.available_utxos)
+                    {
+                        warn!(
+                            tx_id = %tx.id,
+                            error = %e,
+                            "failed to reconcile unshielded UTXOs after failed transaction rollback"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "failed to release pending unshielded UTXOs after failed transaction"
+                    );
+                }
+            }
+        }
 
         let updated = self
             .transaction_repository
@@ -671,6 +748,47 @@ where
     }
 }
 
+fn collect_unshielded_spend_keys(
+    tx: &midnight_node_ledger_helpers::transaction::FinalizedTransaction<
+        midnight_node_ledger_helpers::DefaultDB,
+    >,
+) -> Vec<String> {
+    use midnight_node_ledger_helpers::Transaction;
+
+    let Transaction::Standard(stx) = tx else {
+        return Vec::new();
+    };
+
+    let mut keys = Vec::new();
+    for entry in stx.intents.iter() {
+        let intent = &*entry.1;
+        for spend in intent
+            .guaranteed_inputs()
+            .into_iter()
+            .chain(intent.fallible_inputs())
+        {
+            keys.push(format!(
+                "{}#{}",
+                hex::encode(spend.intent_hash.0 .0),
+                spend.output_no
+            ));
+        }
+    }
+    keys
+}
+
+fn top_level_unshielded_intent(
+    offer: midnight_node_ledger_helpers::UnshieldedOfferInfo<
+        midnight_node_ledger_helpers::DefaultDB,
+    >,
+) -> midnight_node_ledger_helpers::IntentInfo<midnight_node_ledger_helpers::DefaultDB> {
+    midnight_node_ledger_helpers::IntentInfo {
+        guaranteed_unshielded_offer: Some(offer),
+        fallible_unshielded_offer: None,
+        actions: vec![],
+    }
+}
+
 /// Translate one API `MidnightOfferRequest::Unshielded` into a library
 /// `UnshieldedOfferInfo`, routing all spent inputs to the relayer's own
 /// wallet seed and parsing destinations as bech32m unshielded addresses (or
@@ -684,6 +802,9 @@ where
 fn build_unshielded_offer(
     offer: &crate::models::MidnightOfferRequest,
     wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
+    context: Arc<
+        midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>,
+    >,
 ) -> Result<
     midnight_node_ledger_helpers::UnshieldedOfferInfo<midnight_node_ledger_helpers::DefaultDB>,
     TransactionError,
@@ -712,25 +833,23 @@ fn build_unshielded_offer(
     let mut outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> =
         Vec::with_capacity(outputs_req.len());
 
-    for input in inputs_req {
-        let value: u128 = input.value.parse().map_err(|_| {
+    let requested_input_total = inputs_req.iter().try_fold(0u128, |total, input| {
+        let value = input.value.parse::<u128>().map_err(|_| {
             TransactionError::ValidationError(format!("Invalid input value: {}", input.value))
         })?;
-        // The relayer can only spend UTXOs owned by its own wallet; `origin`
-        // is accepted for API symmetry but coerced to the relayer's seed.
-        inputs.push(Box::new(UtxoSpendInfo {
-            value,
-            owner: wallet_seed.clone(),
-            token_type: NIGHT,
-            intent_hash: None,
-            output_number: None,
-        }));
-    }
+        total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Input value overflow".into()))
+    })?;
 
+    let mut requested_output_total = 0u128;
     for output in outputs_req {
         let value: u128 = output.value.parse().map_err(|_| {
             TransactionError::ValidationError(format!("Invalid output value: {}", output.value))
         })?;
+        requested_output_total = requested_output_total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Output value overflow".into()))?;
         if output.destination == "self" {
             outputs.push(Box::new(UtxoOutputInfo {
                 value,
@@ -753,6 +872,41 @@ fn build_unshielded_offer(
             outputs.push(Box::new(UtxoOutputInfo {
                 value,
                 owner: unshielded,
+                token_type: NIGHT,
+            }));
+        }
+    }
+
+    if requested_output_total > requested_input_total {
+        return Err(TransactionError::ValidationError(format!(
+            "Unshielded outputs exceed inputs: outputs={requested_output_total}, inputs={requested_input_total}"
+        )));
+    }
+
+    if requested_input_total > 0 {
+        let (selected_inputs, selected_change) = UtxoSpendInfo::utxos_to_cover_value(
+            context,
+            wallet_seed.clone(),
+            requested_input_total,
+            NIGHT,
+        )
+        .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+
+        let requested_change = requested_input_total
+            .checked_sub(requested_output_total)
+            .ok_or_else(|| TransactionError::ValidationError("Invalid unshielded change".into()))?;
+        let change = selected_change
+            .checked_add(requested_change)
+            .ok_or_else(|| TransactionError::ValidationError("Change value overflow".into()))?;
+
+        for input in selected_inputs {
+            inputs.push(Box::new(input));
+        }
+
+        if change > 0 {
+            outputs.push(Box::new(UtxoOutputInfo {
+                value: change,
+                owner: wallet_seed.clone(),
                 token_type: NIGHT,
             }));
         }
@@ -821,14 +975,17 @@ fn parse_shielded_token_type(
 fn build_shielded_offer(
     offer: &crate::models::MidnightOfferRequest,
     wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
+    context: Arc<
+        midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>,
+    >,
 ) -> Result<
     midnight_node_ledger_helpers::OfferInfo<midnight_node_ledger_helpers::DefaultDB>,
     TransactionError,
 > {
     use crate::models::MidnightOfferRequest;
     use midnight_node_ledger_helpers::{
-        BuildInput, BuildOutput, DefaultDB, HashOutput, InputInfo, OfferInfo, OutputInfo,
-        ShieldedTokenType, ShieldedWallet, WalletAddress,
+        BuildInput, BuildOutput, DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedWallet,
+        WalletAddress,
     };
     use std::str::FromStr;
 
@@ -842,8 +999,11 @@ fn build_shielded_offer(
         }
     };
 
-    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
+    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
+    let mut requested_inputs: std::collections::HashMap<_, u128> = std::collections::HashMap::new();
+    let mut requested_outputs: std::collections::HashMap<_, u128> =
+        std::collections::HashMap::new();
 
     for input in inputs_req {
         let value: u128 = input.value.parse().map_err(|_| {
@@ -853,14 +1013,10 @@ fn build_shielded_offer(
             ))
         })?;
         let token_type = parse_shielded_token_type(&input.token_type)?;
-        // `origin` is accepted for API symmetry but coerced to the relayer's
-        // own seed — the relayer can only spend notes it controls.
-        inputs.push(Box::new(InputInfo {
-            origin: wallet_seed.clone(),
-            token_type,
-            value,
-            nullifier: None,
-        }));
+        let total = requested_inputs.entry(token_type).or_insert(0u128);
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded input overflow".into()))?;
     }
 
     for output in outputs_req {
@@ -871,6 +1027,10 @@ fn build_shielded_offer(
             ))
         })?;
         let token_type = parse_shielded_token_type(&output.token_type)?;
+        let total = requested_outputs.entry(token_type).or_insert(0u128);
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded output overflow".into()))?;
         if output.destination == "self" {
             outputs.push(Box::new(OutputInfo {
                 destination: wallet_seed.clone(),
@@ -901,11 +1061,228 @@ fn build_shielded_offer(
         }
     }
 
+    for (token_type, requested_input_total) in requested_inputs {
+        let requested_output_total = requested_outputs.get(&token_type).copied().unwrap_or(0);
+        let requested_change = requested_input_total
+            .checked_sub(requested_output_total)
+            .ok_or_else(|| TransactionError::ValidationError("Invalid shielded change".into()))?;
+        let (selected_inputs, selected_change) = InputInfo::coins_to_cover_value(
+            context.clone(),
+            wallet_seed.clone(),
+            requested_input_total,
+            token_type,
+        )
+        .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+        let change = selected_change
+            .checked_add(requested_change)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded change overflow".into()))?;
+
+        for input in selected_inputs {
+            inputs.push(Box::new(input));
+        }
+        if change > 0 {
+            outputs.push(Box::new(OutputInfo {
+                destination: wallet_seed.clone(),
+                token_type,
+                value: change,
+            }));
+        }
+    }
+
     Ok(OfferInfo {
         inputs,
         outputs,
         transients: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn simple_unshielded_offer() -> crate::models::MidnightOfferRequest {
+        crate::models::MidnightOfferRequest::Unshielded {
+            inputs: vec![crate::models::MidnightUnshieldedInputRequest {
+                origin: "self".into(),
+                token_type: "NIGHT".into(),
+                value: "1".into(),
+            }],
+            outputs: vec![crate::models::MidnightUnshieldedOutputRequest {
+                destination: "self".into(),
+                token_type: "NIGHT".into(),
+                value: "1".into(),
+            }],
+        }
+    }
+
+    fn simple_shielded_offer(token_type: &str) -> crate::models::MidnightOfferRequest {
+        crate::models::MidnightOfferRequest::Shielded {
+            inputs: vec![crate::models::MidnightShieldedInputRequest {
+                origin: "self".into(),
+                token_type: token_type.into(),
+                value: "1".into(),
+            }],
+            outputs: vec![crate::models::MidnightShieldedOutputRequest {
+                destination: "self".into(),
+                token_type: token_type.into(),
+                value: "1".into(),
+            }],
+        }
+    }
+
+    fn credit_shielded_token(
+        manager: &crate::services::sync::midnight::handler::LedgerContextManager,
+        token_type: midnight_node_ledger_helpers::ShieldedTokenType,
+        value: u128,
+    ) {
+        use midnight_node_ledger_helpers::{CoinInfo, Offer, OsRng, Output, Rng, SeedableRng};
+
+        let wallet_seed = manager.wallet_seed().clone();
+        let mut rng = midnight_node_ledger_helpers::StdRng::seed_from_u64(0x42);
+        manager
+            .context()
+            .with_wallet_from_seed(wallet_seed, |wallet| {
+                let secret_keys = wallet.shielded.secret_keys().clone();
+                let coin = CoinInfo {
+                    nonce: OsRng.r#gen(),
+                    type_: token_type,
+                    value,
+                };
+                let output = Output::new(
+                    &mut rng,
+                    &coin,
+                    None,
+                    &secret_keys.coin_public_key(),
+                    Some(secret_keys.enc_public_key()),
+                )
+                .unwrap();
+                let offer = Offer {
+                    inputs: vec![].into(),
+                    outputs: vec![output].into(),
+                    transient: vec![].into(),
+                    deltas: vec![].into(),
+                };
+                wallet.shielded.state = wallet.shielded.state.apply(&secret_keys, &offer);
+            });
+    }
+
+    #[test]
+    fn top_level_unshielded_offer_routes_to_guaranteed_unshielded_slot() {
+        let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
+            &[7u8; 32], "preview",
+        );
+        let wallet_seed = manager.wallet_seed().clone();
+        manager
+            .inject_utxos(&[crate::repositories::UnshieldedUtxo {
+                owner: "owner".to_string(),
+                value: 1_000_000_000,
+                token_type: "native".to_string(),
+                intent_hash: "aa".repeat(32),
+                output_index: 0,
+                ctime: Some(0),
+                registered_for_dust_generation: false,
+            }])
+            .unwrap();
+        let offer = build_unshielded_offer(
+            &simple_unshielded_offer(),
+            &wallet_seed,
+            manager.context().clone(),
+        )
+        .unwrap();
+
+        let intent = top_level_unshielded_intent(offer);
+
+        assert!(intent.guaranteed_unshielded_offer.is_some());
+        assert!(intent.fallible_unshielded_offer.is_none());
+    }
+
+    #[test]
+    fn unshielded_offer_returns_change_for_oversized_selected_utxo() {
+        let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
+            &[7u8; 32], "preview",
+        );
+        let wallet_seed = manager.wallet_seed().clone();
+        manager
+            .inject_utxos(&[crate::repositories::UnshieldedUtxo {
+                owner: "owner".to_string(),
+                value: 1_000_000_000,
+                token_type: "native".to_string(),
+                intent_hash: "bb".repeat(32),
+                output_index: 0,
+                ctime: Some(0),
+                registered_for_dust_generation: false,
+            }])
+            .unwrap();
+
+        let offer = build_unshielded_offer(
+            &simple_unshielded_offer(),
+            &wallet_seed,
+            manager.context().clone(),
+        )
+        .unwrap();
+        let built = offer.build(manager.context().clone());
+
+        let input_total: u128 = built.inputs.iter().map(|input| input.value).sum();
+        let output_values: Vec<u128> = built.outputs.iter().map(|output| output.value).collect();
+        let output_total: u128 = output_values.iter().sum();
+
+        assert_eq!(input_total, 1_000_000_000);
+        assert_eq!(output_total, input_total);
+        assert!(output_values.contains(&1));
+        assert!(output_values.contains(&999_999_999));
+    }
+
+    #[test]
+    fn transaction_build_context_isolates_shielded_pending_spends() {
+        use midnight_node_ledger_helpers::{HashOutput, SeedableRng, ShieldedTokenType};
+
+        let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
+            &[7u8; 32], "preview",
+        );
+        let wallet_seed = manager.wallet_seed().clone();
+        let token = ShieldedTokenType(HashOutput([9u8; 32]));
+        let token_hex = hex::encode(token.0 .0);
+        credit_shielded_token(&manager, token, 1);
+        assert_eq!(manager.shielded_balances().get(&token_hex), Some(&1));
+
+        let build_context = manager.transaction_build_context().unwrap();
+        let mut offer = build_shielded_offer(
+            &simple_shielded_offer(&token_hex),
+            &wallet_seed,
+            build_context.clone(),
+        )
+        .unwrap();
+        let mut rng = midnight_node_ledger_helpers::StdRng::seed_from_u64(0x42);
+        offer.build(&mut rng, build_context).unwrap();
+
+        assert_eq!(manager.shielded_balances().get(&token_hex), Some(&1));
+    }
+
+    #[test]
+    fn shielded_offer_returns_change_for_oversized_selected_coin() {
+        use midnight_node_ledger_helpers::{HashOutput, SeedableRng, ShieldedTokenType};
+
+        let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
+            &[7u8; 32], "preview",
+        );
+        let wallet_seed = manager.wallet_seed().clone();
+        let token = ShieldedTokenType(HashOutput([10u8; 32]));
+        let token_hex = hex::encode(token.0 .0);
+        credit_shielded_token(&manager, token, 9);
+
+        let build_context = manager.transaction_build_context().unwrap();
+        let mut offer = build_shielded_offer(
+            &simple_shielded_offer(&token_hex),
+            &wallet_seed,
+            build_context.clone(),
+        )
+        .unwrap();
+        let mut rng = midnight_node_ledger_helpers::StdRng::seed_from_u64(0x43);
+        let built = offer.build(&mut rng, build_context).unwrap();
+
+        assert_eq!(built.inputs.iter().count(), 1);
+        assert_eq!(built.outputs.iter().count(), 2);
+    }
 }
 
 // ============================================================================
@@ -1047,14 +1424,17 @@ fn build_fallible_shielded_offer(
     offer: &crate::models::MidnightOfferRequest,
     wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
     segment_id: u16,
+    context: Arc<
+        midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>,
+    >,
 ) -> Result<
     midnight_node_ledger_helpers::OfferInfo<midnight_node_ledger_helpers::DefaultDB>,
     TransactionError,
 > {
     use crate::models::MidnightOfferRequest;
     use midnight_node_ledger_helpers::{
-        BuildInput, BuildOutput, DefaultDB, HashOutput, InputInfo, OfferInfo, OutputInfo,
-        ShieldedTokenType, ShieldedWallet, WalletAddress,
+        BuildInput, BuildOutput, DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedWallet,
+        WalletAddress,
     };
     use std::str::FromStr;
 
@@ -1067,8 +1447,11 @@ fn build_fallible_shielded_offer(
         }
     };
 
-    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::with_capacity(inputs_req.len());
+    let mut inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::with_capacity(outputs_req.len());
+    let mut requested_inputs: std::collections::HashMap<_, u128> = std::collections::HashMap::new();
+    let mut requested_outputs: std::collections::HashMap<_, u128> =
+        std::collections::HashMap::new();
 
     for input in inputs_req {
         let value: u128 = input.value.parse().map_err(|_| {
@@ -1078,15 +1461,10 @@ fn build_fallible_shielded_offer(
             ))
         })?;
         let token_type = parse_shielded_token_type(&input.token_type)?;
-        inputs.push(Box::new(RetargetingShieldedInput {
-            inner: InputInfo {
-                origin: wallet_seed.clone(),
-                token_type,
-                value,
-                nullifier: None,
-            },
-            segment_id,
-        }));
+        let total = requested_inputs.entry(token_type).or_insert(0u128);
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded input overflow".into()))?;
     }
 
     for output in outputs_req {
@@ -1097,6 +1475,10 @@ fn build_fallible_shielded_offer(
             ))
         })?;
         let token_type = parse_shielded_token_type(&output.token_type)?;
+        let total = requested_outputs.entry(token_type).or_insert(0u128);
+        *total = total
+            .checked_add(value)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded output overflow".into()))?;
         if output.destination == "self" {
             outputs.push(Box::new(RetargetingShieldedOutputSelf {
                 inner: OutputInfo {
@@ -1125,6 +1507,40 @@ fn build_fallible_shielded_offer(
                     destination: shielded,
                     token_type,
                     value,
+                },
+                segment_id,
+            }));
+        }
+    }
+
+    for (token_type, requested_input_total) in requested_inputs {
+        let requested_output_total = requested_outputs.get(&token_type).copied().unwrap_or(0);
+        let requested_change = requested_input_total
+            .checked_sub(requested_output_total)
+            .ok_or_else(|| TransactionError::ValidationError("Invalid shielded change".into()))?;
+        let (selected_inputs, selected_change) = InputInfo::coins_to_cover_value(
+            context.clone(),
+            wallet_seed.clone(),
+            requested_input_total,
+            token_type,
+        )
+        .map_err(|e| TransactionError::ValidationError(e.to_string()))?;
+        let change = selected_change
+            .checked_add(requested_change)
+            .ok_or_else(|| TransactionError::ValidationError("Shielded change overflow".into()))?;
+
+        for input in selected_inputs {
+            inputs.push(Box::new(RetargetingShieldedInput {
+                inner: input,
+                segment_id,
+            }));
+        }
+        if change > 0 {
+            outputs.push(Box::new(RetargetingShieldedOutputSelf {
+                inner: OutputInfo {
+                    destination: wallet_seed.clone(),
+                    token_type,
+                    value: change,
                 },
                 segment_id,
             }));
