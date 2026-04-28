@@ -128,7 +128,7 @@ where
     NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
     TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
     J: JobProducerTrait + Send + Sync + 'static,
-    SS: SyncStateTrait + Send + Sync + 'static,
+    SS: SyncStateTrait + Send + Sync + Clone + 'static,
 {
     #[instrument(
         level = "debug",
@@ -285,9 +285,19 @@ where
         // Returns "0" if DUST events haven't been synced yet (wallet state empty).
         let dust_balance = self.ledger_ctx.dust_balance().to_string();
 
+        // Per-token shielded balances aggregated from the wallet's zswap
+        // state. Stringify u128 to preserve precision across JSON.
+        let shielded_balances: std::collections::HashMap<String, String> = self
+            .ledger_ctx
+            .shielded_balances()
+            .into_iter()
+            .map(|(token_hex, value)| (token_hex, value.to_string()))
+            .collect();
+
         Ok(RelayerStatus::Midnight {
             balance: balance.to_string(),
             dust_balance,
+            shielded_balances,
             unshielded_address,
             shielded_address,
             dust_address,
@@ -458,15 +468,11 @@ where
             );
         }
 
-        // Attempt shielded sync — populates the LedgerContext with wallet state.
-        // This is the critical step that enables transaction building.
-        let viewing_key = self.signer.viewing_key();
-        let indexer = self.provider.get_indexer_client();
-        let ledger_ctx = self.ledger_ctx.clone();
-
-        // Restore persisted ledger state if available
+        // Restore persisted ledger state once (one-time, before the
+        // continuous task takes over). If restore fails, the task will
+        // sync from start_index = 0 instead.
         if let Ok(Some(state_bytes)) = self.sync_manager.load_context().await {
-            if let Err(e) = ledger_ctx.restore_state(&state_bytes) {
+            if let Err(e) = self.ledger_ctx.restore_state(&state_bytes) {
                 warn!(
                     relayer_id = %self.relayer.id,
                     error = %e,
@@ -475,88 +481,24 @@ where
             }
         }
 
-        match indexer.connect_wallet(&viewing_key).await {
-            Ok(session_id) => {
-                let start_idx = self.sync_manager.current_index().await.unwrap_or(0);
-
-                match self
-                    .sync_manager
-                    .sync_shielded(&session_id, Some(start_idx), |event| {
-                        use crate::services::sync::midnight::ShieldedEvent;
-                        match &event {
-                            ShieldedEvent::Transaction { raw_hex, .. } => {
-                                // PR-3 v3: route observed shielded txs through the
-                                // verification-skipping wallet apply path
-                                // (`apply_observed_tx_offers`) instead of the strict
-                                // `update_from_tx`. Strict re-verification rejects
-                                // foreign txs with InvalidDustSpendProof because our
-                                // local DUST/tblock state can't reproduce the
-                                // sender's proof reference. Mirrors the TS reference
-                                // `CoreWallet.replayEventsWithChanges` pattern.
-                                match ledger_ctx.apply_observed_tx_offers(raw_hex) {
-                                    Ok(n) if n > 0 => {
-                                        debug!(offers = n, "Applied shielded offers to wallet");
-                                    }
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to apply observed tx offers");
-                                    }
-                                }
-                            }
-                            ShieldedEvent::MerkleUpdate {
-                                update_hex,
-                                start_index,
-                                end_index,
-                            } => {
-                                let _ = ledger_ctx.apply_merkle_update(
-                                    update_hex,
-                                    *start_index,
-                                    *end_index,
-                                );
-                            }
-                            ShieldedEvent::Progress { .. } => {}
-                        }
-                    })
-                    .await
-                {
-                    Ok(result) => {
-                        info!(
-                            relayer_id = %self.relayer.id,
-                            transactions = result.transactions,
-                            merkle_updates = result.merkle_updates,
-                            highest_index = result.highest_index,
-                            "Shielded sync completed, LedgerContext populated"
-                        );
-
-                        // Persist the updated ledger state
-                        if result.transactions > 0 {
-                            if let Ok(state_bytes) = ledger_ctx.serialize_state() {
-                                let _ = self
-                                    .sync_manager
-                                    .persist_state(result.highest_index, Some(state_bytes))
-                                    .await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            relayer_id = %self.relayer.id,
-                            error = %e,
-                            "Shielded sync failed (non-fatal)"
-                        );
-                    }
-                }
-
-                let _ = indexer.disconnect_wallet(&session_id).await;
-            }
-            Err(e) => {
-                warn!(
-                    relayer_id = %self.relayer.id,
-                    error = %e,
-                    "Shielded sync connect failed (non-fatal)"
-                );
-            }
-        }
+        // Spawn the continuous shielded sync task. `sync_shielded` returns
+        // when the WS subscription idles ("caught up"); the task then
+        // persists state, cursors forward, briefly sleeps, and reopens
+        // the subscription to pick up new shielded txs that arrive at
+        // runtime. Without this loop, txs landing AFTER init are not
+        // ingested until the relayer restarts (architecture doc §15.5).
+        // ViewingKeyFormat (a Bech32m enum variant) is what
+        // `connect_wallet` actually expects — keep the typed form rather
+        // than stringifying.
+        let viewing_key = self.signer.viewing_key();
+        let provider = self.provider.clone();
+        let sync_manager = self.sync_manager.clone();
+        let ledger_ctx = self.ledger_ctx.clone();
+        let relayer_id = self.relayer.id.clone();
+        tokio::spawn(async move {
+            run_shielded_sync_loop(relayer_id, viewing_key, provider, sync_manager, ledger_ctx)
+                .await;
+        });
 
         Ok(())
     }
@@ -595,5 +537,130 @@ where
         Err(RelayerError::NotSupported(
             "Midnight does not support external transaction signing".into(),
         ))
+    }
+}
+
+/// Continuous shielded sync loop spawned at relayer init.
+///
+/// Each iteration:
+/// 1. Open an indexer wallet session (with retry on connect failure).
+/// 2. Run `sync_shielded` from the cursor — streams events into our
+///    wallet's zswap state via `apply_observed_tx_offers` until the
+///    indexer idles ("caught up to head").
+/// 3. Persist the updated ledger state + cursor.
+/// 4. Sleep briefly, then reconnect to pick up new txs that landed
+///    after the previous iteration idled out.
+///
+/// Errors don't terminate the loop — they extend the back-off and the
+/// next iteration retries. Process exit kills the task.
+async fn run_shielded_sync_loop<P, SS>(
+    relayer_id: String,
+    viewing_key: crate::services::sync::midnight::indexer::ViewingKeyFormat,
+    provider: Arc<P>,
+    sync_manager: SyncManager<SS>,
+    ledger_ctx: Arc<LedgerContextManager>,
+) where
+    P: MidnightProviderTrait + Send + Sync + 'static,
+    SS: SyncStateTrait + Send + Sync + Clone + 'static,
+{
+    use std::time::Duration;
+
+    info!(relayer_id = %relayer_id, "Continuous shielded sync task started");
+
+    // Back-off windows. Connect failures retry sooner; iteration failures
+    // back off longer to avoid hammering the indexer when something's
+    // broken.
+    const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+    const CONNECT_FAIL_DELAY: Duration = Duration::from_secs(15);
+    const ITERATION_FAIL_DELAY: Duration = Duration::from_secs(10);
+
+    loop {
+        let indexer = provider.get_indexer_client();
+
+        let session_id = match indexer.connect_wallet(&viewing_key).await {
+            Ok(sid) => sid,
+            Err(e) => {
+                warn!(
+                    relayer_id = %relayer_id,
+                    error = %e,
+                    "Shielded sync connect_wallet failed; retrying"
+                );
+                tokio::time::sleep(CONNECT_FAIL_DELAY).await;
+                continue;
+            }
+        };
+
+        let start_idx = sync_manager.current_index().await.unwrap_or(0);
+        let ledger_ctx_for_cb = ledger_ctx.clone();
+
+        let result = sync_manager
+            .sync_shielded(&session_id, Some(start_idx), move |event| {
+                use crate::services::sync::midnight::ShieldedEvent;
+                match &event {
+                    ShieldedEvent::Transaction { raw_hex, .. } => {
+                        match ledger_ctx_for_cb.apply_observed_tx_offers(raw_hex) {
+                            Ok(n) if n > 0 => {
+                                debug!(
+                                    offers = n,
+                                    "Applied shielded offers to wallet (continuous)"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!(error = %e, "Failed to apply observed tx offers");
+                            }
+                        }
+                    }
+                    ShieldedEvent::MerkleUpdate {
+                        update_hex,
+                        start_index,
+                        end_index,
+                    } => {
+                        let _ = ledger_ctx_for_cb.apply_merkle_update(
+                            update_hex,
+                            *start_index,
+                            *end_index,
+                        );
+                    }
+                    ShieldedEvent::Progress { .. } => {}
+                }
+            })
+            .await;
+
+        let _ = indexer.disconnect_wallet(&session_id).await;
+
+        match result {
+            Ok(r) => {
+                if r.transactions > 0 || r.merkle_updates > 0 {
+                    info!(
+                        relayer_id = %relayer_id,
+                        transactions = r.transactions,
+                        merkle_updates = r.merkle_updates,
+                        highest_index = r.highest_index,
+                        "Shielded sync iteration completed"
+                    );
+                    if let Ok(state_bytes) = ledger_ctx.serialize_state() {
+                        let _ = sync_manager
+                            .persist_state(r.highest_index, Some(state_bytes))
+                            .await;
+                    }
+                } else {
+                    debug!(
+                        relayer_id = %relayer_id,
+                        highest_index = r.highest_index,
+                        "Shielded sync idle — caught up"
+                    );
+                }
+                tokio::time::sleep(RECONNECT_DELAY).await;
+            }
+            Err(e) => {
+                warn!(
+                    relayer_id = %relayer_id,
+                    error = %e,
+                    "Shielded sync iteration failed; backing off"
+                );
+                tokio::time::sleep(ITERATION_FAIL_DELAY).await;
+            }
+        }
     }
 }

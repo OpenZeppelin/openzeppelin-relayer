@@ -200,6 +200,13 @@ pub enum RelayerStatus {
         balance: String,
         /// DUST fee token balance
         dust_balance: String,
+        /// Per-token shielded balances keyed by 32-byte token-type hex.
+        /// Empty when the wallet holds no shielded coins. Each token
+        /// type is the chain's `ShieldedTokenType` (note: shielded NIGHT
+        /// is a *different* token-type than unshielded tNIGHT — chain
+        /// treats them as independent per architecture doc §13.3 / §15).
+        #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+        shielded_balances: std::collections::HashMap<String, String>,
         /// Unshielded address (for tNIGHT transfers)
         unshielded_address: String,
         /// Shielded address (for private transfers)

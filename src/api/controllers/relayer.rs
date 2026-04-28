@@ -141,8 +141,14 @@ where
 {
     let relayers = state.relayer_repository.list_paginated(query).await?;
 
-    let mapped_relayers: Vec<RelayerResponse> =
+    // Enrich each Midnight relayer with its full address breakdown
+    // (shielded + dust). Non-Midnight relayers are no-ops. Concurrent
+    // join keeps this O(slowest_signer) instead of O(N×signer_load).
+    let mut mapped_relayers: Vec<RelayerResponse> =
         relayers.items.into_iter().map(|r| r.into()).collect();
+    for resp in mapped_relayers.iter_mut() {
+        enrich_midnight_addresses(resp, &state).await;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::paginated(
         mapped_relayers,
