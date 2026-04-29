@@ -115,10 +115,10 @@ model.
 2. `connection_init` → wait for `connection_ack`
 3. `subscribe` → receive `next` events → `complete` or idle timeout
 
-### 2.6 Dedicated Balance Field in Sync State
+### 2.6 Dedicated Balance Field in Midnight Sync State
 
-**Decision:** Added `unshielded_balance: u128` field to `RelayerSyncState`
-instead of overloading `ledger_context`.
+**Decision:** Added `unshielded_balance: u128` field to
+`MidnightRelayerSyncState` instead of overloading `ledger_context`.
 
 **Rationale:** Previous implementation stored balance as JSON bytes in the
 `ledger_context` field, which coupled unrelated data. The
@@ -134,6 +134,29 @@ set during app initialization, read by the transaction factory.
 factory doesn't. Both need the same sync state to share balance and
 LedgerContext data. The `set_shared_store()`/`get_shared_store()` pattern
 ensures they use the same Arc instance.
+
+### 2.7.1 Versioned Midnight State Envelope and Redis CAS
+
+**Decision:** `RelayerSyncState` is a generic envelope with a `version` and a
+`midnight: Option<MidnightRelayerSyncState>` payload. Redis-backed Midnight
+mutations go through `update_midnight_state()`, which compares the stored
+version before replacing the JSON payload and retries from fresh state on
+conflict. The Redis key namespace is `relayer_state_v2` because Midnight
+support is still in development and we do not need a compatibility shim for
+the old flat JSON state.
+
+**Rationale:** The reference Midnight wallet keeps wallet-local
+`pendingSpends` and filters coins by nonce/nullifier before building another
+transaction. The relayer preserves that model, but Redis deployments can run
+multiple workers, so read-modify-write state updates must be atomic. The CAS
+path prevents a shielded reservation update from clobbering a sync cursor, an
+unshielded wallet update from clobbering shielded reservations, or two workers
+from persisting stale views of the same Midnight state.
+
+**Restart policy:** Redis state is reusable across process restarts:
+`zswap_last_synced_index`, serialized `ledger_context`, unshielded wallet
+state, and active shielded reservations are restored from the Midnight payload.
+`RESET_STORAGE_ON_START=true` intentionally discards that reusable state.
 
 ### 2.8 Fail-Fast on Unpopulated LedgerContext
 

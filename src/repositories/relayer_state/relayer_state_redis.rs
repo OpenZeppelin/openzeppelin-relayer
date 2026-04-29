@@ -7,11 +7,10 @@ use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use crate::utils::RedisConnections;
 
-use super::{
-    RelayerSyncState, ShieldedWalletState, SyncStateError, SyncStateTrait, UnshieldedWalletState,
-};
+use super::{MidnightRelayerSyncState, RelayerSyncState, SyncStateError, SyncStateTrait};
 
-const RELAYER_STATE_PREFIX: &str = "relayer_state";
+const RELAYER_STATE_PREFIX: &str = "relayer_state_v2";
+const MAX_CAS_RETRIES: usize = 8;
 
 #[derive(Clone)]
 pub struct RedisRelayerStateRepository {
@@ -76,244 +75,121 @@ impl RedisRelayerStateRepository {
         }
     }
 
-    async fn set_state(
+    async fn get_state_from_primary(
         &self,
         relayer_id: &str,
-        state: &RelayerSyncState,
-    ) -> Result<(), SyncStateError> {
+    ) -> Result<Option<RelayerSyncState>, SyncStateError> {
         let key = self.key(relayer_id);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "get_state_from_primary")
+            .await
+            .map_err(|e| SyncStateError::SerializationError(e.to_string()))?;
+
+        let value: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| SyncStateError::SerializationError(format!("Redis get error: {e}")))?;
+
+        match value {
+            Some(json) => serde_json::from_str(&json)
+                .map(Some)
+                .map_err(|e| SyncStateError::SerializationError(e.to_string())),
+            None => Ok(None),
+        }
+    }
+
+    async fn compare_and_set_state(
+        &self,
+        relayer_id: &str,
+        expected_version: Option<u64>,
+        state: &RelayerSyncState,
+    ) -> Result<bool, SyncStateError> {
+        let key = self.key(relayer_id);
+        let expected = expected_version
+            .map(|version| version.to_string())
+            .unwrap_or_default();
         let payload = serde_json::to_string(state)
             .map_err(|e| SyncStateError::SerializationError(e.to_string()))?;
-
         let mut conn = self
-            .get_connection(self.connections.primary(), "set_state")
+            .get_connection(self.connections.primary(), "compare_and_set_state")
             .await
             .map_err(|e| SyncStateError::SerializationError(e.to_string()))?;
 
-        conn.set::<_, _, ()>(&key, payload)
-            .await
-            .map_err(|e| SyncStateError::SerializationError(format!("Redis set error: {e}")))?;
+        let script = redis::Script::new(
+            r#"
+            local current = redis.call('GET', KEYS[1])
+            local expected = ARGV[1]
+            if current == false then
+                if expected ~= '' then
+                    return 0
+                end
+            else
+                if expected == '' then
+                    return 0
+                end
+                local decoded = cjson.decode(current)
+                local version = decoded['version'] or 0
+                if tostring(version) ~= expected then
+                    return 0
+                end
+            end
+            redis.call('SET', KEYS[1], ARGV[2])
+            return 1
+            "#,
+        );
 
-        Ok(())
+        let updated: i32 = script
+            .key(key)
+            .arg(expected)
+            .arg(payload)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| SyncStateError::SerializationError(format!("Redis CAS error: {e}")))?;
+
+        Ok(updated == 1)
     }
 }
 
 #[async_trait]
 impl SyncStateTrait for RedisRelayerStateRepository {
-    async fn get_last_synced_index(&self, relayer_id: &str) -> Result<Option<u64>, SyncStateError> {
+    async fn get_midnight_state(
+        &self,
+        relayer_id: &str,
+    ) -> Result<MidnightRelayerSyncState, SyncStateError> {
         Ok(self
             .get_state(relayer_id)
             .await?
-            .map(|state| state.last_synced_index))
+            .and_then(|state| state.midnight)
+            .unwrap_or_default())
     }
 
-    async fn get_ledger_context(
+    async fn update_midnight_state<F, R>(
         &self,
         relayer_id: &str,
-    ) -> Result<Option<Vec<u8>>, SyncStateError> {
-        Ok(self
-            .get_state(relayer_id)
-            .await?
-            .and_then(|state| state.ledger_context))
-    }
+        mut update: F,
+    ) -> Result<R, SyncStateError>
+    where
+        F: FnMut(&mut MidnightRelayerSyncState) -> Result<R, SyncStateError> + Send,
+        R: Send,
+    {
+        for _ in 0..MAX_CAS_RETRIES {
+            let current = self.get_state_from_primary(relayer_id).await?;
+            let expected_version = current.as_ref().map(|state| state.version);
+            let mut state = current.unwrap_or_default();
+            let result = update(state.midnight_or_default_mut())?;
+            state.bump_version();
 
-    async fn set_last_synced_index(
-        &self,
-        relayer_id: &str,
-        index: u64,
-    ) -> Result<(), SyncStateError> {
-        let mut state = self
-            .get_state(relayer_id)
-            .await?
-            .unwrap_or(RelayerSyncState {
-                last_synced_index: 0,
-                ledger_context: None,
-                unshielded_balance: 0,
-                unshielded_wallet: UnshieldedWalletState::default(),
-                shielded_wallet: ShieldedWalletState::default(),
-            });
-        state.last_synced_index = index;
-        self.set_state(relayer_id, &state).await
-    }
-
-    async fn set_ledger_context(
-        &self,
-        relayer_id: &str,
-        context: Vec<u8>,
-    ) -> Result<(), SyncStateError> {
-        let mut state = self
-            .get_state(relayer_id)
-            .await?
-            .unwrap_or(RelayerSyncState {
-                last_synced_index: 0,
-                ledger_context: None,
-                unshielded_balance: 0,
-                unshielded_wallet: UnshieldedWalletState::default(),
-                shielded_wallet: ShieldedWalletState::default(),
-            });
-        state.ledger_context = Some(context);
-        self.set_state(relayer_id, &state).await
-    }
-
-    async fn set_sync_state(
-        &self,
-        relayer_id: &str,
-        index: u64,
-        context: Option<Vec<u8>>,
-    ) -> Result<(), SyncStateError> {
-        // Preserve existing balance when updating sync cursor/context
-        let existing_state = self.get_state(relayer_id).await?;
-        let existing_balance = existing_state
-            .as_ref()
-            .map(|s| s.unshielded_balance)
-            .unwrap_or(0);
-        let existing_wallet = existing_state
-            .as_ref()
-            .map(|s| s.unshielded_wallet.clone())
-            .unwrap_or_default();
-        let existing_shielded_wallet = existing_state
-            .as_ref()
-            .map(|s| s.shielded_wallet.clone())
-            .unwrap_or_default();
-
-        self.set_state(
-            relayer_id,
-            &RelayerSyncState {
-                last_synced_index: index,
-                ledger_context: context,
-                unshielded_balance: existing_balance,
-                unshielded_wallet: existing_wallet,
-                shielded_wallet: existing_shielded_wallet,
-            },
-        )
-        .await
-    }
-
-    async fn update_if_greater(
-        &self,
-        relayer_id: &str,
-        index: u64,
-    ) -> Result<bool, SyncStateError> {
-        let current_state = self.get_state(relayer_id).await?;
-        let should_update = current_state
-            .as_ref()
-            .map(|state| index > state.last_synced_index)
-            .unwrap_or(true);
-
-        if should_update {
-            self.set_state(
-                relayer_id,
-                &RelayerSyncState {
-                    last_synced_index: index,
-                    ledger_context: current_state
-                        .as_ref()
-                        .and_then(|state| state.ledger_context.clone()),
-                    unshielded_balance: current_state
-                        .as_ref()
-                        .map(|s| s.unshielded_balance)
-                        .unwrap_or(0),
-                    unshielded_wallet: current_state
-                        .as_ref()
-                        .map(|s| s.unshielded_wallet.clone())
-                        .unwrap_or_default(),
-                    shielded_wallet: current_state
-                        .as_ref()
-                        .map(|s| s.shielded_wallet.clone())
-                        .unwrap_or_default(),
-                },
-            )
-            .await?;
+            if self
+                .compare_and_set_state(relayer_id, expected_version, &state)
+                .await?
+            {
+                return Ok(result);
+            }
         }
 
-        Ok(should_update)
-    }
-
-    async fn get_unshielded_balance(&self, relayer_id: &str) -> Result<u128, SyncStateError> {
-        Ok(self
-            .get_state(relayer_id)
-            .await?
-            .map(|state| state.unshielded_balance)
-            .unwrap_or(0))
-    }
-
-    async fn set_unshielded_balance(
-        &self,
-        relayer_id: &str,
-        balance: u128,
-    ) -> Result<(), SyncStateError> {
-        let mut state = self
-            .get_state(relayer_id)
-            .await?
-            .unwrap_or(RelayerSyncState {
-                last_synced_index: 0,
-                ledger_context: None,
-                unshielded_balance: 0,
-                unshielded_wallet: UnshieldedWalletState::default(),
-                shielded_wallet: ShieldedWalletState::default(),
-            });
-        state.unshielded_balance = balance;
-        self.set_state(relayer_id, &state).await
-    }
-
-    async fn get_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<UnshieldedWalletState, SyncStateError> {
-        Ok(self
-            .get_state(relayer_id)
-            .await?
-            .map(|state| state.unshielded_wallet)
-            .unwrap_or_default())
-    }
-
-    async fn set_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        wallet_state: UnshieldedWalletState,
-    ) -> Result<(), SyncStateError> {
-        let mut state = self
-            .get_state(relayer_id)
-            .await?
-            .unwrap_or(RelayerSyncState {
-                last_synced_index: 0,
-                ledger_context: None,
-                unshielded_balance: 0,
-                unshielded_wallet: UnshieldedWalletState::default(),
-                shielded_wallet: ShieldedWalletState::default(),
-            });
-        state.unshielded_balance = wallet_state.available_balance();
-        state.unshielded_wallet = wallet_state;
-        self.set_state(relayer_id, &state).await
-    }
-
-    async fn get_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<ShieldedWalletState, SyncStateError> {
-        Ok(self
-            .get_state(relayer_id)
-            .await?
-            .map(|state| state.shielded_wallet)
-            .unwrap_or_default())
-    }
-
-    async fn set_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        wallet_state: ShieldedWalletState,
-    ) -> Result<(), SyncStateError> {
-        let mut state = self
-            .get_state(relayer_id)
-            .await?
-            .unwrap_or(RelayerSyncState {
-                last_synced_index: 0,
-                ledger_context: None,
-                unshielded_balance: 0,
-                unshielded_wallet: UnshieldedWalletState::default(),
-                shielded_wallet: ShieldedWalletState::default(),
-            });
-        state.shielded_wallet = wallet_state;
-        self.set_state(relayer_id, &state).await
+        Err(SyncStateError::SerializationError(format!(
+            "Redis CAS update failed after {MAX_CAS_RETRIES} retries"
+        )))
     }
 
     async fn reset(&self, relayer_id: &str) -> Result<(), SyncStateError> {

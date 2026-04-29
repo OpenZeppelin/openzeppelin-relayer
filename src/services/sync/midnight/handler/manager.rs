@@ -112,17 +112,19 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     pub async fn current_index(&self) -> Result<u64, SyncError> {
         Ok(self
             .sync_state_store
-            .get_last_synced_index(&self.relayer_id)
+            .get_midnight_state(&self.relayer_id)
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))?
-            .unwrap_or(0))
+            .zswap_last_synced_index)
     }
 
     pub async fn load_context(&self) -> Result<Option<Vec<u8>>, SyncError> {
-        self.sync_state_store
-            .get_ledger_context(&self.relayer_id)
+        Ok(self
+            .sync_state_store
+            .get_midnight_state(&self.relayer_id)
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))
+            .map_err(|e| SyncError::SyncState(e.to_string()))?
+            .ledger_context)
     }
 
     pub async fn persist_state(
@@ -131,7 +133,11 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         context: Option<Vec<u8>>,
     ) -> Result<(), SyncError> {
         self.sync_state_store
-            .set_sync_state(&self.relayer_id, index, context)
+            .update_midnight_state(&self.relayer_id, |state| {
+                state.zswap_last_synced_index = index;
+                state.ledger_context = context.clone();
+                Ok(())
+            })
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))
     }
@@ -149,17 +155,21 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     }
 
     pub async fn get_unshielded_balance(&self) -> Result<u128, SyncError> {
-        self.sync_state_store
-            .get_unshielded_balance(&self.relayer_id)
+        Ok(self
+            .sync_state_store
+            .get_midnight_state(&self.relayer_id)
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))
+            .map_err(|e| SyncError::SyncState(e.to_string()))?
+            .unshielded_balance)
     }
 
     pub async fn get_unshielded_wallet_state(&self) -> Result<UnshieldedWalletState, SyncError> {
-        self.sync_state_store
-            .get_unshielded_wallet_state(&self.relayer_id)
+        Ok(self
+            .sync_state_store
+            .get_midnight_state(&self.relayer_id)
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))
+            .map_err(|e| SyncError::SyncState(e.to_string()))?
+            .unshielded_wallet)
     }
 
     pub async fn mark_unshielded_pending_by_keys(
@@ -168,13 +178,14 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     ) -> Result<UnshieldedWalletState, SyncError> {
         let lock = unshielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
-        let mut wallet_state = self.get_unshielded_wallet_state().await?;
-        wallet_state.mark_pending_by_keys(spent_keys);
         self.sync_state_store
-            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .update_midnight_state(&self.relayer_id, |state| {
+                state.unshielded_wallet.mark_pending_by_keys(spent_keys);
+                state.unshielded_balance = state.unshielded_wallet.available_balance();
+                Ok(state.unshielded_wallet.clone())
+            })
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        Ok(wallet_state)
+            .map_err(|e| SyncError::SyncState(e.to_string()))
     }
 
     pub async fn release_unshielded_pending_by_keys(
@@ -183,20 +194,23 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     ) -> Result<UnshieldedWalletState, SyncError> {
         let lock = unshielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
-        let mut wallet_state = self.get_unshielded_wallet_state().await?;
-        wallet_state.release_pending_by_keys(spent_keys);
         self.sync_state_store
-            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .update_midnight_state(&self.relayer_id, |state| {
+                state.unshielded_wallet.release_pending_by_keys(spent_keys);
+                state.unshielded_balance = state.unshielded_wallet.available_balance();
+                Ok(state.unshielded_wallet.clone())
+            })
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        Ok(wallet_state)
+            .map_err(|e| SyncError::SyncState(e.to_string()))
     }
 
     pub async fn get_shielded_wallet_state(&self) -> Result<ShieldedWalletState, SyncError> {
-        self.sync_state_store
-            .get_shielded_wallet_state(&self.relayer_id)
+        Ok(self
+            .sync_state_store
+            .get_midnight_state(&self.relayer_id)
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))
+            .map_err(|e| SyncError::SyncState(e.to_string()))?
+            .shielded_wallet)
     }
 
     pub async fn mark_shielded_pending(
@@ -206,14 +220,17 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     ) -> Result<ShieldedWalletState, SyncError> {
         let lock = shielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
-        let mut wallet_state = self.get_shielded_wallet_state().await?;
-        wallet_state.release_by_transaction(transaction_id);
-        wallet_state.mark_pending(reservations);
+        let transaction_id = transaction_id.to_string();
         self.sync_state_store
-            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .update_midnight_state(&self.relayer_id, |state| {
+                state
+                    .shielded_wallet
+                    .release_by_transaction(&transaction_id);
+                state.shielded_wallet.mark_pending(reservations.clone());
+                Ok(state.shielded_wallet.clone())
+            })
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        Ok(wallet_state)
+            .map_err(|e| SyncError::SyncState(e.to_string()))
     }
 
     pub async fn release_shielded_pending_for_tx(
@@ -222,13 +239,16 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     ) -> Result<ShieldedWalletState, SyncError> {
         let lock = shielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
-        let mut wallet_state = self.get_shielded_wallet_state().await?;
-        wallet_state.release_by_transaction(transaction_id);
+        let transaction_id = transaction_id.to_string();
         self.sync_state_store
-            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .update_midnight_state(&self.relayer_id, |state| {
+                state
+                    .shielded_wallet
+                    .release_by_transaction(&transaction_id);
+                Ok(state.shielded_wallet.clone())
+            })
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        Ok(wallet_state)
+            .map_err(|e| SyncError::SyncState(e.to_string()))
     }
 
     pub async fn clear_confirmed_shielded_pending(
@@ -244,13 +264,16 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
     ) -> Result<ShieldedWalletState, SyncError> {
         let lock = shielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
-        let mut wallet_state = self.get_shielded_wallet_state().await?;
-        wallet_state.retain_transactions(active_transaction_ids);
+        let active_transaction_ids = active_transaction_ids.to_vec();
         self.sync_state_store
-            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .update_midnight_state(&self.relayer_id, |state| {
+                state
+                    .shielded_wallet
+                    .retain_transactions(&active_transaction_ids);
+                Ok(state.shielded_wallet.clone())
+            })
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
-        Ok(wallet_state)
+            .map_err(|e| SyncError::SyncState(e.to_string()))
     }
 
     /// Perform an incremental sync using the indexer's wallet subscription.
@@ -364,14 +387,26 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         &self,
         address: &str,
     ) -> Result<UnshieldedSyncResult, SyncError> {
+        #[derive(Clone)]
+        enum UnshieldedStateUpdate {
+            Progress(u64),
+            Transaction {
+                tx_id: u64,
+                failed: bool,
+                created: Vec<UnshieldedUtxo>,
+                spent: Vec<UnshieldedUtxo>,
+            },
+        }
+
         let lock = unshielded_state_lock(&self.relayer_id);
         let _guard = lock.lock().await;
         let ws_url = self.indexer_client.ws_url();
         let mut wallet_state = self
             .sync_state_store
-            .get_unshielded_wallet_state(&self.relayer_id)
+            .get_midnight_state(&self.relayer_id)
             .await
-            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+            .map_err(|e| SyncError::SyncState(e.to_string()))?
+            .unshielded_wallet;
         info!(
             relayer_id = %self.relayer_id,
             address,
@@ -466,6 +501,7 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         let mut event_count: u64 = 0;
         let mut created_utxos: Vec<UnshieldedUtxo> = Vec::new();
         let mut spent_utxos: Vec<UnshieldedUtxo> = Vec::new();
+        let mut state_updates: Vec<UnshieldedStateUpdate> = Vec::new();
         let idle_timeout = tokio::time::Duration::from_secs(5);
 
         loop {
@@ -487,6 +523,8 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
                                             .and_then(|h| h.as_u64())
                                         {
                                             wallet_state.apply_progress(highest);
+                                            state_updates
+                                                .push(UnshieldedStateUpdate::Progress(highest));
                                             debug!(
                                                 relayer_id = %self.relayer_id,
                                                 highest_transaction_id = highest,
@@ -529,10 +567,22 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
                                             event_count += 1;
 
                                             if status == "FAILURE" {
-                                                wallet_state.apply_failed(tx_id, spent);
+                                                wallet_state.apply_failed(tx_id, spent.clone());
                                             } else {
-                                                wallet_state.apply_success(tx_id, created, spent);
+                                                wallet_state.apply_success(
+                                                    tx_id,
+                                                    created.clone(),
+                                                    spent.clone(),
+                                                );
                                             }
+                                            state_updates.push(
+                                                UnshieldedStateUpdate::Transaction {
+                                                    tx_id,
+                                                    failed: status == "FAILURE",
+                                                    created,
+                                                    spent,
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -571,13 +621,39 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
             .send(tokio_tungstenite::tungstenite::Message::Close(None))
             .await;
 
-        let final_balance = wallet_state.available_balance();
-
-        // Persist wallet state and its derived balance in one repository update.
-        self.sync_state_store
-            .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+        let state_updates = state_updates.clone();
+        wallet_state = self
+            .sync_state_store
+            .update_midnight_state(&self.relayer_id, |state| {
+                for update in &state_updates {
+                    match update {
+                        UnshieldedStateUpdate::Progress(highest) => {
+                            state.unshielded_wallet.apply_progress(*highest);
+                        }
+                        UnshieldedStateUpdate::Transaction {
+                            tx_id,
+                            failed,
+                            created,
+                            spent,
+                        } => {
+                            if *failed {
+                                state.unshielded_wallet.apply_failed(*tx_id, spent.clone());
+                            } else {
+                                state.unshielded_wallet.apply_success(
+                                    *tx_id,
+                                    created.clone(),
+                                    spent.clone(),
+                                );
+                            }
+                        }
+                    }
+                }
+                state.unshielded_balance = state.unshielded_wallet.available_balance();
+                Ok(state.unshielded_wallet.clone())
+            })
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        let final_balance = wallet_state.available_balance();
 
         info!(
             relayer_id = %self.relayer_id,

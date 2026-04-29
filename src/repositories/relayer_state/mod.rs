@@ -12,9 +12,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(test)]
-use mockall::automock;
-
 use crate::models::RepositoryError;
 use crate::utils::RedisConnections;
 
@@ -241,9 +238,11 @@ impl ShieldedWalletState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RelayerSyncState {
-    pub last_synced_index: u64,
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MidnightRelayerSyncState {
+    #[serde(default)]
+    pub zswap_last_synced_index: u64,
+    #[serde(default)]
     pub ledger_context: Option<Vec<u8>>,
     #[serde(default)]
     pub unshielded_balance: u128,
@@ -251,6 +250,32 @@ pub struct RelayerSyncState {
     pub unshielded_wallet: UnshieldedWalletState,
     #[serde(default)]
     pub shielded_wallet: ShieldedWalletState,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RelayerSyncState {
+    #[serde(default)]
+    pub version: u64,
+    #[serde(default)]
+    pub midnight: Option<MidnightRelayerSyncState>,
+}
+
+impl RelayerSyncState {
+    pub fn with_midnight(midnight: MidnightRelayerSyncState) -> Self {
+        Self {
+            version: 0,
+            midnight: Some(midnight),
+        }
+    }
+
+    pub fn midnight_or_default_mut(&mut self) -> &mut MidnightRelayerSyncState {
+        self.midnight
+            .get_or_insert_with(MidnightRelayerSyncState::default)
+    }
+
+    pub fn bump_version(&mut self) {
+        self.version = self.version.saturating_add(1);
+    }
 }
 
 #[derive(Error, Debug, Serialize)]
@@ -265,64 +290,20 @@ pub enum SyncStateError {
 
 #[allow(dead_code)]
 #[async_trait]
-#[cfg_attr(test, automock)]
 pub trait SyncStateTrait: Send + Sync {
-    async fn get_last_synced_index(&self, relayer_id: &str) -> Result<Option<u64>, SyncStateError>;
-
-    async fn get_ledger_context(&self, relayer_id: &str)
-        -> Result<Option<Vec<u8>>, SyncStateError>;
-
-    async fn set_last_synced_index(
+    async fn get_midnight_state(
         &self,
         relayer_id: &str,
-        index: u64,
-    ) -> Result<(), SyncStateError>;
+    ) -> Result<MidnightRelayerSyncState, SyncStateError>;
 
-    async fn set_ledger_context(
+    async fn update_midnight_state<F, R>(
         &self,
         relayer_id: &str,
-        context: Vec<u8>,
-    ) -> Result<(), SyncStateError>;
-
-    async fn set_sync_state(
-        &self,
-        relayer_id: &str,
-        index: u64,
-        context: Option<Vec<u8>>,
-    ) -> Result<(), SyncStateError>;
-
-    async fn update_if_greater(&self, relayer_id: &str, index: u64)
-        -> Result<bool, SyncStateError>;
-
-    async fn get_unshielded_balance(&self, relayer_id: &str) -> Result<u128, SyncStateError>;
-
-    async fn set_unshielded_balance(
-        &self,
-        relayer_id: &str,
-        balance: u128,
-    ) -> Result<(), SyncStateError>;
-
-    async fn get_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<UnshieldedWalletState, SyncStateError>;
-
-    async fn set_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        state: UnshieldedWalletState,
-    ) -> Result<(), SyncStateError>;
-
-    async fn get_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<ShieldedWalletState, SyncStateError>;
-
-    async fn set_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        state: ShieldedWalletState,
-    ) -> Result<(), SyncStateError>;
+        update: F,
+    ) -> Result<R, SyncStateError>
+    where
+        F: FnMut(&mut MidnightRelayerSyncState) -> Result<R, SyncStateError> + Send,
+        R: Send;
 
     async fn reset(&self, relayer_id: &str) -> Result<(), SyncStateError>;
 
@@ -371,125 +352,28 @@ impl RelayerStateRepositoryStorage {
 
 #[async_trait]
 impl SyncStateTrait for RelayerStateRepositoryStorage {
-    async fn get_last_synced_index(&self, relayer_id: &str) -> Result<Option<u64>, SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.get_last_synced_index(relayer_id).await,
-            Self::Redis(repo) => repo.get_last_synced_index(relayer_id).await,
-        }
-    }
-
-    async fn get_ledger_context(
+    async fn get_midnight_state(
         &self,
         relayer_id: &str,
-    ) -> Result<Option<Vec<u8>>, SyncStateError> {
+    ) -> Result<MidnightRelayerSyncState, SyncStateError> {
         match self {
-            Self::InMemory(repo) => repo.get_ledger_context(relayer_id).await,
-            Self::Redis(repo) => repo.get_ledger_context(relayer_id).await,
+            Self::InMemory(repo) => repo.get_midnight_state(relayer_id).await,
+            Self::Redis(repo) => repo.get_midnight_state(relayer_id).await,
         }
     }
 
-    async fn set_last_synced_index(
+    async fn update_midnight_state<F, R>(
         &self,
         relayer_id: &str,
-        index: u64,
-    ) -> Result<(), SyncStateError> {
+        update: F,
+    ) -> Result<R, SyncStateError>
+    where
+        F: FnMut(&mut MidnightRelayerSyncState) -> Result<R, SyncStateError> + Send,
+        R: Send,
+    {
         match self {
-            Self::InMemory(repo) => repo.set_last_synced_index(relayer_id, index).await,
-            Self::Redis(repo) => repo.set_last_synced_index(relayer_id, index).await,
-        }
-    }
-
-    async fn set_ledger_context(
-        &self,
-        relayer_id: &str,
-        context: Vec<u8>,
-    ) -> Result<(), SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.set_ledger_context(relayer_id, context).await,
-            Self::Redis(repo) => repo.set_ledger_context(relayer_id, context).await,
-        }
-    }
-
-    async fn set_sync_state(
-        &self,
-        relayer_id: &str,
-        index: u64,
-        context: Option<Vec<u8>>,
-    ) -> Result<(), SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.set_sync_state(relayer_id, index, context).await,
-            Self::Redis(repo) => repo.set_sync_state(relayer_id, index, context).await,
-        }
-    }
-
-    async fn update_if_greater(
-        &self,
-        relayer_id: &str,
-        index: u64,
-    ) -> Result<bool, SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.update_if_greater(relayer_id, index).await,
-            Self::Redis(repo) => repo.update_if_greater(relayer_id, index).await,
-        }
-    }
-
-    async fn get_unshielded_balance(&self, relayer_id: &str) -> Result<u128, SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.get_unshielded_balance(relayer_id).await,
-            Self::Redis(repo) => repo.get_unshielded_balance(relayer_id).await,
-        }
-    }
-
-    async fn set_unshielded_balance(
-        &self,
-        relayer_id: &str,
-        balance: u128,
-    ) -> Result<(), SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.set_unshielded_balance(relayer_id, balance).await,
-            Self::Redis(repo) => repo.set_unshielded_balance(relayer_id, balance).await,
-        }
-    }
-
-    async fn get_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<UnshieldedWalletState, SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.get_unshielded_wallet_state(relayer_id).await,
-            Self::Redis(repo) => repo.get_unshielded_wallet_state(relayer_id).await,
-        }
-    }
-
-    async fn set_unshielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        state: UnshieldedWalletState,
-    ) -> Result<(), SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.set_unshielded_wallet_state(relayer_id, state).await,
-            Self::Redis(repo) => repo.set_unshielded_wallet_state(relayer_id, state).await,
-        }
-    }
-
-    async fn get_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-    ) -> Result<ShieldedWalletState, SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.get_shielded_wallet_state(relayer_id).await,
-            Self::Redis(repo) => repo.get_shielded_wallet_state(relayer_id).await,
-        }
-    }
-
-    async fn set_shielded_wallet_state(
-        &self,
-        relayer_id: &str,
-        state: ShieldedWalletState,
-    ) -> Result<(), SyncStateError> {
-        match self {
-            Self::InMemory(repo) => repo.set_shielded_wallet_state(relayer_id, state).await,
-            Self::Redis(repo) => repo.set_shielded_wallet_state(relayer_id, state).await,
+            Self::InMemory(repo) => repo.update_midnight_state(relayer_id, update).await,
+            Self::Redis(repo) => repo.update_midnight_state(relayer_id, update).await,
         }
     }
 
@@ -516,33 +400,68 @@ mod tests {
     async fn test_storage_wrapper_basic_flow() {
         let repo = RelayerStateRepositoryStorage::new_in_memory();
 
-        assert_eq!(repo.get_last_synced_index("relayer-1").await.unwrap(), None);
-
-        repo.set_last_synced_index("relayer-1", 42).await.unwrap();
         assert_eq!(
-            repo.get_last_synced_index("relayer-1").await.unwrap(),
-            Some(42)
+            repo.get_midnight_state("relayer-1")
+                .await
+                .unwrap()
+                .zswap_last_synced_index,
+            0
+        );
+
+        repo.update_midnight_state("relayer-1", |state| {
+            state.zswap_last_synced_index = 42;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.get_midnight_state("relayer-1")
+                .await
+                .unwrap()
+                .zswap_last_synced_index,
+            42
         );
 
         repo.reset("relayer-1").await.unwrap();
-        assert_eq!(repo.get_last_synced_index("relayer-1").await.unwrap(), None);
+        assert_eq!(
+            repo.get_midnight_state("relayer-1")
+                .await
+                .unwrap()
+                .zswap_last_synced_index,
+            0
+        );
     }
 
     #[test]
-    fn legacy_sync_state_deserializes_with_empty_unshielded_wallet_state() {
+    fn relayer_sync_state_serializes_midnight_state_under_network_key() {
         let json = r#"{
-            "last_synced_index": 7,
-            "ledger_context": null,
-            "unshielded_balance": 123
+            "version": 3,
+            "midnight": {
+                "zswap_last_synced_index": 7,
+                "ledger_context": null,
+                "unshielded_balance": 123,
+                "unshielded_wallet": {
+                    "applied_transaction_id": 0,
+                    "highest_transaction_id": 0,
+                    "available_utxos": [],
+                    "pending_utxos": []
+                },
+                "shielded_wallet": {
+                    "pending_spends": []
+                }
+            }
         }"#;
 
         let state: RelayerSyncState = serde_json::from_str(json).unwrap();
+        let midnight = state.midnight.unwrap();
 
-        assert_eq!(state.unshielded_balance, 123);
-        assert_eq!(state.unshielded_wallet.applied_transaction_id, 0);
-        assert!(state.unshielded_wallet.available_utxos.is_empty());
-        assert!(state.unshielded_wallet.pending_utxos.is_empty());
-        assert!(state.shielded_wallet.pending_spends.is_empty());
+        assert_eq!(state.version, 3);
+        assert_eq!(midnight.zswap_last_synced_index, 7);
+        assert_eq!(midnight.unshielded_balance, 123);
+        assert_eq!(midnight.unshielded_wallet.applied_transaction_id, 0);
+        assert!(midnight.unshielded_wallet.available_utxos.is_empty());
+        assert!(midnight.unshielded_wallet.pending_utxos.is_empty());
+        assert!(midnight.shielded_wallet.pending_spends.is_empty());
     }
 
     fn shielded_reservation(nonce: &str, tx_id: &str, value: u128) -> ShieldedSpendReservation {
@@ -605,7 +524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_unshielded_wallet_state_derives_balance_from_available_utxos() {
+    async fn update_midnight_state_derives_balance_from_available_utxos() {
         let repo = RelayerStateRepositoryStorage::new_in_memory();
         let wallet_state = UnshieldedWalletState {
             applied_transaction_id: 10,
@@ -630,32 +549,154 @@ mod tests {
             }],
         };
 
-        repo.set_unshielded_wallet_state("relayer-1", wallet_state.clone())
-            .await
-            .unwrap();
+        repo.update_midnight_state("relayer-1", |state| {
+            state.unshielded_balance = wallet_state.available_balance();
+            state.unshielded_wallet = wallet_state.clone();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let midnight = repo.get_midnight_state("relayer-1").await.unwrap();
 
-        assert_eq!(
-            repo.get_unshielded_wallet_state("relayer-1").await.unwrap(),
-            wallet_state
-        );
-        assert_eq!(repo.get_unshielded_balance("relayer-1").await.unwrap(), 5);
+        assert_eq!(midnight.unshielded_wallet, wallet_state);
+        assert_eq!(midnight.unshielded_balance, 5);
     }
 
     #[tokio::test]
-    async fn set_shielded_wallet_state_round_trips_pending_reservations() {
+    async fn update_midnight_state_round_trips_pending_reservations() {
         let repo = RelayerStateRepositoryStorage::new_in_memory();
         let wallet_state = ShieldedWalletState {
             pending_spends: vec![shielded_reservation("nonce-1", "tx-1", 5)],
         };
 
-        repo.set_shielded_wallet_state("relayer-1", wallet_state.clone())
-            .await
-            .unwrap();
+        repo.update_midnight_state("relayer-1", |state| {
+            state.shielded_wallet = wallet_state.clone();
+            Ok(())
+        })
+        .await
+        .unwrap();
 
         assert_eq!(
-            repo.get_shielded_wallet_state("relayer-1").await.unwrap(),
+            repo.get_midnight_state("relayer-1")
+                .await
+                .unwrap()
+                .shielded_wallet,
             wallet_state
         );
+    }
+
+    #[tokio::test]
+    async fn midnight_state_updates_preserve_unrelated_fields_and_increment_version() {
+        let repo = RelayerStateRepositoryStorage::new_in_memory();
+        let shielded_state = ShieldedWalletState {
+            pending_spends: vec![shielded_reservation("nonce-1", "tx-1", 5)],
+        };
+
+        repo.update_midnight_state("relayer-1", |state| {
+            state.shielded_wallet = shielded_state.clone();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        repo.update_midnight_state("relayer-1", |state| {
+            state.zswap_last_synced_index = 42;
+            state.ledger_context = Some(vec![1, 2, 3]);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let all = repo.get_all().await;
+        let state = all
+            .into_iter()
+            .find(|(relayer_id, _)| relayer_id == "relayer-1")
+            .unwrap()
+            .1;
+        let midnight = state.midnight.unwrap();
+
+        assert!(state.version >= 2);
+        assert_eq!(midnight.zswap_last_synced_index, 42);
+        assert_eq!(midnight.ledger_context, Some(vec![1, 2, 3]));
+        assert_eq!(midnight.shielded_wallet, shielded_state);
+    }
+
+    #[tokio::test]
+    async fn concurrent_midnight_updates_merge_against_fresh_state() {
+        let repo = Arc::new(RelayerStateRepositoryStorage::new_in_memory());
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let mut handles = Vec::new();
+
+        for nonce in ["nonce-1", "nonce-2"] {
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            let nonce = nonce.to_string();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                repo.update_midnight_state("relayer-1", |state| {
+                    state
+                        .shielded_wallet
+                        .mark_pending(vec![shielded_reservation(&nonce, "tx-1", 5)]);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            }));
+        }
+
+        barrier.wait().await;
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let wallet_state = repo
+            .get_midnight_state("relayer-1")
+            .await
+            .unwrap()
+            .shielded_wallet;
+        let reserved = wallet_state.reserved_nonces();
+
+        assert_eq!(wallet_state.pending_spends.len(), 2);
+        assert!(reserved.contains("nonce-1"));
+        assert!(reserved.contains("nonce-2"));
+    }
+
+    #[tokio::test]
+    async fn persisted_midnight_state_reuses_cursor_context_and_wallets() {
+        let repo = RelayerStateRepositoryStorage::new_in_memory();
+        let unshielded_state = UnshieldedWalletState {
+            applied_transaction_id: 10,
+            highest_transaction_id: 12,
+            available_utxos: vec![UnshieldedUtxo {
+                owner: "owner".to_string(),
+                value: 5,
+                token_type: "native".to_string(),
+                intent_hash: "aa".repeat(32),
+                output_index: 0,
+                ctime: None,
+                registered_for_dust_generation: false,
+            }],
+            pending_utxos: Vec::new(),
+        };
+        let shielded_state = ShieldedWalletState {
+            pending_spends: vec![shielded_reservation("nonce-1", "tx-1", 5)],
+        };
+
+        repo.update_midnight_state("relayer-1", |state| {
+            state.zswap_last_synced_index = 42;
+            state.ledger_context = Some(vec![1, 2, 3]);
+            state.unshielded_balance = unshielded_state.available_balance();
+            state.unshielded_wallet = unshielded_state.clone();
+            state.shielded_wallet = shielded_state.clone();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let midnight = repo.get_midnight_state("relayer-1").await.unwrap();
+
+        assert_eq!(midnight.zswap_last_synced_index, 42);
+        assert_eq!(midnight.ledger_context, Some(vec![1, 2, 3]));
+        assert_eq!(midnight.unshielded_wallet, unshielded_state);
+        assert_eq!(midnight.shielded_wallet, shielded_state);
     }
 
     #[test]

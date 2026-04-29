@@ -6,11 +6,13 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use midnight_node_ledger_helpers::{
-    make_block_context, DefaultDB, HashOutput, LedgerContext, LedgerParameters, Signature,
-    Timestamp, WalletSeed,
+    deserialize_untagged, make_block_context, serialize_untagged, BlockContext, DefaultDB,
+    DustLocalState, HashOutput, LedgerContext, LedgerParameters, Signature, Sp, Timestamp, Wallet,
+    WalletSeed, WalletState,
 };
 use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 
@@ -27,6 +29,47 @@ type MnSerdeTransaction = midnight_node_ledger_helpers::SerdeTransaction<
     midnight_node_ledger_helpers::ProofMarker,
     DefaultDB,
 >;
+
+const PERSISTED_CONTEXT_MAGIC: &[u8; 8] = b"ozmnctx1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedBlockContext {
+    tblock_secs: u64,
+    tblock_err: u32,
+    parent_block_hash: [u8; 32],
+    last_block_time_secs: u64,
+}
+
+impl From<&BlockContext> for PersistedBlockContext {
+    fn from(context: &BlockContext) -> Self {
+        Self {
+            tblock_secs: context.tblock.to_secs(),
+            tblock_err: context.tblock_err,
+            parent_block_hash: context.parent_block_hash.0,
+            last_block_time_secs: context.last_block_time.to_secs(),
+        }
+    }
+}
+
+impl From<PersistedBlockContext> for BlockContext {
+    fn from(context: PersistedBlockContext) -> Self {
+        Self {
+            tblock: Timestamp::from_secs(context.tblock_secs),
+            tblock_err: context.tblock_err,
+            parent_block_hash: HashOutput(context.parent_block_hash),
+            last_block_time: Timestamp::from_secs(context.last_block_time_secs),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedLedgerContextState {
+    magic: [u8; 8],
+    ledger_state: Vec<u8>,
+    latest_block_context: Option<PersistedBlockContext>,
+    shielded_wallet_state: Vec<u8>,
+    dust_wallet_state: Option<Vec<u8>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShieldedCoinRef {
@@ -546,6 +589,43 @@ impl LedgerContextManager {
     /// This allows the context to be restored after a restart without
     /// re-syncing from genesis.
     pub fn serialize_state(&self) -> Result<Vec<u8>, LedgerContextError> {
+        let ledger_state = self.serialize_ledger_state()?;
+        let latest_block_context = self
+            .context
+            .latest_block_context
+            .lock()
+            .map_err(|e| {
+                LedgerContextError::ContextError(format!("latest_block_context lock: {e:?}"))
+            })?
+            .as_ref()
+            .map(PersistedBlockContext::from);
+        let (shielded_wallet_state, dust_wallet_state) =
+            self.context
+                .with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+                    let shielded = serialize_untagged(&wallet.shielded.state)
+                        .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+                    let dust = wallet
+                        .dust
+                        .dust_local_state
+                        .as_ref()
+                        .map(|state| serialize_untagged(&**state))
+                        .transpose()
+                        .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
+                    Ok::<_, LedgerContextError>((shielded, dust))
+                })?;
+        let persisted = PersistedLedgerContextState {
+            magic: *PERSISTED_CONTEXT_MAGIC,
+            ledger_state,
+            latest_block_context,
+            shielded_wallet_state,
+            dust_wallet_state,
+        };
+
+        bincode::serialize(&persisted)
+            .map_err(|e| LedgerContextError::SerializationError(e.to_string()))
+    }
+
+    fn serialize_ledger_state(&self) -> Result<Vec<u8>, LedgerContextError> {
         self.context.with_ledger_state(|state| {
             midnight_node_ledger_helpers::serialize(state)
                 .map_err(|e| LedgerContextError::SerializationError(e.to_string()))
@@ -554,10 +634,61 @@ impl LedgerContextManager {
 
     /// Restore the ledger state from previously serialized bytes.
     pub fn restore_state(&self, bytes: &[u8]) -> Result<(), LedgerContextError> {
+        if let Ok(persisted) = bincode::deserialize::<PersistedLedgerContextState>(bytes) {
+            if &persisted.magic != PERSISTED_CONTEXT_MAGIC {
+                return Err(LedgerContextError::DeserializationError(
+                    "invalid persisted LedgerContext snapshot magic".into(),
+                ));
+            }
+            self.restore_persisted_state(persisted)?;
+            info!("LedgerContext state and wallet restored from persisted snapshot");
+            return Ok(());
+        }
+
         self.context
             .update_ledger_state_from_bytes(bytes)
             .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
-        info!("LedgerContext state restored from persisted bytes");
+        info!("Legacy LedgerContext ledger state restored from persisted bytes");
+        Ok(())
+    }
+
+    fn restore_persisted_state(
+        &self,
+        persisted: PersistedLedgerContextState,
+    ) -> Result<(), LedgerContextError> {
+        self.context
+            .update_ledger_state_from_bytes(&persisted.ledger_state)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
+
+        {
+            let mut latest = self.context.latest_block_context.lock().map_err(|e| {
+                LedgerContextError::ContextError(format!("latest_block_context lock: {e:?}"))
+            })?;
+            *latest = persisted.latest_block_context.map(BlockContext::from);
+        }
+
+        let ledger_state = self.context.with_ledger_state(|state| state.clone());
+        let mut wallet = Wallet::default(self.wallet_seed.clone(), &ledger_state);
+        if !persisted.shielded_wallet_state.is_empty() {
+            wallet.shielded.state = deserialize_untagged::<WalletState<DefaultDB>>(
+                persisted.shielded_wallet_state.as_slice(),
+            )
+            .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+        }
+        if let Some(dust_bytes) = persisted.dust_wallet_state {
+            let dust_state =
+                deserialize_untagged::<DustLocalState<DefaultDB>>(dust_bytes.as_slice())
+                    .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
+            wallet.dust.dust_local_state = Some(Sp::new(dust_state));
+        }
+
+        let mut wallets = self
+            .context
+            .wallets
+            .lock()
+            .map_err(|e| LedgerContextError::ContextError(format!("wallets lock: {e:?}")))?;
+        wallets.insert(self.wallet_seed.clone(), wallet);
+
         Ok(())
     }
 
@@ -711,7 +842,7 @@ impl LedgerContextManager {
         }
 
         // Deserialize current state, inject UTXOs, re-serialize and inject
-        let current_bytes = self.serialize_state()?;
+        let current_bytes = self.serialize_ledger_state()?;
         let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
             midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
                 .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
@@ -784,7 +915,7 @@ impl LedgerContextManager {
             HashOutput, IntentHash, Sp, Timestamp, UserAddress, Utxo, NIGHT,
         };
 
-        let current_bytes = self.serialize_state()?;
+        let current_bytes = self.serialize_ledger_state()?;
         let mut state: midnight_node_ledger_helpers::LedgerState<DefaultDB> =
             midnight_node_ledger_helpers::deserialize(current_bytes.as_slice())
                 .map_err(|e| LedgerContextError::DeserializationError(e.to_string()))?;
@@ -1155,5 +1286,21 @@ mod tests {
         let balances = manager.shielded_balances_excluding_reservations(&wallet_state);
 
         assert_eq!(balances.get(&token_hex), Some(&(12 - reserved.value)));
+    }
+
+    #[test]
+    fn serialized_state_restores_shielded_wallet_coins() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let token = midnight_node_ledger_helpers::ShieldedTokenType(HashOutput([9u8; 32]));
+        let token_hex = hex::encode(token.0 .0);
+        credit_shielded_token(&manager, token, 5, 0x42);
+
+        let state_bytes = manager.serialize_state().unwrap();
+        let restored = LedgerContextManager::new(&[7u8; 32], "preview");
+        restored.restore_state(&state_bytes).unwrap();
+
+        let balances = restored.shielded_balances_excluding_reservations(&Default::default());
+
+        assert_eq!(balances.get(&token_hex), Some(&5));
     }
 }
