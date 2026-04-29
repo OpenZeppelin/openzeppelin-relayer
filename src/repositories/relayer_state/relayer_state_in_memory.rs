@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use dashmap::DashMap;
 
-use super::{RelayerSyncState, SyncStateError, SyncStateTrait, UnshieldedWalletState};
+use super::{
+    RelayerSyncState, ShieldedWalletState, SyncStateError, SyncStateTrait, UnshieldedWalletState,
+};
 
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryRelayerStateRepository {
@@ -48,6 +50,7 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         Ok(())
     }
@@ -65,6 +68,7 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                 ledger_context: Some(context),
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         Ok(())
     }
@@ -86,6 +90,7 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                 ledger_context: context,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         Ok(())
     }
@@ -111,6 +116,7 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                     ledger_context: None,
                     unshielded_balance: 0,
                     unshielded_wallet: UnshieldedWalletState::default(),
+                    shielded_wallet: ShieldedWalletState::default(),
                 }
             });
         Ok(updated)
@@ -137,6 +143,7 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: balance,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         Ok(())
     }
@@ -169,6 +176,38 @@ impl SyncStateTrait for InMemoryRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: balance,
                 unshielded_wallet: wallet_state,
+                shielded_wallet: ShieldedWalletState::default(),
+            });
+        Ok(())
+    }
+
+    async fn get_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+    ) -> Result<ShieldedWalletState, SyncStateError> {
+        Ok(self
+            .store
+            .get(relayer_id)
+            .map(|state| state.shielded_wallet.clone())
+            .unwrap_or_default())
+    }
+
+    async fn set_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+        wallet_state: ShieldedWalletState,
+    ) -> Result<(), SyncStateError> {
+        self.store
+            .entry(relayer_id.to_string())
+            .and_modify(|state| {
+                state.shielded_wallet = wallet_state.clone();
+            })
+            .or_insert(RelayerSyncState {
+                last_synced_index: 0,
+                ledger_context: None,
+                unshielded_balance: 0,
+                unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: wallet_state,
             });
         Ok(())
     }

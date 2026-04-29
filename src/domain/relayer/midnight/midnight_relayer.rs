@@ -206,7 +206,15 @@ where
                 privacy: Some(TokenPrivacy::Unshielded),
             },
         ];
-        for (token_hex, value) in self.ledger_ctx.shielded_balances() {
+        let shielded_wallet_state = self
+            .sync_manager
+            .get_shielded_wallet_state()
+            .await
+            .unwrap_or_default();
+        for (token_hex, value) in self
+            .ledger_ctx
+            .shielded_balances_excluding_reservations(&shielded_wallet_state)
+        {
             balances.push(TokenBalance {
                 token: token_hex,
                 balance: value.to_string(),
@@ -400,6 +408,41 @@ where
                     relayer_id = %self.relayer.id,
                     error = %e,
                     "Balance sync failed (non-fatal), relayer will retry"
+                );
+            }
+        }
+
+        let active_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+        ];
+        match self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &active_statuses)
+            .await
+        {
+            Ok(active_transactions) => {
+                let active_ids: Vec<String> =
+                    active_transactions.into_iter().map(|tx| tx.id).collect();
+                if let Err(e) = self
+                    .sync_manager
+                    .retain_shielded_pending_transactions(&active_ids)
+                    .await
+                {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        error = %e,
+                        "Failed to prune stale shielded spend reservations"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    error = %e,
+                    "Failed to load active transactions for shielded reservation pruning"
                 );
             }
         }

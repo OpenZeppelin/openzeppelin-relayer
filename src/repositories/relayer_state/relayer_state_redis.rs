@@ -7,7 +7,9 @@ use crate::models::RepositoryError;
 use crate::repositories::redis_base::RedisRepository;
 use crate::utils::RedisConnections;
 
-use super::{RelayerSyncState, SyncStateError, SyncStateTrait, UnshieldedWalletState};
+use super::{
+    RelayerSyncState, ShieldedWalletState, SyncStateError, SyncStateTrait, UnshieldedWalletState,
+};
 
 const RELAYER_STATE_PREFIX: &str = "relayer_state";
 
@@ -128,6 +130,7 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         state.last_synced_index = index;
         self.set_state(relayer_id, &state).await
@@ -146,6 +149,7 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         state.ledger_context = Some(context);
         self.set_state(relayer_id, &state).await
@@ -167,6 +171,10 @@ impl SyncStateTrait for RedisRelayerStateRepository {
             .as_ref()
             .map(|s| s.unshielded_wallet.clone())
             .unwrap_or_default();
+        let existing_shielded_wallet = existing_state
+            .as_ref()
+            .map(|s| s.shielded_wallet.clone())
+            .unwrap_or_default();
 
         self.set_state(
             relayer_id,
@@ -175,6 +183,7 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                 ledger_context: context,
                 unshielded_balance: existing_balance,
                 unshielded_wallet: existing_wallet,
+                shielded_wallet: existing_shielded_wallet,
             },
         )
         .await
@@ -207,6 +216,10 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                         .as_ref()
                         .map(|s| s.unshielded_wallet.clone())
                         .unwrap_or_default(),
+                    shielded_wallet: current_state
+                        .as_ref()
+                        .map(|s| s.shielded_wallet.clone())
+                        .unwrap_or_default(),
                 },
             )
             .await?;
@@ -236,6 +249,7 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         state.unshielded_balance = balance;
         self.set_state(relayer_id, &state).await
@@ -265,9 +279,40 @@ impl SyncStateTrait for RedisRelayerStateRepository {
                 ledger_context: None,
                 unshielded_balance: 0,
                 unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
             });
         state.unshielded_balance = wallet_state.available_balance();
         state.unshielded_wallet = wallet_state;
+        self.set_state(relayer_id, &state).await
+    }
+
+    async fn get_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+    ) -> Result<ShieldedWalletState, SyncStateError> {
+        Ok(self
+            .get_state(relayer_id)
+            .await?
+            .map(|state| state.shielded_wallet)
+            .unwrap_or_default())
+    }
+
+    async fn set_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+        wallet_state: ShieldedWalletState,
+    ) -> Result<(), SyncStateError> {
+        let mut state = self
+            .get_state(relayer_id)
+            .await?
+            .unwrap_or(RelayerSyncState {
+                last_synced_index: 0,
+                ledger_context: None,
+                unshielded_balance: 0,
+                unshielded_wallet: UnshieldedWalletState::default(),
+                shielded_wallet: ShieldedWalletState::default(),
+            });
+        state.shielded_wallet = wallet_state;
         self.set_state(relayer_id, &state).await
     }
 

@@ -6,7 +6,8 @@ use std::{
 use tracing::{debug, info, warn};
 
 use crate::repositories::{
-    RelayerStateRepositoryStorage, SyncStateTrait, UnshieldedUtxo, UnshieldedWalletState,
+    RelayerStateRepositoryStorage, ShieldedSpendReservation, ShieldedWalletState, SyncStateTrait,
+    UnshieldedUtxo, UnshieldedWalletState,
 };
 
 use super::super::indexer::{
@@ -18,12 +19,25 @@ use futures::{SinkExt, StreamExt};
 type UnshieldedStateLock = Arc<tokio::sync::Mutex<()>>;
 static UNSHIELDED_STATE_LOCKS: OnceLock<Mutex<HashMap<String, UnshieldedStateLock>>> =
     OnceLock::new();
+type ShieldedStateLock = Arc<tokio::sync::Mutex<()>>;
+static SHIELDED_STATE_LOCKS: OnceLock<Mutex<HashMap<String, ShieldedStateLock>>> = OnceLock::new();
 
 fn unshielded_state_lock(relayer_id: &str) -> UnshieldedStateLock {
     let registry = UNSHIELDED_STATE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut locks = registry
         .lock()
         .expect("unshielded state lock registry poisoned");
+    locks
+        .entry(relayer_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+fn shielded_state_lock(relayer_id: &str) -> ShieldedStateLock {
+    let registry = SHIELDED_STATE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .expect("shielded state lock registry poisoned");
     locks
         .entry(relayer_id.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -173,6 +187,67 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         wallet_state.release_pending_by_keys(spent_keys);
         self.sync_state_store
             .set_unshielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        Ok(wallet_state)
+    }
+
+    pub async fn get_shielded_wallet_state(&self) -> Result<ShieldedWalletState, SyncError> {
+        self.sync_state_store
+            .get_shielded_wallet_state(&self.relayer_id)
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))
+    }
+
+    pub async fn mark_shielded_pending(
+        &self,
+        transaction_id: &str,
+        reservations: Vec<ShieldedSpendReservation>,
+    ) -> Result<ShieldedWalletState, SyncError> {
+        let lock = shielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
+        let mut wallet_state = self.get_shielded_wallet_state().await?;
+        wallet_state.release_by_transaction(transaction_id);
+        wallet_state.mark_pending(reservations);
+        self.sync_state_store
+            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        Ok(wallet_state)
+    }
+
+    pub async fn release_shielded_pending_for_tx(
+        &self,
+        transaction_id: &str,
+    ) -> Result<ShieldedWalletState, SyncError> {
+        let lock = shielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
+        let mut wallet_state = self.get_shielded_wallet_state().await?;
+        wallet_state.release_by_transaction(transaction_id);
+        self.sync_state_store
+            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
+            .await
+            .map_err(|e| SyncError::SyncState(e.to_string()))?;
+        Ok(wallet_state)
+    }
+
+    pub async fn clear_confirmed_shielded_pending(
+        &self,
+        transaction_id: &str,
+    ) -> Result<ShieldedWalletState, SyncError> {
+        self.release_shielded_pending_for_tx(transaction_id).await
+    }
+
+    pub async fn retain_shielded_pending_transactions(
+        &self,
+        active_transaction_ids: &[String],
+    ) -> Result<ShieldedWalletState, SyncError> {
+        let lock = shielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
+        let mut wallet_state = self.get_shielded_wallet_state().await?;
+        wallet_state.retain_transactions(active_transaction_ids);
+        self.sync_state_store
+            .set_shielded_wallet_state(&self.relayer_id, wallet_state.clone())
             .await
             .map_err(|e| SyncError::SyncState(e.to_string()))?;
         Ok(wallet_state)

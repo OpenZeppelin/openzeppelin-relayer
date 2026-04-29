@@ -187,6 +187,61 @@ impl UnshieldedWalletState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShieldedSpendReservation {
+    pub coin_nonce: String,
+    #[serde(default)]
+    pub nullifier: Option<String>,
+    #[serde(default)]
+    pub commitment: Option<String>,
+    pub transaction_id: String,
+    pub token_type: String,
+    pub value: u128,
+    pub created_at: String,
+    #[serde(default)]
+    pub segment_id: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShieldedWalletState {
+    #[serde(default)]
+    pub pending_spends: Vec<ShieldedSpendReservation>,
+}
+
+impl ShieldedWalletState {
+    pub fn mark_pending(&mut self, reservations: Vec<ShieldedSpendReservation>) {
+        for reservation in reservations {
+            self.upsert_pending(reservation);
+        }
+    }
+
+    pub fn release_by_transaction(&mut self, transaction_id: &str) {
+        self.pending_spends
+            .retain(|reservation| reservation.transaction_id != transaction_id);
+    }
+
+    pub fn retain_transactions(&mut self, active_transaction_ids: &[String]) {
+        let active: std::collections::HashSet<&str> =
+            active_transaction_ids.iter().map(String::as_str).collect();
+        self.pending_spends
+            .retain(|reservation| active.contains(reservation.transaction_id.as_str()));
+    }
+
+    pub fn reserved_nonces(&self) -> std::collections::HashSet<String> {
+        self.pending_spends
+            .iter()
+            .map(|reservation| reservation.coin_nonce.clone())
+            .collect()
+    }
+
+    fn upsert_pending(&mut self, reservation: ShieldedSpendReservation) {
+        let nonce = reservation.coin_nonce.clone();
+        self.pending_spends
+            .retain(|existing| existing.coin_nonce != nonce);
+        self.pending_spends.push(reservation);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RelayerSyncState {
     pub last_synced_index: u64,
     pub ledger_context: Option<Vec<u8>>,
@@ -194,6 +249,8 @@ pub struct RelayerSyncState {
     pub unshielded_balance: u128,
     #[serde(default)]
     pub unshielded_wallet: UnshieldedWalletState,
+    #[serde(default)]
+    pub shielded_wallet: ShieldedWalletState,
 }
 
 #[derive(Error, Debug, Serialize)]
@@ -254,6 +311,17 @@ pub trait SyncStateTrait: Send + Sync {
         &self,
         relayer_id: &str,
         state: UnshieldedWalletState,
+    ) -> Result<(), SyncStateError>;
+
+    async fn get_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+    ) -> Result<ShieldedWalletState, SyncStateError>;
+
+    async fn set_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+        state: ShieldedWalletState,
     ) -> Result<(), SyncStateError>;
 
     async fn reset(&self, relayer_id: &str) -> Result<(), SyncStateError>;
@@ -404,6 +472,27 @@ impl SyncStateTrait for RelayerStateRepositoryStorage {
         }
     }
 
+    async fn get_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+    ) -> Result<ShieldedWalletState, SyncStateError> {
+        match self {
+            Self::InMemory(repo) => repo.get_shielded_wallet_state(relayer_id).await,
+            Self::Redis(repo) => repo.get_shielded_wallet_state(relayer_id).await,
+        }
+    }
+
+    async fn set_shielded_wallet_state(
+        &self,
+        relayer_id: &str,
+        state: ShieldedWalletState,
+    ) -> Result<(), SyncStateError> {
+        match self {
+            Self::InMemory(repo) => repo.set_shielded_wallet_state(relayer_id, state).await,
+            Self::Redis(repo) => repo.set_shielded_wallet_state(relayer_id, state).await,
+        }
+    }
+
     async fn reset(&self, relayer_id: &str) -> Result<(), SyncStateError> {
         match self {
             Self::InMemory(repo) => repo.reset(relayer_id).await,
@@ -453,6 +542,66 @@ mod tests {
         assert_eq!(state.unshielded_wallet.applied_transaction_id, 0);
         assert!(state.unshielded_wallet.available_utxos.is_empty());
         assert!(state.unshielded_wallet.pending_utxos.is_empty());
+        assert!(state.shielded_wallet.pending_spends.is_empty());
+    }
+
+    fn shielded_reservation(nonce: &str, tx_id: &str, value: u128) -> ShieldedSpendReservation {
+        ShieldedSpendReservation {
+            coin_nonce: nonce.to_string(),
+            nullifier: Some(format!("nullifier-{nonce}")),
+            commitment: Some(format!("commitment-{nonce}")),
+            transaction_id: tx_id.to_string(),
+            token_type: "token".to_string(),
+            value,
+            created_at: "2026-04-29T00:00:00Z".to_string(),
+            segment_id: Some(2),
+        }
+    }
+
+    #[test]
+    fn shielded_wallet_state_upserts_reservations_by_nonce() {
+        let mut state = ShieldedWalletState::default();
+        state.mark_pending(vec![shielded_reservation("nonce-1", "tx-1", 5)]);
+        state.mark_pending(vec![shielded_reservation("nonce-1", "tx-2", 7)]);
+
+        assert_eq!(state.pending_spends.len(), 1);
+        assert_eq!(state.pending_spends[0].transaction_id, "tx-2");
+        assert_eq!(state.pending_spends[0].value, 7);
+        assert!(state.reserved_nonces().contains("nonce-1"));
+    }
+
+    #[test]
+    fn shielded_wallet_state_releases_reservations_by_transaction() {
+        let mut state = ShieldedWalletState {
+            pending_spends: vec![
+                shielded_reservation("nonce-1", "tx-1", 5),
+                shielded_reservation("nonce-2", "tx-2", 7),
+            ],
+        };
+
+        state.release_by_transaction("tx-1");
+
+        assert_eq!(
+            state.pending_spends,
+            vec![shielded_reservation("nonce-2", "tx-2", 7)]
+        );
+    }
+
+    #[test]
+    fn shielded_wallet_state_prunes_non_active_transactions() {
+        let mut state = ShieldedWalletState {
+            pending_spends: vec![
+                shielded_reservation("nonce-1", "tx-1", 5),
+                shielded_reservation("nonce-2", "tx-2", 7),
+            ],
+        };
+
+        state.retain_transactions(&["tx-2".to_string()]);
+
+        assert_eq!(
+            state.pending_spends,
+            vec![shielded_reservation("nonce-2", "tx-2", 7)]
+        );
     }
 
     #[tokio::test]
@@ -490,6 +639,23 @@ mod tests {
             wallet_state
         );
         assert_eq!(repo.get_unshielded_balance("relayer-1").await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn set_shielded_wallet_state_round_trips_pending_reservations() {
+        let repo = RelayerStateRepositoryStorage::new_in_memory();
+        let wallet_state = ShieldedWalletState {
+            pending_spends: vec![shielded_reservation("nonce-1", "tx-1", 5)],
+        };
+
+        repo.set_shielded_wallet_state("relayer-1", wallet_state.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.get_shielded_wallet_state("relayer-1").await.unwrap(),
+            wallet_state
+        );
     }
 
     #[test]

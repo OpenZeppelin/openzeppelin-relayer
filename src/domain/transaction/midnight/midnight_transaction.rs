@@ -7,9 +7,8 @@ use crate::{
     domain::Transaction,
     jobs::{JobProducerTrait, StatusCheckContext, TransactionSend, TransactionStatusCheck},
     models::{
-        MidnightNetwork, MidnightTransactionData, NetworkTransactionRequest, NetworkType,
-        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
-        TransactionUpdateRequest,
+        MidnightNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepository, RelayerStateRepositoryStorage, Repository, SyncStateTrait,
@@ -154,44 +153,34 @@ where
         Ok(())
     }
 
-    async fn ensure_no_other_inflight_shielded_spend(
+    async fn release_pending_shielded_spends(
         &self,
         tx: &TransactionRepoModel,
-        data: &MidnightTransactionData,
+        reason: &'static str,
     ) -> Result<(), TransactionError> {
-        if !midnight_data_has_shielded_spend(data) {
-            return Ok(());
-        }
-
-        let active_statuses = [
-            TransactionStatus::Pending,
-            TransactionStatus::Sent,
-            TransactionStatus::Submitted,
-            TransactionStatus::Mined,
-        ];
-        let active = self
-            .transaction_repository
-            .find_by_status(&self.relayer.id, &active_statuses)
+        self.sync_manager
+            .release_shielded_pending_for_tx(&tx.id)
             .await
-            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to release pending shielded reservations after {reason}: {e}"
+                ))
+            })?;
+        Ok(())
+    }
 
-        let has_other_shielded_spend = active.into_iter().any(|candidate| {
-            candidate.id != tx.id
-                && candidate
-                    .network_data
-                    .get_midnight_transaction_data()
-                    .map(|data| midnight_data_has_shielded_spend(&data))
-                    .unwrap_or(false)
-        });
-
-        if has_other_shielded_spend {
-            return Err(TransactionError::ValidationError(
-                "Another shielded Midnight spend is already in flight for this relayer. \
-                 Wait for it to confirm or fail before submitting another shielded spend."
-                    .into(),
-            ));
-        }
-
+    async fn clear_confirmed_shielded_spends(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        self.sync_manager
+            .clear_confirmed_shielded_pending(&tx.id)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to clear confirmed shielded reservations: {e}"
+                ))
+            })?;
         Ok(())
     }
 }
@@ -217,8 +206,6 @@ where
         debug!(tx_id = %tx.id, "Preparing Midnight transaction");
 
         let midnight_data = tx.network_data.get_midnight_transaction_data()?;
-        self.ensure_no_other_inflight_shielded_spend(&tx, &midnight_data)
-            .await?;
 
         // Build the transaction using StandardTrasactionInfo.
         //
@@ -298,6 +285,28 @@ where
                 "Failed to create isolated transaction build context: {e}"
             ))
         })?;
+        let shielded_wallet_state = self
+            .sync_manager
+            .get_shielded_wallet_state()
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to load shielded spend reservations: {e}"
+                ))
+            })?;
+        let active_shielded_reservations: Vec<_> = shielded_wallet_state
+            .pending_spends
+            .iter()
+            .filter(|reservation| reservation.transaction_id != tx.id)
+            .cloned()
+            .collect();
+        self.ledger_ctx
+            .apply_shielded_reservations_to_context(&build_context, &active_shielded_reservations)
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Failed to apply shielded spend reservations: {e}"
+                ))
+            })?;
         let mut tx_info =
             StandardTrasactionInfo::new_from_context(build_context.clone(), proof_server, None);
 
@@ -442,6 +451,9 @@ where
         };
 
         let pending_unshielded_keys = collect_unshielded_spend_keys(&proven_tx);
+        let pending_shielded_reservations =
+            self.ledger_ctx
+                .collect_pending_shielded_spends(&build_context, &tx.id, None);
 
         // Serialize using tagged serialization
         let serialized_bytes =
@@ -485,6 +497,17 @@ where
             )
             .await
             .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        if !pending_shielded_reservations.is_empty() {
+            self.sync_manager
+                .mark_shielded_pending(&tx.id, pending_shielded_reservations)
+                .await
+                .map_err(|e| {
+                    TransactionError::UnexpectedError(format!(
+                        "Failed to persist shielded spend reservations: {e}"
+                    ))
+                })?;
+        }
 
         let updated = self
             .transaction_repository
@@ -632,6 +655,8 @@ where
         tx: TransactionRepoModel,
     ) -> Result<(), TransactionError> {
         self.release_pending_unshielded_spends(&tx, "final submit failure")
+            .await?;
+        self.release_pending_shielded_spends(&tx, "final submit failure")
             .await
     }
 
@@ -761,6 +786,24 @@ where
                     "failed to clean up pending unshielded UTXOs after failed transaction"
                 );
             }
+            if let Err(e) = self
+                .release_pending_shielded_spends(&tx, "failed transaction")
+                .await
+            {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to clean up pending shielded reservations after failed transaction"
+                );
+            }
+        } else if new_status == TransactionStatus::Confirmed {
+            if let Err(e) = self.clear_confirmed_shielded_spends(&tx).await {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to clear pending shielded reservations after confirmed transaction"
+                );
+            }
         }
 
         let updated = self
@@ -844,33 +887,6 @@ fn collect_unshielded_spend_keys(
         }
     }
     keys
-}
-
-fn midnight_data_has_shielded_spend(data: &MidnightTransactionData) -> bool {
-    data.guaranteed_offer
-        .as_ref()
-        .map(shielded_offer_has_inputs)
-        .unwrap_or(false)
-        || data
-            .fallible_shielded_offers
-            .iter()
-            .any(|fallible| shielded_offer_has_inputs(&fallible.offer))
-        || data.intents.iter().any(|intent| {
-            intent
-                .guaranteed_shielded_offer
-                .as_ref()
-                .map(shielded_offer_has_inputs)
-                .unwrap_or(false)
-                || intent
-                    .fallible_shielded_offer
-                    .as_ref()
-                    .map(shielded_offer_has_inputs)
-                    .unwrap_or(false)
-        })
-}
-
-fn shielded_offer_has_inputs(offer: &crate::models::MidnightOfferRequest) -> bool {
-    matches!(offer, crate::models::MidnightOfferRequest::Shielded { inputs, .. } if !inputs.is_empty())
 }
 
 fn top_level_unshielded_intent(
@@ -1261,46 +1277,6 @@ mod tests {
             });
     }
 
-    fn empty_midnight_data() -> MidnightTransactionData {
-        MidnightTransactionData {
-            hash: None,
-            extrinsic_hash: None,
-            block_hash: None,
-            serialized_tx: None,
-            guaranteed_offer: None,
-            intents: vec![],
-            fallible_offers: vec![],
-            fallible_shielded_offers: vec![],
-            pending_unshielded_keys: vec![],
-        }
-    }
-
-    #[test]
-    fn detects_shielded_spend_for_inflight_guard() {
-        let mut data = empty_midnight_data();
-        data.fallible_shielded_offers = vec![crate::models::MidnightFallibleOfferRequest {
-            segment_id: 2,
-            offer: simple_shielded_offer("NIGHT"),
-        }];
-
-        assert!(midnight_data_has_shielded_spend(&data));
-    }
-
-    #[test]
-    fn does_not_guard_shielded_output_only_offers() {
-        let mut data = empty_midnight_data();
-        data.guaranteed_offer = Some(crate::models::MidnightOfferRequest::Shielded {
-            inputs: vec![],
-            outputs: vec![crate::models::MidnightShieldedOutputRequest {
-                destination: "self".into(),
-                token_type: "NIGHT".into(),
-                value: "1".into(),
-            }],
-        });
-
-        assert!(!midnight_data_has_shielded_spend(&data));
-    }
-
     #[test]
     fn top_level_unshielded_offer_routes_to_guaranteed_unshielded_slot() {
         let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
@@ -1417,6 +1393,54 @@ mod tests {
 
         assert_eq!(built.inputs.iter().count(), 1);
         assert_eq!(built.outputs.iter().count(), 2);
+    }
+
+    #[test]
+    fn shielded_reservation_excludes_coin_from_next_offer_build() {
+        use midnight_node_ledger_helpers::{HashOutput, SeedableRng, ShieldedTokenType};
+
+        let manager = crate::services::sync::midnight::handler::LedgerContextManager::new(
+            &[7u8; 32], "preview",
+        );
+        let wallet_seed = manager.wallet_seed().clone();
+        let token = ShieldedTokenType(HashOutput([11u8; 32]));
+        let token_hex = hex::encode(token.0 .0);
+        credit_shielded_token(&manager, token, 1);
+        credit_shielded_token(&manager, token, 1);
+        let reserved = manager.shielded_coin_refs()[0].clone();
+
+        let build_context = manager.transaction_build_context().unwrap();
+        manager
+            .apply_shielded_reservations_to_context(
+                &build_context,
+                &[crate::repositories::ShieldedSpendReservation {
+                    coin_nonce: reserved.coin_nonce.clone(),
+                    nullifier: reserved.nullifier.clone(),
+                    commitment: reserved.commitment.clone(),
+                    transaction_id: "tx-existing".to_string(),
+                    token_type: reserved.token_type.clone(),
+                    value: reserved.value,
+                    created_at: "2026-04-29T00:00:00Z".to_string(),
+                    segment_id: None,
+                }],
+            )
+            .unwrap();
+
+        let mut offer = build_shielded_offer(
+            &simple_shielded_offer(&token_hex),
+            &wallet_seed,
+            build_context.clone(),
+        )
+        .unwrap();
+        let mut rng = midnight_node_ledger_helpers::StdRng::seed_from_u64(0x44);
+        offer.build(&mut rng, build_context.clone()).unwrap();
+
+        let new_reservations =
+            manager.collect_pending_shielded_spends(&build_context, "tx-new", None);
+
+        assert_eq!(new_reservations.len(), 1);
+        assert_ne!(new_reservations[0].coin_nonce, reserved.coin_nonce);
+        assert_eq!(new_reservations[0].transaction_id, "tx-new");
     }
 }
 

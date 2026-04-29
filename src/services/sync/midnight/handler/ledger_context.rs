@@ -14,6 +14,8 @@ use midnight_node_ledger_helpers::{
 };
 use midnight_node_metadata::midnight_metadata_latest as mn_meta;
 
+use crate::repositories::{ShieldedSpendReservation, ShieldedWalletState};
+
 /// The concrete finalized transaction type from the chain.
 /// This matches the tagged format `midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1])`.
 type MnFinalizedTransaction =
@@ -25,6 +27,15 @@ type MnSerdeTransaction = midnight_node_ledger_helpers::SerdeTransaction<
     midnight_node_ledger_helpers::ProofMarker,
     DefaultDB,
 >;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShieldedCoinRef {
+    pub coin_nonce: String,
+    pub nullifier: Option<String>,
+    pub commitment: Option<String>,
+    pub token_type: String,
+    pub value: u128,
+}
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     payload
@@ -301,6 +312,109 @@ impl LedgerContextManager {
                 }
             });
         totals
+    }
+
+    pub fn shielded_balances_excluding_reservations(
+        &self,
+        shielded_wallet: &ShieldedWalletState,
+    ) -> std::collections::HashMap<String, u128> {
+        let reserved_nonces = shielded_wallet.reserved_nonces();
+        self.shielded_coin_refs()
+            .into_iter()
+            .filter(|coin| !reserved_nonces.contains(coin.coin_nonce.as_str()))
+            .fold(std::collections::HashMap::new(), |mut totals, coin| {
+                let total = totals.entry(coin.token_type).or_insert(0u128);
+                *total = total.saturating_add(coin.value);
+                totals
+            })
+    }
+
+    pub fn shielded_coin_refs(&self) -> Vec<ShieldedCoinRef> {
+        self.shielded_coin_refs_in_context(&self.context)
+    }
+
+    pub fn shielded_coin_refs_in_context(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+    ) -> Vec<ShieldedCoinRef> {
+        let mut refs = Vec::new();
+        context.with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+            for (nullifier, coin) in wallet.shielded.state.coins.iter() {
+                if wallet
+                    .shielded
+                    .state
+                    .pending_spends
+                    .contains_key(&nullifier)
+                {
+                    continue;
+                }
+                refs.push(ShieldedCoinRef {
+                    coin_nonce: hex::encode(coin.nonce.0 .0),
+                    nullifier: Some(hex::encode(nullifier.0 .0)),
+                    commitment: None,
+                    token_type: hex::encode(coin.type_.0 .0),
+                    value: coin.value,
+                });
+            }
+        });
+        refs
+    }
+
+    pub fn apply_shielded_reservations_to_context(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        reservations: &[ShieldedSpendReservation],
+    ) -> Result<(), LedgerContextError> {
+        if reservations.is_empty() {
+            return Ok(());
+        }
+
+        let reserved_nonces: std::collections::HashSet<&str> =
+            reservations.iter().map(|r| r.coin_nonce.as_str()).collect();
+        context.with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+            let nullifiers_to_remove: Vec<_> = wallet
+                .shielded
+                .state
+                .coins
+                .iter()
+                .filter_map(|(nullifier, coin)| {
+                    reserved_nonces
+                        .contains(hex::encode(coin.nonce.0 .0).as_str())
+                        .then_some(nullifier)
+                })
+                .collect();
+
+            for nullifier in nullifiers_to_remove {
+                wallet.shielded.state.coins = wallet.shielded.state.coins.remove(&nullifier);
+            }
+        });
+
+        Ok(())
+    }
+
+    pub fn collect_pending_shielded_spends(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        transaction_id: &str,
+        segment_id: Option<u16>,
+    ) -> Vec<ShieldedSpendReservation> {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let mut reservations = Vec::new();
+        context.with_wallet_from_seed(self.wallet_seed.clone(), |wallet| {
+            for (nullifier, coin) in wallet.shielded.state.pending_spends.iter() {
+                reservations.push(ShieldedSpendReservation {
+                    coin_nonce: hex::encode(coin.nonce.0 .0),
+                    nullifier: Some(hex::encode(nullifier.0 .0)),
+                    commitment: None,
+                    transaction_id: transaction_id.to_string(),
+                    token_type: hex::encode(coin.type_.0 .0),
+                    value: coin.value,
+                    created_at: created_at.clone(),
+                    segment_id,
+                });
+            }
+        });
+        reservations
     }
 
     /// Apply a collapsed merkle-tree update to the wallet's zswap state.
@@ -886,7 +1000,7 @@ pub fn sync_dust_trees_to_ledger_ctx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repositories::UnshieldedUtxo;
+    use crate::repositories::{ShieldedSpendReservation, UnshieldedUtxo};
 
     fn test_utxo(intent_hash: &str, output_index: u32, value: u128) -> UnshieldedUtxo {
         UnshieldedUtxo {
@@ -898,6 +1012,43 @@ mod tests {
             ctime: None,
             registered_for_dust_generation: false,
         }
+    }
+
+    fn credit_shielded_token(
+        manager: &LedgerContextManager,
+        token_type: midnight_node_ledger_helpers::ShieldedTokenType,
+        value: u128,
+        rng_seed: u64,
+    ) {
+        use midnight_node_ledger_helpers::{CoinInfo, Offer, OsRng, Output, Rng, SeedableRng};
+
+        let wallet_seed = manager.wallet_seed().clone();
+        let mut rng = midnight_node_ledger_helpers::StdRng::seed_from_u64(rng_seed);
+        manager
+            .context()
+            .with_wallet_from_seed(wallet_seed, |wallet| {
+                let secret_keys = wallet.shielded.secret_keys().clone();
+                let coin = CoinInfo {
+                    nonce: OsRng.r#gen(),
+                    type_: token_type,
+                    value,
+                };
+                let output = Output::new(
+                    &mut rng,
+                    &coin,
+                    None,
+                    &secret_keys.coin_public_key(),
+                    Some(secret_keys.enc_public_key()),
+                )
+                .unwrap();
+                let offer = Offer {
+                    inputs: vec![].into(),
+                    outputs: vec![output].into(),
+                    transient: vec![].into(),
+                    deltas: vec![].into(),
+                };
+                wallet.shielded.state = wallet.shielded.state.apply(&secret_keys, &offer);
+            });
     }
 
     #[test]
@@ -932,5 +1083,77 @@ mod tests {
             manager.context().latest_block_context().tblock,
             Timestamp::from_secs(tblock_secs)
         );
+    }
+
+    #[test]
+    fn shielded_coin_refs_expose_nonce_first_metadata() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let token = midnight_node_ledger_helpers::ShieldedTokenType(HashOutput([9u8; 32]));
+        credit_shielded_token(&manager, token, 5, 0x42);
+
+        let refs = manager.shielded_coin_refs();
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].token_type, hex::encode(token.0 .0));
+        assert_eq!(refs[0].value, 5);
+        assert!(!refs[0].coin_nonce.is_empty());
+        assert!(refs[0].nullifier.is_some());
+    }
+
+    #[test]
+    fn shielded_reservations_remove_reserved_nonces_from_build_context() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let token = midnight_node_ledger_helpers::ShieldedTokenType(HashOutput([9u8; 32]));
+        credit_shielded_token(&manager, token, 5, 0x42);
+        credit_shielded_token(&manager, token, 7, 0x43);
+        let reserved = manager.shielded_coin_refs()[0].clone();
+        let build_context = manager.transaction_build_context().unwrap();
+
+        manager
+            .apply_shielded_reservations_to_context(
+                &build_context,
+                &[ShieldedSpendReservation {
+                    coin_nonce: reserved.coin_nonce.clone(),
+                    nullifier: reserved.nullifier.clone(),
+                    commitment: reserved.commitment.clone(),
+                    transaction_id: "tx-1".to_string(),
+                    token_type: reserved.token_type.clone(),
+                    value: reserved.value,
+                    created_at: "2026-04-29T00:00:00Z".to_string(),
+                    segment_id: None,
+                }],
+            )
+            .unwrap();
+
+        let remaining = manager.shielded_coin_refs_in_context(&build_context);
+
+        assert_eq!(remaining.len(), 1);
+        assert_ne!(remaining[0].coin_nonce, reserved.coin_nonce);
+    }
+
+    #[test]
+    fn shielded_balance_excludes_persisted_reservations() {
+        let manager = LedgerContextManager::new(&[7u8; 32], "preview");
+        let token = midnight_node_ledger_helpers::ShieldedTokenType(HashOutput([9u8; 32]));
+        let token_hex = hex::encode(token.0 .0);
+        credit_shielded_token(&manager, token, 5, 0x42);
+        credit_shielded_token(&manager, token, 7, 0x43);
+        let reserved = manager.shielded_coin_refs()[0].clone();
+        let wallet_state = crate::repositories::ShieldedWalletState {
+            pending_spends: vec![ShieldedSpendReservation {
+                coin_nonce: reserved.coin_nonce,
+                nullifier: reserved.nullifier,
+                commitment: reserved.commitment,
+                transaction_id: "tx-1".to_string(),
+                token_type: reserved.token_type,
+                value: reserved.value,
+                created_at: "2026-04-29T00:00:00Z".to_string(),
+                segment_id: None,
+            }],
+        };
+
+        let balances = manager.shielded_balances_excluding_reservations(&wallet_state);
+
+        assert_eq!(balances.get(&token_hex), Some(&(12 - reserved.value)));
     }
 }
