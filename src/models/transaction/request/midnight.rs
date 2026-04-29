@@ -5,10 +5,9 @@ use utoipa::ToSchema;
 
 /// Segment ID used for the top-level `guaranteed_offer` field.
 ///
-/// Despite its API name, the top-level `guaranteed_offer` is routed through a
-/// **fallible** segment — DUST fee handling currently requires fallible
-/// segments, so the simplest-case transfer lives on segment 1. Intents and
-/// `fallible_offers` cannot reuse segment 1 when `guaranteed_offer` is set.
+/// The builder uses this as the reserved segment for top-level unshielded
+/// offers, so explicit `intents` and `fallible_offers` cannot reuse it when
+/// `guaranteed_offer` is set.
 pub const GUARANTEED_OFFER_SEGMENT_ID: u16 = 1;
 
 #[derive(Deserialize, Serialize, ToSchema, Debug, Clone, PartialEq)]
@@ -65,8 +64,6 @@ pub enum MidnightOfferRequest {
         #[serde(default)]
         outputs: Vec<MidnightUnshieldedOutputRequest>,
     },
-    /// Accepted by the API today, rejected by the builder until PR-3 lands
-    /// shielded sync + `ZswapOffer` construction.
     Shielded {
         #[serde(default)]
         inputs: Vec<MidnightShieldedInputRequest>,
@@ -228,11 +225,10 @@ impl MidnightTransactionRequest {
 
 /// Per-offer size caps and builder-feature gates.
 ///
-/// `allow_shielded`: PR-3 v1 only accepts shielded offers in the top-level
-/// `guaranteed_offer` slot, because the helpers' `BuildOutput::build`
-/// hardcodes `Segment::Guaranteed`. All other positions (fallible_offers
-/// entries, intent-nested offer slots) still reject shielded with a clear
-/// "not yet supported" message.
+/// `allow_shielded`: Shielded offers are supported in top-level
+/// `guaranteed_offer` and in `fallible_shielded_offers`. They are rejected
+/// from unshielded fallible slots and intent-nested shielded slots because
+/// those API surfaces do not map to the builder yet.
 fn validate_offer(
     offer: &MidnightOfferRequest,
     loc: &str,
@@ -250,8 +246,48 @@ fn validate_offer(
     }
     if offer.is_shielded() && !allow_shielded {
         return Err(ApiError::BadRequest(format!(
-            "{loc}: shielded offers are only supported today in the top-level `guaranteed_offer`; fallible-shielded and intent-nested-shielded are follow-ups",
+            "{loc}: shielded offers are only supported in top-level `guaranteed_offer` or `fallible_shielded_offers`",
         )));
+    }
+    validate_supported_offer_fields(offer, loc)?;
+    Ok(())
+}
+
+fn validate_supported_offer_fields(
+    offer: &MidnightOfferRequest,
+    loc: &str,
+) -> Result<(), ApiError> {
+    match offer {
+        MidnightOfferRequest::Unshielded { inputs, outputs } => {
+            for (idx, input) in inputs.iter().enumerate() {
+                if input.origin != "self" {
+                    return Err(ApiError::BadRequest(format!(
+                        "{loc}.inputs[{idx}].origin: only \"self\" is supported"
+                    )));
+                }
+                if input.token_type != "NIGHT" {
+                    return Err(ApiError::BadRequest(format!(
+                        "{loc}.inputs[{idx}].token_type: only \"NIGHT\" is supported for unshielded inputs"
+                    )));
+                }
+            }
+            for (idx, output) in outputs.iter().enumerate() {
+                if output.token_type != "NIGHT" {
+                    return Err(ApiError::BadRequest(format!(
+                        "{loc}.outputs[{idx}].token_type: only \"NIGHT\" is supported for unshielded outputs"
+                    )));
+                }
+            }
+        }
+        MidnightOfferRequest::Shielded { inputs, .. } => {
+            for (idx, input) in inputs.iter().enumerate() {
+                if input.origin != "self" {
+                    return Err(ApiError::BadRequest(format!(
+                        "{loc}.inputs[{idx}].origin: only \"self\" is supported"
+                    )));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -450,8 +486,6 @@ mod tests {
 
     #[test]
     fn rejects_shielded_offer_in_fallible_offers() {
-        // Fallible-shielded still rejected in PR-3 v1 (helpers hardcode
-        // `Segment::Guaranteed`; would need direct zswap crate usage).
         let req = MidnightTransactionRequest {
             guaranteed_offer: None,
             intents: vec![],
@@ -464,8 +498,65 @@ mod tests {
         };
         let err = req.validate(&relayer()).unwrap_err();
         assert!(
-            matches!(err, ApiError::BadRequest(ref m) if m.contains("shielded offers are only supported today in the top-level"))
+            matches!(err, ApiError::BadRequest(ref m) if m.contains("top-level `guaranteed_offer` or `fallible_shielded_offers`"))
         );
+    }
+
+    #[test]
+    fn rejects_unshielded_input_origin_other_than_self() {
+        let mut offer = simple_unshielded_offer();
+        let MidnightOfferRequest::Unshielded { inputs, .. } = &mut offer else {
+            panic!("expected unshielded offer");
+        };
+        inputs[0].origin = "mn_addr_preview1other".into();
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: Some(offer),
+            intents: vec![],
+            fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(ref m) if m.contains("only \"self\"")));
+    }
+
+    #[test]
+    fn rejects_unshielded_token_type_other_than_night() {
+        let mut offer = simple_unshielded_offer();
+        let MidnightOfferRequest::Unshielded { inputs, outputs } = &mut offer else {
+            panic!("expected unshielded offer");
+        };
+        inputs[0].token_type = "DUST".into();
+        outputs[0].token_type = "DUST".into();
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: Some(offer),
+            intents: vec![],
+            fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(ref m) if m.contains("only \"NIGHT\"")));
+    }
+
+    #[test]
+    fn rejects_shielded_input_origin_other_than_self() {
+        let req = MidnightTransactionRequest {
+            guaranteed_offer: Some(MidnightOfferRequest::Shielded {
+                inputs: vec![MidnightShieldedInputRequest {
+                    origin: "mn_shield-addr_preview1other".into(),
+                    token_type: "NIGHT".into(),
+                    value: "1".into(),
+                }],
+                outputs: vec![],
+            }),
+            intents: vec![],
+            fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            ttl: None,
+        };
+        let err = req.validate(&relayer()).unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(ref m) if m.contains("only \"self\"")));
     }
 
     #[test]

@@ -91,6 +91,18 @@ pub trait Transaction {
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError>;
 
+    /// Cleans up network-specific local reservations after submit retries are exhausted.
+    ///
+    /// Most networks do not reserve local spend state during submit, so the
+    /// default is a no-op. Midnight uses this to release UTXOs that were
+    /// reserved during prepare but never reached the chain.
+    async fn handle_transaction_submission_failure(
+        &self,
+        _tx: TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        Ok(())
+    }
+
     /// Resubmits a transaction with updated parameters.
     ///
     /// # Arguments
@@ -258,6 +270,27 @@ impl Transaction for NetworkTransaction {
             NetworkTransaction::Stellar(relayer) => relayer.submit_transaction(tx).await,
             #[cfg(feature = "midnight")]
             NetworkTransaction::Midnight(relayer) => relayer.submit_transaction(tx).await,
+        }
+    }
+
+    async fn handle_transaction_submission_failure(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        match self {
+            NetworkTransaction::Evm(relayer) => {
+                relayer.handle_transaction_submission_failure(tx).await
+            }
+            NetworkTransaction::Solana(relayer) => {
+                relayer.handle_transaction_submission_failure(tx).await
+            }
+            NetworkTransaction::Stellar(relayer) => {
+                relayer.handle_transaction_submission_failure(tx).await
+            }
+            #[cfg(feature = "midnight")]
+            NetworkTransaction::Midnight(relayer) => {
+                relayer.handle_transaction_submission_failure(tx).await
+            }
         }
     }
     /// Resubmits a transaction with updated parameters based on the network type.

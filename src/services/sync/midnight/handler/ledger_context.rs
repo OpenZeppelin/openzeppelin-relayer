@@ -440,7 +440,9 @@ impl LedgerContextManager {
 
     /// Restore the ledger state from previously serialized bytes.
     pub fn restore_state(&self, bytes: &[u8]) -> Result<(), LedgerContextError> {
-        self.context.update_ledger_state_from_bytes(bytes);
+        self.context
+            .update_ledger_state_from_bytes(bytes)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
         info!("LedgerContext state restored from persisted bytes");
         Ok(())
     }
@@ -516,7 +518,9 @@ impl LedgerContextManager {
                 // Otherwise, fall back to parameters-only bootstrap.
                 let tag_prefix = b"midnight:ledger-state";
                 if bytes.len() > 20 && bytes.starts_with(tag_prefix) {
-                    self.context.update_ledger_state_from_bytes(&bytes);
+                    self.context
+                        .update_ledger_state_from_bytes(&bytes)
+                        .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
                     info!("LedgerContext bootstrapped with full chain state");
                 } else {
                     warn!(
@@ -566,7 +570,9 @@ impl LedgerContextManager {
 
         let bytes = midnight_node_ledger_helpers::serialize(&new_state)
             .map_err(|e| LedgerContextError::SerializationError(format!("serialize: {e}")))?;
-        context.update_ledger_state_from_bytes(&bytes);
+        context
+            .update_ledger_state_from_bytes(&bytes)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
 
         info!("LedgerContext bootstrapped with parameters only");
         Ok(())
@@ -626,7 +632,9 @@ impl LedgerContextManager {
         // Re-serialize and inject
         let new_bytes = midnight_node_ledger_helpers::serialize(&state)
             .map_err(|e| LedgerContextError::SerializationError(e.to_string()))?;
-        self.context.update_ledger_state_from_bytes(&new_bytes);
+        self.context
+            .update_ledger_state_from_bytes(&new_bytes)
+            .map_err(|e| LedgerContextError::ContextError(format!("{e}")))?;
 
         // Verify injection by listing UTXOs
         let found_utxos = self.unshielded_utxos();

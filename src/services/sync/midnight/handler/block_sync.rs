@@ -55,6 +55,7 @@ pub async fn sync_blocks(
                 }
                 Err(e) => {
                     // Don't log every skip — most blocks have no Midnight txs
+                    debug!(height, error = %e, "skipping block during Midnight block sync");
                     result.blocks_skipped += 1;
                 }
             }
@@ -131,7 +132,9 @@ async fn process_genesis(
     if let Some(genesis_state_hex) = props.get("genesis_state").and_then(|v| v.as_str()) {
         let genesis_bytes = hex::decode(genesis_state_hex)
             .map_err(|e| BlockSyncError::RpcError(format!("genesis hex: {e}")))?;
-        context.update_ledger_state_from_bytes(&genesis_bytes);
+        context
+            .update_ledger_state_from_bytes(&genesis_bytes)
+            .map_err(|e| BlockSyncError::RpcError(format!("genesis state update: {e}")))?;
         info!(bytes = genesis_bytes.len(), "Genesis state applied");
     }
 
@@ -205,7 +208,9 @@ async fn process_block(
         tblock, // last_block_time approximation
     );
 
-    context.update_from_block(&midnight_txs, &block_context, None, None);
+    context
+        .update_from_block(&midnight_txs, &block_context, None, None)
+        .map_err(|e| BlockSyncError::RpcError(format!("block state update: {e}")))?;
 
     Ok(midnight_txs.len() as u64)
 }

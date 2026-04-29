@@ -8,7 +8,7 @@
 use actix_web::web::ThinData;
 use chrono::Utc;
 use eyre::Result;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     constants::{
@@ -56,6 +56,7 @@ pub async fn transaction_submission_handler(
 
     let command = job.data.command.clone();
     let tx_id = job.data.transaction_id.clone();
+    let relayer_id = job.data.relayer_id.clone();
     let job_timestamp = job.timestamp.clone();
     let max_retries = get_max_retries(&command);
     let result = handle_request(job.data, &state, &job_timestamp).await;
@@ -71,6 +72,9 @@ pub async fn transaction_submission_handler(
             command,
             TransactionCommand::Submit | TransactionCommand::Resend
         ) {
+            if ctx.attempt >= max_retries {
+                cleanup_final_submission_failure(&tx_id, &relayer_id, &state).await;
+            }
             mark_tx_failed_on_final_attempt(
                 &tx_id,
                 state.transaction_repository.as_ref(),
@@ -84,6 +88,41 @@ pub async fn transaction_submission_handler(
 
     // Handle result with command-specific retry logic
     handle_result(result, &ctx, "Transaction Submission", max_retries)
+}
+
+async fn cleanup_final_submission_failure(
+    tx_id: &str,
+    relayer_id: &str,
+    state: &ThinData<DefaultAppState>,
+) {
+    let Ok(relayer_transaction) = get_relayer_transaction(relayer_id.to_string(), state).await
+    else {
+        warn!(
+            tx_id,
+            relayer_id, "failed to load relayer transaction for final submit cleanup"
+        );
+        return;
+    };
+
+    let Ok(transaction) = get_transaction_by_id(tx_id.to_string(), state).await else {
+        warn!(
+            tx_id,
+            relayer_id, "failed to load transaction for final submit cleanup"
+        );
+        return;
+    };
+
+    if let Err(e) = relayer_transaction
+        .handle_transaction_submission_failure(transaction)
+        .await
+    {
+        warn!(
+            tx_id,
+            relayer_id,
+            error = %e,
+            "network-specific final submit cleanup failed"
+        );
+    }
 }
 
 /// Get max retry count based on command type

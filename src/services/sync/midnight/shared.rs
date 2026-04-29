@@ -287,10 +287,8 @@ impl SharedDustSyncTask {
                 return Ok(());
             }
             match self.subscribe_and_process(last_applied_id).await {
-                Ok(new_last) => {
-                    // Clean exit from inner loop (shutdown path). Preserve
-                    // cursor state in case the outer loop reconnects.
-                    last_applied_id = new_last.max(last_applied_id);
+                Ok(_new_last) => {
+                    // Clean exit from inner loop (shutdown path).
                     return Ok(());
                 }
                 Err((e, high_water)) => {
@@ -618,13 +616,21 @@ impl SharedDustSyncTask {
                     );
                     let empty_txs: Vec<SerdeTransaction<Signature, ProofMarker, DefaultDB>> =
                         Vec::new();
-                    self.context
-                        .update_from_block(&empty_txs, &block_context, None, None);
-                    debug!(
-                        network_id = %self.network_id,
-                        tblock = tblock_secs,
-                        "latest_block_context refreshed"
-                    );
+                    match self
+                        .context
+                        .update_from_block(&empty_txs, &block_context, None, None)
+                    {
+                        Ok(_) => debug!(
+                            network_id = %self.network_id,
+                            tblock = tblock_secs,
+                            "latest_block_context refreshed"
+                        ),
+                        Err(e) => debug!(
+                            network_id = %self.network_id,
+                            error = %e,
+                            "failed to refresh latest_block_context"
+                        ),
+                    }
                 }
             }
             Ok(None) => {}

@@ -7,8 +7,9 @@ use crate::{
     domain::Transaction,
     jobs::{JobProducerTrait, StatusCheckContext, TransactionSend, TransactionStatusCheck},
     models::{
-        MidnightNetwork, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
-        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        MidnightNetwork, MidnightTransactionData, NetworkTransactionRequest, NetworkType,
+        RelayerRepoModel, TransactionError, TransactionRepoModel, TransactionStatus,
+        TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepository, RelayerStateRepositoryStorage, Repository, SyncStateTrait,
@@ -118,6 +119,81 @@ where
 
         Ok(())
     }
+
+    async fn release_pending_unshielded_spends(
+        &self,
+        tx: &TransactionRepoModel,
+        reason: &'static str,
+    ) -> Result<(), TransactionError> {
+        let midnight_data = tx.network_data.get_midnight_transaction_data()?;
+        if midnight_data.pending_unshielded_keys.is_empty() {
+            return Ok(());
+        }
+
+        match self
+            .sync_manager
+            .release_unshielded_pending_by_keys(&midnight_data.pending_unshielded_keys)
+            .await
+        {
+            Ok(wallet_state) => {
+                self.ledger_ctx
+                    .reconcile_unshielded_utxos(&wallet_state.available_utxos)
+                    .map_err(|e| {
+                        TransactionError::UnexpectedError(format!(
+                            "Failed to reconcile unshielded UTXOs after {reason}: {e}"
+                        ))
+                    })?;
+            }
+            Err(e) => {
+                return Err(TransactionError::UnexpectedError(format!(
+                    "Failed to release pending unshielded UTXOs after {reason}: {e}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_no_other_inflight_shielded_spend(
+        &self,
+        tx: &TransactionRepoModel,
+        data: &MidnightTransactionData,
+    ) -> Result<(), TransactionError> {
+        if !midnight_data_has_shielded_spend(data) {
+            return Ok(());
+        }
+
+        let active_statuses = [
+            TransactionStatus::Pending,
+            TransactionStatus::Sent,
+            TransactionStatus::Submitted,
+            TransactionStatus::Mined,
+        ];
+        let active = self
+            .transaction_repository
+            .find_by_status(&self.relayer.id, &active_statuses)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        let has_other_shielded_spend = active.into_iter().any(|candidate| {
+            candidate.id != tx.id
+                && candidate
+                    .network_data
+                    .get_midnight_transaction_data()
+                    .map(|data| midnight_data_has_shielded_spend(&data))
+                    .unwrap_or(false)
+        });
+
+        if has_other_shielded_spend {
+            return Err(TransactionError::ValidationError(
+                "Another shielded Midnight spend is already in flight for this relayer. \
+                 Wait for it to confirm or fail before submitting another shielded spend."
+                    .into(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -141,6 +217,8 @@ where
         debug!(tx_id = %tx.id, "Preparing Midnight transaction");
 
         let midnight_data = tx.network_data.get_midnight_transaction_data()?;
+        self.ensure_no_other_inflight_shielded_spend(&tx, &midnight_data)
+            .await?;
 
         // Build the transaction using StandardTrasactionInfo.
         //
@@ -232,18 +310,18 @@ where
 
         // Build intents from the request's three surfaces:
         //
-        // 1. `guaranteed_offer` — sugar for a single fallible unshielded offer
-        //    at `GUARANTEED_OFFER_SEGMENT_ID` (segment 1). Named "guaranteed"
-        //    at the API layer for caller-facing simplicity, but routed through
-        //    a fallible segment because DUST fee payment requires it.
+        // 1. `guaranteed_offer` — sugar for a top-level transfer. Unshielded
+        //    offers are routed through a guaranteed unshielded intent at the
+        //    reserved segment, while shielded offers use the transaction's
+        //    guaranteed shielded slot.
         // 2. `fallible_offers[]` — one intent per offer, each at its own
         //    segment_id, with `fallible_unshielded_offer: Some(...)`.
         // 3. `intents[]` — general case; callers choose which offer slots to
         //    populate. `guaranteed_unshielded_offer` + `fallible_unshielded_offer`
         //    within the same intent are both allowed by the library.
         //
-        // Shielded offers and contract actions are rejected at the API layer
-        // in PR-1; PR-2 lifts the action gate, PR-3 lifts the shielded gate.
+        // Contract actions and intent-nested shielded offers are rejected at
+        // the API layer until their builder surfaces are implemented.
         use crate::models::transaction::request::midnight::GUARANTEED_OFFER_SEGMENT_ID;
 
         if let Some(offer_req) = midnight_data.guaranteed_offer.as_ref() {
@@ -549,6 +627,14 @@ where
         Ok(updated)
     }
 
+    async fn handle_transaction_submission_failure(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        self.release_pending_unshielded_spends(&tx, "final submit failure")
+            .await
+    }
+
     async fn resubmit_transaction(
         &self,
         _tx: TransactionRepoModel,
@@ -664,33 +750,16 @@ where
             None
         };
 
-        if new_status == TransactionStatus::Failed
-            && !midnight_data.pending_unshielded_keys.is_empty()
-        {
-            match self
-                .sync_manager
-                .release_unshielded_pending_by_keys(&midnight_data.pending_unshielded_keys)
+        if new_status == TransactionStatus::Failed {
+            if let Err(e) = self
+                .release_pending_unshielded_spends(&tx, "failed transaction")
                 .await
             {
-                Ok(wallet_state) => {
-                    if let Err(e) = self
-                        .ledger_ctx
-                        .reconcile_unshielded_utxos(&wallet_state.available_utxos)
-                    {
-                        warn!(
-                            tx_id = %tx.id,
-                            error = %e,
-                            "failed to reconcile unshielded UTXOs after failed transaction rollback"
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        tx_id = %tx.id,
-                        error = %e,
-                        "failed to release pending unshielded UTXOs after failed transaction"
-                    );
-                }
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to clean up pending unshielded UTXOs after failed transaction"
+                );
             }
         }
 
@@ -777,6 +846,33 @@ fn collect_unshielded_spend_keys(
     keys
 }
 
+fn midnight_data_has_shielded_spend(data: &MidnightTransactionData) -> bool {
+    data.guaranteed_offer
+        .as_ref()
+        .map(shielded_offer_has_inputs)
+        .unwrap_or(false)
+        || data
+            .fallible_shielded_offers
+            .iter()
+            .any(|fallible| shielded_offer_has_inputs(&fallible.offer))
+        || data.intents.iter().any(|intent| {
+            intent
+                .guaranteed_shielded_offer
+                .as_ref()
+                .map(shielded_offer_has_inputs)
+                .unwrap_or(false)
+                || intent
+                    .fallible_shielded_offer
+                    .as_ref()
+                    .map(shielded_offer_has_inputs)
+                    .unwrap_or(false)
+        })
+}
+
+fn shielded_offer_has_inputs(offer: &crate::models::MidnightOfferRequest) -> bool {
+    matches!(offer, crate::models::MidnightOfferRequest::Shielded { inputs, .. } if !inputs.is_empty())
+}
+
 fn top_level_unshielded_intent(
     offer: midnight_node_ledger_helpers::UnshieldedOfferInfo<
         midnight_node_ledger_helpers::DefaultDB,
@@ -796,9 +892,8 @@ fn top_level_unshielded_intent(
 ///
 /// Returns a `ValidationError` if the offer carries a shielded variant
 /// (shouldn't happen post-`validate()`) or an input/output value that's not a
-/// valid `u128`. The `token_type` field is presently hardcoded to `NIGHT`;
-/// custom-token support lands in a follow-up once the builder-side parsing
-/// helper exists.
+/// valid `u128`. Validation guarantees only `origin: "self"` and native
+/// `NIGHT` are accepted until custom unshielded tokens are implemented.
 fn build_unshielded_offer(
     offer: &crate::models::MidnightOfferRequest,
     wallet_seed: &midnight_node_ledger_helpers::WalletSeed,
@@ -1164,6 +1259,46 @@ mod tests {
                 };
                 wallet.shielded.state = wallet.shielded.state.apply(&secret_keys, &offer);
             });
+    }
+
+    fn empty_midnight_data() -> MidnightTransactionData {
+        MidnightTransactionData {
+            hash: None,
+            extrinsic_hash: None,
+            block_hash: None,
+            serialized_tx: None,
+            guaranteed_offer: None,
+            intents: vec![],
+            fallible_offers: vec![],
+            fallible_shielded_offers: vec![],
+            pending_unshielded_keys: vec![],
+        }
+    }
+
+    #[test]
+    fn detects_shielded_spend_for_inflight_guard() {
+        let mut data = empty_midnight_data();
+        data.fallible_shielded_offers = vec![crate::models::MidnightFallibleOfferRequest {
+            segment_id: 2,
+            offer: simple_shielded_offer("NIGHT"),
+        }];
+
+        assert!(midnight_data_has_shielded_spend(&data));
+    }
+
+    #[test]
+    fn does_not_guard_shielded_output_only_offers() {
+        let mut data = empty_midnight_data();
+        data.guaranteed_offer = Some(crate::models::MidnightOfferRequest::Shielded {
+            inputs: vec![],
+            outputs: vec![crate::models::MidnightShieldedOutputRequest {
+                destination: "self".into(),
+                token_type: "NIGHT".into(),
+                value: "1".into(),
+            }],
+        });
+
+        assert!(!midnight_data_has_shielded_spend(&data));
     }
 
     #[test]

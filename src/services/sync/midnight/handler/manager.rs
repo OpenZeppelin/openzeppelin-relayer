@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use tracing::{debug, info, warn};
 
@@ -11,6 +14,21 @@ use super::super::indexer::{
 };
 
 use futures::{SinkExt, StreamExt};
+
+type UnshieldedStateLock = Arc<tokio::sync::Mutex<()>>;
+static UNSHIELDED_STATE_LOCKS: OnceLock<Mutex<HashMap<String, UnshieldedStateLock>>> =
+    OnceLock::new();
+
+fn unshielded_state_lock(relayer_id: &str) -> UnshieldedStateLock {
+    let registry = UNSHIELDED_STATE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .expect("unshielded state lock registry poisoned");
+    locks
+        .entry(relayer_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -134,6 +152,8 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         &self,
         spent_keys: &[String],
     ) -> Result<UnshieldedWalletState, SyncError> {
+        let lock = unshielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
         let mut wallet_state = self.get_unshielded_wallet_state().await?;
         wallet_state.mark_pending_by_keys(spent_keys);
         self.sync_state_store
@@ -147,6 +167,8 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         &self,
         spent_keys: &[String],
     ) -> Result<UnshieldedWalletState, SyncError> {
+        let lock = unshielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
         let mut wallet_state = self.get_unshielded_wallet_state().await?;
         wallet_state.release_pending_by_keys(spent_keys);
         self.sync_state_store
@@ -267,6 +289,8 @@ impl<SS: SyncStateTrait + Send + Sync> SyncManager<SS> {
         &self,
         address: &str,
     ) -> Result<UnshieldedSyncResult, SyncError> {
+        let lock = unshielded_state_lock(&self.relayer_id);
+        let _guard = lock.lock().await;
         let ws_url = self.indexer_client.ws_url();
         let mut wallet_state = self
             .sync_state_store
