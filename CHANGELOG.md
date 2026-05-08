@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.5.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.4.0...v1.5.0) (2026-05-07)
+
+
+### 🚀 Features
+
+* **evm:** handle nonce gaps before resubmission ([#726](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/726)) ([2c785fd](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/2c785fd5ae5368d449fb57913858d97e14d7b75b))
+* **stellar:** Structure failed tx status_reason ([#765](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/765)) ([4bfd68d](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/4bfd68d6165b82e62d77a3acaa6ab3a3e5a3cf24))
+* **stellar:** Reuse backoff logic for Stellar sent txs ([#695](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/695)) ([281b13a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/281b13a8a0601839a914cd7fe414352141b1f91e))
+* **stellar:** Allow additional resubmissions ([#668](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/668)) ([99027e5](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/99027e5e958bf9a6b2ebd38cdafdd97b8d26e0c5))
+* Use gradual 1.5x backoff for Stellar resubmission ([#730](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/730)) ([0795504](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/079550467ecd3b387cac0a7abda6c729d9e188b8))
+* Improve Stellar txs logic and reduce worker retries ([#675](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/675)) ([7ce4501](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/7ce4501dbb9b6fa6571cb9c958cc2cf0d5082efe))
+* Add insufficient fee and TRY_AGAIN_LATER outcome metrics for Stellar transactions ([#702](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/702)) ([672ee6d](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/672ee6d48c6561476a42dd7cb51c02dfa717b20b))
+* Stellar submission failures metrics ([#670](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/670)) ([fabe2f3](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/fabe2f39c39e1e64fa76d3df672d4e2bd6b28cc5))
+* Add logic to retry insufficient fee errors ([#688](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/688)) ([279efe4](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/279efe4d913e530a69e2ad6584978e12e912a985))
+* Improving initialize relayer logic for distributed mode ([#693](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/693)) ([13e2310](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/13e23100aaf15e252a5a12421e526846fff357a1))
+* Timeout handling and additional plugin pool improvements ([#691](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/691)) ([d2a9d56](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d2a9d565b5f23f35bed289daf5e019a90d721e9e))
+* Allow fine-tuning SQS pooling ([#737](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/737)) ([05c3eee](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/05c3eee4daf86741a0ca079e00dfff3efe575c4c))
+* Add Redis TLS support via optional feature flags ([#674](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/674)) ([aaf5eb8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/aaf5eb86241fb7ae7b4cbae0579551269b08359b))
+* Socket simplification ([#684](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/684)) ([ee494f6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/ee494f69364686ef8d8bba0984c9a8620f4edb98))
+
+
+### 🐛 Bug Fixes
+
+* Extend non-retriable RPC messages ([#696](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/696)) ([cf553ef](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/cf553efe92cb53bd97a0821e40d00e35b408de5f))
+* Fix concurrent transaction repository update races ([#698](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/698)) ([7ce24c6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/7ce24c6d7d711a421e79c37e070e6f5f0d2ac36c))
+* Fix for contract creation and invalid address formats ([#699](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/699)) ([1dae14b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/1dae14b4fbbda3271ef045797eda614d0c05e65e))
+* Improve EVM and Solana transaction request flow ([#655](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/655)) ([818fbcb](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/818fbcbc216954cd96d07260e74dce06690cdeac))
+* Reset counter store on startup when env var exists ([#700](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/700)) ([0ecffbb](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/0ecffbbaf96c7cff59c665116c7098ab4710dcf4))
+* Docs changes ([#671](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/671)) ([1c2d7db](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/1c2d7db268b39536428ece986271367d9ddcf00d))
+
+
+### ⏪ Reverts
+
+* Revert "fix: Adding lock to init relayer instances" ([#692](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/692)) ([46e29bc](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/46e29bc3b998cd161f534e426ad1bb35bb44b562))
+
+
+### 🔧 Chores
+
+* Introduce client cache support and add to signers ([#729](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/729)) ([aede8aa](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/aede8aa82988e209903455ad4548300bcee474d5))
+* Include previous status in failed metric ([#735](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/735)) ([b7d333e](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b7d333e11743fd7d816764b4cfd3e8e3774e909f))
+* **stellar:** Adjust fee according to CAP-0015 ([#680](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/680)) ([f720040](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f720040958aca7fe8ffeb91feb12da0cee6ded9d))
+* **stellar:** Add channels with x402 example ([#686](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/686)) ([de7890b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/de7890bec8f23878564edca6c47083ff42048206))
+* Regenerate openapi spec v1.4.0 ([#724](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/724)) ([bebce65](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/bebce65331e5f159a723db0df5cfd2fa796db08c))
+* Fix vulnerabilities ([#701](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/701)) ([9c675aa](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/9c675aa205e83a7cb6f952c72a47679ebb6559a2))
+* Add Polkadot EVM mainnet example ([#703](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/703)) ([b2dfc3a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b2dfc3a444c804c2b63a733f553113cf2535b603))
+* Bump channels-plugin versions ([#672](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/672), [#679](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/679), [#682](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/682), [#685](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/685), [#687](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/687), [#694](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/694), [#736](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/736), [#746](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/746))
+* Cargo dep bumps: actix-web 4.13.0 ([#710](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/710)), tracing-subscriber 0.3.23 ([#721](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/721)), num_enum 0.7.6 ([#719](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/719)), tempfile 3.27.0 ([#714](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/714)), tar 0.4.45 ([#723](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/723))
+* GitHub Actions group bumps ([#678](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/678), [#722](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/722), [#748](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/748))
+* JS example dep bumps: handlebars, minimatch, js-yaml ([#706](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/706), [#707](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/707), [#709](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/709), [#715](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/715), [#716](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/716), [#727](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/727), [#728](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/728))
+* Extending docs for x402 and channels ([#673](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/673)) ([d4144a2](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d4144a25926127737f9cc3c0dde60d2c4b24e775))
+* Merge release-v1.4.0 branch into main ([#669](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/669)) ([d809540](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d80954014be589cdd7369f655bfa8a2bbaa012b1))
+
 ## [1.4.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.3.0...v1.4.0) (2026-02-20)
 
 
