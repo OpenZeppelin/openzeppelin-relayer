@@ -49,11 +49,11 @@ use crate::{
         client_cache::AsyncClientCache, signer::evm::utils::recover_evm_signature_from_der,
     },
     utils::{
-        self, derive_ethereum_address_from_der, derive_solana_address_from_der,
-        derive_stellar_address_from_der,
+        self, classify_sdk_error, derive_ethereum_address_from_der, derive_solana_address_from_der,
+        derive_stellar_address_from_der, DisplayErrorContext,
     },
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[cfg(test)]
 use mockall::{automock, mock};
@@ -280,8 +280,16 @@ impl AwsKmsK256 for AwsKmsClient {
             .send()
             .await
             .map_err(|e| {
+                warn!(
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
+                    kms_key_id = %key_id,
+                    operation = "get_public_key_secp256k1",
+                    "AWS KMS get_public_key failed"
+                );
                 AwsKmsError::GetError(format!(
-                    "Failed to get secp256k1 public key for key '{key_id}': {e:?}"
+                    "Failed to get secp256k1 public key for key '{key_id}': {}",
+                    DisplayErrorContext(&e)
                 ))
             })?;
 
@@ -316,7 +324,16 @@ impl AwsKmsK256 for AwsKmsClient {
 
         // Process the result, extract DER signature
         let der_signature = sign_result
-            .map_err(|e| AwsKmsError::PermissionError(e.to_string()))?
+            .map_err(|e| {
+                warn!(
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
+                    kms_key_id = %key_id,
+                    operation = "sign_digest_secp256k1",
+                    "AWS KMS sign failed"
+                );
+                AwsKmsError::PermissionError(DisplayErrorContext(&e).to_string())
+            })?
             .signature
             .ok_or(AwsKmsError::SignError(
                 "Signature not found in response".to_string(),
@@ -347,8 +364,16 @@ impl AwsKmsEd25519 for AwsKmsClient {
             .send()
             .await
             .map_err(|e| {
+                warn!(
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
+                    kms_key_id = %key_id,
+                    operation = "get_public_key_ed25519",
+                    "AWS KMS get_public_key failed"
+                );
                 AwsKmsError::GetError(format!(
-                    "Failed to get Ed25519 public key for key '{key_id}': {e:?}"
+                    "Failed to get Ed25519 public key for key '{key_id}': {}",
+                    DisplayErrorContext(&e)
                 ))
             })?;
 
@@ -386,7 +411,16 @@ impl AwsKmsEd25519 for AwsKmsClient {
 
         // Process the result, extract signature
         let signature = sign_result
-            .map_err(|e| AwsKmsError::SignError(e.to_string()))?
+            .map_err(|e| {
+                warn!(
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
+                    kms_key_id = %key_id,
+                    operation = "sign_ed25519",
+                    "AWS KMS sign failed"
+                );
+                AwsKmsError::SignError(DisplayErrorContext(&e).to_string())
+            })?
             .signature
             .ok_or(AwsKmsError::SignError(
                 "Signature not found in response".to_string(),

@@ -21,6 +21,7 @@ use crate::{
     },
     models::{DefaultAppState, NetworkType},
     queues::QueueBackendType,
+    utils::{classify_sdk_error, DisplayErrorContext},
 };
 use actix_web::web::ThinData;
 
@@ -444,8 +445,13 @@ impl SqsBackend {
         }
 
         let response = request.send().await.map_err(|e| {
-            error!(error = %e, queue_url = %queue_url, "Failed to send message to SQS");
-            QueueBackendError::SqsError(format!("SendMessage failed: {e}"))
+            error!(
+                error.kind = classify_sdk_error(&e),
+                error.detail = %DisplayErrorContext(&e),
+                queue_url = %queue_url,
+                "Failed to send message to SQS"
+            );
+            QueueBackendError::SqsError(format!("SendMessage failed: {}", DisplayErrorContext(&e)))
         })?;
 
         let message_id = response

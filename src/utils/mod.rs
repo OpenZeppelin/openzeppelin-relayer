@@ -55,6 +55,9 @@ pub use url_security::*;
 mod error_sanitization;
 pub use error_sanitization::*;
 
+mod aws_error;
+pub use aws_error::*;
+
 mod url;
 pub use url::*;
 
