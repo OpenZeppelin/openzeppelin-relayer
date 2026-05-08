@@ -329,7 +329,7 @@ async fn process_status_cleanup(
         };
 
         let page_result = transaction_repo
-            .find_by_status_paginated(relayer_id, &[status.clone()], query, true)
+            .find_by_status_paginated(relayer_id, std::slice::from_ref(status), query, true)
             .await
             .map_err(|e| {
                 eyre::eyre!(
