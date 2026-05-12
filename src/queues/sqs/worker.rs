@@ -903,7 +903,7 @@ fn poll_error_backoff_secs(consecutive_errors: u32) -> u64 {
 
     // Once well past the ceiling, periodically try the base interval
     // to quickly detect when the SQS endpoint recovers.
-    if consecutive_errors >= 7 && consecutive_errors % RECOVERY_PROBE_EVERY == 0 {
+    if consecutive_errors >= 7 && consecutive_errors.is_multiple_of(RECOVERY_PROBE_EVERY) {
         return base;
     }
 

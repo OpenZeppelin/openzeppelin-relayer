@@ -26,6 +26,19 @@ pub fn is_final_state(tx_status: &TransactionStatus) -> bool {
     FINAL_TRANSACTION_STATUSES.contains(tx_status)
 }
 
+/// Returns true if the status indicates the nonce slot is actively occupied
+/// (tx is in-flight or mined but not yet final). Used by nonce gap detection
+/// to distinguish real gaps from slots with active transactions.
+pub fn is_active_nonce_status(tx_status: &TransactionStatus) -> bool {
+    matches!(
+        tx_status,
+        TransactionStatus::Pending
+            | TransactionStatus::Sent
+            | TransactionStatus::Submitted
+            | TransactionStatus::Mined
+    )
+}
+
 pub fn is_pending_transaction(tx_status: &TransactionStatus) -> bool {
     matches!(
         tx_status,
@@ -105,6 +118,21 @@ mod tests {
         assert!(!is_unsubmitted_transaction(&TransactionStatus::Failed));
         assert!(!is_unsubmitted_transaction(&TransactionStatus::Canceled));
         assert!(!is_unsubmitted_transaction(&TransactionStatus::Expired));
+    }
+
+    #[test]
+    fn test_is_active_nonce_status() {
+        // Active statuses — nonce slot is occupied by in-flight tx
+        assert!(is_active_nonce_status(&TransactionStatus::Pending));
+        assert!(is_active_nonce_status(&TransactionStatus::Sent));
+        assert!(is_active_nonce_status(&TransactionStatus::Submitted));
+        assert!(is_active_nonce_status(&TransactionStatus::Mined));
+
+        // Terminal/gap statuses — nonce slot is available for gap filling
+        assert!(!is_active_nonce_status(&TransactionStatus::Confirmed));
+        assert!(!is_active_nonce_status(&TransactionStatus::Failed));
+        assert!(!is_active_nonce_status(&TransactionStatus::Canceled));
+        assert!(!is_active_nonce_status(&TransactionStatus::Expired));
     }
 
     #[test]

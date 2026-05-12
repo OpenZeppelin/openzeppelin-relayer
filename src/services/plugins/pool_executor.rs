@@ -485,7 +485,7 @@ impl PoolManager {
                     last_log_time = now;
                 } else {
                     suppressed_count += 1;
-                    if suppressed_count % 100 == 0 {
+                    if suppressed_count.is_multiple_of(100) {
                         tracing::warn!(
                             target: "pool_server",
                             suppressed = suppressed_count,

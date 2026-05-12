@@ -329,7 +329,7 @@ async fn process_status_cleanup(
         };
 
         let page_result = transaction_repo
-            .find_by_status_paginated(relayer_id, &[status.clone()], query, true)
+            .find_by_status_paginated(relayer_id, std::slice::from_ref(status), query, true)
             .await
             .map_err(|e| {
                 eyre::eyre!(
@@ -438,7 +438,7 @@ async fn process_transactions_for_cleanup(
         .filter(|tx| {
             // Must be in a final state
             if !FINAL_TRANSACTION_STATUSES.contains(&tx.status) {
-                warn!(
+                debug!(
                     tx_id = %tx.id,
                     status = ?tx.status,
                     "skipping transaction not in final state"
