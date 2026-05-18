@@ -184,6 +184,17 @@ pub trait Relayer {
         &self,
         request: &SignTransactionRequest,
     ) -> Result<SignTransactionExternalResponse, RelayerError>;
+
+    /// Handles a targeted health action dispatched via job metadata.
+    ///
+    /// Returns `Ok(true)` if an action was handled, `Ok(false)` if no recognized action.
+    /// Only meaningful for EVM relayers; other network types return `Ok(false)` by default.
+    async fn handle_health_action(
+        &self,
+        _metadata: &std::collections::HashMap<String, String>,
+    ) -> Result<bool, RelayerError> {
+        Ok(false)
+    }
 }
 
 /// Solana Relayer Dex Trait
@@ -374,6 +385,16 @@ impl<
             )),
             NetworkRelayer::Solana(relayer) => relayer.sign_transaction(request).await,
             NetworkRelayer::Stellar(relayer) => relayer.sign_transaction(request).await,
+        }
+    }
+
+    async fn handle_health_action(
+        &self,
+        metadata: &std::collections::HashMap<String, String>,
+    ) -> Result<bool, RelayerError> {
+        match self {
+            NetworkRelayer::Evm(relayer) => relayer.handle_health_action(metadata).await,
+            NetworkRelayer::Solana(_) | NetworkRelayer::Stellar(_) => Ok(false),
         }
     }
 }

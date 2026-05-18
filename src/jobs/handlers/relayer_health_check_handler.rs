@@ -120,10 +120,25 @@ where
     debug!(
         relayer_id = %relayer_id,
         retry_count = data.retry_count,
-        "Running health check on disabled relayer"
+        "Running health check"
     );
 
-    // Check if relayer is actually disabled
+    // Handle targeted health action if present (e.g., nonce gap resolution).
+    // Targeted actions run for any relayer (enabled or disabled) and return early.
+    // The relayer service is only instantiated when a targeted action is present.
+    if let Some(metadata) = &data.metadata {
+        let relayer_service = get_network_relayer(relayer_id.clone(), app_state)
+            .await
+            .map_err(|e| eyre::eyre!("Failed to get relayer for targeted action: {}", e))?;
+
+        match relayer_service.handle_health_action(metadata).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => { /* no recognized action, fall through to normal health check */ }
+            Err(e) => return Err(eyre::eyre!("Targeted health action failed: {}", e)),
+        }
+    }
+
+    // Normal health check — skip for enabled relayers (existing behavior).
     let relayer = app_state
         .relayer_repository
         .get_by_id(relayer_id.clone())
@@ -138,7 +153,7 @@ where
         return Ok(());
     }
 
-    // Get the network relayer instance
+    // Get the network relayer instance for health check
     let relayer_service = get_network_relayer(relayer_id.clone(), app_state)
         .await
         .map_err(|e| eyre::eyre!("Failed to get relayer: {}", e))?;
