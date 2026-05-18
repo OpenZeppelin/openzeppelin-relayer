@@ -451,7 +451,7 @@ impl SqsBackend {
                 queue_url = %queue_url,
                 "Failed to send message to SQS"
             );
-            QueueBackendError::SqsError(format!("SendMessage failed: {}", DisplayErrorContext(&e)))
+            QueueBackendError::SqsError(format!("SendMessage failed: {}", classify_sdk_error(&e)))
         })?;
 
         let message_id = response
@@ -507,7 +507,12 @@ impl SqsBackend {
         match sqs_client.get_queue_url().queue_name(dlq_name).send().await {
             Ok(output) => output.queue_url().map(str::to_string),
             Err(err) => {
-                warn!(error = %err, dlq_name = %dlq_name, "Failed to resolve DLQ URL at startup");
+                warn!(
+                    error.kind = classify_sdk_error(&err),
+                    error.detail = %DisplayErrorContext(&err),
+                    dlq_name = %dlq_name,
+                    "Failed to resolve DLQ URL at startup"
+                );
                 None
             }
         }
@@ -538,7 +543,12 @@ impl SqsBackend {
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(0),
             Err(err) => {
-                warn!(error = %err, dlq_url = %dlq_url, "Failed to fetch DLQ depth");
+                warn!(
+                    error.kind = classify_sdk_error(&err),
+                    error.detail = %DisplayErrorContext(&err),
+                    dlq_url = %dlq_url,
+                    "Failed to fetch DLQ depth"
+                );
                 0
             }
         }

@@ -289,7 +289,7 @@ impl AwsKmsK256 for AwsKmsClient {
                 );
                 AwsKmsError::GetError(format!(
                     "Failed to get secp256k1 public key for key '{key_id}': {}",
-                    DisplayErrorContext(&e)
+                    classify_sdk_error(&e)
                 ))
             })?;
 
@@ -332,7 +332,10 @@ impl AwsKmsK256 for AwsKmsClient {
                     operation = "sign_digest_secp256k1",
                     "AWS KMS sign failed"
                 );
-                AwsKmsError::PermissionError(DisplayErrorContext(&e).to_string())
+                AwsKmsError::SignError(format!(
+                    "Failed to sign secp256k1 digest for key '{key_id}': {}",
+                    classify_sdk_error(&e)
+                ))
             })?
             .signature
             .ok_or(AwsKmsError::SignError(
@@ -373,7 +376,7 @@ impl AwsKmsEd25519 for AwsKmsClient {
                 );
                 AwsKmsError::GetError(format!(
                     "Failed to get Ed25519 public key for key '{key_id}': {}",
-                    DisplayErrorContext(&e)
+                    classify_sdk_error(&e)
                 ))
             })?;
 
@@ -419,7 +422,10 @@ impl AwsKmsEd25519 for AwsKmsClient {
                     operation = "sign_ed25519",
                     "AWS KMS sign failed"
                 );
-                AwsKmsError::SignError(DisplayErrorContext(&e).to_string())
+                AwsKmsError::SignError(format!(
+                    "Failed to sign Ed25519 message for key '{key_id}': {}",
+                    classify_sdk_error(&e)
+                ))
             })?
             .signature
             .ok_or(AwsKmsError::SignError(

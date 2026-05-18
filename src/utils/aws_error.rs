@@ -17,6 +17,15 @@
 //!   (e.g., `connect timed out`, `dns error: failed to lookup address`)
 //!   appears in the log instead of just the top-level wrapper.
 //!
+//! # Caution: log-only — do not embed in returned error values
+//!
+//! `DisplayErrorContext` walks the underlying SDK chain and can surface
+//! internal infrastructure details (endpoint URLs, connector kinds,
+//! credential-provider failures). Keep it confined to `tracing` fields
+//! and metrics. For error values returned to upstream callers — which
+//! ultimately reach API clients via `ApiError::InternalError(err.to_string())` —
+//! prefer the stable kind tag from [`classify_sdk_error`].
+//!
 //! Typical usage:
 //!
 //! ```ignore
@@ -25,6 +34,8 @@
 //!     error.detail = %DisplayErrorContext(&err),
 //!     "AWS call failed"
 //! );
+//! // Returned error value carries only the kind tag, not the full chain:
+//! return Err(MyError::Wrapped(format!("op X failed: {}", classify_sdk_error(&err))));
 //! ```
 
 pub use aws_smithy_types::error::display::DisplayErrorContext;
