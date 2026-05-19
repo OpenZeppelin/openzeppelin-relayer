@@ -124,7 +124,8 @@ impl JobProducerTrait for JobProducer {
             transaction_process_job
         );
         let job = Job::new(JobType::TransactionRequest, transaction_process_job)
-            .with_request_id(get_request_id());
+            .with_request_id(get_request_id())
+            .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
@@ -155,7 +156,8 @@ impl JobProducerTrait for JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let job = Job::new(JobType::TransactionSend, transaction_submit_job)
-            .with_request_id(get_request_id());
+            .with_request_id(get_request_id())
+            .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
@@ -191,7 +193,8 @@ impl JobProducerTrait for JobProducer {
             JobType::TransactionStatusCheck,
             transaction_status_check_job.clone(),
         )
-        .with_request_id(get_request_id());
+        .with_request_id(get_request_id())
+        .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let tx_id = job.data.transaction_id.clone();
         let relayer_id = job.data.relayer_id.clone();
@@ -222,7 +225,8 @@ impl JobProducerTrait for JobProducer {
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
         let job = Job::new(JobType::NotificationSend, notification_send_job)
-            .with_request_id(get_request_id());
+            .with_request_id(get_request_id())
+            .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let notification_id = job.data.notification_id.clone();
 
@@ -249,8 +253,9 @@ impl JobProducerTrait for JobProducer {
         swap_request_job: TokenSwapRequest,
         scheduled_on: Option<i64>,
     ) -> Result<(), JobProducerError> {
-        let job =
-            Job::new(JobType::TokenSwapRequest, swap_request_job).with_request_id(get_request_id());
+        let job = Job::new(JobType::TokenSwapRequest, swap_request_job)
+            .with_request_id(get_request_id())
+            .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
         let backend = self.queue_backend();
@@ -280,7 +285,8 @@ impl JobProducerTrait for JobProducer {
             JobType::RelayerHealthCheck,
             relayer_health_check_job.clone(),
         )
-        .with_request_id(get_request_id());
+        .with_request_id(get_request_id())
+        .with_scheduled_on(scheduled_on);
         let request_id = job.request_id.clone();
         let relayer_id = job.data.relayer_id.clone();
         let backend = self.queue_backend();
@@ -317,6 +323,8 @@ mod tests {
     struct TestRedisStorage<T> {
         pub push_called: bool,
         pub schedule_called: bool,
+        pub last_job: Option<T>,
+        pub last_scheduled_timestamp: Option<i64>,
         _phantom: std::marker::PhantomData<T>,
     }
 
@@ -325,17 +333,24 @@ mod tests {
             Self {
                 push_called: false,
                 schedule_called: false,
+                last_job: None,
+                last_scheduled_timestamp: None,
                 _phantom: std::marker::PhantomData,
             }
         }
+    }
 
-        async fn push(&mut self, _job: T) -> Result<(), JobProducerError> {
+    impl<T: Clone> TestRedisStorage<T> {
+        async fn push(&mut self, job: T) -> Result<(), JobProducerError> {
             self.push_called = true;
+            self.last_job = Some(job);
             Ok(())
         }
 
-        async fn schedule(&mut self, _job: T, _timestamp: i64) -> Result<(), JobProducerError> {
+        async fn schedule(&mut self, job: T, timestamp: i64) -> Result<(), JobProducerError> {
             self.schedule_called = true;
+            self.last_job = Some(job);
+            self.last_scheduled_timestamp = Some(timestamp);
             Ok(())
         }
     }
@@ -410,7 +425,8 @@ mod tests {
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(JobType::TransactionRequest, transaction_process_job);
+            let job = Job::new(JobType::TransactionRequest, transaction_process_job)
+                .with_scheduled_on(scheduled_on);
 
             match scheduled_on {
                 Some(scheduled_on) => {
@@ -433,7 +449,8 @@ mod tests {
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(JobType::TransactionSend, transaction_submit_job);
+            let job = Job::new(JobType::TransactionSend, transaction_submit_job)
+                .with_scheduled_on(scheduled_on);
 
             match scheduled_on {
                 Some(on) => {
@@ -456,7 +473,8 @@ mod tests {
             let job = Job::new(
                 JobType::TransactionStatusCheck,
                 transaction_status_check_job.clone(),
-            );
+            )
+            .with_scheduled_on(scheduled_on);
 
             // Route to the appropriate queue based on network type
             use crate::models::NetworkType;
@@ -485,7 +503,8 @@ mod tests {
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(JobType::NotificationSend, notification_send_job);
+            let job = Job::new(JobType::NotificationSend, notification_send_job)
+                .with_scheduled_on(scheduled_on);
 
             match scheduled_on {
                 Some(on) => {
@@ -505,7 +524,8 @@ mod tests {
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(JobType::TokenSwapRequest, swap_request_job);
+            let job = Job::new(JobType::TokenSwapRequest, swap_request_job)
+                .with_scheduled_on(scheduled_on);
 
             match scheduled_on {
                 Some(on) => {
@@ -525,7 +545,8 @@ mod tests {
             scheduled_on: Option<i64>,
         ) -> Result<(), JobProducerError> {
             let mut queue = self.queue.lock().await;
-            let job = Job::new(JobType::RelayerHealthCheck, relayer_health_check_job);
+            let job = Job::new(JobType::RelayerHealthCheck, relayer_health_check_job)
+                .with_scheduled_on(scheduled_on);
 
             match scheduled_on {
                 Some(scheduled_on) => {
@@ -842,6 +863,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scheduled_status_check_persists_available_at() {
+        use crate::models::NetworkType;
+        let producer = TestJobProducer::new();
+
+        let status_job =
+            TransactionStatusCheck::new("tx-evm-scheduled", "relayer-1", NetworkType::Evm);
+        let scheduled_timestamp = calculate_scheduled_timestamp(30);
+        producer
+            .produce_check_transaction_status_job(status_job, Some(scheduled_timestamp))
+            .await
+            .unwrap();
+
+        let queue = producer.get_queue().await;
+        let stored_job = queue
+            .transaction_status_queue_evm
+            .last_job
+            .expect("scheduled status check should be stored");
+        let expected_available_at = scheduled_timestamp.to_string();
+
+        assert_eq!(
+            stored_job.available_at.as_deref(),
+            Some(expected_available_at.as_str())
+        );
+        assert_eq!(
+            queue.transaction_status_queue_evm.last_scheduled_timestamp,
+            Some(scheduled_timestamp)
+        );
+    }
+
+    #[tokio::test]
     async fn test_submit_transaction_scheduled() {
         let producer = TestJobProducer::new();
 
@@ -855,6 +906,30 @@ mod tests {
         let queue = producer.get_queue().await;
         assert!(queue.transaction_submission_queue.schedule_called);
         assert!(!queue.transaction_submission_queue.push_called);
+    }
+
+    #[tokio::test]
+    async fn test_scheduled_submit_job_persists_available_at() {
+        let producer = TestJobProducer::new();
+
+        let submit_job = TransactionSend::submit("tx-scheduled", "relayer-1");
+        let scheduled_timestamp = calculate_scheduled_timestamp(15);
+        producer
+            .produce_submit_transaction_job(submit_job, Some(scheduled_timestamp))
+            .await
+            .unwrap();
+
+        let queue = producer.get_queue().await;
+        let stored_job = queue
+            .transaction_submission_queue
+            .last_job
+            .expect("scheduled submission should be stored");
+        let expected_available_at = scheduled_timestamp.to_string();
+
+        assert_eq!(
+            stored_job.available_at.as_deref(),
+            Some(expected_available_at.as_str())
+        );
     }
 
     #[tokio::test]
