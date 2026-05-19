@@ -49,8 +49,8 @@ use crate::{
         client_cache::AsyncClientCache, signer::evm::utils::recover_evm_signature_from_der,
     },
     utils::{
-        self, classify_sdk_error, derive_ethereum_address_from_der, derive_solana_address_from_der,
-        derive_stellar_address_from_der, DisplayErrorContext,
+        self, aws_error::DisplayErrorContext, classify_sdk_error, derive_ethereum_address_from_der,
+        derive_solana_address_from_der, derive_stellar_address_from_der,
     },
 };
 use tracing::{debug, warn};
@@ -68,8 +68,6 @@ pub enum AwsKmsError {
     GetError(String),
     #[error("AWS KMS signing error: {0}")]
     SignError(String),
-    #[error("AWS KMS permissions error: {0}")]
-    PermissionError(String),
     #[error("AWS KMS public key error: {0}")]
     RecoveryError(#[from] utils::Secp256k1Error),
     #[error("AWS KMS conversion error: {0}")]

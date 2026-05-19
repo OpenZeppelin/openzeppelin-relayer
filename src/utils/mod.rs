@@ -55,8 +55,13 @@ pub use url_security::*;
 mod error_sanitization;
 pub use error_sanitization::*;
 
-mod aws_error;
-pub use aws_error::*;
+pub mod aws_error;
+// `classify_sdk_error` returns a stable kind tag and is safe to embed in
+// returned errors, so we re-export it at `utils::`. `DisplayErrorContext`
+// is intentionally NOT re-exported here — it can leak source-chain details
+// and is log-only; callers must import it via the fully qualified
+// `utils::aws_error::DisplayErrorContext` path to keep the misuse risk visible.
+pub use aws_error::classify_sdk_error;
 
 mod url;
 pub use url::*;

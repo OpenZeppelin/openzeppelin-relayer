@@ -28,6 +28,7 @@ use crate::{
         Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
     },
+    utils::{aws_error::DisplayErrorContext, classify_sdk_error},
 };
 
 use super::{HandlerError, WorkerContext};
@@ -341,23 +342,17 @@ async fn run_poll_loop(
             Err(e) => {
                 consecutive_poll_errors = consecutive_poll_errors.saturating_add(1);
                 let backoff_secs = poll_error_backoff_secs(consecutive_poll_errors);
-                let (error_kind, error_code, error_message) = match &e {
-                    SdkError::ServiceError(ctx) => {
-                        ("service", ctx.err().code(), ctx.err().message())
-                    }
-                    SdkError::DispatchFailure(_) => ("dispatch", None, None),
-                    SdkError::ResponseError(_) => ("response", None, None),
-                    SdkError::TimeoutError(_) => ("timeout", None, None),
-                    _ => ("other", None, None),
+                let (error_code, error_message) = match &e {
+                    SdkError::ServiceError(ctx) => (ctx.err().code(), ctx.err().message()),
+                    _ => (None, None),
                 };
                 error!(
                     queue_type = ?queue_type,
                     poller_id = poller_id,
-                    error_kind = error_kind,
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
                     error_code = error_code.unwrap_or("unknown"),
                     error_message = error_message.unwrap_or("n/a"),
-                    error = %e,
-                    error_debug = ?e,
                     consecutive_errors = consecutive_poll_errors,
                     backoff_secs = backoff_secs,
                     "Failed to receive messages from SQS, backing off"
@@ -671,7 +666,8 @@ async fn process_message(
             {
                 error!(
                     queue_type = ?queue_type,
-                    error = %send_err,
+                    error.kind = classify_sdk_error(&send_err),
+                    error.detail = %DisplayErrorContext(&send_err),
                     "Failed to re-enqueue message; leaving original for visibility timeout retry"
                 );
                 // Fall through — original message will retry after visibility timeout
@@ -771,8 +767,15 @@ async fn defer_message(
             .send()
             .await
             .map_err(|e| {
+                error!(
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
+                    queue_url = %queue_url,
+                    "Failed to defer FIFO message via visibility timeout"
+                );
                 QueueBackendError::SqsError(format!(
-                    "Failed to defer FIFO message via visibility timeout: {e}"
+                    "Failed to defer FIFO message via visibility timeout: {}",
+                    classify_sdk_error(&e)
                 ))
             })?;
 
@@ -800,7 +803,16 @@ async fn defer_message(
         );
 
     request.send().await.map_err(|e| {
-        QueueBackendError::SqsError(format!("Failed to defer scheduled message: {e}"))
+        error!(
+            error.kind = classify_sdk_error(&e),
+            error.detail = %DisplayErrorContext(&e),
+            queue_url = %queue_url,
+            "Failed to defer scheduled message"
+        );
+        QueueBackendError::SqsError(format!(
+            "Failed to defer scheduled message: {}",
+            classify_sdk_error(&e)
+        ))
     })?;
 
     Ok(true)
@@ -965,7 +977,8 @@ async fn flush_delete_batch(
             Err(e) => {
                 error!(
                     queue_type = ?queue_type,
-                    error = %e,
+                    error.kind = classify_sdk_error(&e),
+                    error.detail = %DisplayErrorContext(&e),
                     batch_size = chunk.len(),
                     "Batch delete API call failed (messages will be redelivered)"
                 );

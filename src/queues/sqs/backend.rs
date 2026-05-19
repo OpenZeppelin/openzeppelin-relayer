@@ -21,7 +21,7 @@ use crate::{
     },
     models::{DefaultAppState, NetworkType},
     queues::QueueBackendType,
-    utils::{classify_sdk_error, DisplayErrorContext},
+    utils::{aws_error::DisplayErrorContext, classify_sdk_error},
 };
 use actix_web::web::ThinData;
 

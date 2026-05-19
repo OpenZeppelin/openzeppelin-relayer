@@ -129,6 +129,60 @@ mod tests {
         assert_eq!(classify_sdk_error(&err), "dispatch_other");
     }
 
+    /// Sensitive marker that mimics the kind of content `DisplayErrorContext`
+    /// can surface via the SDK error source chain (endpoint URL, connector
+    /// internals, credential-provider failures). Tests below assert this
+    /// marker never leaks into strings produced by the call-site format.
+    const SENSITIVE_MARKER: &str = "https://kms.us-east-1.amazonaws.com/internal-endpoint";
+
+    fn dispatch_timeout_with_sensitive_chain() -> TestErr {
+        let inner = io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("connect timed out to {SENSITIVE_MARKER}"),
+        );
+        SdkError::dispatch_failure(ConnectorError::timeout(Box::new(inner)))
+    }
+
+    // The pattern every AWS call-site uses for the *returned* error value:
+    //   format!("op X failed for key 'Y': {}", classify_sdk_error(&e))
+    // This contract test pins that the bounded form never embeds the source
+    // chain — which is the whole security argument behind the split between
+    // DisplayErrorContext (log-only) and classify_sdk_error (return-safe).
+    #[test]
+    fn returned_error_string_is_bounded_to_kind_tag() {
+        let err = dispatch_timeout_with_sensitive_chain();
+        let returned = format!(
+            "Failed to sign secp256k1 digest for key 'alias/test-key': {}",
+            classify_sdk_error(&err)
+        );
+        assert!(
+            returned.contains("dispatch_timeout"),
+            "returned error should carry the kind tag; got: {returned}"
+        );
+        assert!(
+            !returned.contains(SENSITIVE_MARKER),
+            "returned error must not leak the source chain; got: {returned}"
+        );
+        // Also pin against DisplayErrorContext accidentally creeping in: it
+        // would surface phrases like "connect timed out" from the inner error.
+        assert!(
+            !returned.contains("connect timed out"),
+            "returned error must not embed inner cause text; got: {returned}"
+        );
+    }
+
+    // Counterpart: DisplayErrorContext is *expected* to surface the chain —
+    // that's why it's log-only. This pins both halves of the contract.
+    #[test]
+    fn display_error_context_does_surface_sensitive_chain() {
+        let err = dispatch_timeout_with_sensitive_chain();
+        let rendered = format!("{}", DisplayErrorContext(&err));
+        assert!(
+            rendered.contains(SENSITIVE_MARKER),
+            "DisplayErrorContext must surface the chain for ops logs; got: {rendered}"
+        );
+    }
+
     #[test]
     fn display_error_context_surfaces_underlying_cause() {
         // Re-pins the behaviour the helper relies on: DisplayErrorContext must
