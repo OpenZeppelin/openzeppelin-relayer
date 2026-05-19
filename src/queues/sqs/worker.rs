@@ -457,8 +457,25 @@ async fn process_message(
     // retries are skipped via the `retry_attempt` attribute.
     if let Some(baseline) = queue_pickup_baseline_ms(&message) {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let latency_secs = (now_ms - baseline).max(0) as f64 / 1000.0;
-        observe_queue_pickup_latency(queue_type.queue_name(), "sqs", latency_secs);
+        // SentTimestamp is set by the AWS broker; if the consumer clock runs
+        // ahead of the broker by more than this threshold for a non-scheduled
+        // message, the latency is almost certainly clock skew, not a real
+        // backlog. Log so operators can detect bad data rather than alert on it.
+        let delta_ms = now_ms - baseline;
+        if parse_target_scheduled_on(&message).is_none()
+            && delta_ms > PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS
+        {
+            warn!(
+                queue_type = ?queue_type,
+                latency_ms = delta_ms,
+                "queue_pickup_latency above sanity threshold for non-scheduled SQS message; check broker/consumer clock skew"
+            );
+        }
+        observe_queue_pickup_latency(
+            queue_type.queue_name(),
+            "sqs",
+            pickup_latency_secs(baseline, now_ms),
+        );
     }
 
     // For jobs with scheduling beyond SQS 15-minute max delay, keep deferring in hops.
@@ -764,6 +781,19 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|value| value.string_value())
         .and_then(|value| value.parse::<usize>().ok())
 }
+
+/// Compute pickup latency in seconds, clamping negative deltas to 0 so a
+/// consumer clock running ahead of the AWS broker (or a future-dated
+/// `target_scheduled_on`) cannot produce a negative-then-huge cast value.
+fn pickup_latency_secs(baseline_ms: i64, now_ms: i64) -> f64 {
+    (now_ms - baseline_ms).max(0) as f64 / 1000.0
+}
+
+/// Sanity threshold (ms) for non-scheduled latency observations. Above this,
+/// the consumer clock is almost certainly skewed relative to the AWS broker
+/// rather than the queue genuinely being backed up by an hour+. Used only to
+/// emit a warning — the value is still observed in the histogram.
+const PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS: i64 = 60 * 60 * 1000;
 
 fn queue_pickup_baseline_ms(message: &Message) -> Option<i64> {
     // Observe pickup latency only on the very first physical delivery of
@@ -1523,6 +1553,21 @@ mod tests {
             .build();
 
         assert_eq!(queue_pickup_baseline_ms(&message), Some(123456));
+    }
+
+    #[test]
+    fn test_pickup_latency_secs_clamps_negative_skew() {
+        // Consumer clock running 5s behind the broker (baseline is "in the future")
+        // must not produce a negative-then-huge cast value — clamp to 0.
+        let now_ms = 1_000_000_i64;
+        let baseline_ms = now_ms + 5_000;
+        assert_eq!(pickup_latency_secs(baseline_ms, now_ms), 0.0);
+    }
+
+    #[test]
+    fn test_pickup_latency_secs_positive_delta() {
+        // 2.5s positive delta should be reported in seconds with ms precision.
+        assert_eq!(pickup_latency_secs(1_000_000, 1_002_500), 2.5);
     }
 
     #[test]

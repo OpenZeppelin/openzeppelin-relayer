@@ -216,7 +216,7 @@ lazy_static! {
     // Histogram for queue pickup latency (time from send to consumer pickup).
     pub static ref QUEUE_PICKUP_LATENCY: HistogramVec = {
         let histogram_opts = HistogramOpts::new("queue_pickup_latency_seconds", "Queue pickup latency in seconds (send to consumer pickup)")
-            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0]);
+            .buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0, 14400.0, 86400.0]);
         let histogram_vec = HistogramVec::new(histogram_opts, &["queue_type", "backend"]).unwrap();
         REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
         histogram_vec

@@ -64,6 +64,15 @@ use crate::queues::retry_config::{
 // keeping all handler business logic backend-neutral.
 // ---------------------------------------------------------------------------
 
+/// Sanity threshold (ms) for non-scheduled latency observations.
+///
+/// Latencies above this for a job whose only baseline was `Job.timestamp`
+/// almost certainly indicate clock skew between producer and consumer rather
+/// than a real backlog of that duration. We still observe the value (so the
+/// `+Inf` bucket reflects reality), but log a warning so operators can detect
+/// bad data instead of alerting on it.
+const PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS: i64 = 60 * 60 * 1000;
+
 /// Observe queue pickup latency for Redis/Apalis workers.
 ///
 /// Uses `available_at` (the intended availability time) when present to exclude
@@ -71,6 +80,9 @@ use crate::queues::retry_config::{
 /// for immediate jobs. Only records on the initial attempt — apalis
 /// `Attempt::current()` is 1-indexed, so `attempt == 1` is the first delivery;
 /// subsequent attempts would inflate the metric with retry backoff time.
+///
+/// If the chosen baseline fails to parse, the alternative is tried so a single
+/// corrupted field cannot silently drop the observation.
 fn observe_redis_pickup_latency(
     attempt: usize,
     available_at: Option<&String>,
@@ -80,14 +92,29 @@ fn observe_redis_pickup_latency(
     if attempt != 1 {
         return;
     }
-    let fallback = job_timestamp.to_string();
-    let baseline = available_at.unwrap_or(&fallback);
-    if let Ok(baseline_epoch_secs) = baseline.parse::<i64>() {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let delta_ms = now_ms - baseline_epoch_secs * 1000;
-        let latency_secs = delta_ms.max(0) as f64 / 1000.0;
-        observe_queue_pickup_latency(queue_type, "redis", latency_secs);
+    let baseline_epoch_secs = available_at
+        .and_then(|s| s.parse::<i64>().ok())
+        .or_else(|| job_timestamp.parse::<i64>().ok());
+    let Some(baseline_epoch_secs) = baseline_epoch_secs else {
+        tracing::warn!(
+            queue_type = queue_type,
+            available_at = ?available_at,
+            job_timestamp = %job_timestamp,
+            "skipping queue_pickup_latency: failed to parse both available_at and job_timestamp"
+        );
+        return;
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let delta_ms = now_ms - baseline_epoch_secs * 1000;
+    if available_at.is_none() && delta_ms > PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS {
+        tracing::warn!(
+            queue_type = queue_type,
+            latency_ms = delta_ms,
+            "queue_pickup_latency above sanity threshold for non-scheduled job; check producer/consumer clock skew"
+        );
     }
+    let latency_secs = delta_ms.max(0) as f64 / 1000.0;
+    observe_queue_pickup_latency(queue_type, "redis", latency_secs);
 }
 
 async fn apalis_transaction_request_handler(
@@ -100,7 +127,7 @@ async fn apalis_transaction_request_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "transaction-request",
+        QueueType::TransactionRequest.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_request_handler(job, (*state).clone(), ctx)
@@ -118,7 +145,7 @@ async fn apalis_transaction_submission_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "transaction-submission",
+        QueueType::TransactionSubmission.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_submission_handler(job, (*state).clone(), ctx)
@@ -136,7 +163,7 @@ async fn apalis_transaction_status_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "status-check",
+        QueueType::StatusCheck.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
@@ -154,7 +181,7 @@ async fn apalis_transaction_status_evm_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "status-check-evm",
+        QueueType::StatusCheckEvm.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
@@ -172,7 +199,7 @@ async fn apalis_transaction_status_stellar_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "status-check-stellar",
+        QueueType::StatusCheckStellar.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
@@ -190,7 +217,7 @@ async fn apalis_notification_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "notification",
+        QueueType::Notification.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     notification_handler(job, (*state).clone(), ctx)
@@ -208,7 +235,7 @@ async fn apalis_token_swap_request_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "token-swap-request",
+        QueueType::TokenSwapRequest.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     token_swap_request_handler(job, (*state).clone(), ctx)
@@ -226,7 +253,7 @@ async fn apalis_relayer_health_check_handler(
         attempt.current(),
         job.available_at.as_ref(),
         &job.timestamp,
-        "relayer-health-check",
+        QueueType::RelayerHealthCheck.queue_name(),
     );
     let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     relayer_health_check_handler(job, (*state).clone(), ctx)
