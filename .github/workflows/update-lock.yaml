@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: 0 12 * * *
   workflow_dispatch: {}
+  push:
+    branches: ["fix-nightly-build"]
 permissions:
   actions: read
   contents: write
@@ -22,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
+          ref: fix-nightly-build
       - name: Prepare
         id: init
         uses: ./.github/actions/prepare
