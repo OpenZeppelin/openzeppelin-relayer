@@ -68,8 +68,9 @@ use crate::queues::retry_config::{
 ///
 /// Uses `available_at` (the intended availability time) when present to exclude
 /// intentional scheduling delay. Falls back to `timestamp` (job creation time)
-/// for immediate jobs. Only records on the initial attempt (attempt == 1) to
-/// avoid retry-inflated latency.
+/// for immediate jobs. Only records on the initial attempt — apalis
+/// `Attempt::current()` is 1-indexed, so `attempt == 1` is the first delivery;
+/// subsequent attempts would inflate the metric with retry backoff time.
 fn observe_redis_pickup_latency(
     attempt: usize,
     available_at: Option<&String>,
@@ -81,9 +82,10 @@ fn observe_redis_pickup_latency(
     }
     let fallback = job_timestamp.to_string();
     let baseline = available_at.unwrap_or(&fallback);
-    if let Ok(baseline_epoch) = baseline.parse::<i64>() {
-        let now = chrono::Utc::now().timestamp();
-        let latency_secs = (now - baseline_epoch).max(0) as f64;
+    if let Ok(baseline_epoch_secs) = baseline.parse::<i64>() {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let delta_ms = now_ms - baseline_epoch_secs * 1000;
+        let latency_secs = delta_ms.max(0) as f64 / 1000.0;
         observe_queue_pickup_latency(queue_type, "redis", latency_secs);
     }
 }
@@ -1034,5 +1036,99 @@ mod tests {
     #[test]
     fn test_monitor_handle_event_custom_does_not_panic() {
         monitor_handle_event(make_worker_event(Event::Custom("test-custom".to_string())));
+    }
+
+    // ── observe_redis_pickup_latency tests ─────────────────────────────
+
+    fn pickup_sample_count(queue_type: &str) -> u64 {
+        crate::metrics::QUEUE_PICKUP_LATENCY
+            .with_label_values(&[queue_type, "redis"])
+            .get_sample_count()
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_records_on_first_attempt() {
+        let queue = "test-pickup-first-attempt";
+        let before = pickup_sample_count(queue);
+
+        let ts = chrono::Utc::now().timestamp().to_string();
+        observe_redis_pickup_latency(1, None, &ts, queue);
+
+        assert_eq!(pickup_sample_count(queue), before + 1);
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_skips_retry_attempts() {
+        let queue = "test-pickup-skip-retry";
+        let before = pickup_sample_count(queue);
+
+        let ts = chrono::Utc::now().timestamp().to_string();
+        observe_redis_pickup_latency(2, None, &ts, queue);
+        observe_redis_pickup_latency(99, None, &ts, queue);
+
+        assert_eq!(pickup_sample_count(queue), before);
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_prefers_available_at_over_timestamp() {
+        // available_at is "now" so latency should be ~0; job_timestamp is far in the
+        // past, so if the fallback were used we'd see a large value. We verify the
+        // preference indirectly via the histogram sum delta.
+        let queue = "test-pickup-prefers-available-at";
+        let histogram = crate::metrics::QUEUE_PICKUP_LATENCY.with_label_values(&[queue, "redis"]);
+        let sum_before = histogram.get_sample_sum();
+
+        let now = chrono::Utc::now().timestamp();
+        let available_at = now.to_string();
+        let stale_timestamp = (now - 3600).to_string();
+
+        observe_redis_pickup_latency(1, Some(&available_at), &stale_timestamp, queue);
+
+        let delta = histogram.get_sample_sum() - sum_before;
+        assert!(
+            delta < 5.0,
+            "expected near-zero latency when available_at is now, got {delta}"
+        );
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_falls_back_to_timestamp_when_available_at_absent() {
+        let queue = "test-pickup-fallback-timestamp";
+        let before = pickup_sample_count(queue);
+
+        let ts = chrono::Utc::now().timestamp().to_string();
+        observe_redis_pickup_latency(1, None, &ts, queue);
+
+        assert_eq!(pickup_sample_count(queue), before + 1);
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_clamps_negative_skew_to_zero() {
+        // baseline in the future (producer clock ahead of consumer) → delta negative
+        // → clamped to 0, but the observation still records.
+        let queue = "test-pickup-clamps-negative";
+        let histogram = crate::metrics::QUEUE_PICKUP_LATENCY.with_label_values(&[queue, "redis"]);
+        let sum_before = histogram.get_sample_sum();
+        let count_before = histogram.get_sample_count();
+
+        let future_ts = (chrono::Utc::now().timestamp() + 3600).to_string();
+        observe_redis_pickup_latency(1, None, &future_ts, queue);
+
+        assert_eq!(histogram.get_sample_count(), count_before + 1);
+        let delta_sum = histogram.get_sample_sum() - sum_before;
+        assert!(
+            delta_sum.abs() < f64::EPSILON,
+            "expected 0 latency for future baseline, got {delta_sum}"
+        );
+    }
+
+    #[test]
+    fn test_observe_redis_pickup_latency_skips_when_baseline_unparsable() {
+        let queue = "test-pickup-unparsable";
+        let before = pickup_sample_count(queue);
+
+        observe_redis_pickup_latency(1, None, "not-a-number", queue);
+
+        assert_eq!(pickup_sample_count(queue), before);
     }
 }
