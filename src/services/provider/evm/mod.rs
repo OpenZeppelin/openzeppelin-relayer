@@ -15,7 +15,7 @@ use alloy::{
         client::ClientBuilder,
         types::{BlockNumberOrTag, FeeHistory, TransactionInput, TransactionRequest},
     },
-    transports::http::Http,
+    transports::http::{reqwest as alloy_reqwest, Http},
 };
 
 type EvmProviderType = FillProvider<
@@ -211,9 +211,25 @@ impl EvmProvider {
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
 
-        let client = super::build_rpc_http_client_with_timeout(std::time::Duration::from_secs(
-            self.timeout_seconds,
-        ))?;
+        // Build the HTTP client using alloy's re-exported reqwest to ensure the
+        // Client type matches what alloy-transport-http expects, even if the direct
+        // reqwest dependency is a different version.
+        let client = alloy_reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(
+                crate::constants::DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+            ))
+            .timeout(std::time::Duration::from_secs(self.timeout_seconds))
+            .pool_max_idle_per_host(crate::constants::DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+            .pool_idle_timeout(std::time::Duration::from_secs(
+                crate::constants::DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
+            ))
+            .tcp_keepalive(std::time::Duration::from_secs(
+                crate::constants::DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+            ))
+            .build()
+            .map_err(|e| {
+                ProviderError::NetworkConfiguration(format!("Failed to build RPC HTTP client: {e}"))
+            })?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
