@@ -153,7 +153,6 @@ pub fn get_shared_rpc_http_client() -> Result<ReqwestClient, ProviderError> {
         .map_err(|e| ProviderError::NetworkConfiguration(e.clone()))
 }
 
-
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {
     #[error("RPC client error: {0}")]
