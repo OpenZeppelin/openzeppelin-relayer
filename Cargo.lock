@@ -5703,6 +5703,8 @@ dependencies = [
  "aws-config",
  "aws-sdk-kms",
  "aws-sdk-sqs",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
  "base64 0.22.1",
  "bincode",
  "bs58",
