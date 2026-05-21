@@ -48,6 +48,8 @@ impl From<RepositoryError> for ApiError {
     fn from(error: RepositoryError) -> Self {
         match error {
             RepositoryError::NotFound(msg) => ApiError::NotFound(msg),
+            RepositoryError::InvalidData(msg) => ApiError::BadRequest(msg),
+            RepositoryError::ConstraintViolation(msg) => ApiError::BadRequest(msg),
             RepositoryError::Unknown(msg) => ApiError::InternalError(msg),
             _ => ApiError::InternalError("An unknown error occurred".to_string()),
         }
@@ -81,12 +83,32 @@ mod tests {
     }
 
     #[test]
+    fn test_repository_error_to_api_error_bad_request() {
+        let bad_request_cases = vec![
+            (
+                RepositoryError::InvalidData("Invalid data".to_string()),
+                "Invalid data",
+            ),
+            (
+                RepositoryError::ConstraintViolation("Constraint error".to_string()),
+                "Constraint error",
+            ),
+        ];
+
+        for (repo_error, expected_msg) in bad_request_cases {
+            let api_error = ApiError::from(repo_error);
+            match api_error {
+                ApiError::BadRequest(msg) => assert_eq!(msg, expected_msg),
+                _ => panic!("Expected ApiError::BadRequest, got {:?}", api_error),
+            }
+        }
+    }
+
+    #[test]
     fn test_repository_error_to_api_error_other_errors() {
         let test_cases = vec![
             RepositoryError::LockError("Lock error".to_string()),
             RepositoryError::ConnectionError("Connection error".to_string()),
-            RepositoryError::ConstraintViolation("Constraint error".to_string()),
-            RepositoryError::InvalidData("Invalid data".to_string()),
             RepositoryError::TransactionFailure("Transaction failed".to_string()),
             RepositoryError::ConcurrentUpdateConflict("Concurrent conflict".to_string()),
             RepositoryError::TransactionValidationFailed("Validation failed".to_string()),

@@ -115,6 +115,17 @@ impl Repository<SignerRepoModel, String> for InMemorySignerRepository {
         &self,
         query: PaginationQuery,
     ) -> Result<PaginatedResult<SignerRepoModel>, RepositoryError> {
+        if query.page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "page must be greater than 0".to_string(),
+            ));
+        }
+        if query.per_page == 0 {
+            return Err(RepositoryError::InvalidData(
+                "per_page must be greater than 0".to_string(),
+            ));
+        }
+
         let total = self.count().await?;
         let start = ((query.page - 1) * query.per_page) as usize;
         let items: Vec<SignerRepoModel> = self

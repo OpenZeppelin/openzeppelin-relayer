@@ -51,7 +51,9 @@ where
 
     let api_key = state.api_key_repository.create(api_key).await?;
 
-    Ok(HttpResponse::Created().json(ApiResponse::success(api_key)))
+    let api_key_response = ApiKeyResponse::try_from(api_key)?;
+
+    Ok(HttpResponse::Created().json(ApiResponse::success(api_key_response)))
 }
 
 /// List api keys
