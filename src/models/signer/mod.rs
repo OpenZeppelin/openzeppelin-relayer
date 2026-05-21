@@ -13,7 +13,8 @@
 
 mod repository;
 pub use repository::{
-    AwsKmsSignerConfigStorage, GoogleCloudKmsSignerConfigStorage,
+    AwsKmsSignerConfigStorage, AzureKeyVaultSignerConfigStorage,
+    GoogleCloudKmsSignerConfigStorage,
     GoogleCloudKmsSignerKeyConfigStorage, GoogleCloudKmsSignerServiceAccountConfigStorage,
     LocalSignerConfigStorage, SignerConfigStorage, SignerRepoModel, TurnkeySignerConfigStorage,
     VaultSignerConfigStorage, VaultTransitSignerConfigStorage,
@@ -127,6 +128,37 @@ pub struct AwsKmsSignerConfig {
     pub region: Option<String>,
     #[validate(length(min = 1, message = "Key ID cannot be empty"))]
     pub key_id: String,
+}
+
+/// Azure Key Vault signer configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AzureKeyVaultSignerConfig {
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Tenant ID cannot be empty"
+    ))]
+    pub tenant_id: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Client ID cannot be empty"
+    ))]
+    pub client_id: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Client secret cannot be empty"
+    ))]
+    pub client_secret: SecretString,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Vault URL must be a valid URL"
+    ))]
+    pub vault_url: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Key name cannot be empty"
+    ))]
+    pub key_name: SecretString,
+    pub key_version: Option<String>,
 }
 
 /// Vault signer configuration
@@ -416,6 +448,7 @@ pub enum SignerConfig {
     Vault(VaultSignerConfig),
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
+    AzureKeyVault(AzureKeyVaultSignerConfig),
     Turnkey(TurnkeySignerConfig),
     Cdp(CdpSignerConfig),
     GoogleCloudKms(Box<GoogleCloudKmsSignerConfig>),
@@ -429,6 +462,12 @@ impl SignerConfig {
             Self::AwsKms(config) => Validate::validate(config).map_err(|e| {
                 SignerValidationError::InvalidConfig(format!(
                     "AWS KMS validation failed: {}",
+                    format_validation_errors(&e)
+                ))
+            }),
+            Self::AzureKeyVault(config) => Validate::validate(config).map_err(|e| {
+                SignerValidationError::InvalidConfig(format!(
+                    "Azure Key Vault validation failed: {}",
                     format_validation_errors(&e)
                 ))
             }),
@@ -481,6 +520,14 @@ impl SignerConfig {
         }
     }
 
+    /// Get Azure Key Vault signer config if this is an Azure Key Vault signer
+    pub fn get_azure_key_vault(&self) -> Option<&AzureKeyVaultSignerConfig> {
+        match self {
+            Self::AzureKeyVault(config) => Some(config),
+            _ => None,
+        }
+    }
+
     /// Get Vault signer config if this is a Vault signer
     pub fn get_vault(&self) -> Option<&VaultSignerConfig> {
         match self {
@@ -526,6 +573,7 @@ impl SignerConfig {
         match self {
             Self::Local(_) => SignerType::Local,
             Self::AwsKms(_) => SignerType::AwsKms,
+            Self::AzureKeyVault(_) => SignerType::AzureKeyVault,
             Self::Vault(_) => SignerType::Vault,
             Self::VaultTransit(_) => SignerType::VaultTransit,
             Self::Turnkey(_) => SignerType::Turnkey,
@@ -578,6 +626,8 @@ pub enum SignerType {
     Local,
     #[serde(rename = "aws_kms")]
     AwsKms,
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault,
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms,
     Vault,

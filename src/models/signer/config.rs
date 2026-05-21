@@ -12,9 +12,10 @@
 use crate::{
     config::ConfigFileError,
     models::signer::{
-        AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
-        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
-        Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
+        AwsKmsSignerConfig, AzureKeyVaultSignerConfig, CdpSignerConfig,
+        GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
+        TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
     },
     models::PlainOrEnvValue,
 };
@@ -34,6 +35,17 @@ pub struct LocalSignerFileConfig {
 pub struct AwsKmsSignerFileConfig {
     pub region: String,
     pub key_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AzureKeyVaultSignerFileConfig {
+    pub tenant_id: PlainOrEnvValue,
+    pub client_id: PlainOrEnvValue,
+    pub client_secret: PlainOrEnvValue,
+    pub vault_url: String,
+    pub key_name: String,
+    pub key_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -151,6 +163,8 @@ pub enum SignerFileConfigEnum {
     Local(LocalSignerFileConfig),
     #[serde(rename = "aws_kms")]
     AwsKms(AwsKmsSignerFileConfig),
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault(AzureKeyVaultSignerFileConfig),
     Turnkey(TurnkeySignerFileConfig),
     Cdp(CdpSignerFileConfig),
     Vault(VaultSignerFileConfig),
@@ -262,6 +276,31 @@ impl TryFrom<AwsKmsSignerFileConfig> for AwsKmsSignerConfig {
         Ok(AwsKmsSignerConfig {
             region: Some(config.region),
             key_id: config.key_id,
+        })
+    }
+}
+
+impl TryFrom<AzureKeyVaultSignerFileConfig> for AzureKeyVaultSignerConfig {
+    type Error = ConfigFileError;
+
+    fn try_from(config: AzureKeyVaultSignerFileConfig) -> Result<Self, Self::Error> {
+        let tenant_id = config.tenant_id.get_value().map_err(|e| {
+            ConfigFileError::InvalidFormat(format!("Failed to get tenant_id value: {e}"))
+        })?;
+        let client_id = config.client_id.get_value().map_err(|e| {
+            ConfigFileError::InvalidFormat(format!("Failed to get client_id value: {e}"))
+        })?;
+        let client_secret = config.client_secret.get_value().map_err(|e| {
+            ConfigFileError::InvalidFormat(format!("Failed to get client_secret value: {e}"))
+        })?;
+
+        Ok(AzureKeyVaultSignerConfig {
+            tenant_id,
+            client_id,
+            client_secret,
+            vault_url: crate::models::SecretString::new(&config.vault_url),
+            key_name: crate::models::SecretString::new(&config.key_name),
+            key_version: config.key_version,
         })
     }
 }
@@ -426,6 +465,11 @@ impl TryFrom<SignerFileConfigEnum> for SignerConfig {
             SignerFileConfigEnum::AwsKms(aws_kms) => {
                 Ok(SignerConfig::AwsKms(AwsKmsSignerConfig::try_from(aws_kms)?))
             }
+            SignerFileConfigEnum::AzureKeyVault(azure_key_vault) => Ok(
+                SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig::try_from(
+                    azure_key_vault,
+                )?),
+            ),
             SignerFileConfigEnum::Turnkey(turnkey) => Ok(SignerConfig::Turnkey(
                 TurnkeySignerConfig::try_from(turnkey)?,
             )),
