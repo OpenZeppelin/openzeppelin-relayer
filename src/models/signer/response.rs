@@ -43,6 +43,14 @@ pub enum SignerConfigResponse {
         region: Option<String>,
         key_id: String,
     },
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault {
+        tenant_id: String,
+        client_id: String,
+        vault_url: String,
+        key_name: String,
+        key_version: Option<String>,
+    },
     Turnkey {
         api_public_key: String,
         organization_id: String,
@@ -106,6 +114,13 @@ impl From<SignerConfig> for SignerConfigResponse {
             SignerConfig::AwsKms(c) => SignerConfigResponse::AwsKms {
                 region: c.region,
                 key_id: c.key_id,
+            },
+            SignerConfig::AzureKeyVault(c) => SignerConfigResponse::AzureKeyVault {
+                tenant_id: (*c.tenant_id.to_str()).clone(),
+                client_id: (*c.client_id.to_str()).clone(),
+                vault_url: (*c.vault_url.to_str()).clone(),
+                key_name: (*c.key_name.to_str()).clone(),
+                key_version: c.key_version,
             },
             SignerConfig::Turnkey(c) => SignerConfigResponse::Turnkey {
                 api_public_key: c.api_public_key,

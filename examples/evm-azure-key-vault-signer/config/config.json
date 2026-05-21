@@ -1,0 +1,52 @@
+{
+  "relayers": [
+    {
+      "id": "sepolia-example",
+      "name": "Sepolia Example",
+      "network": "sepolia",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "azure-key-vault-signer-evm",
+      "network_type": "evm",
+      "policies": {
+        "min_balance": 0
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "azure-key-vault-signer-evm",
+      "type": "azure_key_vault",
+      "config": {
+        "tenant_id": {
+          "type": "env",
+          "value": "AZURE_TENANT_ID"
+        },
+        "client_id": {
+          "type": "env",
+          "value": "AZURE_CLIENT_ID"
+        },
+        "client_secret": {
+          "type": "env",
+          "value": "AZURE_CLIENT_SECRET"
+        },
+        "vault_url": "https://your-key-vault-name.vault.azure.net",
+        "key_name": "your-secp256k1-key-name",
+        "key_version": null
+      }
+    }
+  ],
+  "plugins": []
+}
