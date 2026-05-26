@@ -30,6 +30,7 @@
       "id": "azure-key-vault-signer-evm",
       "type": "azure_key_vault",
       "config": {
+        "auth_type": "client_secret",
         "tenant_id": {
           "type": "env",
           "value": "AZURE_TENANT_ID"

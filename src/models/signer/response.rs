@@ -9,7 +9,7 @@
 //! Serves as the exit point for signer data to external clients, ensuring
 //! proper data formatting and security considerations.
 
-use crate::models::{Signer, SignerConfig, SignerRepoModel, SignerType};
+use crate::models::{AzureKeyVaultAuthType, Signer, SignerConfig, SignerRepoModel, SignerType};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -45,8 +45,9 @@ pub enum SignerConfigResponse {
     },
     #[serde(rename = "azure_key_vault")]
     AzureKeyVault {
-        tenant_id: String,
-        client_id: String,
+        auth_type: AzureKeyVaultAuthType,
+        tenant_id: Option<String>,
+        client_id: Option<String>,
         vault_url: String,
         key_name: String,
         key_version: Option<String>,
@@ -116,8 +117,9 @@ impl From<SignerConfig> for SignerConfigResponse {
                 key_id: c.key_id,
             },
             SignerConfig::AzureKeyVault(c) => SignerConfigResponse::AzureKeyVault {
-                tenant_id: (*c.tenant_id.to_str()).clone(),
-                client_id: (*c.client_id.to_str()).clone(),
+                auth_type: c.auth_type(),
+                tenant_id: c.tenant_id.map(|value| (*value.to_str()).clone()),
+                client_id: c.client_id.map(|value| (*value.to_str()).clone()),
                 vault_url: (*c.vault_url.to_str()).clone(),
                 key_name: (*c.key_name.to_str()).clone(),
                 key_version: c.key_version,

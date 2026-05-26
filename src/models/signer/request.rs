@@ -10,11 +10,10 @@
 //! all input is properly validated before reaching the core business logic.
 
 use crate::models::{
-    ApiError, AwsKmsSignerConfig, AzureKeyVaultSignerConfig, CdpSignerConfig,
-    GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+    ApiError, AwsKmsSignerConfig, AzureKeyVaultAuthType, AzureKeyVaultSignerConfig,
+    CdpSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
     GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, Signer,
-    SignerConfig, TurnkeySignerConfig, VaultSignerConfig,
-    VaultTransitSignerConfig,
+    SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
@@ -40,9 +39,11 @@ pub struct AwsKmsSignerRequestConfig {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
 #[serde(deny_unknown_fields)]
 pub struct AzureKeyVaultSignerRequestConfig {
-    pub tenant_id: String,
-    pub client_id: String,
-    pub client_secret: String,
+    pub auth_type: Option<AzureKeyVaultAuthType>,
+    pub tenant_id: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub federated_token_file: Option<String>,
     pub vault_url: String,
     pub key_name: String,
     #[schema(nullable = false)]
@@ -246,9 +247,19 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
             }),
             SignerConfigRequest::AzureKeyVault(azure_config) => {
                 SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
-                    tenant_id: SecretString::new(&azure_config.tenant_id),
-                    client_id: SecretString::new(&azure_config.client_id),
-                    client_secret: SecretString::new(&azure_config.client_secret),
+                    auth_type: azure_config.auth_type,
+                    tenant_id: azure_config
+                        .tenant_id
+                        .map(|value| SecretString::new(&value)),
+                    client_id: azure_config
+                        .client_id
+                        .map(|value| SecretString::new(&value)),
+                    client_secret: azure_config
+                        .client_secret
+                        .map(|value| SecretString::new(&value)),
+                    federated_token_file: azure_config
+                        .federated_token_file
+                        .map(|value| SecretString::new(&value)),
                     vault_url: SecretString::new(&azure_config.vault_url),
                     key_name: SecretString::new(&azure_config.key_name),
                     key_version: azure_config.key_version,
