@@ -12,10 +12,9 @@
 use crate::{
     config::ConfigFileError,
     models::signer::{
-        AwsKmsSignerConfig, AzureKeyVaultSignerConfig, CdpSignerConfig,
-        GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
-        GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
-        TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
+        AwsKmsSignerConfig, AzureKeyVaultSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
+        GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
+        Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
     },
     models::PlainOrEnvValue,
 };
@@ -40,9 +39,11 @@ pub struct AwsKmsSignerFileConfig {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AzureKeyVaultSignerFileConfig {
-    pub tenant_id: PlainOrEnvValue,
-    pub client_id: PlainOrEnvValue,
-    pub client_secret: PlainOrEnvValue,
+    pub auth_type: Option<crate::models::AzureKeyVaultAuthType>,
+    pub tenant_id: Option<PlainOrEnvValue>,
+    pub client_id: Option<PlainOrEnvValue>,
+    pub client_secret: Option<PlainOrEnvValue>,
+    pub federated_token_file: Option<PlainOrEnvValue>,
     pub vault_url: String,
     pub key_name: String,
     pub key_version: Option<String>,
@@ -284,20 +285,49 @@ impl TryFrom<AzureKeyVaultSignerFileConfig> for AzureKeyVaultSignerConfig {
     type Error = ConfigFileError;
 
     fn try_from(config: AzureKeyVaultSignerFileConfig) -> Result<Self, Self::Error> {
-        let tenant_id = config.tenant_id.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get tenant_id value: {e}"))
-        })?;
-        let client_id = config.client_id.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get client_id value: {e}"))
-        })?;
-        let client_secret = config.client_secret.get_value().map_err(|e| {
-            ConfigFileError::InvalidFormat(format!("Failed to get client_secret value: {e}"))
-        })?;
+        let tenant_id = config
+            .tenant_id
+            .map(|value| {
+                value.get_value().map_err(|e| {
+                    ConfigFileError::InvalidFormat(format!("Failed to get tenant_id value: {e}"))
+                })
+            })
+            .transpose()?;
+        let client_id = config
+            .client_id
+            .map(|value| {
+                value.get_value().map_err(|e| {
+                    ConfigFileError::InvalidFormat(format!("Failed to get client_id value: {e}"))
+                })
+            })
+            .transpose()?;
+        let client_secret = config
+            .client_secret
+            .map(|value| {
+                value.get_value().map_err(|e| {
+                    ConfigFileError::InvalidFormat(format!(
+                        "Failed to get client_secret value: {e}"
+                    ))
+                })
+            })
+            .transpose()?;
+        let federated_token_file = config
+            .federated_token_file
+            .map(|value| {
+                value.get_value().map_err(|e| {
+                    ConfigFileError::InvalidFormat(format!(
+                        "Failed to get federated_token_file value: {e}"
+                    ))
+                })
+            })
+            .transpose()?;
 
         Ok(AzureKeyVaultSignerConfig {
+            auth_type: config.auth_type,
             tenant_id,
             client_id,
             client_secret,
+            federated_token_file,
             vault_url: crate::models::SecretString::new(&config.vault_url),
             key_name: crate::models::SecretString::new(&config.key_name),
             key_version: config.key_version,
@@ -466,9 +496,7 @@ impl TryFrom<SignerFileConfigEnum> for SignerConfig {
                 Ok(SignerConfig::AwsKms(AwsKmsSignerConfig::try_from(aws_kms)?))
             }
             SignerFileConfigEnum::AzureKeyVault(azure_key_vault) => Ok(
-                SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig::try_from(
-                    azure_key_vault,
-                )?),
+                SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig::try_from(azure_key_vault)?),
             ),
             SignerFileConfigEnum::Turnkey(turnkey) => Ok(SignerConfig::Turnkey(
                 TurnkeySignerConfig::try_from(turnkey)?,

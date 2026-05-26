@@ -6,18 +6,22 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use k256::ecdsa::Signature;
 use reqwest::Client;
 use serde_json::Value;
+use std::{env, fs};
 
 #[cfg(test)]
 use mockall::automock;
 
 use crate::{
-    models::{Address, AzureKeyVaultSignerConfig},
+    models::{Address, AzureKeyVaultAuthType, AzureKeyVaultSignerConfig},
     utils::{recover_public_key, recover_public_key_from_hash, Secp256k1Error},
 };
 
 const AZURE_API_VERSION: &str = "7.4";
 const AZURE_SCOPE: &str = "https://vault.azure.net/.default";
+const AZURE_MANAGED_IDENTITY_RESOURCE: &str = "https://vault.azure.net";
 const AZURE_SIGN_ALGORITHM: &str = "ES256K";
+const AZURE_IMDS_API_VERSION: &str = "2018-02-01";
+const AZURE_IMDS_TOKEN_URL: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
 pub enum AzureKeyVaultError {
@@ -58,19 +62,43 @@ impl AzureKeyVaultService {
     }
 
     fn tenant_id(&self) -> String {
-        self.config.tenant_id.to_str().to_string()
+        self.config
+            .tenant_id
+            .as_ref()
+            .map(|value| value.to_str().to_string())
+            .unwrap_or_default()
     }
 
     fn client_id(&self) -> String {
-        self.config.client_id.to_str().to_string()
+        self.config
+            .client_id
+            .as_ref()
+            .map(|value| value.to_str().to_string())
+            .unwrap_or_default()
     }
 
     fn client_secret(&self) -> String {
-        self.config.client_secret.to_str().to_string()
+        self.config
+            .client_secret
+            .as_ref()
+            .map(|value| value.to_str().to_string())
+            .unwrap_or_default()
+    }
+
+    fn federated_token_file(&self) -> Option<String> {
+        self.config
+            .federated_token_file
+            .as_ref()
+            .map(|value| value.to_str().to_string())
+            .or_else(|| env::var("AZURE_FEDERATED_TOKEN_FILE").ok())
     }
 
     fn vault_url(&self) -> String {
-        self.config.vault_url.to_str().trim_end_matches('/').to_string()
+        self.config
+            .vault_url
+            .to_str()
+            .trim_end_matches('/')
+            .to_string()
     }
 
     fn key_name(&self) -> String {
@@ -114,7 +142,15 @@ impl AzureKeyVaultService {
         )
     }
 
-    async fn get_access_token(&self) -> AzureKeyVaultResult<String> {
+    fn auth_type(&self) -> AzureKeyVaultAuthType {
+        self.config.auth_type()
+    }
+
+    fn managed_identity_token_url(&self) -> String {
+        env::var("AZURE_IMDS_TOKEN_URL").unwrap_or_else(|_| AZURE_IMDS_TOKEN_URL.to_string())
+    }
+
+    async fn get_client_secret_access_token(&self) -> AzureKeyVaultResult<String> {
         let client_id = self.client_id();
         let client_secret = self.client_secret();
         let url = self.oauth_token_url();
@@ -132,6 +168,68 @@ impl AzureKeyVaultService {
             .await
             .map_err(|e| AzureKeyVaultError::HttpError(e.to_string()))?;
 
+        Self::parse_access_token_response(response).await
+    }
+
+    async fn get_managed_identity_access_token(&self) -> AzureKeyVaultResult<String> {
+        let request = self
+            .client
+            .get(self.managed_identity_token_url())
+            .header("Metadata", "true");
+        let client_id = self.client_id();
+
+        let mut query = vec![
+            ("api-version", AZURE_IMDS_API_VERSION),
+            ("resource", AZURE_MANAGED_IDENTITY_RESOURCE),
+        ];
+        if !client_id.is_empty() {
+            query.push(("client_id", client_id.as_str()));
+        }
+
+        let response = request
+            .query(&query)
+            .send()
+            .await
+            .map_err(|e| AzureKeyVaultError::HttpError(e.to_string()))?;
+
+        Self::parse_access_token_response(response).await
+    }
+
+    async fn get_workload_identity_access_token(&self) -> AzureKeyVaultResult<String> {
+        let client_id = self.client_id();
+        let url = self.oauth_token_url();
+        let token_file = self
+            .federated_token_file()
+            .ok_or_else(|| AzureKeyVaultError::MissingField("federated_token_file".to_string()))?;
+        let federated_token = fs::read_to_string(&token_file).map_err(|e| {
+            AzureKeyVaultError::HttpError(format!(
+                "failed to read federated token file {token_file}: {e}"
+            ))
+        })?;
+
+        let response = self
+            .client
+            .post(url)
+            .form(&[
+                ("grant_type", "client_credentials"),
+                ("client_id", client_id.as_str()),
+                (
+                    "client_assertion_type",
+                    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                ),
+                ("client_assertion", federated_token.trim()),
+                ("scope", AZURE_SCOPE),
+            ])
+            .send()
+            .await
+            .map_err(|e| AzureKeyVaultError::HttpError(e.to_string()))?;
+
+        Self::parse_access_token_response(response).await
+    }
+
+    async fn parse_access_token_response(
+        response: reqwest::Response,
+    ) -> AzureKeyVaultResult<String> {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
 
@@ -148,6 +246,18 @@ impl AzureKeyVaultService {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| AzureKeyVaultError::MissingField("access_token".to_string()))
+    }
+
+    async fn get_access_token(&self) -> AzureKeyVaultResult<String> {
+        match self.auth_type() {
+            AzureKeyVaultAuthType::ClientSecret => self.get_client_secret_access_token().await,
+            AzureKeyVaultAuthType::ManagedIdentity => {
+                self.get_managed_identity_access_token().await
+            }
+            AzureKeyVaultAuthType::WorkloadIdentity => {
+                self.get_workload_identity_access_token().await
+            }
+        }
     }
 
     async fn key_vault_get(&self, url: &str) -> AzureKeyVaultResult<Value> {
@@ -315,12 +425,29 @@ mod tests {
         elliptic_curve::rand_core::OsRng,
     };
     use mockito::Server;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     fn test_config(base_url: &str) -> AzureKeyVaultSignerConfig {
         AzureKeyVaultSignerConfig {
-            tenant_id: SecretString::new(base_url),
-            client_id: SecretString::new("test-client"),
-            client_secret: SecretString::new("test-secret"),
+            auth_type: Some(AzureKeyVaultAuthType::ClientSecret),
+            tenant_id: Some(SecretString::new(base_url)),
+            client_id: Some(SecretString::new("test-client")),
+            client_secret: Some(SecretString::new("test-secret")),
+            federated_token_file: None,
+            vault_url: SecretString::new(base_url),
+            key_name: SecretString::new("test-key"),
+            key_version: Some("test-version".to_string()),
+        }
+    }
+
+    fn managed_identity_config(base_url: &str) -> AzureKeyVaultSignerConfig {
+        AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::ManagedIdentity),
+            tenant_id: None,
+            client_id: Some(SecretString::new("managed-client-id")),
+            client_secret: None,
+            federated_token_file: None,
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
             key_version: Some("test-version".to_string()),
@@ -451,5 +578,88 @@ mod tests {
 
         assert_eq!(signature.len(), 65);
         assert!(signature[64] == 27 || signature[64] == 28);
+    }
+
+    #[tokio::test]
+    async fn test_managed_identity_access_token() {
+        let mut server = Server::new_async().await;
+        unsafe {
+            env::set_var(
+                "AZURE_IMDS_TOKEN_URL",
+                format!("{}/metadata/identity/oauth2/token", server.url()),
+            );
+        }
+        let _token = server
+            .mock("GET", "/metadata/identity/oauth2/token")
+            .match_header("metadata", "true")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("api-version".into(), AZURE_IMDS_API_VERSION.into()),
+                mockito::Matcher::UrlEncoded(
+                    "resource".into(),
+                    AZURE_MANAGED_IDENTITY_RESOURCE.into(),
+                ),
+                mockito::Matcher::UrlEncoded("client_id".into(), "managed-client-id".into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"managed-token"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let service = AzureKeyVaultService {
+            config: managed_identity_config(&server.url()),
+            client: Client::new(),
+        };
+
+        let token = service.get_access_token().await.unwrap();
+        assert_eq!(token, "managed-token");
+
+        unsafe {
+            env::remove_var("AZURE_IMDS_TOKEN_URL");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workload_identity_access_token() {
+        let mut server = Server::new_async().await;
+        let mut token_file = NamedTempFile::new().unwrap();
+        writeln!(token_file, "federated-jwt").unwrap();
+
+        let _token = server
+            .mock("POST", "/oauth2/v2.0/token")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("grant_type".into(), "client_credentials".into()),
+                mockito::Matcher::UrlEncoded("client_id".into(), "workload-client-id".into()),
+                mockito::Matcher::UrlEncoded(
+                    "client_assertion_type".into(),
+                    "urn:ietf:params:oauth:client-assertion-type:jwt-bearer".into(),
+                ),
+                mockito::Matcher::UrlEncoded("client_assertion".into(), "federated-jwt".into()),
+                mockito::Matcher::UrlEncoded("scope".into(), AZURE_SCOPE.into()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"workload-token"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let config = AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::WorkloadIdentity),
+            tenant_id: Some(SecretString::new(&server.url())),
+            client_id: Some(SecretString::new("workload-client-id")),
+            client_secret: None,
+            federated_token_file: Some(SecretString::new(
+                token_file.path().to_string_lossy().as_ref(),
+            )),
+            vault_url: SecretString::new(&server.url()),
+            key_name: SecretString::new("test-key"),
+            key_version: Some("test-version".to_string()),
+        };
+
+        let service = AzureKeyVaultService::new(&config).unwrap();
+        let token = service.get_access_token().await.unwrap();
+        assert_eq!(token, "workload-token");
     }
 }

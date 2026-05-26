@@ -1,11 +1,19 @@
 # Using Azure Key Vault for Secure EVM Transaction Signing in OpenZeppelin Relayer
 
 This example demonstrates how to use an Azure Key Vault hosted secp256k1 key to securely sign EVM transactions in OpenZeppelin Relayer.
+The relayer supports three Azure authentication modes:
+
+- `client_secret`
+- `managed_identity`
+- `workload_identity`
 
 ## Prerequisites
 
 1. An Azure subscription with access to Azure Key Vault
-2. A Microsoft Entra application (service principal) with a client secret
+2. One of the following Azure identity setups:
+   - A Microsoft Entra application (service principal) with a client secret
+   - A managed identity with access to the Key Vault
+   - A workload identity / federated credential with access to the Key Vault
 3. An EVM signing key stored in Azure Key Vault
 4. Rust and Cargo installed
 5. Git
@@ -26,17 +34,18 @@ cd openzeppelin-relayer
 1. Open the Azure portal and create or select a Key Vault
 2. Create or import the EVM signing key you want the relayer to use
 3. Note the following values:
-   - Tenant ID
-   - Client ID
-   - Client secret
    - Vault URL, for example `https://your-key-vault-name.vault.azure.net`
    - Key name
    - Optional key version
-4. Make sure the service principal has permission to read the key metadata and sign payloads with it
+4. Depending on the auth mode, also collect:
+   - `client_secret`: tenant ID, client ID, client secret
+   - `managed_identity`: optional client ID for a user-assigned identity
+   - `workload_identity`: tenant ID, client ID, and optionally a federated token file path if you don't rely on `AZURE_FEDERATED_TOKEN_FILE`
+5. Make sure the chosen identity has permission to read the key metadata and sign payloads with it
 
 ### Step 3: Configure Environment Variables
 
-Populate the environment variables used by the example:
+For `client_secret`, populate the environment variables used by the example:
 
 ```env
 AZURE_TENANT_ID=your-tenant-id
@@ -55,7 +64,9 @@ cargo run --example generate_uuid
 
 ### Step 4: Configure the Relayer
 
-Update [`config/config.json`](./config/config.json) with your Azure Key Vault details:
+Update [`config/config.json`](./config/config.json) with your Azure Key Vault details.
+
+Client secret example:
 
 ```json
 {
@@ -64,6 +75,7 @@ Update [`config/config.json`](./config/config.json) with your Azure Key Vault de
       "id": "azure-key-vault-signer-evm",
       "type": "azure_key_vault",
       "config": {
+        "auth_type": "client_secret",
         "tenant_id": {
           "type": "env",
           "value": "AZURE_TENANT_ID"
@@ -85,7 +97,50 @@ Update [`config/config.json`](./config/config.json) with your Azure Key Vault de
 }
 ```
 
+Managed identity example:
+
+```json
+{
+  "id": "azure-key-vault-signer-evm",
+  "type": "azure_key_vault",
+  "config": {
+    "auth_type": "managed_identity",
+    "client_id": {
+      "type": "env",
+      "value": "AZURE_CLIENT_ID"
+    },
+    "vault_url": "https://your-key-vault-name.vault.azure.net",
+    "key_name": "your-secp256k1-key-name",
+    "key_version": null
+  }
+}
+```
+
+Workload identity example:
+
+```json
+{
+  "id": "azure-key-vault-signer-evm",
+  "type": "azure_key_vault",
+  "config": {
+    "auth_type": "workload_identity",
+    "tenant_id": {
+      "type": "env",
+      "value": "AZURE_TENANT_ID"
+    },
+    "client_id": {
+      "type": "env",
+      "value": "AZURE_CLIENT_ID"
+    },
+    "vault_url": "https://your-key-vault-name.vault.azure.net",
+    "key_name": "your-secp256k1-key-name",
+    "key_version": null
+  }
+}
+```
+
 If you want to pin the signer to a specific key version, replace `null` with the Azure Key Vault key version string.
+For workload identity, the relayer reads `AZURE_FEDERATED_TOKEN_FILE` automatically unless you set `federated_token_file` explicitly in the signer config.
 
 ### Step 5: Configure the Webhook URL
 
@@ -121,9 +176,9 @@ curl -X GET http://localhost:8080/api/v1/relayers \
 
 ## Troubleshooting
 
-1. Verify the tenant, client, and secret values are correct
+1. Verify the auth mode and identity values are correct for your deployment
 2. Verify the Key Vault URL, key name, and key version match your Azure resources
-3. Verify the service principal has access to the key for metadata lookup and signing
+3. Verify the chosen identity has access to the key for metadata lookup and signing
 4. Check relayer logs for Azure Key Vault API or authentication errors
 
 ## Additional Resources
