@@ -34,6 +34,11 @@ impl AzureKeyVaultSigner {
             azure_key_vault_service,
         }
     }
+
+    fn signature_response_bytes(signature: &Signature) -> [u8; 65] {
+        // Return r || s || yParity for API responses, independent of tx encoding rules.
+        signature.as_rsy()
+    }
 }
 
 #[async_trait]
@@ -70,14 +75,8 @@ impl Signer for AzureKeyVaultSigner {
             let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-            let mut signature_bytes = signature.as_bytes();
+            let signature_bytes = Self::signature_response_bytes(&signature);
             let signed_tx = unsigned_tx.into_signed(signature);
-
-            if signature_bytes[64] == 27 {
-                signature_bytes[64] = 0;
-            } else if signature_bytes[64] == 28 {
-                signature_bytes[64] = 1;
-            }
 
             let mut raw = Vec::with_capacity(signed_tx.eip2718_encoded_length());
             signed_tx.eip2718_encode(&mut raw);
@@ -106,7 +105,7 @@ impl Signer for AzureKeyVaultSigner {
             let signature = Signature::from_raw(&signed_bytes)
                 .map_err(|e| SignerError::ConversionError(e.to_string()))?;
 
-            let signature_bytes = signature.as_bytes();
+            let signature_bytes = Self::signature_response_bytes(&signature);
             let signed_tx = unsigned_tx.into_signed(signature);
 
             let mut raw = Vec::with_capacity(signed_tx.rlp_encoded_length());

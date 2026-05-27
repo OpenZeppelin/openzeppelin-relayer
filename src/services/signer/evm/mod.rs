@@ -9,6 +9,7 @@
 //! EVM Signer (trait implementations)
 //!   ├── LocalSigner             - Encrypted JSON keystore (development/testing)
 //!   ├── AwsKmsSigner           - AWS Key Management Service
+//!   ├── AzureKeyVaultSigner    - Azure Key Vault
 //!   ├── GoogleCloudKmsSigner   - Google Cloud Key Management Service
 //!   ├── VaultSigner            - HashiCorp Vault KV2 backend
 //!   ├── TurnkeySigner          - Turnkey API backend

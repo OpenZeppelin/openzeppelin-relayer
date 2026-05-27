@@ -6,7 +6,8 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use k256::ecdsa::Signature;
 use reqwest::Client;
 use serde_json::Value;
-use std::{env, fs};
+use std::{env, time::Duration};
+use tokio::fs;
 
 #[cfg(test)]
 use mockall::automock;
@@ -22,6 +23,9 @@ const AZURE_MANAGED_IDENTITY_RESOURCE: &str = "https://vault.azure.net";
 const AZURE_SIGN_ALGORITHM: &str = "ES256K";
 const AZURE_IMDS_API_VERSION: &str = "2018-02-01";
 const AZURE_IMDS_TOKEN_URL: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
+const AZURE_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const AZURE_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const AZURE_HTTP_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, thiserror::Error, serde::Serialize)]
 pub enum AzureKeyVaultError {
@@ -57,8 +61,17 @@ impl AzureKeyVaultService {
     pub fn new(config: &AzureKeyVaultSignerConfig) -> AzureKeyVaultResult<Self> {
         Ok(Self {
             config: config.clone(),
-            client: Client::new(),
+            client: Self::build_http_client()?,
         })
+    }
+
+    fn build_http_client() -> AzureKeyVaultResult<Client> {
+        Client::builder()
+            .connect_timeout(AZURE_HTTP_CONNECT_TIMEOUT)
+            .timeout(AZURE_HTTP_REQUEST_TIMEOUT)
+            .pool_idle_timeout(AZURE_HTTP_POOL_IDLE_TIMEOUT)
+            .build()
+            .map_err(|e| AzureKeyVaultError::HttpError(e.to_string()))
     }
 
     fn tenant_id(&self) -> String {
@@ -201,7 +214,7 @@ impl AzureKeyVaultService {
         let token_file = self
             .federated_token_file()
             .ok_or_else(|| AzureKeyVaultError::MissingField("federated_token_file".to_string()))?;
-        let federated_token = fs::read_to_string(&token_file).map_err(|e| {
+        let federated_token = fs::read_to_string(&token_file).await.map_err(|e| {
             AzureKeyVaultError::HttpError(format!(
                 "failed to read federated token file {token_file}: {e}"
             ))
@@ -609,7 +622,7 @@ mod tests {
 
         let service = AzureKeyVaultService {
             config: managed_identity_config(&server.url()),
-            client: Client::new(),
+            client: AzureKeyVaultService::build_http_client().unwrap(),
         };
 
         let token = service.get_access_token().await.unwrap();
