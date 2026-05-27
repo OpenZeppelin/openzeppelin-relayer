@@ -292,7 +292,9 @@ impl SolanaSignerFactory {
                 return Ok(SolanaSigner::AwsKms(AwsKmsSigner::new(aws_kms_service)));
             }
             SignerConfig::AzureKeyVault(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Azure Key Vault".into()));
+                return Err(SignerFactoryError::UnsupportedType(
+                    "Azure Key Vault".into(),
+                ));
             }
             SignerConfig::Cdp(config) => {
                 let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
