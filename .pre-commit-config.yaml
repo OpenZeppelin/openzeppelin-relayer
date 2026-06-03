@@ -46,6 +46,7 @@ repos:
     rev: 1.17.0
     hooks:
       - id: yamlfix
+        exclude: (^|/)pnpm-lock\.yaml$
         args:
           - -c
           - .yamlfix.toml
