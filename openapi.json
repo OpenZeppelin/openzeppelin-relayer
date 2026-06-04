@@ -6993,9 +6993,7 @@
                 ]
               },
               "value": {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 0
+                "type": "string"
               }
             }
           },
@@ -7266,8 +7264,7 @@
             ],
             "properties": {
               "amount": {
-                "type": "integer",
-                "format": "int64"
+                "type": "string"
               },
               "asset": {
                 "$ref": "#/components/schemas/AssetSpec"
