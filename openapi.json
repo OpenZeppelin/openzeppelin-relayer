@@ -6993,7 +6993,9 @@
                 ]
               },
               "value": {
-                "type": "string"
+                "type": "string",
+                "description": "Non-negative integer (memo ID) encoded as a decimal string to preserve precision.",
+                "pattern": "^[0-9]+$"
               }
             }
           },
@@ -7264,7 +7266,9 @@
             ],
             "properties": {
               "amount": {
-                "type": "string"
+                "type": "string",
+                "description": "Amount in stroops, encoded as a decimal string to preserve precision.",
+                "pattern": "^-?[0-9]+$"
               },
               "asset": {
                 "$ref": "#/components/schemas/AssetSpec"

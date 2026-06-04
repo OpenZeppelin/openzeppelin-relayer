@@ -526,10 +526,8 @@ pub enum TransactionInput {
     /// Pre-built signed XDR that needs fee-bumping
     SignedXdr {
         xdr: String,
-        // Serialized as a string for the same reason as
-        // `StellarTransactionData::sequence_number`: this i64 is re-encoded by
-        // the partial_update Lua script and would otherwise be floatified by
-        // cjson. The deserializer still accepts legacy integer/float forms.
+        // String-encoded like `sequence_number` to stay precise through storage
+        // serialization; see `serialize_i64`.
         #[serde(serialize_with = "serialize_i64", deserialize_with = "deserialize_i64")]
         max_fee: i64,
     },
@@ -637,12 +635,8 @@ impl TransactionInput {
 pub struct StellarTransactionData {
     pub source_account: String,
     pub fee: Option<u32>,
-    // Serialized as a string so the value survives a Redis/Lua `cjson`
-    // round-trip. Lua 5.1 (bundled by Redis) has no integer type, so a bare
-    // i64 is re-emitted as a float (e.g. `643918676885760.0`) by the
-    // `partial_update` script, which then fails to deserialize back into i64.
-    // The deserializer still accepts the legacy integer and corrupted float
-    // forms for backward compatibility with records already in Redis.
+    // String-encoded to keep large i64s precise through storage serialization;
+    // see `serialize_optional_i64`.
     #[serde(
         serialize_with = "serialize_optional_i64",
         deserialize_with = "deserialize_optional_i64",

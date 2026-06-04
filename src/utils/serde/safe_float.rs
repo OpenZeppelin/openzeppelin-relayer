@@ -3,16 +3,19 @@
 //!
 //! When a large integer is re-encoded by Lua's `cjson` it can come back as a
 //! float (e.g. `643918676885760.0`). For values within the exactly
-//! representable range this is a lossless reformatting we can recover from, but
-//! beyond 2^53 distinct integers collapse onto the same `f64`, so the original
-//! value is no longer knowable. In that case we reject rather than return a
-//! silently wrong number.
+//! representable range this is a lossless reformatting we can recover from.
+//! Beyond 2^53, however, consecutive integers can no longer all be represented
+//! distinctly as `f64`, so the original value is no longer knowable — in that
+//! case we reject rather than return a silently wrong number.
 
 use serde::de;
 
-/// 2^53 - 1: the largest-magnitude integer that `f64` represents exactly.
-/// Beyond this, `n` and `n + 1` can map to the same double, so a floatified
-/// value can no longer be recovered without an authoritative source.
+/// 2^53 - 1, i.e. JavaScript's `Number.MAX_SAFE_INTEGER`: the largest `N` such
+/// that *every* integer in `[-N, N]` is exactly representable as `f64` and
+/// round-trips uniquely. Individual larger integers (e.g. 2^53) are still
+/// representable, but 2^53 + 1 is not — it collapses onto 2^53 — so once a value
+/// exceeds this bound it can no longer be recovered from a float without an
+/// authoritative source.
 pub(crate) const MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
 /// Convert a JSON float that should have been an integer back into an `i128`,
@@ -22,7 +25,12 @@ pub(crate) fn f64_to_safe_integer<E>(value: f64) -> Result<i128, E>
 where
     E: de::Error,
 {
-    if !value.is_finite() || value.fract() != 0.0 {
+    if !value.is_finite() {
+        return Err(E::custom(format!(
+            "cannot convert non-finite float {value} to an integer"
+        )));
+    }
+    if value.fract() != 0.0 {
         return Err(E::custom(format!(
             "cannot convert non-integral float {value} to an integer"
         )));

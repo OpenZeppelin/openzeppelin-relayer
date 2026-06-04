@@ -15,13 +15,12 @@ pub enum MemoSpec {
         value: String,
     }, // ≤ 28 UTF-8 bytes
     Id {
-        // Stored in Redis and re-encoded by the partial_update Lua script;
-        // serialized as a string so large memo IDs survive the cjson round-trip
-        // without being floatified. Legacy integer/float forms still accepted.
-        // `value_type = String` keeps the OpenAPI schema in sync with the wire
-        // format (utoipa ignores serialize_with).
+        /// Non-negative integer (memo ID) encoded as a decimal string to preserve precision.
+        // String serde keeps large integers precise through storage
+        // serialization; `value_type = String` syncs the OpenAPI schema.
+        // See `serialize_u64`.
         #[serde(serialize_with = "serialize_u64", deserialize_with = "deserialize_u64")]
-        #[schema(value_type = String)]
+        #[schema(value_type = String, pattern = "^[0-9]+$")]
         value: u64,
     },
     Hash {

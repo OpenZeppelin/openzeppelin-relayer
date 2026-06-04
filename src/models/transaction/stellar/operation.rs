@@ -36,13 +36,12 @@ pub enum AuthSpec {
 pub enum OperationSpec {
     Payment {
         destination: String,
-        // Stored in Redis and re-encoded by the partial_update Lua script;
-        // serialized as a string so large stroop amounts survive the cjson
-        // round-trip without being floatified. Legacy integer/float forms are
-        // still accepted on read. `value_type = String` keeps the OpenAPI schema
-        // in sync with the wire format (utoipa ignores serialize_with).
+        /// Amount in stroops, encoded as a decimal string to preserve precision.
+        // String serde keeps large integers precise through storage
+        // serialization; `value_type = String` syncs the OpenAPI schema.
+        // See `serialize_i64`.
         #[serde(serialize_with = "serialize_i64", deserialize_with = "deserialize_i64")]
-        #[schema(value_type = String)]
+        #[schema(value_type = String, pattern = "^-?[0-9]+$")]
         amount: i64,
         asset: AssetSpec,
     },
