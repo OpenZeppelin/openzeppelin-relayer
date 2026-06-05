@@ -59,6 +59,14 @@ mod tests {
     }
 
     #[test]
+    fn accepts_negative_value_at_safe_boundary() {
+        assert_eq!(
+            f64_to_safe_integer::<Error>(-9_007_199_254_740_991.0).unwrap(),
+            -9_007_199_254_740_991
+        );
+    }
+
+    #[test]
     fn accepts_real_world_corrupted_value() {
         assert_eq!(
             f64_to_safe_integer::<Error>(643918676885760.0).unwrap(),
@@ -75,5 +83,16 @@ mod tests {
     #[test]
     fn rejects_non_integral() {
         assert!(f64_to_safe_integer::<Error>(1.5).is_err());
+    }
+
+    #[test]
+    fn rejects_infinite() {
+        assert!(f64_to_safe_integer::<Error>(f64::INFINITY).is_err());
+        assert!(f64_to_safe_integer::<Error>(f64::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn rejects_nan() {
+        assert!(f64_to_safe_integer::<Error>(f64::NAN).is_err());
     }
 }

@@ -1,11 +1,13 @@
 //! Memo types and conversions for Stellar transactions
 
-use crate::models::SignerError;
-use crate::utils::{deserialize_u64, serialize_u64};
+use std::convert::TryFrom;
+
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{Hash, Memo, StringM};
-use std::convert::TryFrom;
 use utoipa::ToSchema;
+
+use crate::models::SignerError;
+use crate::utils::{deserialize_u64, serialize_u64};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]

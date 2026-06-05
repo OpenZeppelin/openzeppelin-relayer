@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "paths": {
     "/api/v1/health": {
@@ -9944,8 +9944,9 @@
             "type": "string"
           },
           "sequence_number": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string",
+            "description": "Stellar sequence number encoded as a decimal string to preserve precision.",
+            "pattern": "^-?[0-9]+$"
           },
           "source_account": {
             "type": "string"
