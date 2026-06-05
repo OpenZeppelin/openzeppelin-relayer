@@ -24,7 +24,7 @@ use crate::{
         },
         ApiError, ApiResponse, CreateRelayerRequest, DefaultAppState, NetworkRepoModel,
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
-        PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
+        PaginationQuery, TransactionListQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
         TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
     },
@@ -540,7 +540,7 @@ where
 /// A paginated list of transactions
 pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    query: PaginationQuery,
+    query: TransactionListQuery,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -556,10 +556,21 @@ where
 {
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
-    let transactions = state
-        .transaction_repository
-        .find_by_relayer_id(&relayer_id, query)
-        .await?;
+    let pagination = PaginationQuery::from(query.clone());
+    let transactions = match query.status {
+        Some(status) => {
+            state
+                .transaction_repository
+                .find_by_status_paginated(&relayer_id, &[status], pagination, false)
+                .await?
+        }
+        None => {
+            state
+                .transaction_repository
+                .find_by_relayer_id(&relayer_id, pagination)
+                .await?
+        }
+    };
 
     let transaction_response_list: Vec<TransactionResponse> =
         transactions.items.into_iter().map(|t| t.into()).collect();

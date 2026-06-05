@@ -8,7 +8,7 @@ use crate::{
         transaction::request::{
             SponsoredTransactionBuildRequest, SponsoredTransactionQuoteRequest,
         },
-        CreateRelayerRequest, DefaultAppState, PaginationQuery,
+        CreateRelayerRequest, DefaultAppState, PaginationQuery, TransactionListQuery,
     },
 };
 use actix_web::{delete, get, patch, post, put, web, Responder};
@@ -115,11 +115,11 @@ async fn get_transaction_by_nonce(
     relayer::get_transaction_by_nonce(params.0, params.1, data).await
 }
 
-/// Lists all transactions for a specific relayer with pagination.
+/// Lists all transactions for a specific relayer with pagination and optional status filter.
 #[get("/relayers/{relayer_id}/transactions")]
 async fn list_transactions(
     relayer_id: web::Path<String>,
-    query: web::Query<PaginationQuery>,
+    query: web::Query<TransactionListQuery>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
     relayer::list_transactions(relayer_id.into_inner(), query.into_inner(), data).await
