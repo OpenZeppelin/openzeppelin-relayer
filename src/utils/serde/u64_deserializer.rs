@@ -1,10 +1,15 @@
-//! Deserialization utilities for u64 values
+//! Serde utilities for u64 values.
 //!
-//! This module provides a custom deserializer for u64 values.
+//! Provides a tolerant deserializer (string / integer / float) and a
+//! string serializer so large u64 values survive a Redis/Lua `cjson`
+//! round-trip. See `super::safe_float` for why the float form is tolerated and
+//! why values beyond 2^53 are rejected rather than silently truncated.
 
 use std::fmt;
 
-use serde::{de, Deserializer};
+use serde::{de, Deserializer, Serializer};
+
+use super::safe_float::f64_to_safe_integer;
 
 #[derive(Debug)]
 struct U64Visitor;
@@ -46,6 +51,16 @@ impl de::Visitor<'_> for U64Visitor {
             Ok(value as u64)
         }
     }
+
+    // Corrupted form left in Redis by a Lua cjson round-trip (e.g. 123.0).
+    // Values beyond 2^53 are rejected because precision was already lost.
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let n = f64_to_safe_integer::<E>(value)?;
+        u64::try_from(n).map_err(de::Error::custom)
+    }
 }
 
 pub fn deserialize_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -53,6 +68,15 @@ where
     D: Deserializer<'de>,
 {
     deserializer.deserialize_any(U64Visitor)
+}
+
+/// Serialize a u64 as a JSON string so it survives a Redis/Lua `cjson`
+/// round-trip.
+pub fn serialize_u64<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
 }
 
 #[cfg(test)]
@@ -112,5 +136,35 @@ mod tests {
         let deserializer = I64Deserializer::<ValueError>::new(input);
         let result = deserialize_u64(deserializer);
         assert!(result.is_err());
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Wrapper {
+        #[serde(serialize_with = "serialize_u64", deserialize_with = "deserialize_u64")]
+        id: u64,
+    }
+
+    #[test]
+    fn serializes_as_string() {
+        let json = serde_json::to_string(&Wrapper {
+            id: 18446744073709551615,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"id":"18446744073709551615"}"#);
+    }
+
+    #[test]
+    fn deserializes_from_string_integer_and_corrupted_float() {
+        let from_str: Wrapper = serde_json::from_str(r#"{"id":"1099511627776"}"#).unwrap();
+        assert_eq!(from_str.id, 1099511627776);
+        let from_int: Wrapper = serde_json::from_str(r#"{"id":1099511627776}"#).unwrap();
+        assert_eq!(from_int.id, 1099511627776);
+        let from_float: Wrapper = serde_json::from_str(r#"{"id":1099511627776.0}"#).unwrap();
+        assert_eq!(from_float.id, 1099511627776);
+    }
+
+    #[test]
+    fn rejects_corrupted_float_beyond_safe_range() {
+        assert!(serde_json::from_str::<Wrapper>(r#"{"id":9007199254740993.0}"#).is_err());
     }
 }

@@ -1,10 +1,13 @@
 //! Memo types and conversions for Stellar transactions
 
-use crate::models::SignerError;
+use std::convert::TryFrom;
+
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{Hash, Memo, StringM};
-use std::convert::TryFrom;
 use utoipa::ToSchema;
+
+use crate::models::SignerError;
+use crate::utils::{deserialize_u64, serialize_u64};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Deserialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -14,6 +17,12 @@ pub enum MemoSpec {
         value: String,
     }, // ≤ 28 UTF-8 bytes
     Id {
+        /// Non-negative integer (memo ID) encoded as a decimal string to preserve precision.
+        // String serde keeps large integers precise through storage
+        // serialization; `value_type = String` syncs the OpenAPI schema.
+        // See `serialize_u64`.
+        #[serde(serialize_with = "serialize_u64", deserialize_with = "deserialize_u64")]
+        #[schema(value_type = String, pattern = "^[0-9]+$")]
         value: u64,
     },
     Hash {
@@ -46,6 +55,36 @@ impl TryFrom<MemoSpec> for Memo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // MemoSpec::Id.value is a u64 stored in Redis and re-encoded by the
+    // partial_update Lua script, so it must serialize as a cjson-safe string.
+    #[test]
+    fn test_memo_id_serializes_as_string() {
+        let memo = MemoSpec::Id {
+            value: 18446744073709551615,
+        };
+        let json = serde_json::to_string(&memo).unwrap();
+        assert!(
+            json.contains(r#""value":"18446744073709551615""#),
+            "memo id should serialize as a string, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_memo_id_deserializes_from_corrupted_float() {
+        let mut value = serde_json::to_value(MemoSpec::Id {
+            value: 1099511627776,
+        })
+        .unwrap();
+        value["value"] = serde_json::json!(1099511627776.0);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let parsed: MemoSpec = serde_json::from_str(&json).unwrap();
+        match parsed {
+            MemoSpec::Id { value } => assert_eq!(value, 1099511627776),
+            other => panic!("expected Id, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_memo_none() {
@@ -100,10 +139,12 @@ mod tests {
             serde_json::json!({"type": "text", "value": "hello"})
         );
 
-        // Test Id
+        // Test Id — value is serialized as a string so large memo IDs survive
+        // the Redis/Lua cjson round-trip (deserialization still accepts the
+        // legacy integer form for backward compatibility).
         let id = MemoSpec::Id { value: 12345 };
         let id_json = serde_json::to_value(&id).unwrap();
-        assert_eq!(id_json, serde_json::json!({"type": "id", "value": 12345}));
+        assert_eq!(id_json, serde_json::json!({"type": "id", "value": "12345"}));
 
         // Test Hash
         let hash = MemoSpec::Hash { value: [0x42; 32] };
