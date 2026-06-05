@@ -16,7 +16,10 @@ pub enum WorkerHandle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueHealth {
     pub queue_type: QueueType,
-    pub messages_visible: u64,
+    /// Backlog depth (undelivered messages). `None` means the depth is
+    /// **unavailable** (e.g. the backlog read failed or the backend cannot
+    /// report it), which must NOT be conflated with an empty queue (`Some(0)`).
+    pub messages_visible: Option<u64>,
     pub messages_in_flight: u64,
     pub messages_dlq: u64,
     pub backend: String,

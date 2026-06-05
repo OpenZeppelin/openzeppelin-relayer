@@ -28,6 +28,17 @@ pub fn observe_queue_pickup_latency(queue_type: &str, backend: &str, secs: f64) 
         .with_label_values(&[queue_type, backend])
         .observe(secs);
 }
+
+/// Set the current backlog depth for a queue.
+///
+/// Labeled by `backend` (e.g. "pubsub") and `queue_type`. Fed by the backend's
+/// low-frequency, batched backlog read. Depth that is unavailable (e.g. under
+/// the emulator) is intentionally NOT reported here so it cannot read as 0.
+pub fn set_queue_depth(backend: &str, queue_type: &str, depth: f64) {
+    QUEUE_DEPTH
+        .with_label_values(&[backend, queue_type])
+        .set(depth);
+}
 use sysinfo::{Disks, System};
 
 lazy_static! {
@@ -220,6 +231,16 @@ lazy_static! {
         let histogram_vec = HistogramVec::new(histogram_opts, &["queue_type", "backend"]).unwrap();
         REGISTRY.register(Box::new(histogram_vec.clone())).unwrap();
         histogram_vec
+    };
+
+    // Gauge for queue backlog depth. Labeled by backend and
+    // queue type. Currently emitted by the Pub/Sub backend (the first compliant
+    // backend); Redis/SQS do not yet populate it.
+    pub static ref QUEUE_DEPTH: GaugeVec = {
+        let opts = Opts::new("queue_depth", "Current queue backlog depth (undelivered messages)");
+        let gauge_vec = GaugeVec::new(opts, &["backend", "queue_type"]).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
     };
 
     // Histogram for RPC call latency.
@@ -534,6 +555,9 @@ mod actix_tests {
         // Queue pickup latency
         observe_queue_pickup_latency("transaction-request", "sqs", 0.5);
 
+        // Queue depth gauge
+        set_queue_depth("pubsub", "status-check-evm", 7.0);
+
         let metrics = gather_metrics().expect("failed to gather metrics");
         let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
 
@@ -563,6 +587,10 @@ mod actix_tests {
 
         // Queue pickup latency
         assert!(output.contains("queue_pickup_latency_seconds"));
+
+        // Queue depth gauge
+        assert!(output.contains("queue_depth"));
+        assert!(output.contains(r#"queue_depth{backend="pubsub",queue_type="status-check-evm"} 7"#));
     }
 
     #[actix_rt::test]
