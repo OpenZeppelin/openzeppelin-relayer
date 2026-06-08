@@ -1,11 +1,12 @@
 //! Queue backend abstraction layer.
 //!
 //! This module provides a backend-agnostic interface for job queue operations.
-//! Implementations can use Redis/Apalis (current) or AWS SQS (new) as the backend.
+//! Implementations can use Redis/Apalis, AWS SQS, or GCP Pub/Sub as the backend.
 //!
 //! # Environment Variables
 //!
-//! - `QUEUE_BACKEND`: Backend to use ("redis" or "sqs", default: "redis")
+//! - `QUEUE_BACKEND`: Backend to use ("redis", "sqs", or "pubsub" / "gcp-pubsub",
+//!   default: "redis")
 //!
 //! # Example
 //!

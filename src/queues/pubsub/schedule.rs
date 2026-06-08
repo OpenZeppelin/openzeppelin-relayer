@@ -166,7 +166,7 @@ pub(crate) fn spawn_due_sweep(
             match claim_due(&pool, &key_prefix, queue_type, now, DUE_SWEEP_BATCH).await {
                 Ok(jobs) => {
                     for job in jobs {
-                        publish_scheduled(&publisher, queue_type, &job).await;
+                        publish_scheduled(&publisher, &pool, &key_prefix, queue_type, &job).await;
                     }
                 }
                 Err(e) => warn!(
@@ -193,10 +193,18 @@ pub(crate) fn spawn_due_sweep(
 
 /// Publishes one claimed scheduled job to its topic.
 ///
-/// On publish failure the job is logged and dropped from this tick; Pub/Sub
-/// at-least-once + idempotent handlers absorb the rare re-publish on a retry,
-/// and the durable record remains the persisted transaction state.
-async fn publish_scheduled(publisher: &Publisher, queue_type: QueueType, job: &ScheduledJob) {
+/// `claim_due` has already removed the job from Redis, so on publish failure the
+/// job is re-queued into the scheduled set (scored for immediate re-sweep) to
+/// avoid silently dropping a deferred or retrying job on a transient Pub/Sub
+/// error. A re-publish of a job that actually succeeded is harmless: Pub/Sub is
+/// at-least-once and the handlers are idempotent.
+async fn publish_scheduled(
+    publisher: &Publisher,
+    pool: &Arc<Pool>,
+    key_prefix: &str,
+    queue_type: QueueType,
+    job: &ScheduledJob,
+) {
     let message = message_from_body(job.body.clone().into_bytes(), job.retry_attempt);
     let awaiter = publisher.publish(message).await;
     match awaiter.get().await {
@@ -206,11 +214,21 @@ async fn publish_scheduled(publisher: &Publisher, queue_type: QueueType, job: &S
             retry_attempt = job.retry_attempt,
             "Published due job from scheduled set"
         ),
-        Err(e) => error!(
-            queue_type = %queue_type,
-            error = %e,
-            "Failed to publish due job; will be re-derived by retry/redelivery"
-        ),
+        Err(e) => {
+            error!(
+                queue_type = %queue_type,
+                error = %e,
+                "Failed to publish due job; re-queuing to the scheduled set"
+            );
+            let now = chrono::Utc::now().timestamp();
+            if let Err(re) = zadd_scheduled(pool, key_prefix, queue_type, job, now).await {
+                error!(
+                    queue_type = %queue_type,
+                    error = %re,
+                    "Failed to re-queue due job after publish failure; job dropped this tick"
+                );
+            }
+        }
     }
 }
 

@@ -182,12 +182,11 @@ impl CronScheduler {
                 Duration::from_secs(TOKEN_SWAP_CRON_LOCK_TTL_SECS),
             );
 
-            let state = self.app_state.clone();
             let handle = spawn_cron_task(
                 &task_name,
                 &cron_expr,
                 lock_ttl,
-                state.clone(),
+                self.app_state.clone(),
                 self.shutdown_rx.clone(),
                 move |state| {
                     let rid = relayer_id.clone();

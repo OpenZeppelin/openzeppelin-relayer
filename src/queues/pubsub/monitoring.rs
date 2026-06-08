@@ -10,8 +10,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use gcloud_pubsub::client::google_cloud_auth::project::Config;
+use gcloud_pubsub::client::google_cloud_auth::token::DefaultTokenSourceProvider;
 use serde::Deserialize;
-use token_source::TokenSource;
+use token_source::{TokenSource, TokenSourceProvider};
 
 use super::QueueType;
 
@@ -24,10 +26,6 @@ const NUM_UNDELIVERED_METRIC: &str = "pubsub.googleapis.com/subscription/num_und
 /// (service-account file / `GOOGLE_APPLICATION_CREDENTIALS[_JSON]` / metadata
 /// server). The token is cached and refreshed internally by the provider.
 pub(crate) async fn monitoring_token_source() -> Result<Arc<dyn TokenSource>, String> {
-    use gcloud_pubsub::client::google_cloud_auth::project::Config;
-    use gcloud_pubsub::client::google_cloud_auth::token::DefaultTokenSourceProvider;
-    use token_source::TokenSourceProvider;
-
     let config = Config::default().with_scopes(&[MONITORING_SCOPE]);
     let provider = DefaultTokenSourceProvider::new(config)
         .await
@@ -58,10 +56,7 @@ pub(crate) async fn read_backlog_depths(
         .get(&url)
         .header("Authorization", token)
         .query(&[
-            (
-                "filter",
-                format!("metric.type=\"{NUM_UNDELIVERED_METRIC}\""),
-            ),
+            ("filter", build_filter(subscription_to_queue)),
             ("interval.startTime", start.to_rfc3339()),
             ("interval.endTime", end.to_rfc3339()),
         ])
@@ -82,6 +77,31 @@ pub(crate) async fn read_backlog_depths(
         .map_err(|e| format!("Cloud Monitoring response parse failed: {e}"))?;
 
     Ok(parse_depths(&body, subscription_to_queue))
+}
+
+/// Builds the Cloud Monitoring `filter` for the backlog read, scoped to our own
+/// subscription IDs via `one_of(...)`.
+///
+/// Filtering on `metric.type` alone would match every
+/// `num_undelivered_messages` series in the project; in a project with many
+/// subscriptions the response could paginate and our 8 series land beyond the
+/// first page, so their depths would read as unavailable. Constraining to the
+/// relayer's subscriptions keeps the response bounded and deterministic. Falls
+/// back to the metric-only filter if the subscription map is somehow empty (a
+/// `one_of()` with no arguments is rejected by the API).
+fn build_filter(subscription_to_queue: &HashMap<String, QueueType>) -> String {
+    let metric = format!("metric.type=\"{NUM_UNDELIVERED_METRIC}\"");
+    let mut ids: Vec<&str> = subscription_to_queue.keys().map(String::as_str).collect();
+    if ids.is_empty() {
+        return metric;
+    }
+    ids.sort_unstable(); // deterministic filter string
+    let subs = ids
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{metric} AND resource.label.subscription_id=one_of({subs})")
 }
 
 /// Maps a parsed timeSeries response to per-queue depths using the latest point
@@ -184,6 +204,23 @@ mod tests {
         assert_eq!(depths.get(&QueueType::StatusCheckEvm), Some(&42)); // newest point
         assert_eq!(depths.get(&QueueType::TransactionRequest), Some(&7));
         assert_eq!(depths.len(), 2, "unknown subscriptions are ignored");
+    }
+
+    #[test]
+    fn test_build_filter_scopes_to_our_subscriptions() {
+        let filter = build_filter(&sub_map());
+        assert!(filter.starts_with(&format!("metric.type=\"{NUM_UNDELIVERED_METRIC}\"")));
+        assert!(filter.contains("resource.label.subscription_id=one_of("));
+        // Both subscription IDs are present, sorted for a deterministic string.
+        assert!(filter.contains(
+            "one_of(\"relayer-status-check-evm-sub\",\"relayer-transaction-request-sub\")"
+        ));
+    }
+
+    #[test]
+    fn test_build_filter_falls_back_when_empty() {
+        let filter = build_filter(&HashMap::new());
+        assert_eq!(filter, format!("metric.type=\"{NUM_UNDELIVERED_METRIC}\""));
     }
 
     #[test]

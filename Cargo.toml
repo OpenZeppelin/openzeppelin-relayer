@@ -105,8 +105,10 @@ google-cloud-auth = "0.22.1"
 # GCP Pub/Sub queue backend. EXACT-pinned (Constitution I: transport deps must be
 # pinned + supply-chain reviewed). Isolated from `google-cloud-auth 0.22` above
 # (distinct `gcloud-*` crate names → no version conflict). The Cloud Monitoring
-# depth read reuses the existing `reqwest` + this crate's `gcloud-auth` token
-# source (no extra crate).
+# depth read uses the relayer's existing direct `reqwest` (0.12) + this crate's
+# `gcloud-auth` token source — no extra HTTP crate for the read itself. Note for
+# dependency audits: gcloud-pubsub pulls its own `reqwest` 0.13 transitively for
+# its gRPC/REST transport.
 gcloud-pubsub = "=1.7.1"
 gcloud-googleapis = { version = "=1.3.0", features = ["pubsub"] }
 # Already in the tree via gcloud-pubsub; promoted to a direct dep only to name

@@ -58,7 +58,7 @@ echo "PASS: all 8 topics + 8 subscriptions provisioned (relayer started only aft
 
 echo "--- asserting the relayer API responds (auth works) ---"
 if [ -n "${API_KEY:-}" ]; then
-  curl -sf "${relayer}/api/v1/relayers" -H "AUTHORIZATION: Bearer ${API_KEY}" >/dev/null \
+  curl -sf "${relayer}/api/v1/relayers" -H "Authorization: Bearer ${API_KEY}" >/dev/null \
     && echo "PASS: /api/v1/relayers responded" \
     || { echo "FAIL: /api/v1/relayers did not respond"; exit 1; }
 else
