@@ -23,9 +23,12 @@ create_pair() {
 
   # PUT is idempotent-ish: a 409 (already exists) is fine for repeated runs.
   curl -s -o /dev/null -X PUT "${base}/topics/${topic}"
+  # ackDeadlineSeconds=60: the worker extends each message to 600s before
+  # processing, so this default only needs to cover the pull→extend window; 60s
+  # gives comfortable headroom if that extension is briefly retried.
   curl -s -o /dev/null -X PUT "${base}/subscriptions/${sub}" \
     -H 'Content-Type: application/json' \
-    -d "{\"topic\":\"projects/${project}/topics/${topic}\",\"ackDeadlineSeconds\":10}"
+    -d "{\"topic\":\"projects/${project}/topics/${topic}\",\"ackDeadlineSeconds\":60}"
   echo "created ${topic} + ${sub}"
 }
 

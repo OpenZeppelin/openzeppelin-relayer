@@ -2,10 +2,12 @@
 //!
 //! One pull-loop worker per subscription. Key properties:
 //! **permit-before-pull** (a pulled message's lease isn't ticking while it
-//! waits locally for a permit), a single **600s ack deadline** with the handler
-//! bounded to it (the crate does not auto-extend and every handler is <= 60s, so
-//! 600s is a ~10x margin — no renewal loop), **re-enqueue-to-Redis** on retry,
-//! **drop** on bounded exhaustion, and **never ack incomplete work**.
+//! waits locally for a permit), a single **600s ack deadline** extended up front
+//! and the handler bounded to it (no renewal loop; the extension is retried and,
+//! if it can't be secured, the message is released rather than run under a
+//! too-short lease), **re-enqueue-to-Redis** on retry (including panics and
+//! timeouts, so bounded queues honor max_retries), **drop** on bounded
+//! exhaustion, and **never ack incomplete work**.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -50,6 +52,14 @@ const HANDLER_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Max in-flight handlers to await during graceful-shutdown drain.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How many times to try extending a message's ack deadline before releasing it
+/// for redelivery instead of processing under a too-short lease.
+const ACK_EXTEND_ATTEMPTS: usize = 3;
+
+/// Backoff between ack-deadline extension attempts (lets a transient gRPC blip
+/// clear; negligible against the subscription's default lease).
+const ACK_EXTEND_BACKOFF: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 enum ProcessingError {
@@ -224,15 +234,23 @@ async fn process_received_message(
     let retry_attempt = retry_attempt_from_attrs(&message.message.attributes);
     let correlation_id = job_correlation_id(&message.message.data);
 
-    // Extend the lease to 600s up front so a slow (<=60s) handler is never
-    // redelivered mid-run. Best-effort: log if it fails (handler still <=60s).
-    if let Err(e) = message.modify_ack_deadline(ACK_DEADLINE_SECS).await {
-        warn!(
-            queue_type = %queue_type,
-            correlation_id = %correlation_id,
-            error = %e,
-            "Failed to extend Pub/Sub ack deadline; processing under default lease"
-        );
+    // Secure the 600s lease BEFORE running the handler: a handler running past
+    // the subscription's (short) default ack deadline would be redelivered and
+    // run concurrently on another worker. If we can't extend the lease after a
+    // few tries, release the message (nack) instead of processing it under a
+    // deadline we know is too short — it is redelivered and retried with a fresh
+    // lease. This trades a rare bounce (only on persistent extend failure) for
+    // never risking a concurrent double-execution.
+    if !extend_lease(&message, queue_type, &correlation_id).await {
+        if let Err(e) = message.nack().await {
+            warn!(
+                queue_type = %queue_type,
+                correlation_id = %correlation_id,
+                error = %e,
+                "Failed to nack after ack-deadline extension failure; relying on lease expiry"
+            );
+        }
+        return;
     }
 
     // Observe pickup latency on the first delivery only (retries are republished
@@ -296,23 +314,44 @@ async fn process_received_message(
             .await;
         }
         Ok(Err(_panic)) => {
-            // Handler panicked: leave un-acked for redelivery (rate-limited by
-            // the 600s lease); never ack incomplete work.
+            // Handler panicked: count it as a failed attempt and route through
+            // the bounded retry path (re-enqueue with backoff + ack the
+            // original), so a consistently-panicking handler on a bounded queue
+            // still hits max_retries instead of being redelivered forever.
             error!(
                 queue_type = %queue_type,
                 correlation_id = %correlation_id,
-                "Handler panicked; leaving message un-acked for redelivery"
+                "Handler panicked; routing through bounded retry"
             );
+            settle_retry(
+                &message,
+                config,
+                redis_pool,
+                retry_attempt,
+                &correlation_id,
+                "handler panicked",
+            )
+            .await;
         }
         Err(_elapsed) => {
-            // >600s: cancelled. Leave un-acked so Pub/Sub redelivers — never
-            // run twice concurrently.
+            // >600s: cancelled. Count it as a failed attempt and route through
+            // the bounded retry path so a chronically-slow handler on a bounded
+            // queue hits max_retries instead of a flat 600s redelivery loop.
             error!(
                 queue_type = %queue_type,
                 correlation_id = %correlation_id,
                 timeout_secs = HANDLER_TIMEOUT.as_secs(),
-                "Handler exceeded the 600s lease; cancelled and left for redelivery"
+                "Handler exceeded the 600s lease; routing through bounded retry"
             );
+            settle_retry(
+                &message,
+                config,
+                redis_pool,
+                retry_attempt,
+                &correlation_id,
+                "handler exceeded lease",
+            )
+            .await;
         }
     }
 }
@@ -403,6 +442,40 @@ async fn settle_retry(
             );
         }
     }
+}
+
+/// Extends a message's lease to the full 600s bound, retrying a few times with a
+/// short backoff. Returns `false` if every attempt fails — the caller then
+/// releases the message rather than processing it under a too-short lease.
+async fn extend_lease(
+    message: &ReceivedMessage,
+    queue_type: QueueType,
+    correlation_id: &str,
+) -> bool {
+    for attempt in 1..=ACK_EXTEND_ATTEMPTS {
+        match message.modify_ack_deadline(ACK_DEADLINE_SECS).await {
+            Ok(()) => return true,
+            Err(e) => {
+                warn!(
+                    queue_type = %queue_type,
+                    correlation_id = %correlation_id,
+                    attempt,
+                    max_attempts = ACK_EXTEND_ATTEMPTS,
+                    error = %e,
+                    "Failed to extend Pub/Sub ack deadline"
+                );
+                if attempt < ACK_EXTEND_ATTEMPTS {
+                    tokio::time::sleep(ACK_EXTEND_BACKOFF).await;
+                }
+            }
+        }
+    }
+    error!(
+        queue_type = %queue_type,
+        correlation_id = %correlation_id,
+        "Could not extend ack deadline after retries; releasing message for redelivery"
+    );
+    false
 }
 
 /// Acks a message (best-effort). On failure the message is redelivered and
@@ -638,6 +711,11 @@ mod tests {
         // 600s lease == handler bound (SQS capped model at a far looser cap).
         assert_eq!(ACK_DEADLINE_SECS, 600);
         assert_eq!(HANDLER_TIMEOUT, Duration::from_secs(600));
+        // The lease must be secured with at least one retry before we fall back
+        // to releasing the message, and the backoff must stay well under any
+        // sane subscription default ack deadline.
+        assert!(ACK_EXTEND_ATTEMPTS >= 1);
+        assert!(ACK_EXTEND_BACKOFF < Duration::from_secs(1));
     }
 
     // ── bounded exhaustion vs unbounded status checks ───────

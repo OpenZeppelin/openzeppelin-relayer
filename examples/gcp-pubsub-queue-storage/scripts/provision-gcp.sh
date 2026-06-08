@@ -12,15 +12,16 @@
 #
 # Optional env:
 #   PUBSUB_TOPIC_PREFIX  (default: relayer-)
-#   ACK_DEADLINE         (default: 10; the worker raises each message to 600s at
-#                         pull time, so the subscription default is not critical)
+#   ACK_DEADLINE         (default: 60; the worker raises each message to 600s
+#                         before processing, so this default only needs to cover
+#                         the pull→extend window — 60s leaves comfortable headroom)
 #
 # Requires an authenticated gcloud (`gcloud auth login` / service account).
 set -euo pipefail
 
 PROJECT="${PUBSUB_PROJECT_ID:-${1:-}}"
 PREFIX="${PUBSUB_TOPIC_PREFIX:-relayer-}"
-ACK="${ACK_DEADLINE:-10}"
+ACK="${ACK_DEADLINE:-60}"
 
 if [ -z "${PROJECT}" ]; then
   echo "usage: PUBSUB_PROJECT_ID=<project> $0   (or: $0 <project>)" >&2

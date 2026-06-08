@@ -114,14 +114,17 @@ already-due jobs.
   once its budget (`max_retries`) is exhausted it **stops retrying**, and the
   transaction's terminal state in the repository is the durable record — the
   relayer does **not** publish to a dead-letter topic (matching the Redis/SQS
-  backends).
+  backends). Handler panics and lease timeouts count as failed attempts too, so
+  a consistently-failing bounded job stops at `max_retries` rather than looping.
 - **Status-check** queues are unbounded: they re-run (with increasing backoff)
   until the transaction reaches a final state.
 
 A handler that runs longer than a subscription's default ack deadline is **not**
-double-processed — the worker extends the lease to 600s (Pub/Sub's max) and
-bounds the handler to it. `Ctrl-C` triggers a graceful shutdown that drains
-in-flight work without acking incomplete jobs.
+double-processed — the worker extends the lease to 600s (Pub/Sub's max) before
+processing and bounds the handler to it. If that extension can't be secured
+(after a few retries), the message is released for redelivery rather than run
+under a too-short lease, so it is never executed concurrently. `Ctrl-C` triggers
+a graceful shutdown that drains in-flight work without acking incomplete jobs.
 
 ## Backlog depth under the emulator
 
