@@ -1,0 +1,923 @@
+---
+title: Plugins
+---
+
+## Overview
+
+OpenZeppelin Relayer supports plugins to extend the functionality of the relayer.
+
+Plugins are `TypeScript` functions running in the Relayer server that can include any arbitrary logic defined by the Relayer operator.
+
+The plugin system features:
+
+- **_Handler Pattern_**: Simple export-based plugin development
+- **_TypeScript Support_**: Full type safety and IntelliSense
+- **_Plugin API_**: Clean interface for interacting with relayers
+- **_Key-Value Storage_**: Persistent state and locking for plugins
+- **_HTTP Headers_**: Access request headers for authentication and metadata
+- **_Route-Based Invocation_**: Optional route suffix (`/call/<route>`) for multi-endpoint plugins
+- **_Docker Integration_**: Seamless development and deployment
+- **_Comprehensive Error Handling_**: Detailed logging and debugging capabilities
+
+## Configuration
+
+### Writing a Plugin
+
+Plugins are declared under `plugins` directory, and are expected to be TypeScript files (`.ts` extension).
+
+```bash
+openzeppelin-relayer/
+├── plugins/
+│   └── my-plugin.ts    # Plugin code
+└── config/
+    └── config.json     # Plugins in configuration file
+```
+
+#### Handler Pattern (Recommended)
+
+This approach uses a simple `handler` export pattern with a single context parameter:
+
+```typescript
+/// Required imports.
+import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
+
+/// Define your plugin parameters interface
+type MyPluginParams = {
+  destinationAddress: string;
+  amount?: number;
+  message?: string;
+  relayerId?: string;
+};
+
+/// Define your plugin return type
+type MyPluginResult = {
+  transactionId: string;
+  confirmed: boolean;
+  note?: string;
+};
+
+/// Export a handler function - that's it!
+export async function handler(context: PluginContext): Promise<MyPluginResult> {
+  const { api, params, kv, headers } = context;
+  console.info('🚀 Plugin started...');
+
+  // Validate parameters
+  if (!params.destinationAddress) {
+    throw pluginError('destinationAddress is required', {
+      code: 'MISSING_PARAM',
+      status: 400,
+      details: { field: 'destinationAddress' },
+    });
+  }
+
+  // Use the relayer API
+  const relayer = api.useRelayer(params.relayerId || 'my-relayer');
+
+  const result = await relayer.sendTransaction({
+    to: params.destinationAddress,
+    value: params.amount || 1,
+    data: '0x',
+    gas_limit: 21000,
+    speed: Speed.FAST,
+  });
+
+  console.info(`Transaction submitted: ${result.id}`);
+
+  // Optionally store something in KV
+  await kv.set('last_tx_id', result.id);
+
+  // Wait for confirmation
+  await result.wait({
+    interval: 5000, // Check every 5 seconds
+    timeout: 120000, // Timeout after 2 minutes
+  });
+
+  return {
+    transactionId: result.id,
+    message: `Successfully sent ${params.amount || 1} wei to ${params.destinationAddress}`,
+  };
+}
+```
+
+#### Handler Context (`PluginContext`)
+
+All modern plugins export a single function with the signature:
+
+```typescript
+import type { PluginContext } from '@openzeppelin/relayer-sdk';
+
+export async function handler(context: PluginContext) {
+  const { api, params, kv, headers, route, method, query, config } = context;
+
+  // ...your logic
+  return { ok: true };
+}
+```
+
+The `handler` receives a `PluginContext` object with these commonly-used fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `context.api` | `PluginAPI` | Client for interacting with Relayers (e.g. `api.useRelayer(...)`). |
+| `context.params` | `any` | The input parameters for the plugin invocation. For `POST`, this comes from the request body; for `GET`, it is `{}`. |
+| `context.kv` | KV store client | Persistent key/value store (namespaced per plugin). Only available in the modern context handler. |
+| `context.headers` | `Record<string, string[]>` | Incoming HTTP headers (lowercased keys; values are arrays). |
+| `context.route` | `string` | The route suffix, including the leading slash, e.g. `""`, `"/verify"`, `"/settle"`. |
+| `context.method` | `"GET" \| "POST"` | The HTTP method used to invoke the plugin. |
+| `context.query` | `Record<string, string[]>` | Query parameters parsed from the request URL. Most useful for `GET` invocations. |
+| `context.config` | `unknown` | User-defined plugin configuration object from `plugins[].config` in the Relayer config file. |
+
+<Callout>
+  `context.params` is user-provided input. Prefer defining a `type` for your params, validating required fields, and using
+  `pluginError(...)` to return structured 4xx errors.
+</Callout>
+
+#### Legacy Patterns (Deprecated, but supported)
+
+<Callout type="warn">
+  The legacy patterns below are deprecated and will be removed in a future version. Please migrate to the single-context
+  handler pattern. Legacy plugins continue to work but will show deprecation warnings. The two-parameter handler does
+  not have access to the KV store.
+</Callout>
+
+```typescript
+// Legacy: runPlugin pattern (deprecated)
+import { runPlugin, PluginAPI } from '../lib/plugin';
+
+async function myPlugin(api: PluginAPI, params: any) {
+  // Plugin logic here (no KV access)
+  return 'result';
+}
+
+runPlugin(myPlugin);
+```
+
+**_Legacy handler (two-parameter, deprecated, no KV)_**:
+
+```typescript
+import { PluginAPI } from '@openzeppelin/relayer-sdk';
+
+export async function handler(api: PluginAPI, params: any): Promise<any> {
+  // Same logic as before, but no KV access in this form
+  return 'done!';
+}
+```
+
+### Declaring in config file
+
+Plugins are configured in the `./config/config.json` file, under the `plugins` key.
+
+The file contains a list of plugins, each with an id, path, timeout in seconds (optional), and logging configuration options.
+
+<Callout>The plugin path is relative to the `/plugins` directory</Callout>
+
+Example:
+
+```json
+"plugins": [
+  {
+    "id": "my-plugin",
+    "path": "my-plugin.ts",
+    "timeout": 30,
+    "emit_logs": false,
+    "emit_traces": false,
+    "raw_response": false,
+    "allow_get_invocation": false,
+    "config": {
+      "featureFlagExample": true
+    }
+    "forward_logs": false
+  }
+]
+```
+
+### Configuration Options
+
+#### Timeout
+
+The timeout is the maximum time **in seconds** that the plugin can run. If the plugin exceeds the timeout, it will be terminated with an error.
+
+The timeout is optional, and if not provided, the default is 300 seconds (5 minutes).
+
+#### Logging Configuration
+
+Plugins support three logging configuration options that control how plugin output is handled:
+
+- **`emit_logs`** (default: `false`): When `true`, includes plugin console output (console.log, console.error, etc.) in the HTTP response `metadata.logs` field. Useful for client-side debugging and inspection.
+
+- **`emit_traces`** (default: `false`): When `true`, includes API interaction traces (messages exchanged between the plugin and Relayer) in the HTTP response `metadata.traces` field. Useful for understanding plugin-relayer communication.
+
+- **`forward_logs`** (default: `false`): When `true`, forwards plugin console logs to the Relayer's Rust tracing system, making them appear in the Relayer's unified log output. This enables server-side debugging and monitoring through your existing log aggregation infrastructure. Log levels are automatically mapped (error → error!, warn → warn!, info/log → info!, debug → debug!).
+
+**Use Cases:**
+
+- **Development/Debugging**: Enable `forward_logs: true` to see plugin logs alongside Relayer logs in your development environment
+- **Production Monitoring**: Use `forward_logs: true` for critical plugins to monitor their execution in production logs
+- **Client Debugging**: Enable `emit_logs: true` to return logs in API responses for client-side inspection
+- **API Tracing**: Enable `emit_traces: true` to debug plugin-relayer interactions
+
+**Note**: These options are independent and can be used together. For example, you can enable `forward_logs` for server-side monitoring while keeping `emit_logs` disabled to avoid exposing logs to API clients.
+
+## Plugin Development Guidelines
+
+### TypeScript Best Practices
+
+- **_Define Parameter Types_**: Always create interfaces or types for your plugin parameters
+- **_Define Return Types_**: Specify what your plugin returns for better developer experience
+- **_Handle Errors Gracefully_**: Use try-catch blocks and return structured error responses
+- **_Validate Input_**: Check required parameters and provide meaningful error messages
+- **_Use Async/Await_**: Modern async patterns for better readability
+
+### Testing Your Plugin
+
+You can test your handler function directly with a mocked context:
+
+```typescript
+import { handler } from './my-plugin';
+import type { PluginContext } from '@openzeppelin/relayer-sdk';
+
+const mockContext = {
+  api: {
+    useRelayer: (_id: string) => ({
+      sendTransaction: async () => ({ id: 'test-tx-123', wait: async () => ({ hash: '0xhash' }) }),
+    }),
+  },
+  params: {
+    destinationAddress: '0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A',
+    amount: 1000,
+  },
+  kv: {
+    set: async () => true,
+    get: async () => null,
+    del: async () => true,
+    exists: async () => false,
+    scan: async () => [],
+    clear: async () => 0,
+    withLock: async (_k: string, fn: () => Promise<any>) => fn(),
+    connect: async () => {},
+    disconnect: async () => {},
+  },
+  headers: {
+    'content-type': ['application/json'],
+    authorization: ['Bearer test-token'],
+  },
+} as unknown as PluginContext;
+
+const result = await handler(mockContext);
+console.log(result);
+```
+
+## Invocation
+
+Plugins are invoked by hitting the `/api/v1/plugins/{plugin-id}/call{route}` endpoint.
+
+- `route` is optional. Use `/call` for a single endpoint, or `/call/<route>` to expose multiple routes from the same plugin.
+- The plugin receives the route as `context.route`.
+- You can implement your own routing by branching on `context.route` (for example, `"/verify"`, `"/settle"`, `""`).
+
+Example (route-based invocation):
+
+```bash
+# Calls the plugin with context.route = "/verify"
+curl -X POST http://localhost:8080/api/v1/plugins/my-plugin/call/verify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"params":{}}'
+```
+
+The endpoint accepts a `POST` request.
+
+- If the request body contains a top-level `params` field, that value is used as `context.params`.
+- If the request body does not contain `params`, the entire JSON body is treated as `params`.
+
+Example `POST` request body:
+
+```json
+{
+  "params": {
+    "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+    "amount": 1000000000000000,
+    "message": "Hello from OpenZeppelin Relayer!"
+  }
+}
+```
+
+The parameters are passed directly to your plugin’s `handler` function.
+
+### GET invocation (optional)
+
+By default, plugins can only be called with `POST`. To allow `GET` requests, set `allow_get_invocation: true` in the plugin configuration.
+
+- `GET` requests invoke the plugin with an empty params object (`context.params = {}`).
+- Query parameters are available to plugins via `context.query` as `Record<string, string[]>`.
+
+## Responses
+
+By default, API responses use the `ApiResponse` envelope: `success, data, error, metadata`.
+
+If `raw_response: true` is set for a plugin, the Relayer bypasses the envelope and returns the plugin result (or plugin error) directly.
+
+### Success responses (HTTP 200)
+
+- `data` contains your handler return value (decoded from JSON when possible).
+- `metadata.logs?` and `metadata.traces?` are only populated if the plugin configuration enables `emit_logs` / `emit_traces`.
+- `error` is `null`.
+- Plugin logs are forwarded to the Relayer's tracing system if `forward_logs` is enabled (appears in server logs, not in HTTP response).
+
+### Plugin errors (HTTP 4xx)
+
+- Throwing `pluginError(...)` (or any `Error`) is normalized into a consistent HTTP payload.
+- `error` provides the client-facing message, derived from the thrown error or from log output when the message is empty.
+- `data` carries `code?: string, details?: any` reported by the plugin.
+- `metadata` follows the same visibility rules (`emit_logs` / `emit_traces`).
+- Plugin error logs are also forwarded to the Relayer's tracing system if `forward_logs` is enabled.
+
+### Raw responses (`raw_response: true`)
+
+- **Success**: the response body is the value returned by your plugin handler.
+- **Error**: the response body is the plugin error payload (typically `{ "code": string | null, "details": any | null }`) and the HTTP status is taken from the error.
+- **No metadata envelope**: when `raw_response` is enabled, the response does not include `metadata` even if `emit_logs` / `emit_traces` are enabled.
+
+### Complete Example
+
+1. **_Plugin Code_** (`plugins/example.ts`):
+
+```typescript
+import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
+
+type ExampleResult = {
+  transactionId: string;
+  transactionHash: string | null;
+  message: string;
+  timestamp: string;
+};
+
+export async function handler(context: PluginContext): Promise<ExampleResult> {
+  const { api, params, kv, headers } = context;
+  console.info('🚀 Example plugin started');
+  console.info(`📋 Parameters:`, JSON.stringify(params, null, 2));
+
+  if (!params.destinationAddress) {
+    throw pluginError('destinationAddress is required', {
+      code: 'MISSING_PARAM',
+      status: 400,
+      details: { field: 'destinationAddress' },
+    });
+  }
+
+  const amount = params.amount || 1;
+  const message = params.message || 'Hello from OpenZeppelin Relayer!';
+
+  console.info(`💰 Sending ${amount} wei to ${params.destinationAddress}`);
+
+  const relayer = api.useRelayer('my-relayer');
+  const result = await relayer.sendTransaction({
+    to: params.destinationAddress,
+    value: amount,
+    data: '0x',
+    gas_limit: 21000,
+    speed: Speed.FAST,
+  });
+
+  // Example persistence
+  await kv.set('last_transaction', result.id);
+
+  const confirmation = await result.wait({ interval: 5000, timeout: 120000 });
+
+  return {
+    transactionId: result.id,
+    transactionHash: confirmation.hash || null,
+    message: `Successfully sent ${amount} wei to ${params.destinationAddress}. ${message}`,
+    timestamp: new Date().toISOString(),
+  };
+}
+```
+
+1. **_Plugin Configuration_** (`config/config.json`):
+
+```json
+{
+  "plugins": [
+    {
+      "id": "example-plugin",
+      "path": "example-plugin.ts",
+      "timeout": 30,
+      "emit_logs": true,
+      "emit_traces": true,
+      "forward_logs": true
+    }
+  ]
+}
+```
+
+1. **_API Invocation_**:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/plugins/example-plugin/call \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer YOUR_API_KEY" \
+-d '{
+  "params": {
+    "destinationAddress": "0x742d35Cc6640C21a1c7656d2c9C8F6bF5e7c3F8A",
+    "amount": 1000000000000000,
+    "message": "Test transaction from plugin"
+  }
+}'
+```
+
+1. **_API Response (Success)_**:
+
+```json
+{
+  "success": true,
+  "data": {
+    "transactionId": "tx-123456",
+    "confirmed": true,
+    "note": "Sent 1000000000000000 wei to 0x742d35Cc..."
+  },
+  "metadata": {
+    "logs": [{ "level": "info", "message": "🚀 Example plugin started" }],
+    "traces": [
+      {
+        "relayerId": "my-relayer",
+        "method": "sendTransaction",
+        "payload": {
+          /* ... */
+        }
+      }
+    ]
+  },
+  "error": null
+}
+```
+
+2. **API Response (Error)**:
+
+```json
+{
+  "success": false,
+  "data": {
+    "code": "MISSING_PARAM",
+    "details": { "field": "destinationAddress" }
+  },
+  "metadata": {
+    "logs": [{ "level": "error", "message": "destinationAddress is required" }]
+  },
+  "error": "destinationAddress is required"
+}
+```
+
+## Response Fields
+
+- **`data`**: The value returned by your plugin's handler function (decoded from JSON when possible)
+- **`metadata.logs`**: Terminal output from the plugin (console.log, console.error, etc.) when `emit_logs` is true. These logs are also forwarded to the Relayer's tracing system when `forward_logs` is enabled.
+- **`metadata.traces`**: Messages exchanged between the plugin and the Relayer via PluginAPI when `emit_traces` is true
+- **`error`**: Error message if the plugin execution failed (business errors)
+
+## Logging and Debugging
+
+The Relayer provides multiple ways to access plugin logs and debug information:
+
+### Server-Side Logging (`forward_logs`)
+
+When `forward_logs: true` is enabled in your plugin configuration, all plugin console output is forwarded to the Relayer's Rust tracing system. This means:
+
+- Plugin logs appear in the same log stream as Relayer logs
+- Logs are automatically mapped to appropriate tracing levels (error → error!, warn → warn!, info/log → info!, debug → debug!)
+- Logs include plugin context (plugin ID) for easy filtering
+- Works with your existing log aggregation infrastructure (e.g., CloudWatch, Datadog, ELK stack)
+- Logs are forwarded for both successful executions and errors
+
+**Example**: With `forward_logs: true`, a plugin's `console.error('Transaction failed')` will appear in your Relayer logs as:
+
+```
+ERROR plugin_id=my-plugin Transaction failed
+```
+
+This is particularly useful for:
+- **Production monitoring**: Monitor plugin execution alongside Relayer operations
+- **Debugging**: See plugin logs in real-time during development
+- **Troubleshooting**: Correlate plugin behavior with Relayer events in unified logs
+
+### Client-Side Logging (`emit_logs`)
+
+When `emit_logs: true` is enabled, plugin logs are included in the HTTP response `metadata.logs` field. This allows clients to inspect plugin execution without accessing server logs.
+
+**Example**: With `emit_logs: true`, the API response includes:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "metadata": {
+    "logs": [
+      { "level": "info", "message": "🚀 Plugin started..." },
+      { "level": "error", "message": "Validation failed" }
+    ]
+  }
+}
+```
+
+### API Tracing (`emit_traces`)
+
+When `emit_traces: true` is enabled, API interaction traces are included in the HTTP response `metadata.traces` field. This shows the messages exchanged between your plugin and the Relayer API.
+
+**Example**: With `emit_traces: true`, the API response includes:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "metadata": {
+    "traces": [
+      {
+        "relayerId": "my-relayer",
+        "method": "sendTransaction",
+        "payload": { ... }
+      }
+    ]
+  }
+}
+```
+
+## Key-Value Storage
+
+The Relayer provides a built-in key-value store for plugins to maintain persistent state across invocations. This addresses the core problem of enabling persistent state management and programmatic configuration updates for plugins.
+
+### Why a KV store?
+
+- Plugins execute as isolated processes with no persistent memory
+- No mechanism exists to maintain state between invocations
+- Plugins requiring shared state or coordination need safe concurrency primitives
+
+### Configuration
+
+- Reuses the same Redis URL as the Relayer via the `REDIS_URL` environment variable
+- No extra configuration is required
+- Keys are namespaced per plugin ID to prevent collisions
+
+### Usage
+
+Access the KV store through the `kv` property in the `PluginContext`:
+
+[source,typescript]
+
+```
+export async function handler(context: PluginContext) {
+  const { kv } = context;
+  // Set a value (with optional TTL in seconds)
+  await kv.set('my-key', { data: 'value' }, { ttlSec: 3600 });
+  // Get a value
+  const value = await kv.get<{ data: string }>('my-key');
+  // Atomic update with lock
+  const updated = await kv.withLock('counter-lock', async () => {
+    const count = (await kv.get<number>('counter')) ?? 0;
+    const next = count + 1;
+    await kv.set('counter', next);
+    return next;
+  }, { ttlSec: 10 });
+
+  return { value, updated };
+}
+
+```
+
+### Available Methods
+
+- `get<T>(key: string): Promise<T | null>`
+- `set(key: string, value: unknown, opts?:  ttlSec?: number ): Promise<boolean>`
+- `del(key: string): Promise<boolean>`
+- `exists(key: string): Promise<boolean>`
+- `listKeys(pattern?: string, batch?: number): Promise<string[]>`
+- `clear(): Promise<number>`
+- `withLock<T>(key: string, fn: () => Promise<T>, opts?:  ttlSec?: number; onBusy?: 'throw' | 'skip' ): Promise<T | null>`
+
+Keys must match `[A-Za-z0-9:_-]1,512` and are automatically namespaced per plugin.
+
+## HTTP Headers
+
+Plugins can access HTTP headers from the incoming request through the `headers` property in `PluginContext`. This enables authentication validation, custom header processing, and request metadata inspection.
+
+### Header Format
+
+Headers are provided as `Record<string, string[]>` (object with string keys and string array values):
+
+- Header names are **lowercase** (normalized by the HTTP server)
+- Each header value is an **array** to support multi-value headers (e.g., multiple `Set-Cookie` headers)
+- Access the first value with `headers['header-name']?.[0]`
+
+### Usage
+
+[source,typescript]
+
+```
+export async function handler(context: PluginContext) {
+  const { headers } = context;
+
+  // Access a single-value header
+  const authToken = headers['authorization']?.[0];
+
+  // Access a custom header
+  const requestId = headers['x-request-id']?.[0];
+
+  // Check if header exists
+  if (!headers['x-api-key']?.[0]) {
+    throw pluginError('API key required', { code: 'MISSING_HEADER', status: 401 });
+  }
+
+  // Handle multi-value headers
+  const acceptTypes = headers['accept'] || [];
+
+  return { receivedHeaders: Object.keys(headers).length };
+}
+```
+
+### Common Use Cases
+
+- **Authentication**: Validate `Authorization` or custom API key headers
+- **Request Tracing**: Read `X-Request-Id` or correlation IDs
+- **Content Negotiation**: Check `Accept` or `Content-Type` headers
+- **Custom Metadata**: Access application-specific headers passed by clients
+
+### Important Notes
+
+- Headers are only available in the **modern context pattern** (single-parameter handler)
+- Legacy two-parameter handlers do not receive headers
+- Header names are always lowercase regardless of how they were sent
+
+## Migration from Legacy Patterns
+
+### Current Status
+
+- ✅ **Legacy plugins still work** - No immediate action required
+- ⚠️ **Deprecation warnings** - Legacy plugins will show console warnings
+- 📅 **Future removal** - The legacy `runPlugin` and two-parameter `handler(api, params)` will be removed in a future major version
+- 🎯 **Recommended action** - Migrate to single-parameter `PluginContext` handler for new plugins and KV access
+
+### Migration Steps
+
+If you have existing plugins using `runPlugin()` or the two-parameter handler, migration is simple:
+
+**Before (Legacy runPlugin - still works)**:
+[source,typescript]
+
+```
+import  runPlugin, PluginAPI  from "./lib/plugin";
+
+async function myPlugin(api: PluginAPI, params: any): Promise<any>
+    // Your plugin logic
+    return result;
+
+
+runPlugin(myPlugin); // ⚠️ Shows deprecation warning
+```
+
+**Intermediate (Legacy two-parameter - still works, no KV)**:
+[source,typescript]
+
+```
+import  PluginAPI  from "@openzeppelin/relayer-sdk";
+
+export async function handler(api: PluginAPI, params: any): Promise<any>
+  // Same plugin logic - ⚠️ Deprecated, no KV access
+  return result;
+
+```
+
+**After (Modern context - recommended, with KV and headers)**:
+[source,typescript]
+
+```
+import  PluginContext  from "@openzeppelin/relayer-sdk";
+
+export async function handler(context: PluginContext): Promise<any>
+  const  api, params, kv, headers  = context;
+  // Same plugin logic plus KV and headers access!
+  return result;
+
+```
+
+### Step-by-Step Migration
+
+1. **Remove the `runPlugin()` call** at the bottom of your file
+2. **Rename your function to `handler`** (or create a new handler export)
+3. **Export the `handler` function** using `export async function handler`
+4. **Add proper TypeScript types** for better development experience
+5. **Test your plugin** to ensure it works with the new pattern
+6. **Update your documentation** to reflect the new pattern
+
+### Backwards Compatibility
+
+The relayer will automatically detect which pattern your plugin uses:
+
+- If handler accepts one parameter → modern context pattern (with KV and headers)
+- If handler accepts two parameters → legacy pattern (no KV or headers, with warning)
+- If `runPlugin()` was called → legacy pattern (no KV or headers, with warning)
+- If neither → shows clear error message
+
+This ensures a smooth transition period where both patterns work simultaneously.
+
+## Performance Tuning
+
+For production deployments handling high concurrency, the plugin system offers extensive tuning options via environment variables.
+
+### Execution Modes
+
+The plugin system supports two execution modes:
+
+| Mode | Environment Variable | Description |
+|------|---------------------|-------------|
+| **Pool mode** (default) | `PLUGIN_USE_POOL=true` | Uses persistent worker pool. Best performance. |
+| **ts-node mode** | `PLUGIN_USE_POOL=false` | Spawns a new process per request. Simpler but slower. |
+
+<Callout type="info">
+Pool mode is enabled by default since v1.4. It significantly improves performance by reusing worker processes and maintaining persistent connections. Use `PLUGIN_USE_POOL=false` only for debugging or if you encounter issues.
+</Callout>
+
+### Environment Variables Reference
+
+#### Simple Scaling (Recommended)
+
+<Callout type="info">
+**Most users only need one variable!** Set `PLUGIN_MAX_CONCURRENCY` and everything else is auto-calculated.
+</Callout>
+
+```bash
+# This is all you need for 3000 concurrent users:
+export PLUGIN_MAX_CONCURRENCY=3000
+```
+
+The system automatically derives on **both Rust and Node.js sides**:
+
+**Rust side (connection pool & queue):**
+- `PLUGIN_POOL_MAX_CONNECTIONS` = 3000 (1:1 ratio)
+- `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` = 4500 (1.5x for headroom)
+- `PLUGIN_POOL_MAX_QUEUE_SIZE` = 6000 (2x for burst handling)
+- `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` = auto-scaled based on workload per thread (500-1000ms)
+
+**Node.js side (worker pool):**
+- `PLUGIN_POOL_MAX_THREADS` = memory-aware scaling (see below), capped at 32
+- `PLUGIN_POOL_CONCURRENT_TASKS` = (concurrency / maxThreads) × 1.2, capped at 250
+- `PLUGIN_WORKER_HEAP_MB` = 512 + (concurrent_tasks × 5), between 1024-2048MB
+
+#### Advanced Overrides (Power Users)
+
+You can override any auto-derived value when needed:
+
+```bash
+# Set the primary scaling knob
+export PLUGIN_MAX_CONCURRENCY=3000
+
+# Override just the queue size (other values still auto-derived)
+export PLUGIN_POOL_MAX_QUEUE_SIZE=10000
+```
+
+#### All Available Variables
+
+| Variable | Default | Auto-Derived From | Description |
+|----------|---------|-------------------|-------------|
+| `PLUGIN_MAX_CONCURRENCY` | 2048 | - | **Primary scaling knob** - sets expected concurrent load |
+| **Rust Side** ||||
+| `PLUGIN_POOL_MAX_CONNECTIONS` | 2048 | `MAX_CONCURRENCY` | Max connections to pool server |
+| `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` | 4096 | `MAX_CONCURRENCY × 1.5` | Max plugin connections to relayer |
+| `PLUGIN_POOL_MAX_QUEUE_SIZE` | 4096 | `MAX_CONCURRENCY × 2` | Max queued requests |
+| `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` | 500 | Workload-based (500-1000ms) | Wait time when queue is full |
+| `PLUGIN_POOL_CONNECT_RETRIES` | 15 | - | Retry attempts when connecting |
+| `PLUGIN_POOL_REQUEST_TIMEOUT_SECS` | 30 | - | Timeout for pool requests |
+| `PLUGIN_SOCKET_IDLE_TIMEOUT_SECS` | 60 | - | Close idle connections after |
+| `PLUGIN_SOCKET_READ_TIMEOUT_SECS` | 30 | - | Read timeout per message |
+| `PLUGIN_POOL_WORKERS` | auto | CPU cores | Queue processing workers |
+| `PLUGIN_POOL_SOCKET_BACKLOG` | 2048 | `MAX_CONCURRENCY` | Socket connection backlog |
+| **Node.js Side** ||||
+| `PLUGIN_POOL_MIN_THREADS` | auto | `max(2, cpuCount/2)` | Minimum worker threads |
+| `PLUGIN_POOL_MAX_THREADS` | auto | Memory-aware (capped at 32) | Worker threads in pool |
+| `PLUGIN_POOL_CONCURRENT_TASKS` | auto | `(concurrency/threads) × 1.2` | Tasks per worker (max 250) |
+| `PLUGIN_WORKER_HEAP_MB` | auto | `512 + (tasks × 5)` | Worker heap size (1024-2048MB) |
+| `PLUGIN_POOL_IDLE_TIMEOUT` | 60000 | - | Worker idle timeout (ms) |
+
+#### Memory-Aware Thread Scaling
+
+The plugin system automatically scales worker threads based on **both concurrency requirements AND available system memory**. This prevents out-of-memory issues on systems with limited RAM.
+
+**How it works:**
+1. **Memory budget**: Uses 50% of system RAM for worker threads
+2. **Per-worker allocation**: ~1GB heap budget per worker thread
+3. **Concurrency scaling**: `concurrency / 200` threads (each thread handles ~200 concurrent requests via async I/O)
+4. **Final calculation**: `min(memory_based, concurrency_based)`, capped at 32 threads
+
+**Examples:**
+
+| System RAM | Max Concurrency | Memory-Based | Concurrency-Based | Final Threads |
+|------------|-----------------|--------------|-------------------|---------------|
+| 16GB | 1000 | 8 | 5 | 5 |
+| 16GB | 5000 | 8 | 25 | 8 |
+| 32GB | 5000 | 16 | 25 | 16 |
+| 64GB | 10000 | 32 | 50 | 32 |
+
+<Callout type="info">
+This prevents the previous issue where high concurrency (e.g., 5000 VUs) would spawn too many threads, causing excessive memory pressure and GC pauses.
+</Callout>
+
+#### Queue Timeout Auto-Scaling
+
+The queue send timeout (`PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS`) automatically scales based on workload per thread:
+
+| Workload per Thread | Timeout |
+|---------------------|---------|
+| > 100 items/thread | 1000ms (heavy load) |
+| 50-100 items/thread | 750ms (medium load) |
+| < 50 items/thread | 500ms (light load) |
+
+This ensures requests have sufficient time to queue during traffic spikes while maintaining responsiveness under normal load.
+
+#### Timeout Alignment
+
+<Callout type="warn">
+Timeouts must be aligned! If your plugin takes up to 120s, set these accordingly.
+</Callout>
+
+```bash
+# In config.json: "timeout": 120
+
+# Environment should match:
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_SOCKET_IDLE_TIMEOUT_SECS=180  # 1.5x plugin timeout
+```
+
+#### Health & Recovery
+
+Controls automatic health monitoring and recovery.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PLUGIN_POOL_HEALTH_CHECK_INTERVAL_SECS` | 5 | Minimum seconds between health checks |
+| `PLUGIN_TRACE_TIMEOUT_MS` | 100 | Timeout for collecting execution traces |
+
+### Load Profile Examples
+
+#### Low Load (< 100 concurrent requests)
+
+```bash
+# Default settings are sufficient - pool mode is enabled automatically
+```
+
+#### Medium Load (100-1000 concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=1000
+```
+
+#### High Load (1000-5000 concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=3000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=60
+```
+
+#### Extreme Load (5000+ concurrent requests)
+
+```bash
+export PLUGIN_MAX_CONCURRENCY=8000
+export PLUGIN_POOL_REQUEST_TIMEOUT_SECS=120
+export PLUGIN_POOL_CONNECT_RETRIES=20
+```
+
+### Troubleshooting Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Plugin execution queue is full` | More requests than queue can hold | Increase `PLUGIN_POOL_MAX_QUEUE_SIZE` and `PLUGIN_POOL_QUEUE_SEND_TIMEOUT_MS` |
+| `Connection limit reached` | Too many concurrent plugin connections | Increase `PLUGIN_SOCKET_MAX_CONCURRENT_CONNECTIONS` |
+| `Failed to connect to pool after N attempts` | Pool server overwhelmed | Increase `PLUGIN_POOL_CONNECT_RETRIES` and `PLUGIN_POOL_MAX_CONNECTIONS` |
+| `ScriptTimeout(N)` | Plugin execution exceeded timeout | Increase `timeout` in plugin config (config.json) |
+| `All connection permits exhausted` | Connection pool at capacity | Increase `PLUGIN_POOL_MAX_CONNECTIONS` |
+| `FATAL ERROR: CALL_AND_RETRY_LAST Allocation failed - JavaScript heap out of memory` | Worker heap too small | Increase `PLUGIN_WORKER_HEAP_MB` or reduce `PLUGIN_POOL_CONCURRENT_TASKS` |
+| `Pool server crashed and restarting` | Memory pressure or GC issues | Check logs for heap usage; reduce `PLUGIN_MAX_CONCURRENCY` or increase system RAM |
+
+<Callout type="warn">
+When increasing limits significantly, monitor your system's memory and CPU usage. Each connection consumes resources.
+</Callout>
+
+## Architecture & Internals
+
+For developers who want to understand or modify the plugin system internals, see the [Architecture Guide](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/plugins/ARCHITECTURE.md).
+
+The architecture documentation covers:
+
+- **System Architecture**: High-level diagram showing Rust ↔ Node.js communication
+- **Module Overview**: Purpose of each Rust and TypeScript module
+- **Communication Protocols**: JSON-line protocol for pool and shared socket communication
+- **Request Flow**: Step-by-step execution path for plugin requests
+- **Health & Recovery**: Circuit breaker states, dead server detection, memory pressure handling
+- **Module Dependencies**: How the codebase modules relate to each other
+
+### Key Source Files
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **Rust Plugin Runner** | `src/services/plugins/runner.rs` | Entry point for plugin execution |
+| **Pool Executor** | `src/services/plugins/pool_executor.rs` | Manages Node.js process and connections |
+| **Configuration** | `src/services/plugins/config.rs` | Auto-derivation logic for all env vars |
+| **Pool Server** | `plugins/lib/pool-server.ts` | Node.js server accepting plugin requests |
+| **Executor** | `plugins/lib/pool-executor.ts` | Plugin execution |
+| **Plugin SDK** | `plugins/lib/plugin.ts` | PluginContext and API for plugins |
