@@ -360,6 +360,16 @@ async fn process_received_message(
 /// `now + backoff`) with an incremented attempt, then acks the original — or, if
 /// the budget is exhausted on a bounded queue, drops it (terminal state is the
 /// durable record). On re-enqueue failure the original is left un-acked.
+///
+/// At-least-once: the retry copy is written to Redis *before* the original
+/// Pub/Sub message is acked, and the two stores are not updated atomically. A
+/// crash or a failed ack in between can leave both the scheduled retry and the
+/// original eligible for delivery, so a job may run more than once. This is the
+/// queue subsystem's intended trade-off (favor no-loss over no-duplicates),
+/// matching the Redis/Apalis and SQS backends; handlers must be idempotent.
+/// Transport-level Pub/Sub message IDs are deliberately not used as a dedup
+/// boundary — the meaningful idempotency boundary is the job/transaction layer
+/// (e.g. nonce management), shared across all backends.
 async fn settle_retry(
     message: &ReceivedMessage,
     config: &WorkerConfig,
