@@ -7,7 +7,7 @@ set -eu
 
 host="${PUBSUB_EMULATOR_HOST:-pubsub-emulator:8085}"
 project="${PUBSUB_PROJECT_ID:-test-project}"
-prefix="${PUBSUB_TOPIC_PREFIX:-relayer-}"
+prefix="${PUBSUB_TOPIC_PREFIX:-relayer}"
 base="http://${host}/v1/projects/${project}"
 
 # Wait until the emulator REST API is reachable.
@@ -18,8 +18,8 @@ done
 
 create_pair() {
   queue="$1"
-  topic="${prefix}${queue}"
-  sub="${prefix}${queue}-sub"
+  topic="${prefix}-${queue}"
+  sub="${prefix}-${queue}-sub"
 
   # PUT is idempotent-ish: a 409 (already exists) is fine for repeated runs.
   curl -s -o /dev/null -X PUT "${base}/topics/${topic}"

@@ -88,7 +88,7 @@ status-check re-checks run until the transaction reaches a final state.
 
 ## Topics + subscriptions created by this example
 
-For prefix `relayer-`, `pubsub-init` creates these 8 topic/subscription pairs:
+For the default prefix `relayer`, `pubsub-init` creates these 8 topic/subscription pairs:
 
 | Topic | Subscription |
 |---|---|

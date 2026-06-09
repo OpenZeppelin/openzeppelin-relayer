@@ -359,8 +359,8 @@ When using Pub/Sub:
 ```bash
 QUEUE_BACKEND=pubsub
 PUBSUB_PROJECT_ID=my-gcp-project
-# Optional: prefix applied to all topic/subscription names (default: relayer-)
-# PUBSUB_TOPIC_PREFIX=relayer-
+# Optional: prefix applied to all topic/subscription names (default: relayer)
+# PUBSUB_TOPIC_PREFIX=relayer
 # Optional: target the emulator and skip auth (local dev/test)
 # PUBSUB_EMULATOR_HOST=localhost:8085
 ```

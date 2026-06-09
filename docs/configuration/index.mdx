@@ -86,7 +86,7 @@ This table lists the environment variables and their default values.
 | `SQS_TOKEN_SWAP_REQUEST_POLLER_COUNT`                               | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the token swap request queue per task.                                                                                                                                                                                           |
 | `SQS_RELAYER_HEALTH_CHECK_POLLER_COUNT`                             | `1`                      | `<any positive number>`                                                     | Number of concurrent SQS `ReceiveMessage` loops for the relayer health check queue per task.                                                                                                                                                                                         |
 | `PUBSUB_PROJECT_ID`                                                | (none)                   | `<gcp project id>`                                                          | Required when `QUEUE_BACKEND=pubsub`. GCP project that holds the Pub/Sub topics and subscriptions; resolved for ADC and the Cloud Monitoring backlog read.                                                                                                                           |
-| `PUBSUB_TOPIC_PREFIX`                                              | `relayer-`               | `<topic prefix>`                                                            | Prefix for Pub/Sub topic and subscription names (topics `<prefix><queue>`, subscriptions `<prefix><queue>-sub`). Only applies when `QUEUE_BACKEND=pubsub`.                                                                                                                           |
+| `PUBSUB_TOPIC_PREFIX`                                              | `relayer`                | `<topic prefix>`                                                            | Prefix for Pub/Sub topic and subscription names; the `-` separator is added automatically (topics `<prefix>-<queue>`, subscriptions `<prefix>-<queue>-sub`). Only applies when `QUEUE_BACKEND=pubsub`.                                                                               |
 | `PUBSUB_EMULATOR_HOST`                                             | (none)                   | `<host:port>`                                                               | Optional. When set (example: `localhost:8085`), targets the local Pub/Sub emulator instead of real GCP and skips ADC resolution. Leave unset for real GCP.                                                                                                                           |
 | `DISTRIBUTED_MODE`                                                 | `false`                  | `bool` (`true/false`, `1/0`)                                                | Enables Redis-based distributed locks for cron/cleanup tasks in multi-instance deployments, preventing duplicate scheduled execution across nodes.                                                                                                                                    |
 | `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
@@ -182,8 +182,8 @@ Example for Pub/Sub:
 ```bash
 QUEUE_BACKEND=pubsub
 PUBSUB_PROJECT_ID=my-gcp-project
-# Optional (default: relayer-)
-# PUBSUB_TOPIC_PREFIX=relayer-
+# Optional (default: relayer; the "-" separator is added automatically)
+# PUBSUB_TOPIC_PREFIX=relayer
 # Real GCP: provide Application Default Credentials (service-account key shown)
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 # Or target the local emulator instead of real GCP (no ADC needed):
@@ -317,7 +317,7 @@ Use the dwell-time stages to determine whether tail latency comes from queue pic
 
 ### Pub/Sub queue provisioning guide
 
-When `QUEUE_BACKEND=pubsub`, the relayer **never creates Pub/Sub resources** — it probes them at startup and fails fast if any are missing. Pre-create one topic and one subscription per queue type (8 pairs) using the `relayer-` prefix (or your custom `PUBSUB_TOPIC_PREFIX`).
+When `QUEUE_BACKEND=pubsub`, the relayer **never creates Pub/Sub resources** — it probes them at startup and fails fast if any are missing. Pre-create one topic and one subscription per queue type (8 pairs) named `{prefix}-{queue}` and `{prefix}-{queue}-sub` (the default prefix is `relayer`, giving `relayer-transaction-request`, etc.; override with `PUBSUB_TOPIC_PREFIX`).
 
 Required topic / subscription pairs:
 

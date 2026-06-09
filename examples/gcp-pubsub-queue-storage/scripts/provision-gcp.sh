@@ -11,7 +11,8 @@
 #   # or:  ./provision-gcp.sh my-project
 #
 # Optional env:
-#   PUBSUB_TOPIC_PREFIX  (default: relayer-)
+#   PUBSUB_TOPIC_PREFIX  (default: relayer; the `-` separator is added
+#                         automatically, so the prefix needs no trailing dash)
 #   ACK_DEADLINE         (default: 60; the worker raises each message to 600s
 #                         before processing, so this default only needs to cover
 #                         the pull→extend window — 60s leaves comfortable headroom)
@@ -20,7 +21,7 @@
 set -euo pipefail
 
 PROJECT="${PUBSUB_PROJECT_ID:-${1:-}}"
-PREFIX="${PUBSUB_TOPIC_PREFIX:-relayer-}"
+PREFIX="${PUBSUB_TOPIC_PREFIX:-relayer}"
 ACK="${ACK_DEADLINE:-60}"
 
 if [ -z "${PROJECT}" ]; then
@@ -35,8 +36,8 @@ status-check-stellar notification token-swap-request relayer-health-check"
 
 echo "Provisioning Pub/Sub in project '${PROJECT}' (prefix '${PREFIX}')..."
 for q in ${queues}; do
-  topic="${PREFIX}${q}"
-  sub="${PREFIX}${q}-sub"
+  topic="${PREFIX}-${q}"
+  sub="${PREFIX}-${q}-sub"
 
   if gcloud pubsub topics describe "${topic}" --project="${PROJECT}" >/dev/null 2>&1; then
     echo "  topic exists:        ${topic}"

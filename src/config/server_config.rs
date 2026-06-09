@@ -318,9 +318,11 @@ impl ServerConfig {
 
     /// Gets the prefix applied to all Pub/Sub topic and subscription names.
     ///
-    /// Defaults to `relayer-` when not set.
+    /// The separator is inserted by the name builders, so the prefix needs no
+    /// trailing `-` (topics are `{prefix}-{queue}`). Defaults to `relayer` when
+    /// not set.
     pub fn get_pubsub_topic_prefix() -> String {
-        env::var("PUBSUB_TOPIC_PREFIX").unwrap_or_else(|_| "relayer-".to_string())
+        env::var("PUBSUB_TOPIC_PREFIX").unwrap_or_else(|_| "relayer".to_string())
     }
 
     /// Gets the Pub/Sub emulator host, if configured.
@@ -764,16 +766,16 @@ mod tests {
             ServerConfig::get_pubsub_project_id().is_err(),
             "project id must be required (error) when unset"
         );
-        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "relayer-");
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "relayer");
         assert_eq!(ServerConfig::get_pubsub_emulator_host(), None);
 
         // Custom values.
         env::set_var("PUBSUB_PROJECT_ID", "my-project");
-        env::set_var("PUBSUB_TOPIC_PREFIX", "test-");
+        env::set_var("PUBSUB_TOPIC_PREFIX", "test");
         env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085");
 
         assert_eq!(ServerConfig::get_pubsub_project_id().unwrap(), "my-project");
-        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "test-");
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "test");
         assert_eq!(
             ServerConfig::get_pubsub_emulator_host(),
             Some("localhost:8085".to_string())

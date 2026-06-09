@@ -149,14 +149,14 @@ pub(crate) fn retry_attempt_from_attrs(attributes: &HashMap<String, String>) -> 
 
 // ── Resource naming + status routing ────────────────────────────────
 
-/// Topic name for a queue type: `{prefix}{queue_name}`.
+/// Topic name for a queue type: `{prefix}-{queue_name}`.
 pub(crate) fn topic_name(prefix: &str, queue_type: QueueType) -> String {
-    format!("{prefix}{}", queue_type.queue_name())
+    format!("{prefix}-{}", queue_type.queue_name())
 }
 
-/// Subscription name for a queue type: `{prefix}{queue_name}-sub`.
+/// Subscription name for a queue type: `{prefix}-{queue_name}-sub`.
 pub(crate) fn subscription_name(prefix: &str, queue_type: QueueType) -> String {
-    format!("{prefix}{}-sub", queue_type.queue_name())
+    format!("{prefix}-{}-sub", queue_type.queue_name())
 }
 
 /// Builds the startup fail-fast error naming every missing/inaccessible
@@ -754,7 +754,9 @@ mod tests {
 
     #[test]
     fn test_topic_and_subscription_names_all_eight() {
-        let prefix = "relayer-";
+        // The prefix carries no trailing separator; the `-` is inserted by the
+        // name builders, so the final names are still `relayer-<queue>`.
+        let prefix = "relayer";
         let expected = [
             (QueueType::TransactionRequest, "relayer-transaction-request"),
             (

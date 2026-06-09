@@ -11,7 +11,7 @@ services:
       QUEUE_BACKEND: pubsub
       DISTRIBUTED_MODE: 'false'
       PUBSUB_PROJECT_ID: test-project
-      PUBSUB_TOPIC_PREFIX: relayer-
+      PUBSUB_TOPIC_PREFIX: relayer
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       RATE_LIMIT_REQUESTS_PER_SECOND: 10
       RATE_LIMIT_BURST: 50
@@ -82,7 +82,7 @@ services:
     environment:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       PUBSUB_PROJECT_ID: test-project
-      PUBSUB_TOPIC_PREFIX: relayer-
+      PUBSUB_TOPIC_PREFIX: relayer
     depends_on:
       pubsub-emulator:
         condition: service_healthy
