@@ -52,8 +52,7 @@ type MyPluginParams = {
 /// Define your plugin return type
 type MyPluginResult = {
   transactionId: string;
-  confirmed: boolean;
-  note?: string;
+  message: string;
 };
 
 /// Export a handler function - that's it!
@@ -185,7 +184,7 @@ Example:
     "allow_get_invocation": false,
     "config": {
       "featureFlagExample": true
-    }
+    },
     "forward_logs": false
   }
 ]
@@ -590,9 +589,9 @@ export async function handler(context: PluginContext) {
 - `exists(key: string): Promise<boolean>`
 - `listKeys(pattern?: string, batch?: number): Promise<string[]>`
 - `clear(): Promise<number>`
-- `withLock<T>(key: string, fn: () => Promise<T>, opts?:  ttlSec?: number; onBusy?: 'throw' | 'skip' ): Promise<T | null>`
+- `withLock<T>(key: string, fn: () => Promise<T>, opts?: { ttlSec?: number; onBusy?: 'throw' | 'skip' }): Promise<T | null>`
 
-Keys must match `[A-Za-z0-9:_-]1,512` and are automatically namespaced per plugin.
+Keys must match `[A-Za-z0-9:_-]{1,512}` and are automatically namespaced per plugin.
 
 ## HTTP Headers
 
@@ -662,12 +661,12 @@ If you have existing plugins using `runPlugin()` or the two-parameter handler, m
 [source,typescript]
 
 ```
-import  runPlugin, PluginAPI  from "./lib/plugin";
+import { runPlugin, PluginAPI } from "./lib/plugin";
 
-async function myPlugin(api: PluginAPI, params: any): Promise<any>
+async function myPlugin(api: PluginAPI, params: any): Promise<any> {
     // Your plugin logic
     return result;
-
+}
 
 runPlugin(myPlugin); // ⚠️ Shows deprecation warning
 ```
@@ -676,11 +675,12 @@ runPlugin(myPlugin); // ⚠️ Shows deprecation warning
 [source,typescript]
 
 ```
-import  PluginAPI  from "@openzeppelin/relayer-sdk";
+import { PluginAPI } from "@openzeppelin/relayer-sdk";
 
-export async function handler(api: PluginAPI, params: any): Promise<any>
+export async function handler(api: PluginAPI, params: any): Promise<any> {
   // Same plugin logic - ⚠️ Deprecated, no KV access
   return result;
+}
 
 ```
 
@@ -688,12 +688,13 @@ export async function handler(api: PluginAPI, params: any): Promise<any>
 [source,typescript]
 
 ```
-import  PluginContext  from "@openzeppelin/relayer-sdk";
+import { PluginContext } from "@openzeppelin/relayer-sdk";
 
-export async function handler(context: PluginContext): Promise<any>
-  const  api, params, kv, headers  = context;
+export async function handler(context: PluginContext): Promise<any> {
+  const { api, params, kv, headers } = context;
   // Same plugin logic plus KV and headers access!
   return result;
+}
 
 ```
 

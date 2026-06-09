@@ -292,8 +292,8 @@ Configure relayers in your `config/config.json`:
   "networks": "./config/networks",
   "plugins": [
     {
-      "id": "channels",
-      "path": "channel/index.ts",
+      "id": "channels-plugin",
+      "path": "channels/index.ts",
       "timeout": 30,
       "emit_logs": true,
       "emit_traces": true
@@ -362,8 +362,8 @@ When using the automated setup, you only need to configure and fund the **_fund 
   "relayers": [
     {
       "id": "channels-fund",
-      "chain": "stellar",
-      "signer": "channels-fund-signer",
+      "network_type": "stellar",
+      "signer_id": "channels-fund-signer",
       "policies": {
         "concurrent_transactions": true
       }
