@@ -1,4 +1,5 @@
 //! Top-level crate documentation.
+//! (CI smoke test: verify codecov-action v6.0.2 pin uploads — revert before merge)
 //! # OpenZeppelin Relayer
 //!
 //! A blockchain transaction relayer service that supports multiple networks
