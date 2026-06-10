@@ -1260,13 +1260,19 @@ where
                 .await;
         }
 
-        let update = self
+        let mut update = self
             .prepare_noop_update_request(
                 &tx,
                 true,
                 Some("Transaction canceled by user, replacing with NOOP".to_string()),
             )
             .await?;
+        // Immediately mark the transaction as Canceled so it no longer appears in
+        // active-status queries. The noop replacement is still submitted on-chain to
+        // prevent the original transaction from mining, but the relayer treats this
+        // as a terminal state from this point on.
+        update.status = Some(TransactionStatus::Canceled);
+
         let updated_tx = self
             .transaction_repository()
             .partial_update(tx.id.clone(), update)
@@ -2231,7 +2237,8 @@ mod tests {
 
             // Verify the cancellation transaction was properly created
             assert_eq!(cancelled_tx.id, "test-tx-id");
-            assert_eq!(cancelled_tx.status, TransactionStatus::Submitted);
+            // Status is immediately set to Canceled; the noop is submitted asynchronously.
+            assert_eq!(cancelled_tx.status, TransactionStatus::Canceled);
 
             // Verify the network data was properly updated
             if let NetworkTransactionData::Evm(evm_data) = &cancelled_tx.network_data {
