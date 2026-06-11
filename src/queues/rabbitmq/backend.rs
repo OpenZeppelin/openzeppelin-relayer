@@ -13,12 +13,15 @@
 //! connection auto-recovery, and an idempotent declare / passive-verify startup.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use actix_web::web::ThinData;
 use async_trait::async_trait;
 use lapin::options::{BasicPublishOptions, ConfirmSelectOptions, QueueDeclareOptions};
 use lapin::types::{AMQPValue, FieldTable, ShortString};
+use lapin::uri::AMQPUri;
 use lapin::{BasicProperties, Channel, Confirmation, Connection, ConnectionProperties, ErrorKind};
 use serde::Serialize;
 use tokio::sync::watch;
@@ -68,25 +71,43 @@ pub(crate) const ALL_QUEUE_TYPES: [QueueType; 8] = [
     QueueType::RelayerHealthCheck,
 ];
 
-// ── Credential redaction ─────────────────────────────────────────────
+// ── Credential parsing + redaction ───────────────────────────────────
 
-/// Redacts an AMQP URL for logs/errors: keeps scheme + host + port + vhost,
-/// strips the embedded `user:pass` credentials and any query string.
+/// Parses `RABBITMQ_URL` into an `AMQPUri`, returning a STATIC `ConfigError` on
+/// failure.
 ///
-/// Constitution I: `RABBITMQ_URL` embeds the broker password, so the raw URL
-/// MUST NEVER reach a log or error. An unparsable URL collapses to a fixed
-/// placeholder (never echoes the input, which could itself contain a secret).
-pub(crate) fn redact_amqp_url(raw: &str) -> String {
-    match url::Url::parse(raw) {
-        Ok(u) => {
-            let scheme = u.scheme();
-            let host = u.host_str().unwrap_or("");
-            let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
-            let path = u.path(); // vhost, e.g. "/%2f", "/vhost", or ""
-            format!("{scheme}://{host}{port}{path}")
-        }
-        Err(_) => "<unparsable AMQP URL (redacted)>".to_string(),
-    }
+/// Constitution I: `RABBITMQ_URL` embeds the broker password. `AMQPUri::from_str`
+/// (and the underlying `url` parser) echo the raw URL in their error strings, so
+/// the upstream `Err` is dropped and replaced with a fixed message that NEVER
+/// includes the input. The classic typo this guards against is a missing `//`
+/// after the scheme (e.g. `amqp:user:pass@host/vh`), which the `url` crate treats
+/// as a "cannot-be-a-base" URL — under the old string redaction the userinfo
+/// landed in the URL path and the password survived "redaction".
+fn parse_amqp_url(url: &str) -> Result<AMQPUri, QueueBackendError> {
+    AMQPUri::from_str(url).map_err(|_| {
+        QueueBackendError::ConfigError(
+            "RABBITMQ_URL is not a valid AMQP URL (expected \
+             amqp(s)://[user:password@]host[:port][/vhost]; check for a missing \
+             '//' after the scheme)"
+                .to_string(),
+        )
+    })
+}
+
+/// Builds a redacted endpoint string (`scheme://host:port/vhost`, credentials and
+/// query string omitted) from an already-parsed `AMQPUri`, for logs and errors.
+///
+/// Constitution I: building from the parsed URI's individual fields — never the
+/// raw string — structurally guarantees the embedded `user:password` can never
+/// reach a log or error message.
+pub(crate) fn redact_amqp_uri(uri: &AMQPUri) -> String {
+    // The default vhost decodes to "/"; trim the leading slash(es) so it renders
+    // as a clean ".../{vhost}" (e.g. "amqp://host:5672/" rather than "...//").
+    let vhost = uri.vhost.trim_start_matches('/');
+    format!(
+        "{}://{}:{}/{}",
+        uri.scheme, uri.authority.host, uri.authority.port, vhost
+    )
 }
 
 // ── Wire codec: Job<T> ⇄ AMQP message ────────────────────────────────
@@ -163,6 +184,13 @@ pub(crate) fn job_to_body<T: Serialize>(job: &Job<T>) -> Result<Vec<u8>, QueueBa
 /// only after the broker has accepted the message (FR-009: a durable+persistent
 /// message confirmed by the broker is on disk). A broker nack or transport error
 /// is a `QueueBackendError`.
+///
+/// Published with `mandatory: true` so an UNROUTABLE message (e.g. the target
+/// queue was deleted at runtime) is RETURNED by the broker rather than silently
+/// discarded-then-acked. lapin surfaces a returned message as
+/// `Confirmation::Ack(Some(_))`; only `Ack(None)` means the message was actually
+/// routed and persisted, so a returned message is reported as an error (the job
+/// was not enqueued) instead of a false success.
 pub(crate) async fn publish_confirmed(
     channel: &Channel,
     queue: &str,
@@ -173,7 +201,10 @@ pub(crate) async fn publish_confirmed(
         .basic_publish(
             ShortString::from(""), // default exchange
             ShortString::from(queue),
-            BasicPublishOptions::default(),
+            BasicPublishOptions {
+                mandatory: true,
+                ..BasicPublishOptions::default()
+            },
             body,
             message_properties(retry_attempt),
         )
@@ -185,7 +216,16 @@ pub(crate) async fn publish_confirmed(
         })?;
 
     match confirm {
-        Confirmation::Ack(_) => Ok(()),
+        // Routed to a queue and confirmed by the broker.
+        Confirmation::Ack(None) => Ok(()),
+        // mandatory=true returned the message: it was NOT enqueued (no queue
+        // accepted it). Surface the AMQP reason (code + text only — never the
+        // body) as an error rather than reporting a false success.
+        Confirmation::Ack(Some(returned)) => Err(QueueBackendError::QueueError(format!(
+            "RabbitMQ returned publish to '{queue}' as unroutable (AMQP {} {}); message not enqueued",
+            returned.reply_code,
+            returned.reply_text.as_str()
+        ))),
         Confirmation::Nack(_) => Err(QueueBackendError::QueueError(format!(
             "RabbitMQ broker nacked publish to '{queue}'"
         ))),
@@ -348,18 +388,34 @@ impl RabbitMqBackend {
         let url = ServerConfig::get_rabbitmq_url().map_err(QueueBackendError::ConfigError)?;
         let prefix = ServerConfig::get_rabbitmq_queue_prefix();
         let passive = ServerConfig::get_rabbitmq_passive_queues();
-        let redacted_url = redact_amqp_url(&url);
+
+        // Parse the URL up front so the raw string (with credentials) never
+        // reaches lapin's string-based error paths, and build the redacted
+        // endpoint from the parsed fields (Constitution I).
+        let uri = parse_amqp_url(&url)?;
+        let redacted_url = redact_amqp_uri(&uri);
 
         // One connection with built-in auto-recovery (FR-010: reconnect after a
-        // broker restart without restarting the relayer).
-        let connection =
-            Connection::connect(&url, ConnectionProperties::default().enable_auto_recover())
-                .await
-                .map_err(|e| {
-                    QueueBackendError::ConfigError(format!(
-                        "Failed to connect to RabbitMQ at {redacted_url}: {e}"
-                    ))
-                })?;
+        // broker restart without restarting the relayer). lapin's default
+        // auto-recover caps TCP reconnects at 16 attempts (~11 min) then gives up
+        // permanently, which would brick the backend after a longer outage —
+        // configure an unbounded retry with a capped delay so it keeps healing.
+        let connection = Connection::connect_uri(
+            uri,
+            ConnectionProperties::default()
+                .enable_auto_recover()
+                .configure_backoff(|backoff| {
+                    backoff
+                        .without_max_times()
+                        .with_max_delay(Duration::from_secs(30))
+                }),
+        )
+        .await
+        .map_err(|e| {
+            QueueBackendError::ConfigError(format!(
+                "Failed to connect to RabbitMQ at {redacted_url}: {e}"
+            ))
+        })?;
 
         // Dedicated confirm-mode channel: produce returns only after the broker
         // acks the publish (FR-009 durability).
@@ -728,40 +784,54 @@ mod tests {
         Job::new(JobType::TransactionStatusCheck, data)
     }
 
-    // ── credential redaction (Constitution I) ──────────────────────
+    // ── credential parsing + redaction (Constitution I) ────────────
 
     #[test]
-    fn test_redact_amqp_url_strips_password() {
+    fn test_redact_amqp_uri_strips_credentials() {
         // The password must never survive redaction; scheme/host/port/vhost stay.
-        let redacted = redact_amqp_url("amqp://user:s3cr3t@broker.example:5672/%2f");
+        // Default vhost "/%2f" decodes to "/" and renders as a trailing slash.
+        let uri = AMQPUri::from_str("amqp://user:s3cr3t@broker.example:5672/%2f").unwrap();
+        let redacted = redact_amqp_uri(&uri);
         assert!(
             !redacted.contains("s3cr3t"),
             "redaction leaked the password: {redacted}"
         );
         assert!(!redacted.contains("user"), "redaction leaked the user");
-        assert_eq!(redacted, "amqp://broker.example:5672/%2f");
+        assert_eq!(redacted, "amqp://broker.example:5672/");
     }
 
     #[test]
-    fn test_redact_amqp_url_tls_and_no_userinfo() {
+    fn test_redact_amqp_uri_tls_custom_vhost_and_drops_query() {
         // amqps + custom vhost, no credentials present.
-        assert_eq!(
-            redact_amqp_url("amqps://broker:5671/prod"),
-            "amqps://broker:5671/prod"
-        );
-        // Query string (e.g. heartbeat) is dropped from the redacted form.
-        let r = redact_amqp_url("amqps://u:p@h:5671/v?heartbeat=20");
-        assert!(!r.contains('p') || !r.contains("u:p"), "no creds: {r}");
-        assert!(r.starts_with("amqps://h:5671/v"));
+        let uri = AMQPUri::from_str("amqps://broker:5671/prod").unwrap();
+        assert_eq!(redact_amqp_uri(&uri), "amqps://broker:5671/prod");
+        // Query string (e.g. heartbeat) is dropped, credentials stripped — assert
+        // the exact redacted endpoint (not a substring guard).
+        let uri = AMQPUri::from_str("amqps://u:p@h:5671/v?heartbeat=20").unwrap();
+        assert_eq!(redact_amqp_uri(&uri), "amqps://h:5671/v");
     }
 
     #[test]
-    fn test_redact_amqp_url_unparsable_never_echoes_input() {
-        // A garbage URL (which could itself embed a secret) collapses to a fixed
-        // placeholder — never echoed back.
-        let r = redact_amqp_url("not a url with maybe-a-secret");
-        assert!(!r.contains("secret"));
-        assert_eq!(r, "<unparsable AMQP URL (redacted)>");
+    fn test_parse_amqp_url_rejects_missing_slashes_without_echoing_secret() {
+        // The "cannot-be-a-base" typo (missing `//`) is what leaked the password
+        // under the old string redaction. It must be rejected with a STATIC error
+        // that never echoes the input (which embeds the password).
+        let err =
+            parse_amqp_url("amqp:user:s3cr3t@host/vh").expect_err("missing // must be rejected");
+        assert!(
+            !err.to_string().contains("s3cr3t"),
+            "parse error leaked the password: {err}"
+        );
+        assert!(matches!(err, QueueBackendError::ConfigError(_)));
+    }
+
+    #[test]
+    fn test_parse_amqp_url_rejects_garbage_without_echoing_input() {
+        // A garbage URL (which could itself embed a secret) is rejected with the
+        // same static error — never echoed back.
+        let err = parse_amqp_url("not a url with maybe-a-secret").expect_err("garbage rejected");
+        assert!(!err.to_string().contains("secret"));
+        assert!(matches!(err, QueueBackendError::ConfigError(_)));
     }
 
     // ── wire codec ─────────────────────────────────────────────────

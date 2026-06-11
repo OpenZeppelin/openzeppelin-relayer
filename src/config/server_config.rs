@@ -341,8 +341,9 @@ impl ServerConfig {
     /// for TLS. Standard URI query parameters (e.g. `?heartbeat=20`) pass through
     /// to the client. Required when the RabbitMQ backend is selected.
     ///
-    /// The URL embeds credentials, so it MUST be redacted before logging — see
-    /// [`crate::queues::rabbitmq::backend::redact_amqp_url`].
+    /// The URL embeds credentials, so it MUST be redacted before logging — it is
+    /// parsed up front and only its endpoint is ever logged, see
+    /// [`crate::queues::rabbitmq::backend::redact_amqp_uri`].
     ///
     /// # Errors
     ///

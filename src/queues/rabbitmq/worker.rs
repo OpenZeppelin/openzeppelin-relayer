@@ -7,9 +7,10 @@
 //! (the broker's `consumer_timeout`, default 30 min, sits far above the 600s
 //! handler timeout). The loop **self-heals**: if the delivery stream ends or
 //! errors, it re-opens the channel and re-subscribes with capped backoff once
-//! the (auto-recovered) connection is available. On shutdown it drains in-flight
-//! handlers and never acks incomplete work — unacked deliveries are requeued by
-//! the broker on channel close.
+//! the (auto-recovered) connection is available. On shutdown it stops consuming
+//! (`basic_cancel`) and drains in-flight handlers **while the channel is still
+//! open** so their acks land, then closes it; anything still unacked at the
+//! drain timeout is left for the broker to requeue.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +43,10 @@ use super::{QueueType, WorkerHandle};
 const RECONNECT_BACKOFF_INITIAL: Duration = Duration::from_millis(500);
 /// Cap for the reconnect backoff.
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// Cap for the pre-nack pause when a retry can't be durably recorded (e.g. Redis
+/// is down). Without it, nack-with-requeue makes the broker redeliver instantly,
+/// which becomes a zero-backoff hot loop; this paces redelivery instead.
+const NACK_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
 /// Per-consumer parameters threaded through the loop.
 #[derive(Clone)]
@@ -54,9 +59,11 @@ struct ConsumerConfig {
     redacted_url: String,
 }
 
-/// Clamps a concurrency value to the AMQP `prefetch_count` range (u16).
+/// Clamps a concurrency value to the AMQP `prefetch_count` range. A `prefetch` of
+/// 0 means UNLIMITED in AMQP (the broker would flood the consumer's backlog into
+/// memory), so 0 is clamped to 1; values above `u16::MAX` saturate, never wrap.
 fn prefetch_count(concurrency: usize) -> u16 {
-    u16::try_from(concurrency).unwrap_or(u16::MAX)
+    u16::try_from(concurrency.max(1)).unwrap_or(u16::MAX)
 }
 
 /// Spawns a consumer loop for one queue.
@@ -174,29 +181,44 @@ async fn run_consumer_loop(
             }
         };
 
-        // Consume until the stream ends/errors (→ reconnect) or shutdown. Both
-        // exits fall through to the `basic_cancel` below so the broker stops
-        // delivering before we drain or re-subscribe.
+        // Consume until the stream ends/errors (→ reconnect) or shutdown.
+        // `shutting_down` distinguishes a shutdown exit (drain this channel) from
+        // a stream-loss exit (drop + reconnect).
+        let mut shutting_down = false;
         loop {
             // Reap finished handlers so the JoinSet doesn't grow unbounded.
             while inflight.try_join_next().is_some() {}
 
             if *shutdown_rx.borrow() {
+                shutting_down = true;
                 break;
             }
 
             let next = tokio::select! {
                 d = consumer.next() => d,
-                _ = shutdown_rx.changed() => break,
+                _ = shutdown_rx.changed() => {
+                    shutting_down = true;
+                    break;
+                }
             };
 
             match next {
                 Some(Ok(delivery)) => {
-                    let permit = match semaphore.clone().acquire_owned().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            error!(queue_type = %queue_type, "Semaphore closed, stopping consumer");
-                            break 'reconnect;
+                    // Race permit acquisition against shutdown so a saturated
+                    // consumer doesn't block here while a shutdown is pending (M2);
+                    // the un-spawned delivery is left unacked and the broker
+                    // requeues it when the channel closes.
+                    let permit = tokio::select! {
+                        p = semaphore.clone().acquire_owned() => match p {
+                            Ok(p) => p,
+                            Err(_) => {
+                                error!(queue_type = %queue_type, "Semaphore closed, stopping consumer");
+                                break 'reconnect;
+                            }
+                        },
+                        _ = shutdown_rx.changed() => {
+                            shutting_down = true;
+                            break;
                         }
                     };
                     let state = app_state.clone();
@@ -226,35 +248,56 @@ async fn run_consumer_loop(
             }
         }
 
-        // Stop delivering on the (still-open) channel before reconnecting or
-        // shutting down: on shutdown this halts new deliveries while in-flight
+        // Stop the broker delivering on the (still-open) channel before draining
+        // or reconnecting: on shutdown this halts new deliveries while in-flight
         // handlers drain; on stream loss it's best-effort (channel may be dead).
         let _ = channel
             .basic_cancel(consumer.tag(), BasicCancelOptions::default())
             .await;
 
-        if *shutdown_rx.borrow() {
+        if shutting_down {
+            // Drain in-flight handlers WHILE this channel is still open, so each
+            // handler's ack/nack actually reaches the broker, THEN drop the
+            // channel. Dropping it first (lapin closes a channel on drop) would
+            // requeue every unacked in-flight delivery AND turn the drain's acks
+            // into poisoned no-ops — duplicating every in-flight job on a graceful
+            // shutdown (H1).
+            drain_inflight(&mut inflight, queue_type).await;
             break;
         }
+        // Stream loss: drop channel/consumer (closing the old channel) and loop to
+        // reconnect. In-flight handlers from this subscription run to completion;
+        // their acks on the now-closed channel are no-ops and the broker may
+        // redeliver (tolerated — handlers are idempotent).
     }
 
-    // Graceful drain: let in-flight handlers finish (bounded); never ack
-    // incomplete work — anything unacked is requeued by the broker on channel
-    // close.
-    if !inflight.is_empty() {
-        info!(
+    // Shutdown observed between subscriptions (e.g. during reconnect backoff):
+    // any handlers still in flight here are orphaned — their channel is already
+    // gone, so their acks can't land. Abort them rather than waiting (no-op after
+    // a clean drain above).
+    inflight.abort_all();
+}
+
+/// Drains in-flight handlers, bounded by `DRAIN_TIMEOUT`. MUST be called while
+/// the consumer channel is still open: a finished handler acks its delivery, and
+/// that ack only reaches the broker over a live channel. On timeout the remaining
+/// handlers are aborted (left unacked → the broker requeues them).
+async fn drain_inflight(inflight: &mut JoinSet<()>, queue_type: QueueType) {
+    if inflight.is_empty() {
+        return;
+    }
+    info!(
+        queue_type = %queue_type,
+        count = inflight.len(),
+        "Draining in-flight RabbitMQ handlers before shutdown"
+    );
+    let drain = async { while inflight.join_next().await.is_some() {} };
+    if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
+        warn!(
             queue_type = %queue_type,
-            count = inflight.len(),
-            "Draining in-flight RabbitMQ handlers before shutdown"
+            "Drain timeout; aborting remaining handlers (left un-acked → broker requeues)"
         );
-        let drain = async { while inflight.join_next().await.is_some() {} };
-        if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
-            warn!(
-                queue_type = %queue_type,
-                "Drain timeout; aborting remaining handlers (left un-acked → broker requeues)"
-            );
-            inflight.abort_all();
-        }
+        inflight.abort_all();
     }
 }
 
@@ -410,44 +453,66 @@ async fn settle_retry(
         }
         Err(e) => {
             // Couldn't durably record the retry → nack-with-requeue so the broker
-            // redelivers (no loss) instead of the slot being held un-acked.
+            // redelivers (no loss) instead of the slot being held un-acked. But an
+            // immediate nack-with-requeue, while the Redis outage that caused this
+            // persists, makes the broker redeliver instantly → a zero-backoff hot
+            // loop. Pause for the computed retry delay (capped) first so redelivery
+            // is paced, then nack.
+            let pause = Duration::from_secs(delay.max(0) as u64).min(NACK_BACKOFF_MAX);
             error!(
                 queue_type = %queue_type,
                 correlation_id = %correlation_id,
                 error = %e,
-                "Failed to re-enqueue retry; nacking with requeue for redelivery"
+                pause_secs = pause.as_secs(),
+                "Failed to re-enqueue retry; pausing before nack-with-requeue"
             );
+            tokio::time::sleep(pause).await;
             nack_requeue(delivery, queue_type, correlation_id).await;
         }
     }
 }
 
 /// Acks a delivery (best-effort). On failure the broker redelivers on channel
-/// close; handlers are idempotent.
+/// close; handlers are idempotent. `ack` returns `Ok(false)` when the acker is
+/// already used or poisoned (e.g. the channel closed) — the ack never reached the
+/// broker, so it's logged rather than silently treated as success.
 async fn ack(delivery: &Delivery, queue_type: QueueType, correlation_id: &str) {
-    if let Err(e) = delivery.ack(BasicAckOptions::default()).await {
-        warn!(
+    match delivery.ack(BasicAckOptions::default()).await {
+        Ok(true) => {}
+        Ok(false) => warn!(
+            queue_type = %queue_type,
+            correlation_id = %correlation_id,
+            "RabbitMQ ack was a no-op (acker poisoned/already used); broker will redeliver on channel close (idempotent)"
+        ),
+        Err(e) => warn!(
             queue_type = %queue_type,
             correlation_id = %correlation_id,
             error = %e,
             "Failed to ack RabbitMQ delivery; broker will redeliver on channel close (idempotent)"
-        );
+        ),
     }
 }
 
-/// Nacks a delivery with requeue so the broker redelivers it.
+/// Nacks a delivery with requeue so the broker redelivers it. As with `ack`, an
+/// `Ok(false)` (poisoned/used acker) means the nack was a no-op and is logged.
 async fn nack_requeue(delivery: &Delivery, queue_type: QueueType, correlation_id: &str) {
     let options = BasicNackOptions {
         multiple: false,
         requeue: true,
     };
-    if let Err(e) = delivery.nack(options).await {
-        warn!(
+    match delivery.nack(options).await {
+        Ok(true) => {}
+        Ok(false) => warn!(
+            queue_type = %queue_type,
+            correlation_id = %correlation_id,
+            "RabbitMQ nack was a no-op (acker poisoned/already used); broker will redeliver on channel close"
+        ),
+        Err(e) => warn!(
             queue_type = %queue_type,
             correlation_id = %correlation_id,
             error = %e,
             "Failed to nack RabbitMQ delivery; broker will redeliver on channel close"
-        );
+        ),
     }
 }
 
@@ -457,7 +522,8 @@ mod tests {
 
     #[test]
     fn test_prefetch_count_clamps_to_u16() {
-        assert_eq!(prefetch_count(0), 0);
+        // 0 would mean UNLIMITED prefetch in AMQP, so it's clamped up to 1.
+        assert_eq!(prefetch_count(0), 1);
         assert_eq!(prefetch_count(50), 50);
         assert_eq!(prefetch_count(u16::MAX as usize), u16::MAX);
         // Above u16::MAX clamps rather than wrapping.
@@ -716,6 +782,32 @@ mod gated_tests {
         let _ = producer
             .queue_delete(queue.as_str().into(), QueueDeleteOptions::default())
             .await;
+    }
+
+    /// H5: a confirmed publish to a queue that does not exist is RETURNED by the
+    /// broker (mandatory=true) and surfaced as an error — never the silent
+    /// "broker acked an unroutable publish" success that would lose the job (e.g.
+    /// if a queue is deleted at runtime).
+    #[tokio::test]
+    #[ignore]
+    async fn integration_publish_to_missing_queue_errors() {
+        let Some(url) = broker_url() else {
+            return;
+        };
+        let conn = connect(&url).await;
+        let producer = conn.create_channel().await.unwrap();
+        producer.confirm_select(Default::default()).await.unwrap();
+
+        // Never-declared queue → unroutable via the default exchange.
+        let missing = format!("relayer-missing-{}", uuid::Uuid::new_v4().simple());
+        let err = publish_confirmed(&producer, &missing, br#"{"message_id":"lost"}"#, 0)
+            .await
+            .expect_err("publish to a non-existent queue must error, not silently succeed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unroutable") && msg.contains("not enqueued"),
+            "error must explain the publish was returned and not enqueued, got: {msg}"
+        );
     }
 
     /// A future-scheduled job stays in Redis and never reaches the broker until
