@@ -122,6 +122,14 @@ token-source = "=1.0.0"
 # on the first real-GCP connection without it. EXACT-pinned to the resolved
 # version (Constitution I); aws_lc_rs matches gcloud-pubsub's own provider.
 rustls = { version = "=0.23.36", features = ["aws_lc_rs"] }
+# RabbitMQ queue backend. EXACT-pinned (Constitution I: transport deps must be
+# pinned + supply-chain reviewed); lapin broke API between 4.0→4.1, so a loose
+# range is unsafe. `default-features = false` + the tokio/rustls features avoids
+# pulling a second crypto provider: `rustls--aws_lc_rs` matches the process-default
+# CryptoProvider the Pub/Sub backend already installs (never enable
+# `rustls--ring` — one provider only). No pooling crate: the backend holds one
+# connection with built-in auto-recovery and multiplexes channels over it.
+lapin = { version = "=4.10.0", default-features = false, features = ["tokio", "rustls", "rustls--aws_lc_rs"] }
 http = { version = "1.3.1" }
 pem = { version = "3" }
 simple_asn1 = { version = "0.6" }
