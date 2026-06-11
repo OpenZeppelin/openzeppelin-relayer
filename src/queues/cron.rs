@@ -381,8 +381,9 @@ mod tests {
 
     #[test]
     fn test_cron_lock_keys_are_backend_neutral() {
-        // No lock task name may embed a backend name; a mixed SQS/Pub/Sub fleet
-        // must share one lock domain per task.
+        // No lock task name may embed a backend name; a mixed
+        // SQS/Pub/Sub/RabbitMQ fleet must share one lock domain per task so each
+        // cron runs at most once per interval regardless of the active backend.
         let names = [
             TRANSACTION_CLEANUP_CRON_LOCK.to_string(),
             SYSTEM_CLEANUP_CRON_LOCK.to_string(),
@@ -393,6 +394,10 @@ mod tests {
             assert!(
                 !name.contains("pubsub"),
                 "lock key '{name}' embeds 'pubsub'"
+            );
+            assert!(
+                !name.contains("rabbitmq"),
+                "lock key '{name}' embeds 'rabbitmq'"
             );
         }
         // Stable, expected values.
