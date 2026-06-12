@@ -63,8 +63,7 @@ pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 /// cannot select one automatically and any TLS that relies on the process
 /// default — gcloud-pubsub's gRPC TLS, lapin's `amqps://` — panics on the first
 /// real connection without this. Install once, ignore if a default is already
-/// set. (Shared by the Pub/Sub and RabbitMQ backends — the 002 real-GCP
-/// rustls-panic lesson.)
+/// set. (Shared by the Pub/Sub and RabbitMQ backends.)
 pub(crate) fn ensure_crypto_provider() {
     use rustls::crypto::{aws_lc_rs, CryptoProvider};
     if CryptoProvider::get_default().is_none() {

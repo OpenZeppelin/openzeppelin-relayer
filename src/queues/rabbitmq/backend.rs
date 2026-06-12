@@ -45,8 +45,9 @@ use super::{QueueBackend, QueueBackendError, QueueHealth, QueueType, WorkerHandl
 pub(crate) const RABBITMQ_MAX_MESSAGE_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 /// AMQP message header carrying the logical retry counter (single canonical
-/// source — the broker's physical `redelivered` flag is deliberately not used,
-/// it only signals channel-death redelivery, not handler failures).
+/// source — the broker's physical `redelivered` flag is deliberately not used:
+/// it is a boolean set on any redelivery, e.g. channel loss or nack-with-requeue,
+/// so it cannot count logical handler-failure attempts).
 pub(crate) const RETRY_ATTEMPT_HEADER: &str = "x-retry-attempt";
 
 /// `content_type` set on every published message.
@@ -71,18 +72,16 @@ pub(crate) const ALL_QUEUE_TYPES: [QueueType; 8] = [
     QueueType::RelayerHealthCheck,
 ];
 
-// ── Credential parsing + redaction ───────────────────────────────────
-
 /// Parses `RABBITMQ_URL` into an `AMQPUri`, returning a STATIC `ConfigError` on
 /// failure.
 ///
-/// Constitution I: `RABBITMQ_URL` embeds the broker password. `AMQPUri::from_str`
+/// `RABBITMQ_URL` embeds the broker password, and `AMQPUri::from_str`
 /// (and the underlying `url` parser) echo the raw URL in their error strings, so
 /// the upstream `Err` is dropped and replaced with a fixed message that NEVER
 /// includes the input. The classic typo this guards against is a missing `//`
 /// after the scheme (e.g. `amqp:user:pass@host/vh`), which the `url` crate treats
-/// as a "cannot-be-a-base" URL — under the old string redaction the userinfo
-/// landed in the URL path and the password survived "redaction".
+/// as a "cannot-be-a-base" URL: a naive substring redaction would leave the
+/// userinfo in the path component, so the password must never be echoed.
 fn parse_amqp_url(url: &str) -> Result<AMQPUri, QueueBackendError> {
     AMQPUri::from_str(url).map_err(|_| {
         QueueBackendError::ConfigError(
@@ -97,9 +96,9 @@ fn parse_amqp_url(url: &str) -> Result<AMQPUri, QueueBackendError> {
 /// Builds a redacted endpoint string (`scheme://host:port/vhost`, credentials and
 /// query string omitted) from an already-parsed `AMQPUri`, for logs and errors.
 ///
-/// Constitution I: building from the parsed URI's individual fields — never the
-/// raw string — structurally guarantees the embedded `user:password` can never
-/// reach a log or error message.
+/// Building from the parsed URI's individual fields — never the raw string —
+/// structurally guarantees the embedded `user:password` can never reach a log or
+/// error message.
 pub(crate) fn redact_amqp_uri(uri: &AMQPUri) -> String {
     // The default vhost decodes to "/"; trim the leading slash(es) so it renders
     // as a clean ".../{vhost}" (e.g. "amqp://host:5672/" rather than "...//").
@@ -109,8 +108,6 @@ pub(crate) fn redact_amqp_uri(uri: &AMQPUri) -> String {
         uri.scheme, uri.authority.host, uri.authority.port, vhost
     )
 }
-
-// ── Wire codec: Job<T> ⇄ AMQP message ────────────────────────────────
 
 /// Errors if an encoded body exceeds RabbitMQ's 16 MiB message-size limit.
 pub(crate) fn check_message_size(len: usize) -> Result<(), QueueBackendError> {
@@ -181,8 +178,8 @@ pub(crate) fn job_to_body<T: Serialize>(job: &Job<T>) -> Result<Vec<u8>, QueueBa
 
 /// Publishes a body to a queue via the **default exchange** (`routing_key =
 /// queue name`), persistent, and **awaits the publisher confirm** — returning
-/// only after the broker has accepted the message (FR-009: a durable+persistent
-/// message confirmed by the broker is on disk). A broker nack or transport error
+/// only after the broker has accepted the message (a durable+persistent message
+/// confirmed by the broker is on disk). A broker nack or transport error
 /// is a `QueueBackendError`.
 ///
 /// Published with `mandatory: true` so an UNROUTABLE message (e.g. the target
@@ -235,8 +232,6 @@ pub(crate) async fn publish_confirmed(
     }
 }
 
-// ── Resource naming + status routing ────────────────────────────────
-
 /// Queue name for a queue type: `{prefix}-{queue_name}`.
 pub(crate) fn queue_name(prefix: &str, queue_type: QueueType) -> String {
     format!("{prefix}-{}", queue_type.queue_name())
@@ -254,8 +249,6 @@ pub(crate) fn status_check_queue_type(network_type: Option<&NetworkType>) -> Que
     }
 }
 
-// ── Health & depth ───────────────────────────────────────────────────
-
 /// Maps an observed ready-message `depth` to a `QueueHealth`. `Some(count)` is a
 /// real ready-message count (including a genuine `Some(0)` empty queue) and the
 /// queue is healthy; `None` means the depth is **unavailable** (disconnected or
@@ -272,8 +265,6 @@ fn build_queue_health(queue_type: QueueType, depth: Option<u64>) -> QueueHealth 
         is_healthy: depth.is_some(),
     }
 }
-
-// ── Startup declare / verify ─────────────────────────────────────────
 
 /// The `queue_declare` options for the active resource policy: an idempotent
 /// durable declare by default, or a passive (verify-only) declare in passive
@@ -326,8 +317,6 @@ fn queue_setup_error(failures: &[String], endpoint: &str) -> QueueBackendError {
     ))
 }
 
-// ── Backend ──────────────────────────────────────────────────────────
-
 /// RabbitMQ backend for job queue operations.
 ///
 /// Constructed only after the connection succeeds AND all 8 queues are in place
@@ -342,7 +331,8 @@ pub struct RabbitMqBackend {
     producer_channel: Channel,
     /// Broker queue name per queue type (`{prefix}-{queue_name}`).
     queue_names: HashMap<QueueType, String>,
-    /// Reused for the scheduled-job sorted sets and cron `DistributedLock`.
+    /// Reused for the scheduled-job sorted sets (the cron locks reach the same
+    /// Redis via the repositories).
     redis_connections: Arc<RedisConnections>,
     /// Redis key prefix for scheduled-set keys (same prefix the repos/locks use).
     key_prefix: String,
@@ -382,7 +372,7 @@ impl RabbitMqBackend {
     pub async fn new(redis_connections: Arc<RedisConnections>) -> Result<Self, QueueBackendError> {
         info!("Initializing RabbitMQ queue backend");
 
-        // amqps:// TLS uses the process-default rustls CryptoProvider (002 lesson).
+        // amqps:// TLS uses the process-default rustls CryptoProvider.
         ensure_crypto_provider();
 
         let url = ServerConfig::get_rabbitmq_url().map_err(QueueBackendError::ConfigError)?;
@@ -391,12 +381,12 @@ impl RabbitMqBackend {
 
         // Parse the URL up front so the raw string (with credentials) never
         // reaches lapin's string-based error paths, and build the redacted
-        // endpoint from the parsed fields (Constitution I).
+        // endpoint from the parsed fields.
         let uri = parse_amqp_url(&url)?;
         let redacted_url = redact_amqp_uri(&uri);
 
-        // One connection with built-in auto-recovery (FR-010: reconnect after a
-        // broker restart without restarting the relayer). lapin's default
+        // One connection with built-in auto-recovery (reconnect after a broker
+        // restart without restarting the relayer). lapin's default
         // auto-recover caps TCP reconnects at 16 attempts (~11 min) then gives up
         // permanently, which would brick the backend after a longer outage —
         // configure an unbounded retry with a capped delay so it keeps healing.
@@ -418,7 +408,7 @@ impl RabbitMqBackend {
         })?;
 
         // Dedicated confirm-mode channel: produce returns only after the broker
-        // acks the publish (FR-009 durability).
+        // acks the publish (for durability).
         let producer_channel = connection.create_channel().await.map_err(|e| {
             QueueBackendError::ConfigError(format!(
                 "Failed to open RabbitMQ producer channel at {redacted_url}: {e}"
@@ -784,8 +774,6 @@ mod tests {
         Job::new(JobType::TransactionStatusCheck, data)
     }
 
-    // ── credential parsing + redaction (Constitution I) ────────────
-
     #[test]
     fn test_redact_amqp_uri_strips_credentials() {
         // The password must never survive redaction; scheme/host/port/vhost stay.
@@ -813,9 +801,10 @@ mod tests {
 
     #[test]
     fn test_parse_amqp_url_rejects_missing_slashes_without_echoing_secret() {
-        // The "cannot-be-a-base" typo (missing `//`) is what leaked the password
-        // under the old string redaction. It must be rejected with a STATIC error
-        // that never echoes the input (which embeds the password).
+        // The "cannot-be-a-base" typo (missing `//`) would defeat a naive
+        // substring redaction (userinfo lands in the path). It must be rejected
+        // with a STATIC error that never echoes the input (which embeds the
+        // password).
         let err =
             parse_amqp_url("amqp:user:s3cr3t@host/vh").expect_err("missing // must be rejected");
         assert!(
@@ -833,8 +822,6 @@ mod tests {
         assert!(!err.to_string().contains("secret"));
         assert!(matches!(err, QueueBackendError::ConfigError(_)));
     }
-
-    // ── wire codec ─────────────────────────────────────────────────
 
     #[test]
     fn test_retry_header_round_trip() {
@@ -893,8 +880,6 @@ mod tests {
         assert!(err.to_string().contains("exceeds RabbitMQ limit"));
     }
 
-    // ── resource naming + status routing ───────────────────────────
-
     #[test]
     fn test_queue_names_all_eight() {
         let prefix = "relayer";
@@ -944,8 +929,6 @@ mod tests {
         );
         assert_eq!(status_check_queue_type(None), QueueType::StatusCheck);
     }
-
-    // ── declare mode selection + error composition (pure parts) ─────
 
     #[test]
     fn test_declare_options_mode_selection() {
@@ -1002,8 +985,6 @@ mod tests {
             ALL_QUEUE_TYPES.iter().map(|qt| qt.queue_name()).collect();
         assert_eq!(names.len(), 8);
     }
-
-    // ── health shape: unavailable is never 0 ───────────────────────
 
     #[test]
     fn test_build_queue_health_available_reports_real_depth() {

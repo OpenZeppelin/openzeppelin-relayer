@@ -155,8 +155,8 @@ pub(crate) fn sweep_interval(queue_type: QueueType) -> Duration {
 /// each due job is published once. A rare double-publish is harmless (at-least-
 /// once + idempotent handlers). On publish failure the job is re-queued into the
 /// scheduled set scored `now` (immediate re-sweep) so a transient transport
-/// error never silently drops a deferred/retrying job. Fully interruptible by
-/// `shutdown_rx`.
+/// error never silently drops a deferred/retrying job. Interruptible between
+/// ticks via `shutdown_rx` (an in-progress claimed batch completes first).
 pub(crate) fn spawn_due_sweep<F, Fut>(
     segment: &'static str,
     queue_type: QueueType,

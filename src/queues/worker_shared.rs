@@ -6,8 +6,9 @@
 //! backoff, correlation-id extraction, and per-queue concurrency resolution.
 //!
 //! The transport mechanics (Pub/Sub pull + lease, RabbitMQ consume + ack) stay
-//! per-backend — there is deliberately no generic "worker" trait (research
-//! Decision 7); only this shared logic is factored out.
+//! per-backend — there is deliberately no generic "worker" trait, since the
+//! delivery models share no clean abstraction; only this shared logic is
+//! factored out.
 
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -343,8 +344,6 @@ mod tests {
         assert_eq!(DRAIN_TIMEOUT, Duration::from_secs(30));
     }
 
-    // ── bounded exhaustion vs unbounded status checks ───────
-
     #[test]
     fn test_is_retry_exhausted_bounded_queue() {
         // A queue with max_retries = 5 exhausts once the next attempt (> 5).
@@ -362,8 +361,6 @@ mod tests {
         assert!(!is_retry_exhausted(usize::MAX, 1_000_000));
         assert!(!is_retry_exhausted(usize::MAX, usize::MAX - 1));
     }
-
-    // ── retry backoff is observably increasing then capped ──
 
     #[test]
     fn test_status_retry_backoff_is_monotonic_and_capped() {

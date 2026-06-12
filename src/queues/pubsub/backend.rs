@@ -242,8 +242,8 @@ impl PubSubBackend {
         info!("Initializing Pub/Sub queue backend");
 
         // Install the process-default rustls CryptoProvider (shared helper): the
-        // emulator path is plaintext, so this only surfaces against real GCP, but
-        // the install-if-unset guard is the 002 real-GCP rustls-panic fix.
+        // emulator path is plaintext, so this only surfaces against real GCP,
+        // where the install-if-unset guard prevents a first-connection panic.
         crate::queues::ensure_crypto_provider();
 
         let project_id =

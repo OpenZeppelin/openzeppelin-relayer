@@ -113,7 +113,8 @@ pub(crate) fn spawn_consumer_for_queue(
 }
 
 /// Opens a consumer channel, applies `basic_qos`, and subscribes with manual
-/// acks. A generated consumer tag lets shutdown cancel it explicitly.
+/// acks. A recognizable consumer tag identifies this consumer in the broker and
+/// logs; shutdown cancels it via `consumer.tag()`.
 async fn establish_consumer(
     connection: &Arc<Connection>,
     config: &ConsumerConfig,
@@ -155,7 +156,7 @@ async fn run_consumer_loop(
 
         // (Re)establish the consumer channel + subscription. lapin's connection
         // auto-recovery handles the transport; this loop re-creates the channel
-        // and re-subscribes once the connection is back (FR-010 self-healing).
+        // and re-subscribes once the connection is back (self-healing).
         let (channel, mut consumer) = match establish_consumer(&connection, &config, concurrency)
             .await
         {
@@ -205,7 +206,7 @@ async fn run_consumer_loop(
             match next {
                 Some(Ok(delivery)) => {
                     // Race permit acquisition against shutdown so a saturated
-                    // consumer doesn't block here while a shutdown is pending (M2);
+                    // consumer doesn't block here while a shutdown is pending;
                     // the un-spawned delivery is left unacked and the broker
                     // requeues it when the channel closes.
                     let permit = tokio::select! {
@@ -261,7 +262,7 @@ async fn run_consumer_loop(
             // channel. Dropping it first (lapin closes a channel on drop) would
             // requeue every unacked in-flight delivery AND turn the drain's acks
             // into poisoned no-ops — duplicating every in-flight job on a graceful
-            // shutdown (H1).
+            // shutdown.
             drain_inflight(&mut inflight, queue_type).await;
             break;
         }
@@ -539,16 +540,15 @@ mod tests {
     }
 }
 
-// ── Gated integration tests ──────────────────────────────────────────
-//
+// Gated integration tests.
 // `settle_retry_*` need only Redis on localhost:6379:
 //   cargo test --lib queues::rabbitmq::worker::gated_tests::integration_settle -- --ignored
 // The broker spine tests additionally need a real RabbitMQ at RABBITMQ_TEST_URL
 // (e.g. amqp://guest:guest@localhost:5672/%2f):
 //   RABBITMQ_TEST_URL=amqp://guest:guest@localhost:5672/%2f \
 //   cargo test --lib queues::rabbitmq::worker::gated_tests -- --ignored
-// The full transaction -> final-state end-to-end is validated by the quickstart
-// example (T024/T035).
+// The full transaction -> final-state end-to-end is validated by the
+// examples/rabbitmq-queue-storage example.
 #[cfg(test)]
 mod gated_tests {
     use std::sync::Arc;
@@ -604,8 +604,6 @@ mod gated_tests {
             let _: Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
         }
     }
-
-    // ── T019: settle-retry ordering (Redis only) ──────────────────
 
     /// A retryable failure on a bounded queue writes the retry copy (attempt+1,
     /// future score) to the Redis scheduled set BEFORE acking the original. The
@@ -714,8 +712,6 @@ mod gated_tests {
         drain_key(&pool, &prefix, queue_type).await;
     }
 
-    // ── T018: broker spine (real RabbitMQ + Redis) ────────────────
-
     async fn connect(url: &str) -> Connection {
         crate::queues::ensure_crypto_provider();
         Connection::connect(url, ConnectionProperties::default())
@@ -784,7 +780,7 @@ mod gated_tests {
             .await;
     }
 
-    /// H5: a confirmed publish to a queue that does not exist is RETURNED by the
+    /// A confirmed publish to a queue that does not exist is RETURNED by the
     /// broker (mandatory=true) and surfaced as an error — never the silent
     /// "broker acked an unroutable publish" success that would lose the job (e.g.
     /// if a queue is deleted at runtime).
@@ -910,8 +906,6 @@ mod gated_tests {
             .await;
         drain_key(&pool, &prefix, queue_type).await;
     }
-
-    // ── T031: backlog observability (real broker) ─────────────────
 
     /// A passive `queue_declare` reports the ready-message count — the depth that
     /// feeds `health_check` and the `queue_depth` gauge. With work queued and no
