@@ -1,11 +1,12 @@
 // openzeppelin-relayer/src/services/signer/stellar/mod.rs
-//! Stellar signer implementation (local keystore, Google Cloud KMS, AWS KMS, and Turnkey)
+//! Stellar signer implementation (local keystore, Vault-backed signers, cloud KMS, and Turnkey)
 
 mod aws_kms_signer;
 mod google_cloud_kms_signer;
 mod local_signer;
 mod turnkey_signer;
 mod vault_signer;
+mod vault_transit_signer;
 
 use async_trait::async_trait;
 use aws_kms_signer::*;
@@ -13,6 +14,7 @@ use google_cloud_kms_signer::*;
 use local_signer::*;
 use turnkey_signer::*;
 use vault_signer::*;
+use vault_transit_signer::*;
 
 use soroban_rs::xdr::SignatureHint;
 
@@ -81,6 +83,7 @@ pub trait StellarSignTrait: Sync + Send {
 pub enum StellarSigner {
     Local(Box<LocalSigner>),
     Vault(VaultSigner<VaultService>),
+    VaultTransit(VaultTransitSigner),
     GoogleCloudKms(Box<GoogleCloudKmsSigner>),
     AwsKms(AwsKmsSigner),
     Turnkey(TurnkeySigner),
@@ -92,6 +95,7 @@ impl Signer for StellarSigner {
         match self {
             Self::Local(s) => s.address().await,
             Self::Vault(s) => s.address().await,
+            Self::VaultTransit(s) => s.address().await,
             Self::GoogleCloudKms(s) => s.address().await,
             Self::AwsKms(s) => s.address().await,
             Self::Turnkey(s) => s.address().await,
@@ -105,6 +109,7 @@ impl Signer for StellarSigner {
         match self {
             Self::Local(s) => s.sign_transaction(tx).await,
             Self::Vault(s) => s.sign_transaction(tx).await,
+            Self::VaultTransit(s) => s.sign_transaction(tx).await,
             Self::GoogleCloudKms(s) => s.sign_transaction(tx).await,
             Self::AwsKms(s) => s.sign_transaction(tx).await,
             Self::Turnkey(s) => s.sign_transaction(tx).await,
@@ -125,6 +130,10 @@ impl StellarSignTrait for StellarSigner {
                     .await
             }
             Self::Vault(s) => {
+                s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
+                    .await
+            }
+            Self::VaultTransit(s) => {
                 s.sign_xdr_transaction(unsigned_xdr, network_passphrase)
                     .await
             }
@@ -199,13 +208,25 @@ impl StellarSignerFactory {
                 })?;
                 StellarSigner::AwsKms(AwsKmsSigner::new(aws_kms_service))
             }
+            SignerConfig::VaultTransit(config) => {
+                let vault_service = VaultService::new(VaultConfig {
+                    address: config.address.clone(),
+                    namespace: config.namespace.clone(),
+                    role_id: config.role_id.clone(),
+                    secret_id: config.secret_id.clone(),
+                    mount_path: config
+                        .mount_point
+                        .clone()
+                        .unwrap_or_else(|| "transit".to_string()),
+                    token_ttl: None,
+                });
+
+                StellarSigner::VaultTransit(VaultTransitSigner::new(m, vault_service))
+            }
             SignerConfig::AzureKeyVault(_) => {
                 return Err(SignerFactoryError::UnsupportedType(
                     "Azure Key Vault".into(),
                 ))
-            }
-            SignerConfig::VaultTransit(_) => {
-                return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))
             }
             SignerConfig::Cdp(_) => return Err(SignerFactoryError::UnsupportedType("CDP".into())),
         };

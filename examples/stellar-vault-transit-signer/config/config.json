@@ -1,0 +1,49 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-example",
+      "name": "Stellar Testnet Example",
+      "network": "testnet",
+      "paused": false,
+      "notification_id": "notification-example",
+      "signer_id": "stellar-vault-transit-signer",
+      "network_type": "stellar",
+      "policies": {
+        "min_balance": 0,
+        "fee_payment_strategy": "relayer"
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-example",
+      "type": "webhook",
+      "url": "",
+      "signing_key": {
+        "type": "env",
+        "value": "WEBHOOK_SIGNING_KEY"
+      }
+    }
+  ],
+  "signers": [
+    {
+      "id": "stellar-vault-transit-signer",
+      "type": "vault_transit",
+      "config": {
+        "address": "http://vault:8200",
+        "role_id": {
+          "type": "env",
+          "value": "VAULT_ROLE_ID"
+        },
+        "secret_id": {
+          "type": "env",
+          "value": "VAULT_SECRET_ID"
+        },
+        "key_name": "my_signing_key",
+        "pubkey": ""
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}
