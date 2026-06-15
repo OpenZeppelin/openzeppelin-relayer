@@ -538,6 +538,75 @@ mod tests {
         assert!(RECONNECT_BACKOFF_INITIAL < RECONNECT_BACKOFF_MAX);
         assert!(RECONNECT_BACKOFF_MAX <= Duration::from_secs(60));
     }
+
+    fn test_config(queue_type: QueueType) -> ConsumerConfig {
+        ConsumerConfig {
+            queue_type,
+            queue_name: format!("relayer-{}", queue_type.queue_name()),
+            max_retries: queue_type.max_retries(),
+            key_prefix: "test".to_string(),
+            redacted_url: "amqp://broker:5672/%2f".to_string(),
+        }
+    }
+
+    /// A pool that is never actually connected to. The `settle_retry` branches
+    /// exercised below ack and return before any Redis write, so the pool is only
+    /// a required argument, never used.
+    fn unconnected_pool() -> Arc<Pool> {
+        let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:6379")
+            .builder()
+            .expect("pool builder")
+            .max_size(1)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("build pool");
+        Arc::new(pool)
+    }
+
+    fn mock_delivery(queue: &str, body: Vec<u8>) -> Delivery {
+        Delivery::mock(1, "".into(), queue.into(), false, body)
+    }
+
+    #[tokio::test]
+    async fn test_ack_and_nack_helpers_handle_mock_acker_states() {
+        // A fresh mock acker settles once (Ok(true)); settling it again is the
+        // poisoned/already-used no-op (Ok(false)). Both branches must be handled
+        // without panicking, with no live channel.
+        let d = mock_delivery("relayer-status-check", b"{}".to_vec());
+        ack(&d, QueueType::StatusCheck, "cid").await; // Ok(true)
+        ack(&d, QueueType::StatusCheck, "cid").await; // Ok(false) → logged no-op
+
+        let d2 = mock_delivery("relayer-status-check", b"{}".to_vec());
+        nack_requeue(&d2, QueueType::StatusCheck, "cid").await; // Ok(true)
+        nack_requeue(&d2, QueueType::StatusCheck, "cid").await; // Ok(false) → logged
+    }
+
+    #[tokio::test]
+    async fn test_settle_retry_drops_when_budget_exhausted_without_redis() {
+        // A bounded queue at its retry budget drops (acks) and returns BEFORE any
+        // Redis write — so this runs without a live Redis.
+        let config = test_config(QueueType::TransactionRequest); // bounded
+        let delivery = mock_delivery(&config.queue_name, br#"{"message_id":"m1"}"#.to_vec());
+        settle_retry(
+            &delivery,
+            &config,
+            &unconnected_pool(),
+            config.max_retries,
+            "m1",
+            "boom",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_settle_retry_drops_non_utf8_body_without_redis() {
+        // A non-UTF8 body can't be re-enqueued; it's dropped (acked) before the
+        // Redis ZADD, so this also runs without a live Redis. Attempt 0 is well
+        // under the budget, so it passes the exhaustion check first.
+        let config = test_config(QueueType::TransactionRequest);
+        let delivery = mock_delivery(&config.queue_name, vec![0xff, 0xfe, 0x00]);
+        settle_retry(&delivery, &config, &unconnected_pool(), 0, "m1", "boom").await;
+    }
 }
 
 // Gated integration tests.

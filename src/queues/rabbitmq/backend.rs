@@ -212,12 +212,20 @@ pub(crate) async fn publish_confirmed(
             QueueBackendError::QueueError(format!("RabbitMQ publish confirm failed: {e}"))
         })?;
 
+    classify_publish_confirmation(confirm, queue)
+}
+
+/// Maps a publisher `Confirmation` to a publish result. `Ack(None)` is the only
+/// success (routed to a queue and persisted). A returned message
+/// (`Ack(Some(_))`, produced when a `mandatory` publish is unroutable), a `Nack`,
+/// or `NotRequested` all mean the job was NOT durably enqueued and become errors;
+/// a returned message surfaces the AMQP reply code + text (never the body).
+fn classify_publish_confirmation(
+    confirm: Confirmation,
+    queue: &str,
+) -> Result<(), QueueBackendError> {
     match confirm {
-        // Routed to a queue and confirmed by the broker.
         Confirmation::Ack(None) => Ok(()),
-        // mandatory=true returned the message: it was NOT enqueued (no queue
-        // accepted it). Surface the AMQP reason (code + text only — never the
-        // body) as an error rather than reporting a false success.
         Confirmation::Ack(Some(returned)) => Err(QueueBackendError::QueueError(format!(
             "RabbitMQ returned publish to '{queue}' as unroutable (AMQP {} {}); message not enqueued",
             returned.reply_code,
@@ -1008,5 +1016,74 @@ mod tests {
         let h = build_queue_health(QueueType::Notification, None);
         assert!(!h.is_healthy);
         assert_eq!(h.messages_visible, None);
+    }
+
+    // publish confirmation classification
+
+    #[test]
+    fn test_classify_publish_confirmation_ack_none_is_success() {
+        // Ack(None) = routed to a queue and persisted by the broker.
+        assert!(
+            classify_publish_confirmation(Confirmation::Ack(None), "relayer-status-check").is_ok()
+        );
+    }
+
+    #[test]
+    fn test_classify_publish_confirmation_returned_is_unroutable_error() {
+        // A mandatory publish the broker can't route returns as Ack(Some(_)) — the
+        // job was NOT enqueued, so it must error with the AMQP reply code + text.
+        let returned = lapin::message::BasicReturnMessage {
+            delivery: lapin::message::Delivery::mock(
+                0,
+                ShortString::from(""),
+                ShortString::from("relayer-status-check"),
+                false,
+                b"{}".to_vec(),
+            ),
+            reply_code: 312,
+            reply_text: ShortString::from("NO_ROUTE"),
+        };
+        let err = classify_publish_confirmation(
+            Confirmation::Ack(Some(returned)),
+            "relayer-status-check",
+        )
+        .expect_err("a returned (unroutable) message must be an error");
+        let msg = err.to_string();
+        assert!(msg.contains("unroutable"), "{msg}");
+        assert!(msg.contains("not enqueued"), "{msg}");
+        assert!(msg.contains("312") && msg.contains("NO_ROUTE"), "{msg}");
+        assert!(matches!(err, QueueBackendError::QueueError(_)));
+    }
+
+    #[test]
+    fn test_classify_publish_confirmation_nack_is_error() {
+        let err = classify_publish_confirmation(Confirmation::Nack(None), "relayer-notification")
+            .expect_err("a broker nack must be an error");
+        assert!(err.to_string().contains("nacked"));
+    }
+
+    #[test]
+    fn test_classify_publish_confirmation_not_requested_is_error() {
+        // Confirms not enabled on the channel — never report a silent success.
+        let err = classify_publish_confirmation(Confirmation::NotRequested, "relayer-notification")
+            .expect_err("missing confirmation must be an error");
+        assert!(err.to_string().contains("no confirmation"));
+    }
+
+    // retry-attempt header integer coercion
+
+    #[test]
+    fn test_amqp_value_as_usize_accepts_all_integer_widths() {
+        assert_eq!(amqp_value_as_usize(&AMQPValue::LongLongInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::LongInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::ShortInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::ShortShortInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::LongUInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::ShortUInt(7)), Some(7));
+        assert_eq!(amqp_value_as_usize(&AMQPValue::ShortShortUInt(7)), Some(7));
+        // Negative values aren't valid attempt counts → None (→ 0 at the caller).
+        assert_eq!(amqp_value_as_usize(&AMQPValue::LongLongInt(-1)), None);
+        // Non-integer AMQP types → None.
+        assert_eq!(amqp_value_as_usize(&AMQPValue::Boolean(true)), None);
     }
 }
