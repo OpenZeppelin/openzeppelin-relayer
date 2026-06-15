@@ -13,7 +13,7 @@
 
 mod repository;
 pub use repository::{
-    AwsKmsSignerConfigStorage, GoogleCloudKmsSignerConfigStorage,
+    AwsKmsSignerConfigStorage, AzureKeyVaultSignerConfigStorage, GoogleCloudKmsSignerConfigStorage,
     GoogleCloudKmsSignerKeyConfigStorage, GoogleCloudKmsSignerServiceAccountConfigStorage,
     LocalSignerConfigStorage, SignerConfigStorage, SignerRepoModel, TurnkeySignerConfigStorage,
     VaultSignerConfigStorage, VaultTransitSignerConfigStorage,
@@ -127,6 +127,50 @@ pub struct AwsKmsSignerConfig {
     pub region: Option<String>,
     #[validate(length(min = 1, message = "Key ID cannot be empty"))]
     pub key_id: String,
+}
+
+/// Azure Key Vault authentication mode
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AzureKeyVaultAuthType {
+    ClientSecret,
+    ManagedIdentity,
+    WorkloadIdentity,
+}
+
+impl zeroize::Zeroize for AzureKeyVaultAuthType {
+    fn zeroize(&mut self) {
+        *self = Self::ClientSecret;
+    }
+}
+
+/// Azure Key Vault signer configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[validate(schema(function = "validate_azure_key_vault_config"))]
+pub struct AzureKeyVaultSignerConfig {
+    pub auth_type: Option<AzureKeyVaultAuthType>,
+    pub tenant_id: Option<SecretString>,
+    pub client_id: Option<SecretString>,
+    pub client_secret: Option<SecretString>,
+    pub federated_token_file: Option<SecretString>,
+    #[validate(custom(
+        function = "validate_secret_url",
+        message = "Vault URL must be a valid URL"
+    ))]
+    pub vault_url: SecretString,
+    #[validate(custom(
+        function = "validate_secret_string",
+        message = "Key name cannot be empty"
+    ))]
+    pub key_name: SecretString,
+    pub key_version: Option<String>,
+}
+
+impl AzureKeyVaultSignerConfig {
+    pub fn auth_type(&self) -> AzureKeyVaultAuthType {
+        self.auth_type
+            .unwrap_or(AzureKeyVaultAuthType::ClientSecret)
+    }
 }
 
 /// Vault signer configuration
@@ -327,6 +371,89 @@ fn validate_secret_url(secret: &SecretString) -> Result<(), validator::Validatio
     })
 }
 
+fn validate_required_optional_secret(
+    value: &Option<SecretString>,
+    field: &str,
+    message: &'static str,
+) -> Result<(), validator::ValidationError> {
+    match value {
+        Some(secret) if !secret.to_str().is_empty() => Ok(()),
+        _ => {
+            let mut error = validator::ValidationError::new("missing_or_empty");
+            error.add_param(std::borrow::Cow::Borrowed("field"), &field);
+            error.message = Some(message.into());
+            Err(error)
+        }
+    }
+}
+
+fn validate_optional_secret_if_present(
+    value: &Option<SecretString>,
+    field: &str,
+    message: &'static str,
+) -> Result<(), validator::ValidationError> {
+    if let Some(secret) = value {
+        if secret.to_str().is_empty() {
+            let mut error = validator::ValidationError::new("empty_secret");
+            error.add_param(std::borrow::Cow::Borrowed("field"), &field);
+            error.message = Some(message.into());
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_azure_key_vault_config(
+    config: &AzureKeyVaultSignerConfig,
+) -> Result<(), validator::ValidationError> {
+    match config.auth_type() {
+        AzureKeyVaultAuthType::ClientSecret => {
+            validate_required_optional_secret(
+                &config.tenant_id,
+                "tenant_id",
+                "Tenant ID cannot be empty",
+            )?;
+            validate_required_optional_secret(
+                &config.client_id,
+                "client_id",
+                "Client ID cannot be empty",
+            )?;
+            validate_required_optional_secret(
+                &config.client_secret,
+                "client_secret",
+                "Client secret cannot be empty",
+            )?;
+        }
+        AzureKeyVaultAuthType::ManagedIdentity => {
+            validate_optional_secret_if_present(
+                &config.client_id,
+                "client_id",
+                "Client ID cannot be empty",
+            )?;
+        }
+        AzureKeyVaultAuthType::WorkloadIdentity => {
+            validate_required_optional_secret(
+                &config.tenant_id,
+                "tenant_id",
+                "Tenant ID cannot be empty",
+            )?;
+            validate_required_optional_secret(
+                &config.client_id,
+                "client_id",
+                "Client ID cannot be empty",
+            )?;
+            validate_optional_secret_if_present(
+                &config.federated_token_file,
+                "federated_token_file",
+                "Federated token file cannot be empty",
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Allowed Google Cloud KMS universe domains
 /// These are the legitimate Google Cloud domains where KMS services can be hosted.
 /// See: https://cloud.google.com/kms/docs/reference/rest
@@ -416,6 +543,7 @@ pub enum SignerConfig {
     Vault(VaultSignerConfig),
     VaultTransit(VaultTransitSignerConfig),
     AwsKms(AwsKmsSignerConfig),
+    AzureKeyVault(AzureKeyVaultSignerConfig),
     Turnkey(TurnkeySignerConfig),
     Cdp(CdpSignerConfig),
     GoogleCloudKms(Box<GoogleCloudKmsSignerConfig>),
@@ -429,6 +557,12 @@ impl SignerConfig {
             Self::AwsKms(config) => Validate::validate(config).map_err(|e| {
                 SignerValidationError::InvalidConfig(format!(
                     "AWS KMS validation failed: {}",
+                    format_validation_errors(&e)
+                ))
+            }),
+            Self::AzureKeyVault(config) => Validate::validate(config).map_err(|e| {
+                SignerValidationError::InvalidConfig(format!(
+                    "Azure Key Vault validation failed: {}",
                     format_validation_errors(&e)
                 ))
             }),
@@ -481,6 +615,14 @@ impl SignerConfig {
         }
     }
 
+    /// Get Azure Key Vault signer config if this is an Azure Key Vault signer
+    pub fn get_azure_key_vault(&self) -> Option<&AzureKeyVaultSignerConfig> {
+        match self {
+            Self::AzureKeyVault(config) => Some(config),
+            _ => None,
+        }
+    }
+
     /// Get Vault signer config if this is a Vault signer
     pub fn get_vault(&self) -> Option<&VaultSignerConfig> {
         match self {
@@ -526,6 +668,7 @@ impl SignerConfig {
         match self {
             Self::Local(_) => SignerType::Local,
             Self::AwsKms(_) => SignerType::AwsKms,
+            Self::AzureKeyVault(_) => SignerType::AzureKeyVault,
             Self::Vault(_) => SignerType::Vault,
             Self::VaultTransit(_) => SignerType::VaultTransit,
             Self::Turnkey(_) => SignerType::Turnkey,
@@ -578,6 +721,8 @@ pub enum SignerType {
     Local,
     #[serde(rename = "aws_kms")]
     AwsKms,
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault,
     #[serde(rename = "google_cloud_kms")]
     GoogleCloudKms,
     Vault,
@@ -678,6 +823,63 @@ mod tests {
 
         assert!(signer.validate().is_ok());
         assert_eq!(signer.signer_type(), SignerType::AwsKms);
+    }
+
+    #[test]
+    fn test_valid_azure_key_vault_client_secret_signer() {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::ClientSecret),
+            tenant_id: Some(SecretString::new("tenant-id")),
+            client_id: Some(SecretString::new("client-id")),
+            client_secret: Some(SecretString::new("client-secret")),
+            federated_token_file: None,
+            vault_url: SecretString::new("https://example.vault.azure.net"),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        });
+
+        let signer = Signer::new("azure-client-secret".to_string(), config);
+        assert!(signer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_valid_azure_key_vault_managed_identity_signer() {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::ManagedIdentity),
+            tenant_id: None,
+            client_id: Some(SecretString::new("managed-client-id")),
+            client_secret: None,
+            federated_token_file: None,
+            vault_url: SecretString::new("https://example.vault.azure.net"),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        });
+
+        let signer = Signer::new("azure-managed-identity".to_string(), config);
+        assert!(signer.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_azure_key_vault_workload_identity_without_tenant() {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::WorkloadIdentity),
+            tenant_id: None,
+            client_id: Some(SecretString::new("workload-client-id")),
+            client_secret: None,
+            federated_token_file: None,
+            vault_url: SecretString::new("https://example.vault.azure.net"),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        });
+
+        let signer = Signer::new("azure-workload-identity".to_string(), config);
+        let result = signer.validate();
+        assert!(result.is_err());
+        if let Err(SignerValidationError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("Tenant ID cannot be empty"));
+        } else {
+            panic!("Expected InvalidConfig error for missing tenant ID");
+        }
     }
 
     #[test]
