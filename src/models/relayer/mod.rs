@@ -314,6 +314,8 @@ pub struct RelayerEvmPolicy {
     pub eip1559_pricing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_transactions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_revert_data: Option<bool>,
 }
 
 /// Solana token swap configuration
@@ -1666,6 +1668,7 @@ mod tests {
     #[test]
     fn test_relayer_evm_policy_serialization() {
         let policy = RelayerEvmPolicy {
+            include_revert_data: None,
             min_balance: Some(1000000000000000000),
             gas_limit_estimation: Some(true),
             gas_price_cap: Some(50000000000),
@@ -2891,6 +2894,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 min_balance: Some(1000000000000000000),
                 gas_limit_estimation: Some(true),
                 gas_price_cap: Some(50000000000),

@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "paths": {
     "/api/v1/health": {
@@ -6332,6 +6332,9 @@
             "type": "integer",
             "minimum": 0
           },
+          "include_revert_data": {
+            "type": "boolean"
+          },
           "min_balance": {
             "type": "integer",
             "minimum": 0
@@ -7724,6 +7727,12 @@
               "null"
             ],
             "minimum": 0
+          },
+          "include_revert_data": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "min_balance": {
             "type": [

@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### 🚀 Features
+
+* **evm:** Enrich the `status_reason` of failed EVM transactions with the on-chain revert payload (`Transaction reverted on-chain (revert_data: 0x...)`), recovered best-effort via `debug_traceTransaction` then an `eth_call` at the execution block. The legacy generic reason is preserved byte-for-byte as the fallback.
+* **evm:** Add the per-relayer EVM policy `include_revert_data` (default enabled) to disable revert-data recovery and its extra RPC calls.
+
 ## [1.5.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.4.0...v1.5.0) (2026-05-07)
 
 

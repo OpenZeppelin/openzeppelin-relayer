@@ -833,6 +833,7 @@ mod tests {
             signer_id: "test-signer-id".to_string(),
             notification_id: Some("test-notification-id".to_string()),
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 min_balance: Some(100000000000000000u128), // 0.1 ETH
                 whitelist_receivers: Some(vec!["0xRecipient".to_string()]),
                 gas_price_cap: Some(100000000000), // 100 Gwei

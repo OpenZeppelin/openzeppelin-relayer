@@ -1499,6 +1499,7 @@ mod tests {
     // Helper to create a relayer model with specific configuration for these tests
     fn create_test_relayer() -> RelayerRepoModel {
         create_test_relayer_with_policy(crate::models::RelayerEvmPolicy {
+            include_revert_data: None,
             min_balance: Some(100000000000000000u128), // 0.1 ETH
             gas_limit_estimation: Some(true),
             gas_price_cap: Some(100000000000), // 100 Gwei

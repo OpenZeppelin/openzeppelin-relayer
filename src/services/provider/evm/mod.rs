@@ -15,7 +15,10 @@ use alloy::{
         client::ClientBuilder,
         types::{BlockNumberOrTag, FeeHistory, TransactionInput, TransactionRequest},
     },
-    transports::http::{reqwest as alloy_reqwest, Http},
+    transports::{
+        http::{reqwest as alloy_reqwest, Http},
+        RpcError,
+    },
 };
 
 type EvmProviderType = FillProvider<
@@ -150,6 +153,19 @@ pub trait EvmProviderTrait: Send + Sync {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError>;
+
+    /// Re-executes `tx` as an `eth_call` at `block_number` and returns the on-chain revert
+    /// payload, if the call reverts with data.
+    ///
+    /// Returns `Ok(None)` when the call does not revert or returns no revert data. Transport
+    /// errors propagate as `Err` and are treated by callers as "no data recovered". This
+    /// bypasses the lossy `From<RpcError>` conversion so the JSON-RPC error `data` field
+    /// (which carries the revert payload) is not discarded.
+    async fn get_call_revert_data(
+        &self,
+        tx: &TransactionRequest,
+        block_number: u64,
+    ) -> Result<Option<Bytes>, ProviderError>;
 }
 
 impl EvmProvider {
@@ -516,6 +532,33 @@ impl EvmProviderTrait for EvmProvider {
                 // Convert RawValue back to Value
                 serde_json::from_str(result.get())
                     .map_err(|e| ProviderError::Other(format!("Failed to deserialize result: {e}")))
+            }
+        })
+        .await
+    }
+
+    async fn get_call_revert_data(
+        &self,
+        tx: &TransactionRequest,
+        block_number: u64,
+    ) -> Result<Option<Bytes>, ProviderError> {
+        // A revert is a non-retriable `ErrorResp`; we extract its `data` field directly here,
+        // before the lossy `From<RpcError>` conversion would drop it. Only genuine transport
+        // errors are returned as `Err` (and may be retried by the selector).
+        self.retry_rpc_call("get_call_revert_data", move |provider| {
+            let tx_req = tx.clone();
+            async move {
+                match provider
+                    .call(tx_req.into())
+                    .block(block_number.into())
+                    .await
+                {
+                    // The call unexpectedly succeeded: no revert data to surface.
+                    Ok(_) => Ok(None),
+                    // A reverting call returns a JSON-RPC error whose `data` holds the payload.
+                    Err(RpcError::ErrorResp(payload)) => Ok(payload.as_revert_data()),
+                    Err(e) => Err(ProviderError::from(e)),
+                }
             }
         })
         .await
@@ -1164,5 +1207,43 @@ mod tests {
             hex::encode(data),
             "0000000000000000000000000000000000000000000000000000000000000001"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_call_revert_data_returns_payload() {
+        let mut mock = MockEvmProviderTrait::new();
+
+        let tx = TransactionRequest::default();
+        let revert_bytes = Bytes::from(
+            hex::decode("5592f1b2000000000000000000000000be437b1a0b08a09a283713882a6ca75fd2acf4fd")
+                .unwrap(),
+        );
+        let expected = revert_bytes.clone();
+
+        mock.expect_get_call_revert_data()
+            .with(mockall::predicate::always(), mockall::predicate::eq(123u64))
+            .times(1)
+            .returning(move |_, _| {
+                let bytes = revert_bytes.clone();
+                async move { Ok(Some(bytes)) }.boxed()
+            });
+
+        let result = mock.get_call_revert_data(&tx, 123).await;
+        assert_eq!(result.unwrap(), Some(expected));
+    }
+
+    #[tokio::test]
+    async fn test_get_call_revert_data_no_revert_returns_none() {
+        let mut mock = MockEvmProviderTrait::new();
+
+        let tx = TransactionRequest::default();
+
+        mock.expect_get_call_revert_data()
+            .with(mockall::predicate::always(), mockall::predicate::always())
+            .times(1)
+            .returning(|_, _| async { Ok(None) }.boxed());
+
+        let result = mock.get_call_revert_data(&tx, 456).await;
+        assert_eq!(result.unwrap(), None);
     }
 }

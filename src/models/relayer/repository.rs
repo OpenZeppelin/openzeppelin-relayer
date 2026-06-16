@@ -363,6 +363,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: Some(100_000_000_000),
                 eip1559_pricing: Some(true),
                 min_balance: None,
@@ -893,6 +894,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: Some(50_000_000_000),
                 eip1559_pricing: Some(true),
                 min_balance: None,
