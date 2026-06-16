@@ -971,6 +971,36 @@ mod tests {
     }
 
     #[test]
+    fn test_declare_failure_reason_protocol_error_extracts_amqp_code() {
+        // A real broker protocol error (404 NOT_FOUND, the passive-mode
+        // missing-queue case) must have its AMQP reply code extracted via
+        // get_id() and routed to the actionable missing-queue message — this is
+        // the only check that the lapin::Error → message bridge reads the code.
+        let amqp = lapin::protocol::AMQPError::from_id(404, ShortString::from("NOT_FOUND"))
+            .expect("404 is a valid AMQP error code");
+        let err: lapin::Error = ErrorKind::ProtocolError(amqp).into();
+        let msg = declare_failure_reason("relayer-status-check", &err);
+        assert!(msg.contains("relayer-status-check"));
+        assert!(msg.contains("does not exist"));
+        assert!(msg.contains("RABBITMQ_PASSIVE_QUEUES"));
+    }
+
+    #[test]
+    fn test_declare_failure_reason_non_protocol_error_keeps_detail() {
+        // A non-protocol lapin error (no AMQP reply code) falls to the None
+        // branch, which keeps the underlying error detail in the message.
+        let err: lapin::Error = ErrorKind::InvalidChannel(7).into();
+        let msg = declare_failure_reason("relayer-notification", &err);
+        assert!(msg.contains("relayer-notification"));
+        assert!(msg.contains("declare failed"));
+        // The raw lapin detail is preserved (None-code path uses err.to_string()).
+        assert!(
+            msg.contains(&err.to_string()),
+            "non-protocol message must keep the lapin detail: {msg}"
+        );
+    }
+
+    #[test]
     fn test_queue_setup_error_names_every_problem_and_endpoint() {
         let failures = vec![
             "queue 'relayer-status-check' does not exist".to_string(),

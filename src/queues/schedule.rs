@@ -273,6 +273,8 @@ async fn publish_scheduled<F, Fut>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     #[test]
     fn test_scheduled_set_key_format_per_segment() {
@@ -321,6 +323,102 @@ mod tests {
         let bytes = serde_json::to_vec(&job).unwrap();
         let decoded: ScheduledJob = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(decoded, job);
+    }
+
+    /// A deadpool pointed at an unbound localhost port: `get()` fails fast with a
+    /// connection-refused error, deterministically driving the re-queue path
+    /// without depending on a live (or absent) Redis.
+    fn refused_pool() -> Arc<Pool> {
+        let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:1")
+            .builder()
+            .expect("pool builder")
+            .max_size(1)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("build pool");
+        Arc::new(pool)
+    }
+
+    #[tokio::test]
+    async fn test_publish_scheduled_invokes_callback_on_success() {
+        // The success path hands the claimed job to the backend publish callback
+        // verbatim (body + retry_attempt) and never touches Redis, so it runs
+        // infra-free. The callback's Ok result settles the job (logged).
+        let seen: Arc<Mutex<Vec<ScheduledJob>>> = Arc::new(Mutex::new(Vec::new()));
+        let publish = {
+            let seen = seen.clone();
+            move |job: ScheduledJob| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(job);
+                    Ok(())
+                }
+            }
+        };
+
+        let job = ScheduledJob {
+            body: r#"{"message_id":"due"}"#.to_string(),
+            retry_attempt: 4,
+        };
+        publish_scheduled(
+            &publish,
+            &refused_pool(),
+            "oz-relayer",
+            "rabbitmq",
+            QueueType::StatusCheckEvm,
+            job.clone(),
+        )
+        .await;
+
+        let recorded = seen.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "publish callback must be invoked once");
+        assert_eq!(recorded[0], job, "callback receives the job verbatim");
+    }
+
+    #[tokio::test]
+    async fn test_publish_scheduled_publish_then_requeue_failure_does_not_panic() {
+        // Covers the double-failure error arms: the publish callback fails, then
+        // the re-queue ZADD also fails (Redis refused), so the job is dropped this
+        // tick. The function must complete without panicking, having attempted the
+        // publish exactly once. (This does NOT verify the re-queue content — that
+        // needs a live Redis and is covered by the gated worker integration tests.)
+        let calls = Arc::new(AtomicUsize::new(0));
+        let publish = {
+            let calls = calls.clone();
+            move |_job: ScheduledJob| {
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(QueueBackendError::QueueError("publish boom".to_string()))
+                }
+            }
+        };
+
+        let job = ScheduledJob {
+            body: r#"{"message_id":"due"}"#.to_string(),
+            retry_attempt: 0,
+        };
+        // Guard against a hung connect to the refused pool: the error arms must
+        // resolve promptly, so fail loudly rather than hang if they don't.
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            publish_scheduled(
+                &publish,
+                &refused_pool(),
+                "oz-relayer",
+                "rabbitmq",
+                QueueType::TransactionRequest,
+                job,
+            ),
+        )
+        .await
+        .expect("publish_scheduled must resolve promptly on the double-failure path");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "publish must be attempted exactly once before the re-queue path"
+        );
     }
 
     #[test]
