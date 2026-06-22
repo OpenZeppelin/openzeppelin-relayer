@@ -37,6 +37,7 @@ OpenZeppelin Relayer supports the following signer types:
 * `turnkey`: Turnkey signer
 * `google_cloud_kms`: Google Cloud KMS signer
 * `aws_kms`: Amazon AWS KMS signer
+* `azure_key_vault`: Azure Key Vault signer
 * `cdp`: Coinbase Developer Platform signer
 
 ## Network Compatibility Matrix
@@ -51,6 +52,7 @@ The following table shows which signer types are compatible with each network ty
 | `turnkey` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `google_cloud_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `aws_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
+| `azure_key_vault` | ✅ Supported | ❌ Not supported | ❌ Not supported |
 | `cdp` | ✅ Supported | ✅ Supported | ❌ Not supported |
 
 <Callout>
@@ -62,6 +64,7 @@ The following table shows which signer types are compatible with each network ty
 * ***Solana Networks***: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
 * ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Supported by local, AWS KMS, Google Cloud KMS, and Turnkey signers.
 * ***AWS KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
+* ***Azure Key Vault***: Supports EVM networks with secp256k1 keys stored in Azure Key Vault.
 * ***Google Cloud KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
 * ***Turnkey***: Supports EVM, Solana, and Stellar networks with appropriate key management.
 
@@ -298,6 +301,67 @@ Configuration fields:
 | region | String | AWS region. If the key is non-replicated across regions, this must match the key's original region. Optional. If not specified, the default region from shared credentials is used |
 | key_id | String | ID of the key in AWS KMS (can be key ID, key ARN, alias name, or alias ARN) |
 
+## Azure Key Vault Signer Configuration
+
+Uses Azure Key Vault for secure EVM signing operations with secp256k1 keys.
+
+<Callout>
+
+
+***Authentication modes:***
+
+* `client_secret`: Uses a Microsoft Entra application client ID and client secret.
+* `managed_identity`: Uses an Azure managed identity. `client_id` is optional and can be used for user-assigned identities.
+* `workload_identity`: Uses a federated workload identity. If `federated_token_file` is not set in config, the relayer reads `AZURE_FEDERATED_TOKEN_FILE`.
+
+</Callout>
+
+```json
+{
+  "id": "azure-key-vault-signer",
+  "type": "azure_key_vault",
+  "config": {
+    "auth_type": "client_secret",
+    "tenant_id": {
+      "type": "env",
+      "value": "AZURE_TENANT_ID"
+    },
+    "client_id": {
+      "type": "env",
+      "value": "AZURE_CLIENT_ID"
+    },
+    "client_secret": {
+      "type": "env",
+      "value": "AZURE_CLIENT_SECRET"
+    },
+    "vault_url": "https://your-key-vault-name.vault.azure.net",
+    "key_name": "your-secp256k1-key-name",
+    "key_version": null
+  }
+}
+```
+
+Configuration fields:
+| Field | Type | Description |
+| --- | --- | --- |
+| auth_type | String | Azure authentication mode. Supported values are `client_secret`, `managed_identity`, and `workload_identity`. Defaults to `client_secret` when omitted |
+| tenant_id.type | String | Type of value source (`env` or `plain`) |
+| tenant_id.value | String | The Azure tenant ID, or the environment variable name containing it. Required for `client_secret` and `workload_identity` |
+| client_id.type | String | Type of value source (`env` or `plain`) |
+| client_id.value | String | The Azure client ID, or the environment variable name containing it. Required for `client_secret` and `workload_identity`. Optional for `managed_identity` and commonly used for user-assigned identities |
+| client_secret.type | String | Type of value source (`env` or `plain`) |
+| client_secret.value | String | The Azure client secret, or the environment variable name containing it. Required for `client_secret` |
+| federated_token_file.type | String | Type of value source (`env` or `plain`) |
+| federated_token_file.value | String | Path to the federated token file, or the environment variable name containing it. Optional for `workload_identity`; if omitted, `AZURE_FEDERATED_TOKEN_FILE` is used |
+| vault_url | String | The Azure Key Vault URL |
+| key_name | String | The Azure Key Vault key name used for signing operations |
+| key_version | String | Specific Azure Key Vault key version to use. Optional. When omitted or empty, the latest version for the key is used |
+
+Azure-specific requirements:
+* The signer currently supports EVM networks only
+* Use a secp256k1 key in Azure Key Vault
+* Ensure the chosen identity can read key metadata and perform signing operations
+
 ## CDP Signer Configuration
 
 Uses CDP’s secure key management infrastructure.
@@ -364,6 +428,13 @@ Configuration fields:
 * Verify service account credentials are valid and properly formatted
 * Check that the service account has necessary permissions for KMS operations
 * Ensure the KMS key exists and is in the correct region/project
+
+***Azure Key Vault authentication failures***
+
+* Verify the configured `auth_type` matches your Azure deployment
+* Check that tenant, client, secret, or workload identity values are present for the selected auth mode
+* Ensure the chosen identity has permission to read key metadata and sign with the Azure Key Vault key
+* Confirm the Key Vault URL, key name, and optional key version are correct
 
 ***Vault connection issues***
 

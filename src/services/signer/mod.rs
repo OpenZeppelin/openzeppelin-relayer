@@ -15,6 +15,7 @@
 //!   │   |── LocalSigner
 //!   |   |── TurnkeySigner
 //!   |   └── AwsKmsSigner
+//!   |   └── AzureKeyVaultSigner
 //!   ├── SolanaSigner
 //!   │   |── LocalSigner
 //!   |   |── GoogleCloudKmsSigner

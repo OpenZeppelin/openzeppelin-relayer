@@ -3,6 +3,7 @@
 use crate::models::transaction::stellar::asset::AssetSpec;
 use crate::models::transaction::stellar::host_function::{ContractSource, WasmSource};
 use crate::models::SignerError;
+use crate::utils::{deserialize_i64, serialize_i64};
 use serde::{Deserialize, Serialize};
 use soroban_rs::xdr::{
     HostFunction, InvokeHostFunctionOp, MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519,
@@ -35,6 +36,12 @@ pub enum AuthSpec {
 pub enum OperationSpec {
     Payment {
         destination: String,
+        /// Amount in stroops, encoded as a decimal string to preserve precision.
+        // String serde keeps large integers precise through storage
+        // serialization; `value_type = String` syncs the OpenAPI schema.
+        // See `serialize_i64`.
+        #[serde(serialize_with = "serialize_i64", deserialize_with = "deserialize_i64")]
+        #[schema(value_type = String, pattern = "^-?[0-9]+$")]
         amount: i64,
         asset: AssetSpec,
     },
@@ -310,6 +317,41 @@ mod tests {
     const TEST_CONTRACT: &str = "CA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJUWDA";
     const TEST_MUXED: &str =
         "MAAAAAAAAAAAAAB7BQ2L7E5NBWMXDUCMZSIPOBKRDSBYVLMXGSSKF6YNPIB7Y77ITLVL6";
+
+    // Payment.amount is an i64 stored in Redis and re-encoded by the
+    // partial_update Lua script, so it must be serialized as a cjson-safe
+    // string (large stroop amounts would otherwise be floatified).
+    #[test]
+    fn test_payment_amount_serializes_as_string() {
+        let op = OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 643918676885760,
+            asset: AssetSpec::Native,
+        };
+        let json = serde_json::to_string(&op).unwrap();
+        assert!(
+            json.contains(r#""amount":"643918676885760""#),
+            "amount should serialize as a string, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_payment_amount_deserializes_from_corrupted_float() {
+        let op = OperationSpec::Payment {
+            destination: TEST_PK.to_string(),
+            amount: 643918676885760,
+            asset: AssetSpec::Native,
+        };
+        let mut value = serde_json::to_value(&op).unwrap();
+        value["amount"] = serde_json::json!(643918676885760.0);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let parsed: OperationSpec = serde_json::from_str(&json).unwrap();
+        match parsed {
+            OperationSpec::Payment { amount, .. } => assert_eq!(amount, 643918676885760),
+            other => panic!("expected Payment, got {other:?}"),
+        }
+    }
 
     mod parse_destination_address_tests {
         use super::*;

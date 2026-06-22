@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
+use crate::metrics::observe_queue_pickup_latency;
 use crate::queues::{backoff_config_for_queue, retry_delay_secs};
 use crate::{
     config::ServerConfig,
@@ -232,6 +233,7 @@ async fn run_poll_loop(
                 .visibility_timeout(visibility_timeout as i32)
                 .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
                 .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+                .message_system_attribute_names(MessageSystemAttributeName::SentTimestamp)
                 .message_attribute_names("target_scheduled_on")
                 .message_attribute_names("retry_attempt")
                 .send() => result,
@@ -435,6 +437,42 @@ async fn process_message(
         .receipt_handle()
         .ok_or_else(|| QueueBackendError::QueueError("Missing receipt handle".to_string()))?;
 
+    // Observe queue pickup latency on the FIRST physical delivery, before the
+    // defer block consumes it. Placement here is deliberate:
+    //   - Standard queues hold scheduled messages invisible via DelaySeconds
+    //     and deliver at ~target_scheduled_on, so latency reflects actual
+    //     sub-second pickup delay.
+    //   - FIFO queues deliver scheduled messages immediately (no native
+    //     DelaySeconds) and the consumer then defers via visibility timeout.
+    //     The negative `now - target_scheduled_on` clamps to 0, which honestly
+    //     says "consumer is keeping up with the schedule".
+    // Either way: receive_count==1 in `queue_pickup_baseline_ms` ensures we
+    // observe exactly once per logical message lifecycle. FIFO defer/retry
+    // re-deliveries (which bump receive_count) are skipped; standard-queue
+    // retries are skipped via the `retry_attempt` attribute.
+    if let Some(baseline) = queue_pickup_baseline_ms(&message) {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        // SentTimestamp is set by the AWS broker; if the consumer clock runs
+        // ahead of the broker by more than this threshold for a non-scheduled
+        // message, the latency is almost certainly clock skew, not a real
+        // backlog. Log so operators can detect bad data rather than alert on it.
+        let delta_ms = now_ms - baseline;
+        if parse_target_scheduled_on(&message).is_none()
+            && delta_ms > PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS
+        {
+            warn!(
+                queue_type = ?queue_type,
+                latency_ms = delta_ms,
+                "queue_pickup_latency above sanity threshold for non-scheduled SQS message; check broker/consumer clock skew"
+            );
+        }
+        observe_queue_pickup_latency(
+            queue_type.queue_name(),
+            "sqs",
+            pickup_latency_secs(baseline, now_ms),
+        );
+    }
+
     // For jobs with scheduling beyond SQS 15-minute max delay, keep deferring in hops.
     if let Some(target_scheduled_on) = parse_target_scheduled_on(&message) {
         let now = std::time::SystemTime::now()
@@ -476,9 +514,14 @@ async fn process_message(
         .unwrap_or(1);
     // SQS receive count starts at 1; Apalis Attempt starts at 0.
     let attempt_number = receive_count.saturating_sub(1);
-    // Persisted retry attempt for self-reenqueued status checks. Falls back to receive_count-based
-    // attempt when attribute is missing.
-    let logical_retry_attempt = parse_retry_attempt(&message).unwrap_or(attempt_number);
+    // Attempt count handed to the handler for its max_attempts decision.
+    // Prefers the persisted `retry_attempt` attribute (set on standard-queue
+    // re-enqueues, where receive_count resets to 1 every retry) and falls back
+    // to receive_count-1 for FIFO (same physical message redelivered).
+    // Using receive_count alone would peg standard-queue retries at attempt 0
+    // forever, so max_attempts would never trigger and the job would loop.
+    let logical_retry_attempt =
+        effective_handler_attempt(receive_count, parse_retry_attempt(&message));
 
     // Use SQS MessageId as the worker task_id for log correlation.
     let sqs_message_id = message.message_id().unwrap_or("unknown").to_string();
@@ -498,7 +541,7 @@ async fn process_message(
             process_job::<TransactionRequest, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionRequest",
                 transaction_request_handler,
@@ -509,7 +552,7 @@ async fn process_message(
             process_job::<TransactionSend, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionSend",
                 transaction_submission_handler,
@@ -520,7 +563,7 @@ async fn process_message(
             process_job::<TransactionStatusCheck, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionStatusCheck",
                 transaction_status_handler,
@@ -531,7 +574,7 @@ async fn process_message(
             process_job::<NotificationSend, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "NotificationSend",
                 notification_handler,
@@ -542,7 +585,7 @@ async fn process_message(
             process_job::<TokenSwapRequest, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TokenSwapRequest",
                 token_swap_request_handler,
@@ -553,7 +596,7 @@ async fn process_message(
             process_job::<RelayerHealthCheck, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "RelayerHealthCheck",
                 relayer_health_check_handler,
@@ -738,6 +781,87 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|attrs| attrs.get("retry_attempt"))
         .and_then(|value| value.string_value())
         .and_then(|value| value.parse::<usize>().ok())
+}
+
+/// The attempt number handed to a job handler for its `max_attempts` decision.
+///
+/// Standard-queue retries re-enqueue a brand-new message, so the SQS
+/// `ApproximateReceiveCount` resets to 1 on every retry; the true retry count
+/// is carried instead in the persisted `retry_attempt` message attribute.
+/// FIFO retries reuse the same physical message via `change_message_visibility`,
+/// so `receive_count` climbs and no `retry_attempt` attribute is set.
+///
+/// Preferring the persisted `retry_attempt` (falling back to `receive_count - 1`)
+/// yields a monotonically increasing attempt count on BOTH queue types, so the
+/// handler's `max_attempts` ceiling is actually enforced and a permanently
+/// failing job cannot loop forever on a standard queue.
+fn effective_handler_attempt(receive_count: usize, retry_attempt: Option<usize>) -> usize {
+    retry_attempt.unwrap_or_else(|| receive_count.saturating_sub(1))
+}
+
+/// Compute pickup latency in seconds, clamping negative deltas to 0 so a
+/// consumer clock running ahead of the AWS broker (or a future-dated
+/// `target_scheduled_on`) cannot produce a negative-then-huge cast value.
+fn pickup_latency_secs(baseline_ms: i64, now_ms: i64) -> f64 {
+    (now_ms - baseline_ms).max(0) as f64 / 1000.0
+}
+
+/// Sanity threshold (ms) for non-scheduled latency observations. Above this,
+/// the consumer clock is almost certainly skewed relative to the AWS broker
+/// rather than the queue genuinely being backed up by an hour+. Used only to
+/// emit a warning — the value is still observed in the histogram.
+const PICKUP_LATENCY_CLOCK_SKEW_THRESHOLD_MS: i64 = 60 * 60 * 1000;
+
+fn queue_pickup_baseline_ms(message: &Message) -> Option<i64> {
+    // Observe pickup latency only on the very first physical delivery of
+    // a message. The gate is intentionally narrow because the relayer
+    // supports both standard and FIFO SQS queues — and FIFO defer-hops and
+    // error retries both reuse the same physical message via
+    // `change_message_visibility`, which cannot mutate the `retry_attempt`
+    // attribute. Without the receive-count gate, every FIFO redelivery
+    // would re-observe the latency, conflating the metric with retry
+    // backoff time.
+    //
+    // The trade-offs:
+    //   - Standard queues: behaves correctly. Initial delivery has
+    //     receive_count=1; standard-queue retries re-send a new message
+    //     (also receive_count=1) but carry `retry_attempt > 0`, so the
+    //     second check below skips them.
+    //   - Standard queues with defer-hop (only triggered when
+    //     scheduled_on - now > 900s): each defer-hop creates a new message
+    //     with receive_count=1 and no `retry_attempt`, so the metric
+    //     observes each hop. This is an accepted limitation; long-delay
+    //     scheduling is rare in this codebase (status checks use seconds-
+    //     scale backoff).
+    //   - FIFO queues: only the very first delivery observes. For
+    //     scheduled jobs that arrive before `target_scheduled_on`, the
+    //     computed latency is clamped to 0 by the caller. This is narrower
+    //     than the standard-queue semantic but consistent and free of
+    //     retry inflation.
+    let receive_count = message
+        .attributes()
+        .and_then(|attrs| attrs.get(&MessageSystemAttributeName::ApproximateReceiveCount))
+        .and_then(|count| count.parse::<usize>().ok())
+        .unwrap_or(1);
+    if receive_count != 1 {
+        return None;
+    }
+
+    // Standard-queue retries re-enqueue as new messages with receive_count=1
+    // and an explicit `retry_attempt` attribute. Skip those so the metric
+    // doesn't include retry backoff time.
+    if parse_retry_attempt(message).is_some_and(|n| n > 0) {
+        return None;
+    }
+
+    parse_target_scheduled_on(message)
+        .map(|ts_secs| ts_secs * 1000)
+        .or_else(|| {
+            message
+                .attributes()
+                .and_then(|a| a.get(&MessageSystemAttributeName::SentTimestamp))
+                .and_then(|v| v.parse::<i64>().ok())
+        })
 }
 
 fn is_fifo_queue_url(queue_url: &str) -> bool {
@@ -1430,6 +1554,180 @@ mod tests {
             )
             .build();
         assert_eq!(parse_retry_attempt(&message), Some(999999));
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_uses_scheduled_time_on_first_delivery() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("123")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "999999".to_string(),
+            )])))
+            .build();
+
+        // No retry_attempt attribute → first attempt
+        assert_eq!(queue_pickup_baseline_ms(&message), Some(123_000));
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_falls_back_to_sent_timestamp() {
+        let message = Message::builder()
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "123456".to_string(),
+            )])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message), Some(123456));
+    }
+
+    #[test]
+    fn test_pickup_latency_secs_clamps_negative_skew() {
+        // Consumer clock running 5s behind the broker (baseline is "in the future")
+        // must not produce a negative-then-huge cast value — clamp to 0.
+        let now_ms = 1_000_000_i64;
+        let baseline_ms = now_ms + 5_000;
+        assert_eq!(pickup_latency_secs(baseline_ms, now_ms), 0.0);
+    }
+
+    #[test]
+    fn test_pickup_latency_secs_positive_delta() {
+        // 2.5s positive delta should be reported in seconds with ms precision.
+        assert_eq!(pickup_latency_secs(1_000_000, 1_002_500), 2.5);
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_skips_when_retry_attempt_positive() {
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("123")
+                    .build()
+                    .unwrap(),
+            )
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("1")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::SentTimestamp,
+                "123456".to_string(),
+            )])))
+            .build();
+
+        // retry_attempt > 0 → genuine retry, skip
+        assert_eq!(queue_pickup_baseline_ms(&message), None);
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_accepts_retry_attempt_zero() {
+        // Explicit retry_attempt=0 should be treated as first attempt
+        // (consistent with absent attribute).
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("777")
+                    .build()
+                    .unwrap(),
+            )
+            .message_attributes(
+                "retry_attempt",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("0")
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message), Some(777_000));
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_prefers_persisted_retry_attempt() {
+        // Standard-queue retry: re-enqueued as a NEW message (receive_count=1)
+        // but carrying retry_attempt=3. The handler must see attempt 3, not 0,
+        // otherwise max_attempts is never reached and the job loops forever.
+        assert_eq!(effective_handler_attempt(1, Some(3)), 3);
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_falls_back_to_receive_count_for_fifo() {
+        // FIFO retry: same physical message redelivered, receive_count climbs,
+        // and there is no retry_attempt attribute to read.
+        assert_eq!(effective_handler_attempt(4, None), 3);
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_first_delivery_is_zero() {
+        assert_eq!(effective_handler_attempt(1, None), 0);
+        assert_eq!(effective_handler_attempt(1, Some(0)), 0);
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_skips_when_receive_count_gt_one() {
+        // Receive count > 1 means the message has been delivered before,
+        // which on FIFO queues happens for both scheduling defer-hops and
+        // error retries — neither of which we want to record as a fresh
+        // pickup. Gating on receive_count == 1 prevents this conflation.
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("500")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([
+                (
+                    MessageSystemAttributeName::ApproximateReceiveCount,
+                    "2".to_string(),
+                ),
+                (MessageSystemAttributeName::SentTimestamp, "999".to_string()),
+            ])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message), None);
+    }
+
+    #[test]
+    fn test_queue_pickup_baseline_ms_observes_when_receive_count_explicitly_one() {
+        // Explicit receive_count=1 (first physical delivery) should be
+        // observed, mirroring the implicit default when the attribute is
+        // missing.
+        let message = Message::builder()
+            .message_attributes(
+                "target_scheduled_on",
+                MessageAttributeValue::builder()
+                    .data_type("Number")
+                    .string_value("250")
+                    .build()
+                    .unwrap(),
+            )
+            .set_attributes(Some(std::collections::HashMap::from([(
+                MessageSystemAttributeName::ApproximateReceiveCount,
+                "1".to_string(),
+            )])))
+            .build();
+
+        assert_eq!(queue_pickup_baseline_ms(&message), Some(250_000));
     }
 
     // ── is_fifo_queue_url: comprehensive cases ────────────────────────

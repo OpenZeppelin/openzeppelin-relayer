@@ -861,7 +861,9 @@ impl QueueBackend for SqsBackend {
 
             health_statuses.push(QueueHealth {
                 queue_type: *queue_type,
-                messages_visible,
+                // SQS reports an approximate visible count (or 0 on probe error),
+                // both genuine values, so always `Some(..)`.
+                messages_visible: Some(messages_visible),
                 messages_in_flight,
                 messages_dlq,
                 backend: "sqs".to_string(),

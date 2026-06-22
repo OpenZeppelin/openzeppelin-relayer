@@ -23,7 +23,10 @@ use crate::{
         RelayerError, RelayerRepoModel, SignerError, StellarNetwork, StellarValidationError,
         TransactionError, U256,
     },
-    utils::{deserialize_optional_u128, serialize_optional_u128},
+    utils::{
+        deserialize_i64, deserialize_optional_i64, deserialize_optional_u128, serialize_i64,
+        serialize_optional_i64, serialize_optional_u128,
+    },
 };
 use alloy::{
     consensus::{TxEip1559, TxLegacy},
@@ -521,7 +524,13 @@ pub enum TransactionInput {
     /// Pre-built unsigned XDR that needs signing
     UnsignedXdr(String),
     /// Pre-built signed XDR that needs fee-bumping
-    SignedXdr { xdr: String, max_fee: i64 },
+    SignedXdr {
+        xdr: String,
+        // String-encoded like `sequence_number` to stay precise through storage
+        // serialization; see `serialize_i64`.
+        #[serde(serialize_with = "serialize_i64", deserialize_with = "deserialize_i64")]
+        max_fee: i64,
+    },
     /// Soroban gas abstraction: FeeForwarder transaction with user's signed auth entry
     /// The XDR is the FeeForwarder transaction from /build, and the signed_auth_entry
     /// contains the user's signed SorobanAuthorizationEntry to be injected.
@@ -626,6 +635,13 @@ impl TransactionInput {
 pub struct StellarTransactionData {
     pub source_account: String,
     pub fee: Option<u32>,
+    // String-encoded to keep large i64s precise through storage serialization;
+    // see `serialize_optional_i64`.
+    #[serde(
+        serialize_with = "serialize_optional_i64",
+        deserialize_with = "deserialize_optional_i64",
+        default
+    )]
     pub sequence_number: Option<i64>,
     pub memo: Option<MemoSpec>,
     pub valid_until: Option<String>,
@@ -1748,6 +1764,106 @@ mod tests {
         let tx = test_stellar_tx_data();
         let updated = tx.with_sequence_number(42);
         assert_eq!(updated.sequence_number, Some(42));
+    }
+
+    #[test]
+    fn test_stellar_sequence_number_serializes_as_string() {
+        // sequence_number must serialize as a JSON string so it survives a
+        // Redis/Lua cjson decode->encode round-trip. Lua 5.1 (bundled by
+        // Redis) has no integer type, so a large i64 stored as a bare JSON
+        // number is re-emitted as a float (e.g. 643918676885760.0), which
+        // then fails to deserialize back into i64. A quoted string is opaque
+        // to cjson and round-trips untouched.
+        let mut tx = test_stellar_tx_data();
+        tx.sequence_number = Some(643918676885760);
+
+        let json = serde_json::to_string(&tx).unwrap();
+
+        assert!(
+            json.contains(r#""sequence_number":"643918676885760""#),
+            "sequence_number should serialize as a string, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_stellar_sequence_number_deserializes_from_corrupted_float() {
+        // Regression for the GCP crash: transactions already stored in Redis
+        // hold sequence_number as a float (643918676885760.0) after a cjson
+        // round-trip. Deserialization must recover the integer value rather
+        // than erroring with "invalid type: floating point ..., expected i64".
+        let mut value = serde_json::to_value(test_stellar_tx_data()).unwrap();
+        value["sequence_number"] = serde_json::json!(643918676885760.0);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let tx: StellarTransactionData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(tx.sequence_number, Some(643918676885760));
+    }
+
+    #[test]
+    fn test_stellar_sequence_number_deserializes_from_legacy_integer() {
+        // Backward compat: records written before this fix hold a bare integer.
+        // (Passes today; guards us against regressing the legacy on-disk form.)
+        let mut value = serde_json::to_value(test_stellar_tx_data()).unwrap();
+        value["sequence_number"] = serde_json::json!(643918676885760_i64);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let tx: StellarTransactionData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(tx.sequence_number, Some(643918676885760));
+    }
+
+    fn signed_xdr_tx_data(max_fee: i64) -> StellarTransactionData {
+        let mut tx = test_stellar_tx_data();
+        tx.transaction_input = TransactionInput::SignedXdr {
+            xdr: "AAAA".to_string(),
+            max_fee,
+        };
+        tx
+    }
+
+    #[test]
+    fn test_stellar_signed_xdr_max_fee_serializes_as_string() {
+        // SignedXdr.max_fee is an i64 stored in Redis and re-encoded by the
+        // partial_update Lua script, so it has the same cjson float-corruption
+        // exposure as sequence_number and must serialize as a string too.
+        let json = serde_json::to_string(&signed_xdr_tx_data(643918676885760)).unwrap();
+
+        assert!(
+            json.contains(r#""max_fee":"643918676885760""#),
+            "max_fee should serialize as a string, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_stellar_signed_xdr_max_fee_deserializes_from_corrupted_float() {
+        // Regression: a SignedXdr tx whose max_fee was floatified by a cjson
+        // round-trip must still deserialize.
+        let mut value = serde_json::to_value(signed_xdr_tx_data(643918676885760)).unwrap();
+        value["transaction_input"]["SignedXdr"]["max_fee"] = serde_json::json!(643918676885760.0);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let tx: StellarTransactionData = serde_json::from_str(&json).unwrap();
+
+        match tx.transaction_input {
+            TransactionInput::SignedXdr { max_fee, .. } => assert_eq!(max_fee, 643918676885760),
+            other => panic!("expected SignedXdr, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_stellar_signed_xdr_max_fee_deserializes_from_legacy_integer() {
+        // Backward compat with bare-integer records written before this fix.
+        let mut value = serde_json::to_value(signed_xdr_tx_data(35014)).unwrap();
+        value["transaction_input"]["SignedXdr"]["max_fee"] = serde_json::json!(35014_i64);
+        let json = serde_json::to_string(&value).unwrap();
+
+        let tx: StellarTransactionData = serde_json::from_str(&json).unwrap();
+
+        match tx.transaction_input {
+            TransactionInput::SignedXdr { max_fee, .. } => assert_eq!(max_fee, 35014),
+            other => panic!("expected SignedXdr, got {other:?}"),
+        }
     }
 
     #[test]

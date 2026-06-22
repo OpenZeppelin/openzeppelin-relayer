@@ -10,10 +10,10 @@
 //! all input is properly validated before reaching the core business logic.
 
 use crate::models::{
-    ApiError, AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
-    GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig,
-    SecretString, Signer, SignerConfig, TurnkeySignerConfig, VaultSignerConfig,
-    VaultTransitSignerConfig,
+    ApiError, AwsKmsSignerConfig, AzureKeyVaultAuthType, AzureKeyVaultSignerConfig,
+    CdpSignerConfig, GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+    GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, SecretString, Signer,
+    SignerConfig, TurnkeySignerConfig, VaultSignerConfig, VaultTransitSignerConfig,
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,21 @@ pub struct LocalSignerRequestConfig {
 pub struct AwsKmsSignerRequestConfig {
     pub region: String,
     pub key_id: String,
+}
+
+/// Azure Key Vault signer configuration for API requests
+#[derive(Debug, Serialize, Deserialize, ToSchema, Zeroize)]
+#[serde(deny_unknown_fields)]
+pub struct AzureKeyVaultSignerRequestConfig {
+    pub auth_type: Option<AzureKeyVaultAuthType>,
+    pub tenant_id: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub federated_token_file: Option<String>,
+    pub vault_url: String,
+    pub key_name: String,
+    #[schema(nullable = false)]
+    pub key_version: Option<String>,
 }
 
 /// Vault signer configuration for API requests
@@ -125,6 +140,7 @@ pub struct CdpSignerRequestConfig {
 pub enum SignerConfigRequest {
     Local(LocalSignerRequestConfig),
     AwsKms(AwsKmsSignerRequestConfig),
+    AzureKeyVault(AzureKeyVaultSignerRequestConfig),
     Vault(VaultSignerRequestConfig),
     VaultTransit(VaultTransitSignerRequestConfig),
     Turnkey(TurnkeySignerRequestConfig),
@@ -140,6 +156,8 @@ pub enum SignerTypeRequest {
     Local,
     #[serde(rename = "aws_kms")]
     AwsKms,
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault,
     Vault,
     #[serde(rename = "vault_transit")]
     VaultTransit,
@@ -227,6 +245,26 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                 region: Some(aws_config.region),
                 key_id: aws_config.key_id,
             }),
+            SignerConfigRequest::AzureKeyVault(azure_config) => {
+                SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+                    auth_type: azure_config.auth_type,
+                    tenant_id: azure_config
+                        .tenant_id
+                        .map(|value| SecretString::new(&value)),
+                    client_id: azure_config
+                        .client_id
+                        .map(|value| SecretString::new(&value)),
+                    client_secret: azure_config
+                        .client_secret
+                        .map(|value| SecretString::new(&value)),
+                    federated_token_file: azure_config
+                        .federated_token_file
+                        .map(|value| SecretString::new(&value)),
+                    vault_url: SecretString::new(&azure_config.vault_url),
+                    key_name: SecretString::new(&azure_config.key_name),
+                    key_version: azure_config.key_version,
+                })
+            }
             SignerConfigRequest::Vault(vault_config) => SignerConfig::Vault(VaultSignerConfig {
                 address: vault_config.address,
                 namespace: vault_config.namespace,
@@ -290,6 +328,10 @@ impl TryFrom<SignerCreateRequest> for Signer {
             (&request.signer_type, &request.config),
             (SignerTypeRequest::Local, SignerConfigRequest::Local(_))
                 | (SignerTypeRequest::AwsKms, SignerConfigRequest::AwsKms(_))
+                | (
+                    SignerTypeRequest::AzureKeyVault,
+                    SignerConfigRequest::AzureKeyVault(_)
+                )
                 | (SignerTypeRequest::Vault, SignerConfigRequest::Vault(_))
                 | (
                     SignerTypeRequest::VaultTransit,

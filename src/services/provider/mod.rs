@@ -153,19 +153,6 @@ pub fn get_shared_rpc_http_client() -> Result<ReqwestClient, ProviderError> {
         .map_err(|e| ProviderError::NetworkConfiguration(e.clone()))
 }
 
-/// Build a new RPC HTTP client with standard settings plus a per-request timeout.
-/// Use when the provider needs timeouts baked into the client (e.g., EVM via alloy transport).
-pub fn build_rpc_http_client_with_timeout(
-    timeout: Duration,
-) -> Result<ReqwestClient, ProviderError> {
-    base_rpc_client_builder()
-        .timeout(timeout)
-        .build()
-        .map_err(|e| {
-            ProviderError::NetworkConfiguration(format!("Failed to build RPC HTTP client: {e}"))
-        })
-}
-
 #[derive(Error, Debug, Serialize)]
 pub enum ProviderError {
     #[error("RPC client error: {0}")]

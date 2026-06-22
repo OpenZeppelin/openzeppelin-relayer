@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "paths": {
     "/api/v1/health": {
@@ -6993,9 +6993,9 @@
                 ]
               },
               "value": {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 0
+                "type": "string",
+                "description": "Non-negative integer (memo ID) encoded as a decimal string to preserve precision.",
+                "pattern": "^[0-9]+$"
               }
             }
           },
@@ -7266,8 +7266,9 @@
             ],
             "properties": {
               "amount": {
-                "type": "integer",
-                "format": "int64"
+                "type": "string",
+                "description": "Amount in stroops, encoded as a decimal string to preserve precision.",
+                "pattern": "^-?[0-9]+$"
               },
               "asset": {
                 "$ref": "#/components/schemas/AssetSpec"
@@ -9943,8 +9944,9 @@
             "type": "string"
           },
           "sequence_number": {
-            "type": "integer",
-            "format": "int64"
+            "type": "string",
+            "description": "Stellar sequence number encoded as a decimal string to preserve precision.",
+            "pattern": "^-?[0-9]+$"
           },
           "source_account": {
             "type": "string"

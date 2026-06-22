@@ -293,6 +293,83 @@ pub fn sanitize_url_for_error(url: &str) -> String {
     }
 }
 
+/// Decision returned by [`evaluate_redirect_decision`].
+///
+/// Crate-version-agnostic: callers wire this back into whichever
+/// `reqwest::redirect::Attempt` they are working with (we have two —
+/// the direct `reqwest` dep and the one re-exported by alloy, which can
+/// resolve to a different reqwest minor under nightly cargo updates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectDecision {
+    Follow,
+    Stop,
+}
+
+/// Core redirect-policy decision. See [`create_secure_redirect_policy`] for the
+/// security model. Pure function over `url::Url` so it can be shared between
+/// `reqwest::redirect::Policy::custom` and the alloy-re-exported variant.
+pub fn evaluate_redirect_decision(
+    target_url: &url::Url,
+    previous_urls: &[url::Url],
+) -> RedirectDecision {
+    // Only allow one redirect (prevent redirect chains).
+    if previous_urls.len() > 1 {
+        warn!(
+            redirect_count = previous_urls.len(),
+            "Blocking redirect: too many redirects in chain"
+        );
+        return RedirectDecision::Stop;
+    }
+
+    let Some(original_url) = previous_urls.first() else {
+        warn!("Blocking redirect: no previous URL found");
+        return RedirectDecision::Stop;
+    };
+
+    // Same host (case-insensitive, as DNS is case-insensitive).
+    let original_host = original_url.host_str().unwrap_or("");
+    let target_host = target_url.host_str().unwrap_or("");
+    if !original_host.eq_ignore_ascii_case(target_host) {
+        warn!(
+            original_host = original_host,
+            target_host = target_host,
+            "Blocking redirect: host mismatch"
+        );
+        return RedirectDecision::Stop;
+    }
+
+    // Port matches (explicit or default for scheme).
+    let original_port = original_url.port_or_known_default();
+    let target_port = target_url.port_or_known_default();
+    if original_port != target_port {
+        warn!(
+            original_port = ?original_port,
+            target_port = ?target_port,
+            "Blocking redirect: port mismatch"
+        );
+        return RedirectDecision::Stop;
+    }
+
+    // Only allow HTTP → HTTPS upgrade.
+    let original_scheme = original_url.scheme();
+    let target_scheme = target_url.scheme();
+    if original_scheme == "http" && target_scheme == "https" {
+        tracing::debug!(
+            original = %original_url,
+            target = %target_url,
+            "Allowing HTTP to HTTPS redirect"
+        );
+        RedirectDecision::Follow
+    } else {
+        warn!(
+            original_scheme = original_scheme,
+            target_scheme = target_scheme,
+            "Blocking redirect: only HTTP to HTTPS upgrades are allowed"
+        );
+        RedirectDecision::Stop
+    }
+}
+
 /// Creates a secure redirect policy that only allows HTTP to HTTPS upgrades on the same host.
 ///
 /// This policy prevents SSRF attacks via redirect chains while still allowing legitimate
@@ -302,81 +379,11 @@ pub fn sanitize_url_for_error(url: &str) -> String {
 /// - **Single redirect only**: Prevents redirect chains that could be used to bypass security
 /// - **Same host required**: The redirect target must have the exact same host as the original request
 /// - **Protocol upgrade only**: Only allows `http` → `https`, blocks all other redirects
-///
-/// # Examples
-/// Allowed:
-/// - `http://example.com/rpc` → `https://example.com/rpc`
-/// - `http://example.com:8545/` → `https://example.com:8545/`
-///
-/// Blocked:
-/// - `https://example.com/` → `https://other.com/` (different host)
-/// - `https://example.com/` → `http://example.com/` (downgrade)
-/// - `http://a.com/` → `http://b.com/` → `https://b.com/` (chain)
 pub fn create_secure_redirect_policy() -> Policy {
     Policy::custom(|attempt: Attempt| {
-        // Get the redirect target URL
-        let target_url = attempt.url();
-
-        // Get the previous URLs in the redirect chain
-        let previous_urls = attempt.previous();
-
-        // Only allow one redirect (prevent redirect chains)
-        if previous_urls.len() > 1 {
-            warn!(
-                redirect_count = previous_urls.len(),
-                "Blocking redirect: too many redirects in chain"
-            );
-            return attempt.stop();
-        }
-
-        // Get the original URL (first in the chain)
-        let Some(original_url) = previous_urls.first() else {
-            // This shouldn't happen, but if there's no previous URL, stop
-            warn!("Blocking redirect: no previous URL found");
-            return attempt.stop();
-        };
-
-        // Check same host (case-insensitive, as DNS is case-insensitive)
-        let original_host = original_url.host_str().unwrap_or("");
-        let target_host = target_url.host_str().unwrap_or("");
-        if !original_host.eq_ignore_ascii_case(target_host) {
-            warn!(
-                original_host = original_host,
-                target_host = target_host,
-                "Blocking redirect: host mismatch"
-            );
-            return attempt.stop();
-        }
-
-        // Check port matches (explicit or default for scheme)
-        let original_port = original_url.port_or_known_default();
-        let target_port = target_url.port_or_known_default();
-        if original_port != target_port {
-            warn!(
-                original_port = ?original_port,
-                target_port = ?target_port,
-                "Blocking redirect: port mismatch"
-            );
-            return attempt.stop();
-        }
-
-        // Only allow HTTP → HTTPS upgrade
-        let original_scheme = original_url.scheme();
-        let target_scheme = target_url.scheme();
-        if original_scheme == "http" && target_scheme == "https" {
-            tracing::debug!(
-                original = %original_url,
-                target = %target_url,
-                "Allowing HTTP to HTTPS redirect"
-            );
-            attempt.follow()
-        } else {
-            warn!(
-                original_scheme = original_scheme,
-                target_scheme = target_scheme,
-                "Blocking redirect: only HTTP to HTTPS upgrades are allowed"
-            );
-            attempt.stop()
+        match evaluate_redirect_decision(attempt.url(), attempt.previous()) {
+            RedirectDecision::Follow => attempt.follow(),
+            RedirectDecision::Stop => attempt.stop(),
         }
     })
 }
@@ -384,6 +391,62 @@ pub fn create_secure_redirect_policy() -> Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn u(s: &str) -> url::Url {
+        url::Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn redirect_allows_http_to_https_same_host_explicit_port() {
+        // Note: existing policy requires port equality, so default-port
+        // 80→443 upgrades are blocked. Explicit equal ports are allowed.
+        let target = u("https://example.com:8545/rpc");
+        let prev = vec![u("http://example.com:8545/rpc")];
+        assert_eq!(
+            evaluate_redirect_decision(&target, &prev),
+            RedirectDecision::Follow
+        );
+    }
+
+    #[test]
+    fn redirect_blocks_cross_host() {
+        let target = u("https://other.com/rpc");
+        let prev = vec![u("https://example.com/rpc")];
+        assert_eq!(
+            evaluate_redirect_decision(&target, &prev),
+            RedirectDecision::Stop
+        );
+    }
+
+    #[test]
+    fn redirect_blocks_https_to_http_downgrade() {
+        let target = u("http://example.com/rpc");
+        let prev = vec![u("https://example.com/rpc")];
+        assert_eq!(
+            evaluate_redirect_decision(&target, &prev),
+            RedirectDecision::Stop
+        );
+    }
+
+    #[test]
+    fn redirect_blocks_chain_longer_than_one() {
+        let target = u("https://example.com/c");
+        let prev = vec![u("http://example.com/a"), u("https://example.com/b")];
+        assert_eq!(
+            evaluate_redirect_decision(&target, &prev),
+            RedirectDecision::Stop
+        );
+    }
+
+    #[test]
+    fn redirect_blocks_port_mismatch() {
+        let target = u("https://example.com:9999/rpc");
+        let prev = vec![u("http://example.com:8545/rpc")];
+        assert_eq!(
+            evaluate_redirect_decision(&target, &prev),
+            RedirectDecision::Stop
+        );
+    }
 
     #[test]
     fn test_private_ipv4_detection() {

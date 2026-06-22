@@ -1,0 +1,73 @@
+---
+# Run the Pub/Sub queue backend against REAL GCP (not the emulator).
+#
+# The relayer never creates resources, so provide them first:
+#   1. Create the 8 topics + 8 subscriptions:
+#        PUBSUB_PROJECT_ID=<your-project> ./scripts/provision-gcp.sh
+#   2. Provide Application Default Credentials, either:
+#        - a service-account key (roles/pubsub.editor + roles/monitoring.viewer)
+#          at config/keys/gcp-sa-key.json  (the default mount below; gitignored), or
+#        - any host credentials file via GCP_CREDENTIALS_FILE, e.g. your gcloud ADC:
+#          GCP_CREDENTIALS_FILE="$HOME/.config/gcloud/application_default_credentials.json"
+#   3. Set PUBSUB_PROJECT_ID in .env.
+#
+# Differs from docker-compose.yaml (emulator): no PUBSUB_EMULATOR_HOST (the
+# backend resolves ADC against real GCP), an ADC credentials mount, and no
+# emulator/pubsub-init services (provisioning is the operator step above).
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: pubsub
+      DISTRIBUTED_MODE: 'false'
+      PUBSUB_PROJECT_ID: ${PUBSUB_PROJECT_ID}
+      PUBSUB_TOPIC_PREFIX: relayer
+      GOOGLE_APPLICATION_CREDENTIALS: /adc/key.json
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+      - ${GCP_CREDENTIALS_FILE:-./config/keys/gcp-sa-key.json}:/adc/key.json:ro
+    depends_on:
+      redis:
+        condition: service_started
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local

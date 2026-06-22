@@ -9,6 +9,7 @@
 //! EVM Signer (trait implementations)
 //!   ├── LocalSigner             - Encrypted JSON keystore (development/testing)
 //!   ├── AwsKmsSigner           - AWS Key Management Service
+//!   ├── AzureKeyVaultSigner    - Azure Key Vault
 //!   ├── GoogleCloudKmsSigner   - Google Cloud Key Management Service
 //!   ├── VaultSigner            - HashiCorp Vault KV2 backend
 //!   ├── TurnkeySigner          - Turnkey API backend
@@ -30,6 +31,7 @@
 //! - Input validation and error handling
 
 mod aws_kms_signer;
+mod azure_key_vault_signer;
 mod cdp_signer;
 mod google_cloud_kms_signer;
 mod local_signer;
@@ -37,6 +39,7 @@ mod turnkey_signer;
 pub(crate) mod utils;
 mod vault_signer;
 use aws_kms_signer::*;
+use azure_key_vault_signer::*;
 use cdp_signer::*;
 use google_cloud_kms_signer::*;
 use local_signer::*;
@@ -62,7 +65,8 @@ use crate::{
         signer::SignerFactoryError,
         turnkey::TurnkeyService,
         vault::{VaultConfig, VaultService, VaultServiceTrait},
-        AwsKmsService, CdpService, GoogleCloudKmsService, TurnkeyServiceTrait,
+        AwsKmsService, AzureKeyVaultService, CdpService, GoogleCloudKmsService,
+        TurnkeyServiceTrait,
     },
 };
 use eyre::Result;
@@ -281,6 +285,7 @@ pub enum EvmSigner {
     Turnkey(TurnkeySigner),
     Cdp(CdpSigner),
     AwsKms(AwsKmsSigner),
+    AzureKeyVault(AzureKeyVaultSigner),
     GoogleCloudKms(Box<GoogleCloudKmsSigner>),
 }
 
@@ -293,6 +298,7 @@ impl Signer for EvmSigner {
             Self::Turnkey(signer) => signer.address().await,
             Self::Cdp(signer) => signer.address().await,
             Self::AwsKms(signer) => signer.address().await,
+            Self::AzureKeyVault(signer) => signer.address().await,
             Self::GoogleCloudKms(signer) => signer.address().await,
         }
     }
@@ -307,6 +313,7 @@ impl Signer for EvmSigner {
             Self::Turnkey(signer) => signer.sign_transaction(transaction).await,
             Self::Cdp(signer) => signer.sign_transaction(transaction).await,
             Self::AwsKms(signer) => signer.sign_transaction(transaction).await,
+            Self::AzureKeyVault(signer) => signer.sign_transaction(transaction).await,
             Self::GoogleCloudKms(signer) => signer.sign_transaction(transaction).await,
         }
     }
@@ -321,6 +328,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Turnkey(signer) => signer.sign_data(request).await,
             Self::Cdp(signer) => signer.sign_data(request).await,
             Self::AwsKms(signer) => signer.sign_data(request).await,
+            Self::AzureKeyVault(signer) => signer.sign_data(request).await,
             Self::GoogleCloudKms(signer) => signer.sign_data(request).await,
         }
     }
@@ -335,6 +343,7 @@ impl DataSignerTrait for EvmSigner {
             Self::Turnkey(signer) => signer.sign_typed_data(request).await,
             Self::Cdp(signer) => signer.sign_typed_data(request).await,
             Self::AwsKms(signer) => signer.sign_typed_data(request).await,
+            Self::AzureKeyVault(signer) => signer.sign_typed_data(request).await,
             Self::GoogleCloudKms(signer) => signer.sign_typed_data(request).await,
         }
     }
@@ -373,6 +382,14 @@ impl EvmSignerFactory {
                     SignerFactoryError::CreationFailed(format!("AWS KMS service error: {e}"))
                 })?;
                 EvmSigner::AwsKms(AwsKmsSigner::new(aws_service))
+            }
+            SignerConfig::AzureKeyVault(config) => {
+                let azure_service = AzureKeyVaultService::new(config).map_err(|e| {
+                    SignerFactoryError::CreationFailed(format!(
+                        "Azure Key Vault service error: {e}"
+                    ))
+                })?;
+                EvmSigner::AzureKeyVault(AzureKeyVaultSigner::new(azure_service))
             }
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()));

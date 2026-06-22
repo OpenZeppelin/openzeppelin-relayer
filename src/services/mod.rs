@@ -38,6 +38,9 @@ pub use google_cloud_kms::*;
 mod aws_kms;
 pub use aws_kms::*;
 
+mod azure_key_vault;
+pub use azure_key_vault::*;
+
 pub mod plugins;
 
 pub mod health;

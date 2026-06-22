@@ -15,7 +15,7 @@ use alloy::{
         client::ClientBuilder,
         types::{BlockNumberOrTag, FeeHistory, TransactionInput, TransactionRequest},
     },
-    transports::http::Http,
+    transports::http::{reqwest as alloy_reqwest, Http},
 };
 
 type EvmProviderType = FillProvider<
@@ -211,9 +211,13 @@ impl EvmProvider {
             .parse()
             .map_err(|e| ProviderError::NetworkConfiguration(format!("Invalid URL format: {e}")))?;
 
-        let client = super::build_rpc_http_client_with_timeout(std::time::Duration::from_secs(
-            self.timeout_seconds,
-        ))?;
+        // Build the HTTP client using alloy's re-exported reqwest so the Client
+        // type matches what alloy-transport-http expects, even when nightly cargo
+        // updates bump alloy (and its transitive reqwest) ahead of the direct
+        // reqwest dependency. All settings here MUST mirror
+        // `base_rpc_client_builder()` in `services::provider::mod` — in particular
+        // `use_rustls_tls()` and the secure redirect policy are SSRF-relevant.
+        let client = build_alloy_rpc_http_client(self.timeout_seconds)?;
 
         let mut transport = Http::new(rpc_url);
         transport.set_client(client);
@@ -262,6 +266,55 @@ impl EvmProvider {
         )
         .await
     }
+}
+
+/// Builds an `alloy_reqwest::Client` for EVM RPC transport with all the
+/// hardening that `services::provider::mod::base_rpc_client_builder` applies:
+/// connect/request timeouts, pool tuning, TCP+HTTP/2 keepalive, rustls TLS,
+/// and a same-host HTTP→HTTPS-only redirect policy (SSRF defense).
+///
+/// We can't simply call `base_rpc_client_builder()` because under nightly cargo
+/// updates alloy may pull in a different reqwest minor than the direct dep, so
+/// the `Client` type would mismatch at `Http::set_client`. The redirect policy
+/// logic is shared via [`crate::utils::evaluate_redirect_decision`] — both
+/// builders make the same security decision from the same pure core.
+fn build_alloy_rpc_http_client(
+    timeout_seconds: u64,
+) -> Result<alloy_reqwest::Client, ProviderError> {
+    use crate::utils::{evaluate_redirect_decision, RedirectDecision};
+    use alloy_reqwest::redirect::{Attempt, Policy};
+
+    let redirect_policy = Policy::custom(|attempt: Attempt| {
+        match evaluate_redirect_decision(attempt.url(), attempt.previous()) {
+            RedirectDecision::Follow => attempt.follow(),
+            RedirectDecision::Stop => attempt.stop(),
+        }
+    });
+
+    alloy_reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(
+            crate::constants::DEFAULT_HTTP_CLIENT_CONNECT_TIMEOUT_SECONDS,
+        ))
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
+        .pool_max_idle_per_host(crate::constants::DEFAULT_HTTP_CLIENT_POOL_MAX_IDLE_PER_HOST)
+        .pool_idle_timeout(std::time::Duration::from_secs(
+            crate::constants::DEFAULT_HTTP_CLIENT_POOL_IDLE_TIMEOUT_SECONDS,
+        ))
+        .tcp_keepalive(std::time::Duration::from_secs(
+            crate::constants::DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS,
+        ))
+        .http2_keep_alive_interval(Some(std::time::Duration::from_secs(
+            crate::constants::DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_INTERVAL_SECONDS,
+        )))
+        .http2_keep_alive_timeout(std::time::Duration::from_secs(
+            crate::constants::DEFAULT_HTTP_CLIENT_HTTP2_KEEP_ALIVE_TIMEOUT_SECONDS,
+        ))
+        .use_rustls_tls()
+        .redirect(redirect_policy)
+        .build()
+        .map_err(|e| {
+            ProviderError::NetworkConfiguration(format!("Failed to build RPC HTTP client: {e}"))
+        })
 }
 
 impl AsRef<EvmProvider> for EvmProvider {

@@ -248,7 +248,7 @@ jobs:
 
       # Upload coverage reports
       - name: Upload AI Coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1  # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: ai-coverage
@@ -256,7 +256,7 @@ jobs:
           flags: ai
           fail_ci_if_error: true
       - name: Upload Developer Coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1  # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: dev-coverage
@@ -322,7 +322,7 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: 1
         run: cargo hack llvm-cov --locked --ignore-filename-regex "(src/api/routes/docs/.*_docs\.rs$|src/repositories/.*/.*_redis\.rs$)" --lcov --output-path properties-lcov.info --test properties
       - name: Upload Properties Coverage to Codecov
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2  # v6.0.0
+        uses: codecov/codecov-action@e53489f4d376d79066609109e7a95a29eb3740b1  # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           name: properties-coverage

@@ -13,16 +13,17 @@
 use crate::{
     models::{
         signer::{
-            AwsKmsSignerConfig, CdpSignerConfig, GoogleCloudKmsSignerConfig,
-            GoogleCloudKmsSignerKeyConfig, GoogleCloudKmsSignerServiceAccountConfig,
-            LocalSignerConfig, Signer, SignerConfig, SignerValidationError, TurnkeySignerConfig,
-            VaultSignerConfig, VaultTransitSignerConfig,
+            AwsKmsSignerConfig, AzureKeyVaultAuthType, AzureKeyVaultSignerConfig, CdpSignerConfig,
+            GoogleCloudKmsSignerConfig, GoogleCloudKmsSignerKeyConfig,
+            GoogleCloudKmsSignerServiceAccountConfig, LocalSignerConfig, Signer, SignerConfig,
+            SignerValidationError, TurnkeySignerConfig, VaultSignerConfig,
+            VaultTransitSignerConfig,
         },
         SecretString,
     },
     utils::{
-        deserialize_secret_string, deserialize_secret_vec, serialize_secret_string,
-        serialize_secret_vec,
+        deserialize_option_secret_string, deserialize_secret_string, deserialize_secret_vec,
+        serialize_option_secret_string, serialize_secret_string, serialize_secret_vec,
     },
 };
 use secrets::SecretVec;
@@ -40,6 +41,7 @@ pub enum SignerConfigStorage {
     Vault(VaultSignerConfigStorage),
     VaultTransit(VaultTransitSignerConfigStorage),
     AwsKms(AwsKmsSignerConfigStorage),
+    AzureKeyVault(AzureKeyVaultSignerConfigStorage),
     Turnkey(TurnkeySignerConfigStorage),
     Cdp(CdpSignerConfigStorage),
     GoogleCloudKms(Box<GoogleCloudKmsSignerConfigStorage>),
@@ -76,6 +78,42 @@ impl From<LocalSignerConfigStorage> for LocalSignerConfig {
 pub struct AwsKmsSignerConfigStorage {
     pub region: Option<String>,
     pub key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AzureKeyVaultSignerConfigStorage {
+    pub auth_type: Option<AzureKeyVaultAuthType>,
+    #[serde(
+        serialize_with = "serialize_option_secret_string",
+        deserialize_with = "deserialize_option_secret_string"
+    )]
+    pub tenant_id: Option<SecretString>,
+    #[serde(
+        serialize_with = "serialize_option_secret_string",
+        deserialize_with = "deserialize_option_secret_string"
+    )]
+    pub client_id: Option<SecretString>,
+    #[serde(
+        serialize_with = "serialize_option_secret_string",
+        deserialize_with = "deserialize_option_secret_string"
+    )]
+    pub client_secret: Option<SecretString>,
+    #[serde(
+        serialize_with = "serialize_option_secret_string",
+        deserialize_with = "deserialize_option_secret_string"
+    )]
+    pub federated_token_file: Option<SecretString>,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub vault_url: SecretString,
+    #[serde(
+        serialize_with = "serialize_secret_string",
+        deserialize_with = "deserialize_secret_string"
+    )]
+    pub key_name: SecretString,
+    pub key_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +301,36 @@ impl From<AwsKmsSignerConfigStorage> for AwsKmsSignerConfig {
         Self {
             region: storage.region,
             key_id: storage.key_id,
+        }
+    }
+}
+
+impl From<AzureKeyVaultSignerConfig> for AzureKeyVaultSignerConfigStorage {
+    fn from(config: AzureKeyVaultSignerConfig) -> Self {
+        Self {
+            auth_type: config.auth_type,
+            tenant_id: config.tenant_id,
+            client_id: config.client_id,
+            client_secret: config.client_secret,
+            federated_token_file: config.federated_token_file,
+            vault_url: config.vault_url,
+            key_name: config.key_name,
+            key_version: config.key_version,
+        }
+    }
+}
+
+impl From<AzureKeyVaultSignerConfigStorage> for AzureKeyVaultSignerConfig {
+    fn from(storage: AzureKeyVaultSignerConfigStorage) -> Self {
+        Self {
+            auth_type: storage.auth_type,
+            tenant_id: storage.tenant_id,
+            client_id: storage.client_id,
+            client_secret: storage.client_secret,
+            federated_token_file: storage.federated_token_file,
+            vault_url: storage.vault_url,
+            key_name: storage.key_name,
+            key_version: storage.key_version,
         }
     }
 }
@@ -462,6 +530,7 @@ impl From<SignerConfig> for SignerConfigStorage {
                 SignerConfigStorage::VaultTransit(vault_transit.into())
             }
             SignerConfig::AwsKms(aws_kms) => SignerConfigStorage::AwsKms(aws_kms.into()),
+            SignerConfig::AzureKeyVault(azure) => SignerConfigStorage::AzureKeyVault(azure.into()),
             SignerConfig::Turnkey(turnkey) => SignerConfigStorage::Turnkey(turnkey.into()),
             SignerConfig::Cdp(cdp) => SignerConfigStorage::Cdp(cdp.into()),
             SignerConfig::GoogleCloudKms(gcp) => {
@@ -480,6 +549,7 @@ impl From<SignerConfigStorage> for SignerConfig {
                 SignerConfig::VaultTransit(vault_transit.into())
             }
             SignerConfigStorage::AwsKms(aws_kms) => SignerConfig::AwsKms(aws_kms.into()),
+            SignerConfigStorage::AzureKeyVault(azure) => SignerConfig::AzureKeyVault(azure.into()),
             SignerConfigStorage::Turnkey(turnkey) => SignerConfig::Turnkey(turnkey.into()),
             SignerConfigStorage::Cdp(cdp) => SignerConfig::Cdp(cdp.into()),
             SignerConfigStorage::GoogleCloudKms(gcp) => {
@@ -542,6 +612,14 @@ impl SignerConfigStorage {
     pub fn get_aws_kms(&self) -> Option<&AwsKmsSignerConfigStorage> {
         match self {
             Self::AwsKms(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get azure key vault signer config, returns error if not an azure key vault signer
+    pub fn get_azure_key_vault(&self) -> Option<&AzureKeyVaultSignerConfigStorage> {
+        match self {
+            Self::AzureKeyVault(config) => Some(config),
             _ => None,
         }
     }

@@ -304,6 +304,37 @@ impl ServerConfig {
         })
     }
 
+    /// Gets the GCP project ID for the Pub/Sub backend.
+    ///
+    /// Required when using the Pub/Sub queue backend (even against the emulator).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `PUBSUB_PROJECT_ID` is not set.
+    pub fn get_pubsub_project_id() -> Result<String, String> {
+        env::var("PUBSUB_PROJECT_ID")
+            .map_err(|_| "PUBSUB_PROJECT_ID not set. Required for the Pub/Sub backend.".to_string())
+    }
+
+    /// Gets the prefix applied to all Pub/Sub topic and subscription names.
+    ///
+    /// The separator is inserted by the name builders, so the prefix needs no
+    /// trailing `-` (topics are `{prefix}-{queue}`). Defaults to `relayer` when
+    /// not set.
+    pub fn get_pubsub_topic_prefix() -> String {
+        env::var("PUBSUB_TOPIC_PREFIX").unwrap_or_else(|_| "relayer".to_string())
+    }
+
+    /// Gets the Pub/Sub emulator host, if configured.
+    ///
+    /// When set (e.g. `localhost:8085`), the client targets the emulator and
+    /// skips authentication; Cloud Monitoring depth reads are unavailable.
+    pub fn get_pubsub_emulator_host() -> Option<String> {
+        env::var("PUBSUB_EMULATOR_HOST")
+            .ok()
+            .filter(|v| !v.is_empty())
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
@@ -717,6 +748,46 @@ mod tests {
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
         static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    #[test]
+    fn test_pubsub_config_getters() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::remove_var("PUBSUB_PROJECT_ID");
+        env::remove_var("PUBSUB_TOPIC_PREFIX");
+        env::remove_var("PUBSUB_EMULATOR_HOST");
+
+        // Defaults / required behavior when unset.
+        assert!(
+            ServerConfig::get_pubsub_project_id().is_err(),
+            "project id must be required (error) when unset"
+        );
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "relayer");
+        assert_eq!(ServerConfig::get_pubsub_emulator_host(), None);
+
+        // Custom values.
+        env::set_var("PUBSUB_PROJECT_ID", "my-project");
+        env::set_var("PUBSUB_TOPIC_PREFIX", "test");
+        env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085");
+
+        assert_eq!(ServerConfig::get_pubsub_project_id().unwrap(), "my-project");
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "test");
+        assert_eq!(
+            ServerConfig::get_pubsub_emulator_host(),
+            Some("localhost:8085".to_string())
+        );
+
+        // Empty emulator host is treated as unset.
+        env::set_var("PUBSUB_EMULATOR_HOST", "");
+        assert_eq!(ServerConfig::get_pubsub_emulator_host(), None);
+
+        env::remove_var("PUBSUB_PROJECT_ID");
+        env::remove_var("PUBSUB_TOPIC_PREFIX");
+        env::remove_var("PUBSUB_EMULATOR_HOST");
     }
 
     fn setup() {

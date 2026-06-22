@@ -82,7 +82,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
     vec![
         QueueHealth {
             queue_type: QueueType::TransactionRequest,
-            messages_visible: 0, // Would need Redis LLEN query
+            messages_visible: Some(0), // Would need Redis LLEN query
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -90,7 +90,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::TransactionSubmission,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -98,7 +98,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::StatusCheck,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -106,7 +106,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::StatusCheckEvm,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -114,7 +114,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::StatusCheckStellar,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -122,7 +122,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::Notification,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -130,7 +130,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::TokenSwapRequest,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -138,7 +138,7 @@ fn static_redis_health_statuses() -> Vec<QueueHealth> {
         },
         QueueHealth {
             queue_type: QueueType::RelayerHealthCheck,
-            messages_visible: 0,
+            messages_visible: Some(0),
             messages_in_flight: 0,
             messages_dlq: 0,
             backend: "redis".to_string(),
@@ -453,7 +453,7 @@ mod tests {
         let statuses = static_redis_health_statuses();
         assert!(!statuses.is_empty());
         for status in statuses {
-            assert_eq!(status.messages_visible, 0);
+            assert_eq!(status.messages_visible, Some(0));
             assert_eq!(status.messages_in_flight, 0);
             assert_eq!(status.messages_dlq, 0);
         }

@@ -1,0 +1,104 @@
+---
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: pubsub
+      DISTRIBUTED_MODE: 'false'
+      PUBSUB_PROJECT_ID: test-project
+      PUBSUB_TOPIC_PREFIX: relayer
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      redis:
+        condition: service_started
+      pubsub-emulator:
+        condition: service_healthy
+      pubsub-init:
+        condition: service_completed_successfully
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    # Published to the host so host-side tooling and the gated emulator tests
+    # (PUBSUB_EMULATOR_HOST=localhost:8085) can reach it directly.
+    ports:
+      - 8085:8085/tcp
+    command:
+      - gcloud
+      - beta
+      - emulators
+      - pubsub
+      - start
+      - --host-port=0.0.0.0:8085
+      - --project=test-project
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - curl -sf http://localhost:8085/v1/projects/test-project/topics >/dev/null 2>&1
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - relayer-network
+    restart: on-failure:5
+  pubsub-init:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:emulators
+    environment:
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+      PUBSUB_PROJECT_ID: test-project
+      PUBSUB_TOPIC_PREFIX: relayer
+    depends_on:
+      pubsub-emulator:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - /scripts/init-pubsub.sh
+    volumes:
+      - ./scripts/init-pubsub.sh:/scripts/init-pubsub.sh:ro
+    networks:
+      - relayer-network
+    restart: 'no'
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
