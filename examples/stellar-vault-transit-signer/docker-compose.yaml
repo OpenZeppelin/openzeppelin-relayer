@@ -26,6 +26,7 @@ services:
       - ../../config/networks:/app/config/networks
     depends_on:
       - redis
+      - vault
     restart: on-failure:5
   redis:
     image: redis:bookworm

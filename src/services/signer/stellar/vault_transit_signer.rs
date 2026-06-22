@@ -38,37 +38,46 @@ where
 }
 
 impl VaultTransitSigner<DefaultVaultService> {
-    pub fn new(signer_model: &SignerDomainModel, vault_service: DefaultVaultService) -> Self {
+    /// Builds a Stellar Vault Transit signer from a validated signer model.
+    pub fn new(
+        signer_model: &SignerDomainModel,
+        vault_service: DefaultVaultService,
+    ) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_vault_transit()
-            .expect("vault transit config not found");
+            .ok_or_else(|| SignerError::Configuration("vault transit config not found".into()))?;
 
-        Self {
+        Ok(Self {
             vault_service,
             pubkey: config.pubkey.clone(),
             key_name: config.key_name.clone(),
             cached_hint: OnceCell::new(),
-        }
+        })
     }
 }
 
 #[cfg(test)]
 impl<T: VaultServiceTrait> VaultTransitSigner<T> {
-    pub fn new_with_service(signer_model: &SignerDomainModel, vault_service: T) -> Self {
+    /// Builds a test signer from a signer model and injected Vault service.
+    pub fn new_with_service(
+        signer_model: &SignerDomainModel,
+        vault_service: T,
+    ) -> Result<Self, SignerError> {
         let config = signer_model
             .config
             .get_vault_transit()
-            .expect("vault transit config not found");
+            .ok_or_else(|| SignerError::Configuration("vault transit config not found".into()))?;
 
-        Self {
+        Ok(Self {
             vault_service,
             pubkey: config.pubkey.clone(),
             key_name: config.key_name.clone(),
             cached_hint: OnceCell::new(),
-        }
+        })
     }
 
+    /// Builds a test signer directly from raw constructor inputs.
     pub fn new_for_testing(key_name: String, pubkey: String, vault_service: T) -> Self {
         Self {
             vault_service,
@@ -80,6 +89,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
 }
 
 impl<T: VaultServiceTrait> VaultTransitSigner<T> {
+    /// Converts the configured Vault Transit public key into a Stellar address.
     fn stellar_address_from_pubkey(&self) -> Result<Address, SignerError> {
         let raw_pubkey =
             base64_decode(&self.pubkey).map_err(|e| SignerError::KeyError(e.to_string()))?;
@@ -94,6 +104,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         Ok(Address::Stellar(stellar_address))
     }
 
+    /// Requests a signature from Vault Transit and validates the Ed25519 length.
     async fn sign_hash(&self, hash: &[u8]) -> Result<Vec<u8>, SignerError> {
         let vault_signature_str = self.vault_service.sign(&self.key_name, hash).await?;
 
@@ -116,6 +127,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         Ok(signature_bytes)
     }
 
+    /// Signs a parsed Stellar envelope using Vault Transit.
     async fn sign_envelope(
         &self,
         envelope: &TransactionEnvelope,
@@ -134,6 +146,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         self.create_decorated_signature(signature_bytes).await
     }
 
+    /// Signs an operations-based Stellar transaction by constructing its signature payload.
     async fn sign_transaction_directly(
         &self,
         transaction: &Transaction,
@@ -151,6 +164,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         self.create_decorated_signature(signature_bytes).await
     }
 
+    /// Wraps raw signature bytes with the cached Stellar signature hint.
     async fn create_decorated_signature(
         &self,
         signature_bytes: Vec<u8>,
@@ -169,6 +183,7 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         })
     }
 
+    /// Computes and caches the Stellar signature hint derived from the configured public key.
     async fn get_signature_hint(&self) -> Result<SignatureHint, SignerError> {
         self.cached_hint
             .get_or_try_init(|| async {
@@ -182,10 +197,12 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
 
 #[async_trait]
 impl<T: VaultServiceTrait> Signer for VaultTransitSigner<T> {
+    /// Returns the Stellar address derived from the configured Vault Transit public key.
     async fn address(&self) -> Result<Address, SignerError> {
         self.stellar_address_from_pubkey()
     }
 
+    /// Signs Stellar transaction data using Vault Transit for either operations or XDR inputs.
     async fn sign_transaction(
         &self,
         tx: NetworkTransactionData,
@@ -233,6 +250,7 @@ impl<T: VaultServiceTrait> Signer for VaultTransitSigner<T> {
 
 #[async_trait]
 impl<T: VaultServiceTrait> StellarSignTrait for VaultTransitSigner<T> {
+    /// Signs an unsigned Stellar XDR envelope and returns the signed XDR plus decorated signature.
     async fn sign_xdr_transaction(
         &self,
         unsigned_xdr: &str,
@@ -267,27 +285,32 @@ mod tests {
     use super::*;
     use crate::{
         models::{
-            SecretString, SignerConfig, StellarTransactionData, TransactionInput,
-            VaultTransitSignerConfig,
+            LocalSignerConfig, SecretString, SignerConfig, StellarTransactionData,
+            TransactionInput, VaultTransitSignerConfig,
         },
         services::{vault::VaultError, MockVaultServiceTrait},
     };
     use base64::Engine;
     use mockall::predicate::*;
+    use secrets::SecretVec;
     use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
 
+    /// Returns deterministic public key bytes for Vault Transit unit tests.
     fn create_test_public_key_bytes() -> [u8; 32] {
         [7u8; 32]
     }
 
+    /// Encodes the deterministic test public key as base64, matching Vault output format.
     fn create_test_pubkey_base64() -> String {
         base64::engine::general_purpose::STANDARD.encode(create_test_public_key_bytes())
     }
 
+    /// Converts the deterministic test public key into a Stellar account address.
     fn create_test_address() -> String {
         stellar_strkey::ed25519::PublicKey(create_test_public_key_bytes()).to_string()
     }
 
+    /// Builds a valid Vault Transit signer model for Stellar unit tests.
     fn create_test_signer_model() -> SignerDomainModel {
         SignerDomainModel {
             id: "test-vault-transit-signer".to_string(),
@@ -303,6 +326,7 @@ mod tests {
         }
     }
 
+    /// Creates a minimal unsigned Stellar XDR envelope for signing tests.
     fn create_unsigned_xdr(source_address: &str) -> String {
         let source_pk = stellar_strkey::ed25519::PublicKey::from_string(source_address).unwrap();
         let tx = TransactionV0 {
@@ -324,17 +348,38 @@ mod tests {
     }
 
     #[test]
+    /// Verifies that constructor state is copied from Vault Transit config.
     fn test_new_with_service() {
         let model = create_test_signer_model();
         let mock_vault_service = MockVaultServiceTrait::new();
 
-        let signer = VaultTransitSigner::new_with_service(&model, mock_vault_service);
+        let signer = VaultTransitSigner::new_with_service(&model, mock_vault_service).unwrap();
 
         assert_eq!(signer.key_name, "transit-key");
         assert_eq!(signer.pubkey, create_test_pubkey_base64());
     }
 
+    #[test]
+    /// Verifies that missing Vault Transit config surfaces as a configuration error.
+    fn test_new_with_service_missing_config_returns_error() {
+        let model = SignerDomainModel {
+            id: "test-vault-transit-signer".to_string(),
+            config: SignerConfig::Local(LocalSignerConfig {
+                raw_key: SecretVec::new(32, |v| v.copy_from_slice(&[1u8; 32])),
+            }),
+        };
+        let mock_vault_service = MockVaultServiceTrait::new();
+
+        let result = VaultTransitSigner::new_with_service(&model, mock_vault_service);
+
+        assert!(matches!(
+            result,
+            Err(SignerError::Configuration(ref msg)) if msg == "vault transit config not found"
+        ));
+    }
+
     #[tokio::test]
+    /// Verifies that address resolution returns the expected Stellar StrKey.
     async fn test_address_returns_stellar_strkey() {
         let mock_vault_service = MockVaultServiceTrait::new();
         let signer = VaultTransitSigner::new_for_testing(
@@ -348,6 +393,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies that a signed XDR response contains a decorated signature and signed envelope.
     async fn test_sign_xdr_transaction_success() {
         let test_address = create_test_address();
         let unsigned_xdr = create_unsigned_xdr(&test_address);
@@ -387,6 +433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies that invalid signature sizes returned by Vault Transit are rejected.
     async fn test_sign_transaction_invalid_signature_length() {
         let mut mock_vault_service = MockVaultServiceTrait::new();
         mock_vault_service.expect_sign().times(1).returning(|_, _| {
@@ -430,6 +477,7 @@ mod tests {
     }
 
     #[tokio::test]
+    /// Verifies that Vault signing failures propagate through transaction signing.
     async fn test_sign_propagates_vault_error() {
         let mut mock_vault_service = MockVaultServiceTrait::new();
         mock_vault_service.expect_sign().times(1).returning(|_, _| {
