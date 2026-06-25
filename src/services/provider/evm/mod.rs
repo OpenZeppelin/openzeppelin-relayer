@@ -542,9 +542,11 @@ impl EvmProviderTrait for EvmProvider {
         tx: &TransactionRequest,
         block_number: u64,
     ) -> Result<Option<Bytes>, ProviderError> {
-        // A revert is a non-retriable `ErrorResp`; we extract its `data` field directly here,
-        // before the lossy `From<RpcError>` conversion would drop it. Only genuine transport
-        // errors are returned as `Err` (and may be retried by the selector).
+        // A revert surfaces as an `ErrorResp` carrying the payload in its `data` field; we extract
+        // it directly here, before the lossy `From<RpcError>` conversion would drop it. Error
+        // responses that carry no revert data (rate limits, internal errors, etc.) are forwarded as
+        // `Err` so the selector can retry/failover on retriable codes instead of mistaking a
+        // transient failure for "no revert data".
         self.retry_rpc_call("get_call_revert_data", move |provider| {
             let tx_req = tx.clone();
             async move {
@@ -555,9 +557,18 @@ impl EvmProviderTrait for EvmProvider {
                 {
                     // The call unexpectedly succeeded: no revert data to surface.
                     Ok(_) => Ok(None),
-                    // A reverting call returns a JSON-RPC error whose `data` holds the payload.
-                    Err(RpcError::ErrorResp(payload)) => Ok(payload.as_revert_data()),
-                    Err(e) => Err(ProviderError::from(e)),
+                    Err(e) => {
+                        // A reverting call returns a JSON-RPC error whose `data` holds the payload.
+                        let revert_data = match &e {
+                            RpcError::ErrorResp(payload) => payload.as_revert_data(),
+                            _ => None,
+                        };
+                        match revert_data {
+                            Some(data) => Ok(Some(data)),
+                            // Not an actual revert: surface as an error so retry/failover applies.
+                            None => Err(ProviderError::from(e)),
+                        }
+                    }
                 }
             }
         })

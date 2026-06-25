@@ -20,7 +20,7 @@ use super::{
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
+    DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -44,8 +44,23 @@ use crate::{
 /// recovered (or recovery is disabled). Kept byte-for-byte for consumers that match on it.
 const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt status: failed)";
 
-/// Reconstructs a minimal `eth_call` request from persisted transaction data, with only the
-/// fields needed to reproduce the call as a state read.
+/// Upper bound (in characters) on the revert-data hex embedded in `status_reason`. Revert payloads
+/// are normally tiny, but they are RPC/contract-controlled, so we cap the recovered hex before it
+/// is persisted to avoid an oversized DB write or notification payload.
+const MAX_REVERT_DATA_HEX_LEN: usize = 4096;
+
+/// Caps an overlong revert-data hex string to [`MAX_REVERT_DATA_HEX_LEN`], appending a marker so
+/// consumers can tell the payload was clipped. The hex is ASCII, so slicing on a byte index is safe.
+fn truncate_revert_hex(hex: &str) -> String {
+    if hex.len() <= MAX_REVERT_DATA_HEX_LEN {
+        return hex.to_string();
+    }
+    format!("{}...(truncated)", &hex[..MAX_REVERT_DATA_HEX_LEN])
+}
+
+/// Reconstructs an `eth_call` request from persisted transaction data to reproduce the call as a
+/// state read. The fee fields (gas price / EIP-1559 caps) are carried through because contracts
+/// can branch on `tx.gasprice`, which would otherwise change the revert path versus the mined tx.
 fn build_revert_call_request(
     evm_data: &EvmTransactionData,
 ) -> Result<TransactionRequest, TransactionError> {
@@ -70,6 +85,9 @@ fn build_revert_call_request(
         value: Some(evm_data.value),
         input: TransactionInput::from(input),
         gas: evm_data.gas_limit,
+        gas_price: evm_data.gas_price,
+        max_fee_per_gas: evm_data.max_fee_per_gas,
+        max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
         ..Default::default()
     })
 }
@@ -1101,7 +1119,7 @@ where
             .policies
             .get_evm_policy()
             .include_revert_data
-            .unwrap_or(true)
+            .unwrap_or(DEFAULT_EVM_INCLUDE_REVERT_DATA)
         {
             debug!(
                 tx_id = %tx.id,
@@ -1111,7 +1129,10 @@ where
         }
 
         match self.recover_revert_data(tx).await {
-            Some(hex) => format!("Transaction reverted on-chain (revert_data: {hex})"),
+            Some(hex) => {
+                let hex = truncate_revert_hex(&hex);
+                format!("Transaction reverted on-chain (revert_data: {hex})")
+            }
             None => REVERT_REASON_GENERIC.to_string(),
         }
     }
@@ -3234,6 +3255,9 @@ mod tests {
             mocks
                 .provider
                 .expect_get_call_revert_data()
+                // The reconstructed call must carry the persisted fee context (legacy gas_price
+                // here) so contracts that branch on tx.gasprice revert as they did on-chain.
+                .withf(|req, _block| req.gas_price == Some(20000000000))
                 .returning(|_, _| {
                     Box::pin(async { Ok(Some(Bytes::from(hex::decode("08c379a0").unwrap()))) })
                 });
