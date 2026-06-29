@@ -115,6 +115,19 @@ where
                 );
                 return Ok(TransactionStatus::Mined);
             }
+            // A confirmed NOOP that replaced a user-cancelled transaction is terminal
+            // as Canceled, not Confirmed: the relayer kept tracking and resubmitting it
+            // until it mined (consuming the nonce so the original could never execute),
+            // but from the user's perspective the transaction was cancelled.
+            if tx.is_canceled == Some(true) && is_noop(&evm_data) {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    tx_hash = %tx_hash,
+                    "cancellation NOOP confirmed on-chain; marking transaction as Canceled"
+                );
+                return Ok(TransactionStatus::Canceled);
+            }
             Ok(TransactionStatus::Confirmed)
         } else {
             debug!(
@@ -1608,6 +1621,78 @@ mod tests {
                 .return_once(|| Box::pin(async { Ok(113) }));
 
             // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Confirmed);
+        }
+
+        /// A confirmed NOOP that replaced a user-cancelled transaction must terminate
+        /// as Canceled rather than Confirmed, so the user sees the cancellation reflected
+        /// once the nonce-consuming NOOP actually mines.
+        #[tokio::test]
+        async fn test_cancellation_noop_confirmed_becomes_canceled() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.is_canceled = Some(true);
+
+            // Shape the network data as a cancellation NOOP (value 0, data "0x", to == from).
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xNoopHash".to_string());
+                evm_data.value = U256::from(0);
+                evm_data.data = Some("0x".to_string());
+                evm_data.to = Some(evm_data.from.clone());
+            }
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Canceled);
+        }
+
+        /// A confirmed NOOP that is NOT a user cancellation (is_canceled=false) — e.g. a
+        /// nonce-clearing NOOP from timeout handling — must still confirm normally.
+        #[tokio::test]
+        async fn test_non_cancellation_noop_confirmed_stays_confirmed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            // is_canceled stays Some(false) from the helper.
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xNoopHash".to_string());
+                evm_data.value = U256::from(0);
+                evm_data.data = Some("0x".to_string());
+                evm_data.to = Some(evm_data.from.clone());
+            }
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
             mocks
                 .network_repo
                 .expect_get_by_chain_id()
