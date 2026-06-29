@@ -559,15 +559,24 @@ where
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     let pagination = PaginationQuery::from(query.clone());
-    let mut transactions = match &query.status {
+    let transactions = match &query.status {
         Some(status) => {
+            // Hide cancelled-in-progress transactions from active-status listings: a
+            // cancelled tx keeps its non-terminal status with is_canceled=true until its
+            // replacement NOOP mines (then it becomes Canceled), so without this it would
+            // still appear under e.g. ?status=Submitted. We only exclude for non-terminal
+            // statuses, so ?status=Canceled still returns settled cancellations. The
+            // exclusion is applied in the repository (before pagination) so the page and
+            // total stay consistent.
+            let exclude_canceled = !is_final_state(status);
             state
                 .transaction_repository
-                .find_by_status_paginated(
+                .find_by_status_paginated_filtered(
                     &relayer_id,
                     std::slice::from_ref(status),
                     pagination,
                     false,
+                    exclude_canceled,
                 )
                 .await?
         }
@@ -578,19 +587,6 @@ where
                 .await?
         }
     };
-
-    // Hide cancelled-in-progress transactions from active-status listings. A cancelled
-    // transaction keeps its non-terminal status with is_canceled=true until its
-    // replacement NOOP mines (at which point it becomes Canceled), so without this it
-    // would still appear under e.g. ?status=Submitted. This filters the already-paginated
-    // page, so `total` may briefly overcount during the cancel->mine window; the drift is
-    // transient and self-healing. Terminal-status queries (e.g. ?status=Canceled) are
-    // unaffected, so the settled transaction remains visible there.
-    if let Some(status) = &query.status {
-        if !is_final_state(status) {
-            transactions.items.retain(|t| t.is_canceled != Some(true));
-        }
-    }
 
     let transaction_response_list: Vec<TransactionResponse> =
         transactions.items.into_iter().map(|t| t.into()).collect();
