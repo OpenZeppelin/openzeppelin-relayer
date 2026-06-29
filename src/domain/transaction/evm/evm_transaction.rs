@@ -1260,18 +1260,18 @@ where
                 .await;
         }
 
-        let mut update = self
+        // Build the NOOP replacement. The transaction keeps its active status
+        // (Sent/Submitted) and is marked is_canceled=true, so it is still tracked,
+        // resubmitted, and recovered by the normal status machinery until the NOOP
+        // actually mines — at which point it transitions to Canceled (see status.rs).
+        // The is_canceled flag excludes it from active-status API views immediately.
+        let update = self
             .prepare_noop_update_request(
                 &tx,
                 true,
                 Some("Transaction canceled by user, replacing with NOOP".to_string()),
             )
             .await?;
-        // Immediately mark the transaction as Canceled so it no longer appears in
-        // active-status queries. The noop replacement is still submitted on-chain to
-        // prevent the original transaction from mining, but the relayer treats this
-        // as a terminal state from this point on.
-        update.status = Some(TransactionStatus::Canceled);
 
         let updated_tx = self
             .transaction_repository()
@@ -2168,6 +2168,7 @@ mod tests {
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.network_data =
                         update.network_data.unwrap_or(updated_tx.network_data);
+                    updated_tx.is_canceled = update.is_canceled.or(updated_tx.is_canceled);
                     if let Some(hashes) = update.hashes {
                         updated_tx.hashes = hashes;
                     }
@@ -2237,8 +2238,10 @@ mod tests {
 
             // Verify the cancellation transaction was properly created
             assert_eq!(cancelled_tx.id, "test-tx-id");
-            // Status is immediately set to Canceled; the noop is submitted asynchronously.
-            assert_eq!(cancelled_tx.status, TransactionStatus::Canceled);
+            // The tx keeps its active status until the NOOP mines; is_canceled excludes
+            // it from active-status API views in the meantime.
+            assert_eq!(cancelled_tx.status, TransactionStatus::Submitted);
+            assert_eq!(cancelled_tx.is_canceled, Some(true));
 
             // Verify the network data was properly updated
             if let NetworkTransactionData::Evm(evm_data) = &cancelled_tx.network_data {
