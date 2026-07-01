@@ -205,10 +205,6 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         warn!(tx_id = %tx.id, reason = %reason, "marking transaction as failed");
 
-        // Terminal state: advance the per-account submission watermark so this dead
-        // sequence does not block the next one (concurrent mode; no-op otherwise).
-        self.advance_submit_gate_on_terminal(&tx);
-
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
             status_reason: Some(reason),
@@ -234,10 +230,6 @@ where
         reason: String,
     ) -> Result<TransactionRepoModel, TransactionError> {
         info!(tx_id = %tx.id, reason = %reason, "marking transaction as expired");
-
-        // Terminal state: advance the per-account submission watermark so this dead
-        // sequence does not block the next one (concurrent mode; no-op otherwise).
-        self.advance_submit_gate_on_terminal(&tx);
 
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Expired),

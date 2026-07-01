@@ -16,8 +16,6 @@ pub use token::*;
 mod lane_gate;
 pub use lane_gate::*;
 
-pub mod submit_gate;
-
 // Re-export common transaction utilities
 pub use crate::domain::transaction::common::is_final_state;
 

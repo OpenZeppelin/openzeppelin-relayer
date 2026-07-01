@@ -7,16 +7,11 @@ use tracing::{debug, info, warn};
 
 use super::{
     is_final_state,
-    prepare::common::send_submit_transaction_job,
-    submit_gate::{self, Admission},
-    utils::{
-        decode_transaction_result_code, fetch_next_sequence_from_chain, is_bad_sequence_error,
-        is_insufficient_fee_error,
-    },
+    utils::{decode_transaction_result_code, is_bad_sequence_error, is_insufficient_fee_error},
     StellarRelayerTransaction,
 };
 use crate::{
-    constants::{STELLAR_INSUFFICIENT_FEE_MAX_RETRIES, STELLAR_SUBMIT_ORDER_RETRY_DELAY_SECONDS},
+    constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
     jobs::JobProducerTrait,
     metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE},
     models::{
@@ -29,17 +24,6 @@ use crate::{
         signer::{Signer, StellarSignTrait},
     },
 };
-
-/// Distinguishes failures that occur before the transaction ever reaches the
-/// network (gate seeding, deferral re-enqueue, envelope construction) from
-/// failures that occur during or after the `send_transaction_with_status` RPC
-/// call. Pre-submission failures must never advance the submit-gate watermark
-/// or mark the transaction terminally Failed, since the sequence was never
-/// consumed on-chain.
-enum SubmitCoreError {
-    PreSubmission(TransactionError),
-    PostSubmission(TransactionError),
-}
 
 impl<R, T, J, S, P, C, D> StellarRelayerTransaction<R, T, J, S, P, C, D>
 where
@@ -91,23 +75,7 @@ where
         // Call core submission logic with error handling
         match self.submit_core(tx.clone()).await {
             Ok(submitted_tx) => Ok(submitted_tx),
-            Err(SubmitCoreError::PreSubmission(error)) => {
-                // The failure occurred before the transaction ever reached the network
-                // (gate seeding, deferral re-enqueue, or envelope construction). The
-                // sequence was never consumed on-chain, so it must NOT be marked
-                // terminally Failed and the submit-gate watermark must NOT advance —
-                // doing so would let a later sequence be admitted out of order.
-                // Leave the transaction as-is; the status checker's existing
-                // Sent/Pending backoff will re-drive submission for this tx.
-                warn!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    error = %error,
-                    "pre-submission failure, leaving transaction for status checker to retry"
-                );
-                Ok(tx)
-            }
-            Err(SubmitCoreError::PostSubmission(error)) => {
+            Err(error) => {
                 // Handle submission failure - mark as failed and send notification
                 self.handle_submit_failure(tx, error).await
             }
@@ -127,64 +95,11 @@ where
     async fn submit_core(
         &self,
         tx: TransactionRepoModel,
-    ) -> Result<TransactionRepoModel, SubmitCoreError> {
-        let stellar_data = tx
-            .network_data
-            .get_stellar_transaction_data()
-            .map_err(SubmitCoreError::PostSubmission)?;
-        let source_account = stellar_data.source_account.clone();
-        let sequence_number = stellar_data.sequence_number;
-
-        // Per-account ordered submission gate (Constitution III). Only engaged for
-        // concurrent-mode relayers — lane-gated relayers are already serialized.
-        // The gate guards ONLY the ordering decision; it is not held across the RPC.
-        if self.concurrent_transactions_enabled() {
-            if let Some(seq) = sequence_number {
-                let relayer_id = &self.relayer().id;
-                // Seed the watermark from chain only on first sight (or after a reset);
-                // once seeded, subsequent submits skip the chain round-trip.
-                let chain_floor = match submit_gate::peek(relayer_id, &source_account) {
-                    Some(watermark) => watermark,
-                    None => fetch_next_sequence_from_chain(self.provider(), &source_account)
-                        .await
-                        .map_err(|e| {
-                            SubmitCoreError::PreSubmission(TransactionError::UnexpectedError(
-                                format!("Failed to fetch sequence floor for submit gate: {e}"),
-                            ))
-                        })? as i64,
-                };
-
-                if submit_gate::try_admit(relayer_id, &source_account, seq, chain_floor)
-                    == Admission::TooEarly
-                {
-                    info!(
-                        tx_id = %tx.id,
-                        relayer_id = %relayer_id,
-                        sequence = seq,
-                        next_expected = chain_floor,
-                        "submit deferred: sequence ahead of account watermark, re-enqueuing submit job"
-                    );
-                    send_submit_transaction_job(
-                        self.job_producer(),
-                        &tx,
-                        Some(STELLAR_SUBMIT_ORDER_RETRY_DELAY_SECONDS),
-                    )
-                    .await
-                    .map_err(SubmitCoreError::PreSubmission)?;
-                    return Ok(tx);
-                }
-            }
-        }
-
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let stellar_data = tx.network_data.get_stellar_transaction_data()?;
         let tx_envelope = stellar_data
             .get_envelope_for_submission()
-            .map_err(TransactionError::from)
-            // A malformed/unbuildable envelope is a permanent, terminal failure: it will
-            // not self-heal on retry, so mark the tx Failed (and, in concurrent mode,
-            // advance the gate so a dead sequence N does not deadlock N+1 — the resulting
-            // on-chain gap self-heals via bad-sequence recovery). Only the transient gate
-            // paths (chain-floor seed fetch, TooEarly re-enqueue) are PreSubmission.
-            .map_err(SubmitCoreError::PostSubmission)?;
+            .map_err(TransactionError::from)?;
 
         // Use send_transaction_with_status to get full status information
         let response = self
@@ -195,20 +110,12 @@ where
                 STELLAR_SUBMISSION_FAILURES
                     .with_label_values(&["provider_error", "n/a"])
                     .inc();
-                SubmitCoreError::PostSubmission(TransactionError::from(e))
+                TransactionError::from(e)
             })?;
 
         // Handle status codes from the RPC response
         match response.status.as_str() {
             "PENDING" | "DUPLICATE" => {
-                // Success — advance the per-account submission watermark so the next
-                // sequence becomes admissible (concurrent mode only; no-op otherwise).
-                if self.concurrent_transactions_enabled() {
-                    if let Some(seq) = sequence_number {
-                        submit_gate::record_submitted(&self.relayer().id, &source_account, seq);
-                    }
-                }
-
                 // Success - transaction is accepted or already exists
                 if response.status == "DUPLICATE" {
                     info!(
@@ -237,9 +144,7 @@ where
                 let updated_tx = self
                     .transaction_repository()
                     .partial_update(tx.id.clone(), update_req)
-                    .await
-                    .map_err(TransactionError::from)
-                    .map_err(SubmitCoreError::PostSubmission)?;
+                    .await?;
 
                 // Send notification for newly submitted transaction
                 if response.status == "PENDING" {
@@ -264,9 +169,7 @@ where
                 let updated_tx = self
                     .transaction_repository()
                     .record_stellar_try_again_later_retry(tx.id.clone(), Utc::now().to_rfc3339())
-                    .await
-                    .map_err(TransactionError::from)
-                    .map_err(SubmitCoreError::PostSubmission)?;
+                    .await?;
 
                 let retries = updated_tx
                     .metadata
@@ -317,11 +220,9 @@ where
                         STELLAR_SUBMISSION_FAILURES
                             .with_label_values(&["error", "tx_insufficient_fee"])
                             .inc();
-                        return Err(SubmitCoreError::PostSubmission(
-                            TransactionError::UnexpectedError(format!(
-                                "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
-                            )),
-                        ));
+                        return Err(TransactionError::UnexpectedError(format!(
+                            "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+                        )));
                     }
 
                     debug!(
@@ -339,9 +240,7 @@ where
                             tx.id.clone(),
                             Utc::now().to_rfc3339(),
                         )
-                        .await
-                        .map_err(TransactionError::from)
-                        .map_err(SubmitCoreError::PostSubmission)?;
+                        .await?;
                     return Ok(updated_tx);
                 }
                 STELLAR_SUBMISSION_FAILURES
@@ -350,12 +249,10 @@ where
                         decoded_result_code.as_deref().unwrap_or("unknown"),
                     ])
                     .inc();
-                Err(SubmitCoreError::PostSubmission(
-                    TransactionError::UnexpectedError(format!(
-                        "Transaction submission error: {}",
-                        decoded_result_code.unwrap_or(error_detail)
-                    )),
-                ))
+                Err(TransactionError::UnexpectedError(format!(
+                    "Transaction submission error: {}",
+                    decoded_result_code.unwrap_or(error_detail)
+                )))
             }
             unknown => {
                 // Unknown status - treat as error
@@ -368,29 +265,9 @@ where
                     status = %unknown,
                     "received unknown transaction status from RPC"
                 );
-                Err(SubmitCoreError::PostSubmission(
-                    TransactionError::UnexpectedError(format!(
-                        "Unknown transaction status: {unknown}"
-                    )),
-                ))
-            }
-        }
-    }
-
-    /// Advance the per-account submission watermark when `tx` reaches a terminal
-    /// state (Failed/Expired), so a dead sequence `N` can never block `N+1` forever.
-    /// No-op outside concurrent mode or for seq-less data.
-    pub(super) fn advance_submit_gate_on_terminal(&self, tx: &TransactionRepoModel) {
-        if !self.concurrent_transactions_enabled() {
-            return;
-        }
-        if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
-            if let Some(seq) = stellar_data.sequence_number {
-                submit_gate::advance_on_terminal(
-                    &self.relayer().id,
-                    &stellar_data.source_account,
-                    seq,
-                );
+                Err(TransactionError::UnexpectedError(format!(
+                    "Unknown transaction status: {unknown}"
+                )))
             }
         }
     }
@@ -437,11 +314,6 @@ where
                     relayer_id = %relayer_id,
                     "syncing sequence from chain after bad sequence error"
                 );
-                // Re-seed the ordering gate from chain alongside the counter so both
-                // recover consistently (the counter via monotonic `sync_floor`, the
-                // gate by clearing its watermark so the next submit re-seeds).
-                submit_gate::reset(&relayer_id, &stellar_data.source_account);
-
                 match self
                     .sync_sequence_from_chain(&stellar_data.source_account)
                     .await
@@ -495,11 +367,7 @@ where
             }
         }
 
-        // For non-bad-sequence errors or if reset failed, mark as failed.
-        // This sequence is now dead — advance the ordering watermark so the next
-        // sequence for this account is not blocked behind it.
-        self.advance_submit_gate_on_terminal(&tx);
-
+        // For non-bad-sequence errors or if reset failed, mark as failed
         // Step 1: Mark transaction as Failed with detailed reason
         let update_request = TransactionUpdateRequest {
             status: Some(TransactionStatus::Failed),
@@ -1625,341 +1493,6 @@ mod tests {
             let returned_tx = res.unwrap();
             // Reloaded state reflects the concurrent writer's update
             assert_eq!(returned_tx.status, TransactionStatus::Submitted);
-        }
-    }
-
-    /// Integration coverage for the per-account ordered submission gate (D5).
-    /// The gate's pure logic is unit-tested in `submit_gate`; these verify the
-    /// wiring into `submit_core` and the terminal-state watermark advance.
-    mod submit_gate_integration_tests {
-        use super::*;
-        use crate::domain::transaction::stellar::submit_gate;
-        use crate::models::{RelayerNetworkPolicy, RelayerStellarPolicy, RepositoryError};
-        use soroban_rs::xdr::{
-            AccountEntry, AccountEntryExt, PublicKey as XdrPublicKey, SequenceNumber, String32,
-            Thresholds, Uint256,
-        };
-
-        fn concurrent_relayer(id: &str) -> RelayerRepoModel {
-            let mut relayer = create_test_relayer();
-            relayer.id = id.to_string();
-            relayer.policies = RelayerNetworkPolicy::Stellar(RelayerStellarPolicy {
-                concurrent_transactions: Some(true),
-                ..Default::default()
-            });
-            relayer
-        }
-
-        fn tx_with_seq(relayer_id: &str, seq: i64) -> TransactionRepoModel {
-            let mut tx = create_test_transaction(relayer_id);
-            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
-                data.sequence_number = Some(seq);
-            }
-            tx
-        }
-
-        /// AccountEntry whose `seq_num` is `next_usable - 1`, so the submit gate
-        /// seeds its watermark to `next_usable`.
-        fn account_entry_for_floor(next_usable: i64) -> AccountEntry {
-            use stellar_strkey::ed25519;
-            let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
-            let account_id =
-                soroban_rs::xdr::AccountId(XdrPublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
-            AccountEntry {
-                account_id,
-                balance: 1_000_000,
-                seq_num: SequenceNumber(next_usable - 1),
-                num_sub_entries: 0,
-                inflation_dest: None,
-                flags: 0,
-                home_domain: String32::default(),
-                thresholds: Thresholds([1, 1, 1, 1]),
-                signers: Default::default(),
-                ext: AccountEntryExt::V0,
-            }
-        }
-
-        /// T023: a submit for a sequence ahead of the account watermark is deferred
-        /// (re-enqueued with a delay) and is NOT sent to the network.
-        #[tokio::test]
-        async fn submit_defers_sequence_ahead_of_watermark() {
-            submit_gate::reset("relayer-gate-defer", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-defer");
-            let mut mocks = default_test_mocks();
-
-            // First sight → gate seeds watermark to 100 from chain.
-            mocks
-                .provider
-                .expect_get_account()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(account_entry_for_floor(100)) }));
-
-            // The out-of-order submit job MUST be re-enqueued (with a delay)...
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .times(1)
-                .withf(|_, scheduled_on| scheduled_on.is_some())
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            // ...and the network submit RPC MUST NOT be called (no expectation set;
-            // mockall panics if `send_transaction_with_status` is invoked).
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let tx = tx_with_seq("relayer-gate-defer", 101); // ahead of watermark 100
-
-            let result = handler.submit_transaction_impl(tx).await;
-            assert!(result.is_ok());
-            // Deferred, not submitted: status unchanged.
-            assert_eq!(result.unwrap().status, TransactionStatus::Pending);
-        }
-
-        /// Regression: when the deferral's re-enqueue itself fails (e.g. the job
-        /// queue is unavailable), the failure is pre-submission — the sequence never
-        /// reached the network. The watermark must NOT advance and the transaction
-        /// must NOT be marked Failed, otherwise a later sequence could be admitted
-        /// out of order behind a tx that was only ever deferred, never dead.
-        #[tokio::test]
-        async fn submit_defer_reenqueue_failure_does_not_advance_gate_or_fail_tx() {
-            submit_gate::reset("relayer-gate-defer-fail", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-defer-fail");
-            let mut mocks = default_test_mocks();
-
-            // First sight → gate seeds watermark to 100 from chain.
-            mocks
-                .provider
-                .expect_get_account()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(account_entry_for_floor(100)) }));
-
-            // The re-enqueue of the deferred submit job fails (e.g. queue unavailable).
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .times(1)
-                .returning(|_, _| {
-                    Box::pin(async {
-                        Err(crate::jobs::JobProducerError::QueueError(
-                            "queue unavailable".to_string(),
-                        ))
-                    })
-                });
-
-            // No failure handling should occur: no notification, no next-pending lookup.
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .never();
-            mocks.tx_repo.expect_find_by_status_paginated().never();
-            mocks.tx_repo.expect_partial_update().never();
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let tx = tx_with_seq("relayer-gate-defer-fail", 101); // ahead of watermark 100
-
-            let result = handler.submit_transaction_impl(tx).await;
-
-            // Propagated as Ok so the caller doesn't treat this as a hard failure;
-            // the transaction is left exactly as it was for the status checker to
-            // re-drive submission later.
-            assert!(result.is_ok());
-            let returned_tx = result.unwrap();
-            assert_eq!(returned_tx.status, TransactionStatus::Pending);
-            assert_ne!(returned_tx.status, TransactionStatus::Failed);
-
-            // Watermark unchanged: 101 is still TooEarly against floor 100 (seq 101
-            // was never admitted/consumed), confirming the gate wasn't advanced.
-            assert_eq!(
-                submit_gate::try_admit("relayer-gate-defer-fail", TEST_PK, 101, 100),
-                submit_gate::Admission::TooEarly
-            );
-        }
-
-        /// T023: once the in-order sequence is admitted and submitted, the watermark
-        /// advances so the next sequence becomes admissible.
-        #[tokio::test]
-        async fn submit_admits_in_order_sequence_and_advances_watermark() {
-            submit_gate::reset("relayer-gate-admit", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-admit");
-            let mut mocks = default_test_mocks();
-
-            mocks
-                .provider
-                .expect_get_account()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(account_entry_for_floor(100)) }));
-            let response = create_send_tx_response(
-                "PENDING",
-                "0101010101010101010101010101010101010101010101010101010101010101",
-            );
-            mocks
-                .provider
-                .expect_send_transaction_with_status()
-                .times(1)
-                .returning(move |_| {
-                    let r = response.clone();
-                    Box::pin(async move { Ok(r) })
-                });
-            mocks.tx_repo.expect_partial_update().returning(|id, _| {
-                let mut tx = create_test_transaction("relayer-gate-admit");
-                tx.id = id;
-                tx.status = TransactionStatus::Submitted;
-                Ok::<_, RepositoryError>(tx)
-            });
-            // PENDING triggers an update notification.
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let tx = tx_with_seq("relayer-gate-admit", 100); // exactly the watermark
-
-            let result = handler.submit_transaction_impl(tx).await;
-            assert!(result.is_ok());
-            // Watermark advanced past 100, so 101 is now admissible.
-            assert_eq!(
-                submit_gate::try_admit("relayer-gate-admit", TEST_PK, 101, 100),
-                submit_gate::Admission::Ready
-            );
-        }
-
-        /// T024: a terminal Failed sequence advances the watermark so the next
-        /// sequence proceeds — a dead N never deadlocks N+1.
-        #[tokio::test]
-        async fn terminal_failure_unblocks_next_sequence() {
-            submit_gate::reset("relayer-gate-terminal", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-terminal");
-
-            // Seed the watermark to 50 and confirm 51 is blocked while 50 is alive.
-            assert_eq!(
-                submit_gate::try_admit("relayer-gate-terminal", TEST_PK, 51, 50),
-                submit_gate::Admission::TooEarly
-            );
-
-            let mocks = default_test_mocks();
-            let handler = make_stellar_tx_handler(relayer, mocks);
-
-            // Seq 50 reaches a terminal state → advance the watermark.
-            let dead_tx = tx_with_seq("relayer-gate-terminal", 50);
-            handler.advance_submit_gate_on_terminal(&dead_tx);
-
-            // 51 now proceeds.
-            assert_eq!(
-                submit_gate::try_admit("relayer-gate-terminal", TEST_PK, 51, 50),
-                submit_gate::Admission::Ready
-            );
-        }
-
-        /// Regression: a chain-floor seed fetch failure (first-sight watermark seed)
-        /// is pre-submission — the tx never reached the network. The watermark must
-        /// stay unseeded and the transaction must NOT be marked Failed, so the next
-        /// attempt can re-seed from chain instead of leaving a dead sequence behind.
-        #[tokio::test]
-        async fn submit_chain_floor_fetch_failure_does_not_advance_gate_or_fail_tx() {
-            submit_gate::reset("relayer-gate-floor-fail", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-floor-fail");
-            let mut mocks = default_test_mocks();
-
-            // First sight → gate tries to seed watermark from chain, but the
-            // provider call fails (e.g. transient RPC error).
-            mocks.provider.expect_get_account().times(1).returning(|_| {
-                Box::pin(async {
-                    Err(
-                        crate::services::provider::ProviderError::NetworkConfiguration(
-                            "rpc unavailable".to_string(),
-                        ),
-                    )
-                })
-            });
-
-            // No failure handling should occur: no notification, no next-pending
-            // lookup, no terminal Failed update, and the network submit RPC must
-            // never be reached.
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .never();
-            mocks.tx_repo.expect_find_by_status_paginated().never();
-            mocks.tx_repo.expect_partial_update().never();
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let tx = tx_with_seq("relayer-gate-floor-fail", 1);
-
-            let result = handler.submit_transaction_impl(tx).await;
-
-            assert!(result.is_ok());
-            let returned_tx = result.unwrap();
-            assert_ne!(returned_tx.status, TransactionStatus::Failed);
-
-            // Watermark was never seeded: still None, so a later attempt will
-            // retry the chain fetch rather than treating the sequence as dead.
-            assert_eq!(submit_gate::peek("relayer-gate-floor-fail", TEST_PK), None);
-        }
-
-        /// Regression: a genuine POST-RPC bad-sequence failure (the RPC was
-        /// actually reached) must keep its existing behavior unchanged — the gate
-        /// watermark is cleared via `submit_gate::reset` (not left advanced past a
-        /// stale value) and the sequence counter is synced from chain, so the next
-        /// submit re-seeds cleanly.
-        #[tokio::test]
-        async fn submit_bad_sequence_resets_gate_watermark() {
-            submit_gate::reset("relayer-gate-badseq", TEST_PK);
-            let relayer = concurrent_relayer("relayer-gate-badseq");
-            let mut mocks = default_test_mocks();
-
-            // Called twice: once to seed the gate watermark on first sight, and
-            // again by sync_sequence_from_chain during bad-seq recovery.
-            mocks
-                .provider
-                .expect_get_account()
-                .times(2)
-                .returning(|_| Box::pin(async { Ok(account_entry_for_floor(100)) }));
-
-            // The RPC is actually reached and rejects with a bad-sequence error.
-            mocks
-                .provider
-                .expect_send_transaction_with_status()
-                .times(1)
-                .returning(|_| {
-                    Box::pin(async {
-                        Err(crate::services::provider::ProviderError::Other(
-                            "transaction submission failed: TxBadSeq".to_string(),
-                        ))
-                    })
-                });
-
-            mocks
-                .counter
-                .expect_sync_floor()
-                .times(1)
-                .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
-
-            // Reset to Pending for retry.
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
-                .times(1)
-                .returning(|id, upd| {
-                    let mut tx = create_test_transaction("relayer-gate-badseq");
-                    tx.id = id;
-                    tx.status = upd.status.unwrap();
-                    if let Some(network_data) = upd.network_data {
-                        tx.network_data = network_data;
-                    }
-                    Ok::<_, RepositoryError>(tx)
-                });
-
-            let handler = make_stellar_tx_handler(relayer, mocks);
-            let tx = tx_with_seq("relayer-gate-badseq", 100); // exactly the watermark
-
-            let result = handler.submit_transaction_impl(tx).await;
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().status, TransactionStatus::Pending);
-
-            // Watermark was cleared by the bad-seq recovery path: peek returns None,
-            // so the next submit re-seeds from chain instead of using a stale value.
-            assert_eq!(submit_gate::peek("relayer-gate-badseq", TEST_PK), None);
         }
     }
 }

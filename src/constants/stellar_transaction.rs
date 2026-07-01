@@ -34,12 +34,6 @@ pub const STELLAR_HORIZON_TESTNET_URL: &str = "https://horizon-testnet.stellar.o
 /// Set to 2s for faster detection of transaction state changes
 pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 
-/// Bounded delay (in seconds) before re-enqueuing a submit job that arrived
-/// out of order for its `(relayer, source_account)` (sequence ahead of the
-/// per-account watermark). Small so ordered submission stays low-latency while
-/// avoiding a hot re-enqueue spin. See `submit_gate`.
-pub const STELLAR_SUBMIT_ORDER_RETRY_DELAY_SECONDS: i64 = 2;
-
 /// Minimum age before triggering Pending status recovery (in seconds)
 /// Only schedule a recovery job if Pending transaction without hash exceeds this age
 /// This prevents scheduling a job on every status check
