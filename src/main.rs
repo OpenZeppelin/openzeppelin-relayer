@@ -48,14 +48,16 @@ use tracing::info;
 use openzeppelin_relayer::{
     api,
     bootstrap::{
-        initialize_app_state, initialize_plugin_pool, initialize_queue_workers,
-        initialize_relayers, precompile_plugins, process_config_file, shutdown_plugin_pool,
+        drain_worker_handles, initialize_app_state, initialize_plugin_pool,
+        initialize_queue_workers, initialize_relayers, precompile_plugins, process_config_file,
+        shutdown_plugin_pool, RuntimeConfig,
     },
     config,
     constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
     logging::setup_logging,
     metrics,
     observability::RequestIdMiddleware,
+    queues::QueueBackend,
     utils::check_authorization_header,
 };
 use tracing_actix_web::TracingLogger;
@@ -94,8 +96,32 @@ async fn main() -> Result<()> {
     // Initialize relayers: sync and validate relayers
     initialize_relayers(app_state.clone()).await?;
 
-    // Setup workers for processing jobs using the configured queue backend.
-    let _worker_handles = initialize_queue_workers(app_state.clone()).await?;
+    // Resolve the worker-thread budget and build an explicit multi-thread tokio
+    // runtime for the background transaction pipeline (queue workers, tx
+    // processing). Keeping `#[actix_web::main]` for the HTTP server, the pipeline
+    // is re-homed onto this runtime's Handle so it uses all worker threads
+    // instead of pinning to the actix System arbiter's single thread (D1/D2).
+    let runtime_config = RuntimeConfig::from_env();
+    runtime_config.log_startup();
+    metrics::set_worker_threads("pipeline", runtime_config.tokio_worker_threads);
+    metrics::set_worker_threads("http", runtime_config.actix_workers);
+
+    let pipeline_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(runtime_config.tokio_worker_threads)
+        .enable_all()
+        .thread_name("relayer-pipeline")
+        .build()
+        .wrap_err("Failed to build the pipeline runtime")?;
+    let pipeline_handle = pipeline_runtime.handle().clone();
+
+    // Re-home the plugin shared-socket service's background tasks onto the
+    // pipeline runtime as well (the plugin-execution path behind the 504 storms).
+    openzeppelin_relayer::services::plugins::set_pipeline_handle(pipeline_handle.clone());
+
+    // Setup workers for processing jobs using the configured queue backend,
+    // spawned onto the pipeline runtime. Handles are joined on shutdown (below).
+    let worker_handles =
+        initialize_queue_workers(app_state.clone(), pipeline_handle.clone()).await?;
 
     // Initialize plugin worker pool (enabled by default for better performance)
     // Set PLUGIN_USE_POOL=false to use legacy ts-node mode
@@ -173,6 +199,9 @@ async fn main() -> Result<()> {
     })
     .bind((config.host.as_str(), config.port))
     .wrap_err_with(|| format!("Failed to bind server to {}:{}", config.host, config.port))?
+    // Pin HTTP worker count to the resolved budget (was: actix default = host cores,
+    // which over-provisions on cgroup-limited containers). Part of the vCPU budget.
+    .workers(runtime_config.actix_workers)
     // Safety net: max concurrent connections server-wide
     .max_connections(config.max_connections)
     // TCP listen queue size
@@ -218,12 +247,34 @@ async fn main() -> Result<()> {
         app_server.await?;
     }
 
-    // Graceful shutdown: cleanup plugin pool if it was started
+    // Graceful shutdown of the pipeline runtime (D7): broadcast shutdown to the
+    // queue backend (SQS/PubSub `watch`; Redis now also fires its own shutdown
+    // `watch` into the Apalis Monitor's signal future), then join the re-homed
+    // worker handles so in-flight transactions drain before the runtime is torn
+    // down. At-least-once redelivery is the backstop if the bounded drain window
+    // is exceeded.
+    info!("HTTP server stopped; draining pipeline workers");
+    app_state.job_producer.queue_backend().shutdown();
+
+    if !drain_worker_handles(worker_handles, Duration::from_secs(35)).await {
+        tracing::warn!("pipeline drain timed out; aborting remaining in-flight work (redelivery is the backstop)");
+    }
+
+    // Shut down the plugin pool BEFORE the pipeline runtime: the pool's shared-socket
+    // tasks run on the pipeline runtime, so tearing the runtime down first would abort
+    // them mid-shutdown.
     if pool_manager.is_some() {
         if let Err(e) = shutdown_plugin_pool().await {
             tracing::warn!(error = %e, "Failed to shutdown plugin pool gracefully");
         }
     }
+
+    // Shut down the pipeline runtime last. `shutdown_background()` (not `drop`) is
+    // required here: `drop`ping a multi-thread `tokio::runtime::Runtime` blocks the
+    // current thread until all runtime threads exit, which panics when called from
+    // within an async context (this function runs under `#[actix_web::main]`).
+    // `shutdown_background()` is non-blocking and safe to call from async code.
+    pipeline_runtime.shutdown_background();
 
     Ok(())
 }

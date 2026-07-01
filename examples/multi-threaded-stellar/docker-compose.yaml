@@ -1,0 +1,84 @@
+---
+# Multi-threaded Stellar concurrent-ordering example.
+#
+# Runs the relayer on its explicit multi-thread tokio pipeline runtime against
+# the public Stellar testnet and Redis (the apalis queue backend). Used to
+# validate that concurrent self-payments from a single account stay correctly
+# ordered under the multi-thread runtime — the submission-ordering gate
+# (submit_gate) + monotonic sync_floor prevent TxBadSeq from out-of-order
+# submission across worker threads (spec 005, task T025, Constitution III
+# non-negotiable gate).
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+      - 8081:8081/tcp
+    secrets:
+      - api_key
+      - webhook_signing_key
+      - keystore_passphrase
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: redis
+      RATE_LIMIT_REQUESTS_PER_SECOND: 1000
+      RATE_LIMIT_BURST: 2000
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+      # ── Multi-thread runtime sizing ────────────────────────────────────────
+      # Pin both runtimes to fit the container's vCPU quota. Pick values whose sum
+      # is <= the CPUs you give the container (see `deploy.resources` below).
+      TOKIO_WORKER_THREADS: ${TOKIO_WORKER_THREADS:-4}
+      ACTIX_WORKERS: ${ACTIX_WORKERS:-2}
+      # ── Observability for the T025 ordering check ──────────────────────────
+      # JSON logs include the OS thread id on every line (with_thread_ids), which
+      # lets you confirm the submit_gate serialises submission while still
+      # distributing pipeline work across threads. debug is required to see the
+      # gate log line and per-job thread attribution.
+      LOG_FORMAT: json
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      METRICS_ENABLED: 'true'
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      - redis
+    restart: on-failure:5
+    # Give the container a few cores so worker_threads + actix_workers have room.
+    deploy:
+      resources:
+        limits:
+          cpus: '6'
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+    networks:
+      - relayer-network
+    restart: on-failure:5
+networks:
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+secrets:
+  api_key:
+    environment: API_KEY
+  webhook_signing_key:
+    environment: WEBHOOK_SIGNING_KEY
+  keystore_passphrase:
+    environment: KEYSTORE_PASSPHRASE

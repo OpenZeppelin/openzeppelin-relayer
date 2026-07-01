@@ -17,8 +17,8 @@
 //! // Produce a job
 //! backend.produce_transaction_request(job, None).await?;
 //!
-//! // Initialize workers
-//! let workers = backend.initialize_workers(app_state).await?;
+//! // Initialize workers on the pipeline runtime
+//! let workers = backend.initialize_workers(app_state, handle).await?;
 //! ```
 
 use async_trait::async_trait;
@@ -141,12 +141,17 @@ pub trait QueueBackend: Send + Sync {
     ///
     /// # Arguments
     /// * `app_state` - Application state containing handlers and configuration
+    /// * `handle` - Handle to the multi-thread pipeline runtime. Workers MUST be
+    ///   spawned via `handle.spawn` (not bare `tokio::spawn`) so background work
+    ///   is distributed across the pipeline runtime's worker threads instead of
+    ///   landing on the actix `System` arbiter's single thread.
     ///
     /// # Returns
     /// Vector of worker handles that can be used to monitor or stop workers
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError>;
 
     /// Performs a health check on all queues.
@@ -160,9 +165,10 @@ pub trait QueueBackend: Send + Sync {
 
     /// Signals all workers to shut down gracefully.
     ///
-    /// The default implementation is a no-op (e.g. Redis/Apalis workers handle
-    /// shutdown via Monitor's signal handling). SQS backend overrides this to
-    /// broadcast a shutdown signal to all polling loops and cron tasks.
+    /// The default implementation is a no-op. Redis, SQS, and Pub/Sub backends all
+    /// override this to broadcast a shutdown signal (via a `watch` channel) into
+    /// their respective polling loops / cron tasks / Apalis Monitor signal futures,
+    /// so a programmatic shutdown (no OS signal) still stops them promptly.
     fn shutdown(&self) {}
 }
 
@@ -285,11 +291,12 @@ impl QueueBackend for QueueBackendStorage {
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
         match self {
-            Self::Redis(b) => b.initialize_workers(app_state).await,
-            Self::Sqs(b) => b.initialize_workers(app_state).await,
-            Self::PubSub(b) => b.initialize_workers(app_state).await,
+            Self::Redis(b) => b.initialize_workers(app_state, handle).await,
+            Self::Sqs(b) => b.initialize_workers(app_state, handle).await,
+            Self::PubSub(b) => b.initialize_workers(app_state, handle).await,
         }
     }
 

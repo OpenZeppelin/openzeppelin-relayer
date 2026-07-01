@@ -255,6 +255,33 @@ pub struct SharedSocketService {
     connection_semaphore: Arc<Semaphore>,
 }
 
+/// Handle to the multi-thread pipeline runtime. Set once at startup
+/// ([`set_pipeline_handle`]) so the shared socket service's background tasks
+/// (cleanup, listener, per-connection handlers) are spawned onto the pipeline
+/// runtime's worker threads instead of the actix System arbiter's single thread
+/// — the same single-thread saturation that caused the plugin-endpoint 504 storms.
+/// Falls back to `tokio::spawn` (the current runtime) when unset, e.g. in tests.
+static PIPELINE_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+
+/// Register the pipeline runtime handle used to re-home socket service tasks.
+/// Idempotent: the first call wins (later calls are ignored).
+pub fn set_pipeline_handle(handle: tokio::runtime::Handle) {
+    let _ = PIPELINE_HANDLE.set(handle);
+}
+
+/// Spawn a future onto the pipeline runtime when its handle has been registered,
+/// otherwise onto the current runtime (`tokio::spawn`).
+fn spawn_on_pipeline<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match PIPELINE_HANDLE.get() {
+        Some(handle) => handle.spawn(fut),
+        None => tokio::spawn(fut),
+    }
+}
+
 impl SharedSocketService {
     /// Create a new shared socket service
     pub fn new(socket_path: &str) -> Result<Self, PluginError> {
@@ -274,7 +301,7 @@ impl SharedSocketService {
         let executions_clone = executions.clone();
         let active_count_clone = active_count.clone();
         let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
-        tokio::spawn(async move {
+        spawn_on_pipeline(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 tokio::select! {
@@ -444,8 +471,8 @@ impl SharedSocketService {
             socket_path
         );
 
-        // Spawn the listener task
-        tokio::spawn(async move {
+        // Spawn the listener task onto the pipeline runtime.
+        spawn_on_pipeline(async move {
             debug!("Shared socket service: listener task started");
             loop {
                 tokio::select! {
@@ -469,7 +496,7 @@ impl SharedSocketService {
                                         let state_clone = Arc::clone(&state);
                                         let executions_clone = executions.clone();
 
-                                        tokio::spawn(async move {
+                                        spawn_on_pipeline(async move {
                                             // Permit held until task completes (auto-released on drop)
                                             let _permit = permit;
 

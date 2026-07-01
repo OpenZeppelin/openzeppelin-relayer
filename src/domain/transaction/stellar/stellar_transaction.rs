@@ -255,15 +255,24 @@ where
                 ))
             })?;
 
-        // Update the local counter to the next usable sequence
-        self.transaction_counter_service()
-            .set(&self.relayer().id, relayer_address, next_usable_seq)
+        // Raise the local counter to the on-chain floor *monotonically*: a blind `set` here
+        // would rewind the counter when concurrent allocations have already advanced it past
+        // the chain value, causing duplicate/gapped sequences and a TxBadSeq cascade
+        // (Constitution III: live chain sequence is a floor, never the authoritative next
+        // assignment). `sync_floor` only advances when the chain is ahead.
+        let effective_seq = self
+            .transaction_counter_service()
+            .sync_floor(&self.relayer().id, relayer_address, next_usable_seq)
             .await
             .map_err(|e| {
                 TransactionError::UnexpectedError(format!("Failed to update sequence counter: {e}"))
             })?;
 
-        info!(sequence = %next_usable_seq, "updated local sequence counter");
+        info!(
+            chain_sequence = %next_usable_seq,
+            effective_sequence = %effective_seq,
+            "synced local sequence counter to chain floor"
+        );
         Ok(())
     }
 
@@ -634,15 +643,15 @@ mod tests {
                 })
             });
 
-        // Mock counter set to verify it's called with next usable sequence (101)
+        // Mock counter sync_floor to verify it's called with next usable sequence (101)
         mocks
             .counter
-            .expect_set()
-            .withf(|relayer_id, addr, seq| {
-                relayer_id == "relayer-1" && addr == TEST_PK && *seq == 101
+            .expect_sync_floor()
+            .withf(|relayer_id, addr, floor| {
+                relayer_id == "relayer-1" && addr == TEST_PK && *floor == 101
             })
             .times(1)
-            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+            .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
@@ -705,14 +714,18 @@ mod tests {
             })
         });
 
-        // Mock counter set to fail
-        mocks.counter.expect_set().times(1).returning(|_, _, _| {
-            Box::pin(async {
-                Err(RepositoryError::Unknown(
-                    "Counter update failed".to_string(),
-                ))
-            })
-        });
+        // Mock counter sync_floor to fail
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| {
+                Box::pin(async {
+                    Err(RepositoryError::Unknown(
+                        "Counter update failed".to_string(),
+                    ))
+                })
+            });
 
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 

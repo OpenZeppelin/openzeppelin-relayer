@@ -526,6 +526,7 @@ impl QueueBackend for PubSubBackend {
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
         info!(
             queue_count = self.topic_names.len(),
@@ -547,6 +548,7 @@ impl QueueBackend for PubSubBackend {
                 pool.clone(),
                 self.key_prefix.clone(),
                 self.shutdown_tx.subscribe(),
+                handle.clone(),
             ));
 
             // One due-sweep per queue (publishes deferred/retrying jobs when due).
@@ -556,6 +558,7 @@ impl QueueBackend for PubSubBackend {
                 pool.clone(),
                 self.key_prefix.clone(),
                 self.shutdown_tx.subscribe(),
+                handle.clone(),
             ));
         }
 
@@ -565,6 +568,7 @@ impl QueueBackend for PubSubBackend {
         let cron_scheduler = crate::queues::cron::CronScheduler::new(
             app_state.clone(),
             self.shutdown_tx.subscribe(),
+            handle.clone(),
         );
         handles.extend(cron_scheduler.start().await?);
 
@@ -574,7 +578,7 @@ impl QueueBackend for PubSubBackend {
             let snapshot = self.depth_snapshot.clone();
             let project_id = self.project_id.clone();
             let mut shutdown_rx = self.shutdown_tx.subscribe();
-            let handle = tokio::spawn(async move {
+            let depth_handle = handle.spawn(async move {
                 let interval = Duration::from_secs(DEPTH_REFRESH_INTERVAL_SECS);
                 loop {
                     match monitoring::read_backlog_depths(
@@ -610,13 +614,18 @@ impl QueueBackend for PubSubBackend {
                     }
                 }
             });
-            handles.push(WorkerHandle::Tokio(handle));
+            handles.push(WorkerHandle::Tokio(depth_handle));
         }
 
         // SIGINT/SIGTERM → broadcast shutdown to all workers and due-sweeps.
+        //
+        // NOT pushed into `handles`: this task only resolves on an OS signal, so on a
+        // programmatic/server-driven shutdown (no signal sent) it would never complete
+        // and `drain_worker_handles` would block for the full drain timeout waiting on
+        // it instead of the real worker/due-sweep tasks.
         {
             let shutdown_tx = self.shutdown_tx.clone();
-            let handle = tokio::spawn(async move {
+            handle.spawn(async move {
                 let mut sigint =
                     tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
                         .expect("Failed to create SIGINT handler");
@@ -629,7 +638,6 @@ impl QueueBackend for PubSubBackend {
                 }
                 let _ = shutdown_tx.send(true);
             });
-            handles.push(WorkerHandle::Tokio(handle));
         }
 
         info!(

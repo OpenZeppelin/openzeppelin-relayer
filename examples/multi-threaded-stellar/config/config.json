@@ -1,0 +1,32 @@
+{
+  "relayers": [
+    {
+      "id": "mt-stellar",
+      "name": "Multi-threaded Stellar Relayer",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "local-signer",
+      "policies": {
+        "concurrent_transactions": true,
+        "fee_payment_strategy": "relayer"
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": "./config/networks",
+  "plugins": []
+}
