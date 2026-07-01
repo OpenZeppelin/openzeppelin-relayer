@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
-use deadpool_redis::{Config, Pool, Runtime};
+use deadpool_redis::{Config, Metrics, Pool, Runtime};
 use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
@@ -160,10 +160,68 @@ pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<R
         }
     };
 
+    // Bounded connection lifetime for the PRIMARY (write) pool: periodically
+    // evict connections older than `redis_connection_max_age_ms` so the next
+    // `get()` opens a fresh connection that re-resolves the endpoint DNS. This
+    // lets pooled writes follow endpoint changes such as failover, scaling, or
+    // node replacement (e.g. an ElastiCache failover repointing the endpoint to
+    // a new node) instead of staying pinned to a stale, potentially unusable
+    // node. Applied to the primary pool only; the reader pool is left untouched.
+    spawn_primary_pool_age_recycler(&primary_pool, config.redis_connection_max_age_ms);
+
     Ok(Arc::new(RedisConnections {
         primary_pool,
         reader_pool,
     }))
+}
+
+/// Spawns a background task that evicts primary-pool connections older than
+/// `max_age_ms`.
+///
+/// deadpool-redis 0.22 does not expose a hook to swap in a custom `Manager`
+/// without changing the concrete `Pool` type (which would ripple into
+/// `RedisConnections`), so age eviction is implemented with `Pool::retain`,
+/// which drops connections whose age exceeds the bound. Fresh connections are
+/// then created lazily by deadpool on demand, re-resolving DNS so the pool
+/// follows whatever node the endpoint currently points to.
+///
+/// Age-eviction predicate for `Pool::retain`.
+///
+/// Returns `true` to KEEP the connection and `false` to DROP it. A connection
+/// is dropped once its age (time since creation) reaches `max_age`.
+fn should_retain_connection(metrics: &Metrics, max_age: Duration) -> bool {
+    metrics.created.elapsed() < max_age
+}
+
+/// When `max_age_ms == 0`, recycling is disabled and no task is spawned.
+fn spawn_primary_pool_age_recycler(primary_pool: &Arc<Pool>, max_age_ms: u64) {
+    if max_age_ms == 0 {
+        return;
+    }
+
+    let max_age = Duration::from_millis(max_age_ms);
+    let pool = primary_pool.clone();
+
+    // Sweep at roughly half the max age (bounded to a sane range) so an aged
+    // connection is dropped well within one max-age window without hammering.
+    let interval = max_age
+        .div_f64(2.0)
+        .clamp(Duration::from_secs(1), Duration::from_secs(30));
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            let result = pool.retain(|_, metrics| should_retain_connection(&metrics, max_age));
+            if !result.removed.is_empty() {
+                debug!(
+                    removed = result.removed.len(),
+                    retained = result.retained,
+                    max_age_ms = max_age_ms,
+                    "recycled aged primary Redis connections"
+                );
+            }
+        }
+    });
 }
 
 /// A distributed lock implementation using Redis SET NX EX pattern.
@@ -749,6 +807,27 @@ mod tests {
 
         // First part should be parseable as u32 (process ID)
         assert!(parts[0].parse::<u32>().is_ok());
+    }
+
+    #[test]
+    fn test_should_retain_connection_keeps_young_connection() {
+        // A freshly created connection is younger than any positive max age.
+        let metrics = Metrics::default();
+        assert!(
+            should_retain_connection(&metrics, Duration::from_secs(60)),
+            "young connection should be retained"
+        );
+    }
+
+    #[test]
+    fn test_should_retain_connection_drops_over_age_connection() {
+        // Simulate a connection created well in the past → over max age → dropped.
+        let mut metrics = Metrics::default();
+        metrics.created = std::time::Instant::now() - Duration::from_secs(120);
+        assert!(
+            !should_retain_connection(&metrics, Duration::from_secs(60)),
+            "over-age connection should be dropped"
+        );
     }
 
     #[test]

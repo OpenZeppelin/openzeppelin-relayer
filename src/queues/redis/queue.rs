@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
 use tracing::info;
 
+use crate::queues::redis::refreshing_connection::RefreshingConnection;
 use crate::{config::ServerConfig, utils::RedisConnections};
 
 use crate::jobs::{
@@ -23,19 +24,27 @@ use crate::jobs::{
     TransactionSend, TransactionStatusCheck,
 };
 
+/// Storage type for all queues.
+///
+/// Uses [`RefreshingConnection`] instead of a bare `ConnectionManager` so that
+/// connections are dropped/reopened on a bounded lifetime, letting them follow
+/// the endpoint's DNS whenever it changes (e.g. after an ElastiCache failover
+/// repoints the endpoint to a new node).
+type QueueStorage<T> = RedisStorage<T, RefreshingConnection<ConnectionManager>>;
+
 #[derive(Clone)]
 pub struct Queue {
-    pub transaction_request_queue: RedisStorage<Job<TransactionRequest>>,
-    pub transaction_submission_queue: RedisStorage<Job<TransactionSend>>,
+    pub transaction_request_queue: QueueStorage<Job<TransactionRequest>>,
+    pub transaction_submission_queue: QueueStorage<Job<TransactionSend>>,
     /// Default/fallback status queue for backward compatibility, Solana, and future networks
-    pub transaction_status_queue: RedisStorage<Job<TransactionStatusCheck>>,
+    pub transaction_status_queue: QueueStorage<Job<TransactionStatusCheck>>,
     /// EVM-specific status queue with slower retries
-    pub transaction_status_queue_evm: RedisStorage<Job<TransactionStatusCheck>>,
+    pub transaction_status_queue_evm: QueueStorage<Job<TransactionStatusCheck>>,
     /// Stellar-specific status queue with fast retries
-    pub transaction_status_queue_stellar: RedisStorage<Job<TransactionStatusCheck>>,
-    pub notification_queue: RedisStorage<Job<NotificationSend>>,
-    pub token_swap_request_queue: RedisStorage<Job<TokenSwapRequest>>,
-    pub relayer_health_check_queue: RedisStorage<Job<RelayerHealthCheck>>,
+    pub transaction_status_queue_stellar: QueueStorage<Job<TransactionStatusCheck>>,
+    pub notification_queue: QueueStorage<Job<NotificationSend>>,
+    pub token_swap_request_queue: QueueStorage<Job<TokenSwapRequest>>,
+    pub relayer_health_check_queue: QueueStorage<Job<RelayerHealthCheck>>,
     /// Redis connection pools for handlers that need pool-based access.
     /// Provides both primary (write) and reader (read) pools for:
     /// - Distributed locking
@@ -105,9 +114,9 @@ impl Queue {
     /// ensuring queue processing continues even if the Redis connection drops temporarily.
     fn storage<T: Serialize + for<'de> Deserialize<'de>>(
         namespace: &str,
-        conn: ConnectionManager,
+        conn: RefreshingConnection<ConnectionManager>,
         queue_config: QueueConfig,
-    ) -> RedisStorage<T> {
+    ) -> QueueStorage<T> {
         let config = Config::default()
             .set_namespace(namespace)
             .set_enqueue_scheduled(queue_config.enqueue_scheduled);
@@ -115,23 +124,37 @@ impl Queue {
         RedisStorage::new_with_config(conn, config)
     }
 
-    /// Creates a ConnectionManager with the standard queue configuration.
+    /// Creates a `RefreshingConnection` wrapping a `ConnectionManager` with the
+    /// standard queue configuration.
     ///
     /// Each ConnectionManager represents a single Redis connection with auto-reconnect.
     /// Creating separate managers for different queue types enables parallel Redis operations.
+    ///
+    /// The connection is wrapped in a [`RefreshingConnection`] so it is dropped
+    /// and reopened once it exceeds `max_age_ms`, re-resolving DNS to follow
+    /// the endpoint wherever it currently points (e.g. after an ElastiCache
+    /// failover repoints the endpoint to a new node).
     async fn create_connection_manager(
         client: &redis::Client,
         queue_timeout: Duration,
-    ) -> Result<ConnectionManager> {
+        max_age_ms: u64,
+    ) -> Result<RefreshingConnection<ConnectionManager>> {
         let conn_config = ConnectionManagerConfig::new()
             .set_connection_timeout(queue_timeout)
             .set_response_timeout(queue_timeout)
             .set_number_of_retries(2)
             .set_max_delay(1000);
 
-        ConnectionManager::new_with_config(client.clone(), conn_config)
+        let conn = ConnectionManager::new_with_config(client.clone(), conn_config.clone())
             .await
-            .map_err(|e| eyre::eyre!("Failed to create Redis connection manager: {}", e))
+            .map_err(|e| eyre::eyre!("Failed to create Redis connection manager: {}", e))?;
+
+        Ok(RefreshingConnection::new(
+            client.clone(),
+            conn_config,
+            conn,
+            max_age_ms,
+        ))
     }
 
     /// Sets up all job queues with properly configured Redis connections.
@@ -163,16 +186,30 @@ impl Queue {
         // Worst case calculation: 3 attempts × 5s timeout + ~0.3s backoff = ~15.3s
         let queue_timeout = Duration::from_secs(5);
 
+        // Bounded connection lifetime: each queue connection is dropped and
+        // reopened once it exceeds this age so a fresh connect re-resolves the
+        // endpoint's DNS, letting it follow endpoint changes such as failover,
+        // scaling, or node replacement (e.g. an ElastiCache failover repointing
+        // the endpoint to a new node). `0` disables age-based recycling.
+        let max_age_ms = server_config.redis_connection_max_age_ms;
+
         // Create one ConnectionManager per queue to prevent connection contention.
         // Each ConnectionManager is a single Redis connection with auto-reconnect.
-        let conn_tx_request = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_tx_submit = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_status = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_status_evm = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_status_stellar = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_notification = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_swap = Self::create_connection_manager(&client, queue_timeout).await?;
-        let conn_health = Self::create_connection_manager(&client, queue_timeout).await?;
+        let conn_tx_request =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_tx_submit =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_status =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_status_evm =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_status_stellar =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_notification =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_swap = Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
+        let conn_health =
+            Self::create_connection_manager(&client, queue_timeout, max_age_ms).await?;
 
         info!(
             redis_url = %redis_url,
