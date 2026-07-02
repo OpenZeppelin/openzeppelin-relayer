@@ -52,8 +52,8 @@ use std::sync::Arc;
 
 use crate::{
     domain::{
-        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
-        SignTypedDataRequest,
+        SignDataRequest, SignDataRequestEncoding, SignDataResponse, SignDataResponseEvm,
+        SignTransactionResponse, SignTypedDataRequest,
     },
     models::{
         Address, NetworkTransactionData, Signer as SignerDomainModel, SignerConfig,
@@ -267,6 +267,21 @@ pub(crate) fn validate_and_format_signature(
     }))
 }
 
+/// Resolves the message bytes to sign, honoring the request encoding.
+pub(crate) fn resolve_message_bytes(request: &SignDataRequest) -> Result<Vec<u8>, SignerError> {
+    match request.encoding {
+        SignDataRequestEncoding::Text => Ok(request.message.as_bytes().to_vec()),
+        SignDataRequestEncoding::Hex => {
+            let hex_str = request
+                .message
+                .strip_prefix("0x")
+                .unwrap_or(&request.message);
+            hex::decode(hex_str)
+                .map_err(|e| SignerError::ParseError(format!("invalid hex message: {e}")))
+        }
+    }
+}
+
 #[async_trait]
 pub trait DataSignerTrait: Send + Sync {
     /// Signs arbitrary message data
@@ -434,6 +449,35 @@ mod tests {
     use secrets::SecretVec;
     use std::str::FromStr;
     use std::sync::Arc;
+
+    #[test]
+    fn resolve_message_bytes_text_uses_utf8_bytes() {
+        let req = SignDataRequest {
+            message: "hello".to_string(),
+            encoding: SignDataRequestEncoding::Text,
+        };
+        assert_eq!(resolve_message_bytes(&req).unwrap(), b"hello".to_vec());
+    }
+
+    #[test]
+    fn resolve_message_bytes_hex_decodes_with_or_without_prefix() {
+        for m in ["0x48656c6c6f", "48656c6c6f"] {
+            let req = SignDataRequest {
+                message: m.to_string(),
+                encoding: SignDataRequestEncoding::Hex,
+            };
+            assert_eq!(resolve_message_bytes(&req).unwrap(), b"Hello".to_vec());
+        }
+    }
+
+    #[test]
+    fn resolve_message_bytes_invalid_hex_errors() {
+        let req = SignDataRequest {
+            message: "0xnothex".to_string(),
+            encoding: SignDataRequestEncoding::Hex,
+        };
+        assert!(resolve_message_bytes(&req).is_err());
+    }
 
     fn test_key_bytes() -> SecretVec<u8> {
         let key_bytes =
@@ -679,6 +723,7 @@ mod tests {
             .unwrap();
         let request = SignDataRequest {
             message: "Test message".to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;
@@ -799,6 +844,7 @@ mod tests {
         for (name, message) in test_cases {
             let request = SignDataRequest {
                 message: message.to_string(),
+                encoding: Default::default(),
             };
 
             let result = signer.sign_data(request).await;
