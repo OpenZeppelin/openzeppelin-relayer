@@ -269,6 +269,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Stop the shared plugin socket listener before tearing down the pipeline runtime
+    // it runs on. Otherwise its accept loop spins on `accept()` errors from the
+    // shutting-down tokio context, emitting a flood of "context is being shutdown"
+    // warnings until the process is killed. No-op if no plugin ever started the socket.
+    openzeppelin_relayer::services::plugins::shutdown_shared_socket_service().await;
+
     // Shut down the pipeline runtime last. `shutdown_background()` (not `drop`) is
     // required here: `drop`ping a multi-thread `tokio::runtime::Runtime` blocks the
     // current thread until all runtime threads exit, which panics when called from
