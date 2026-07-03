@@ -29,7 +29,10 @@ use crate::jobs::{
 /// Uses [`RefreshingConnection`] instead of a bare `ConnectionManager` so that
 /// connections are dropped/reopened on a bounded lifetime, letting them follow
 /// the endpoint's DNS whenever it changes (e.g. after an ElastiCache failover
-/// repoints the endpoint to a new node).
+/// repoints the endpoint to a new node). Connections are ALSO rebuilt
+/// reactively when a reply indicates the connection is pinned to a read-only
+/// node, which accelerates recovery; the bounded lifetime remains the
+/// guaranteed backstop.
 type QueueStorage<T> = RedisStorage<T, RefreshingConnection<ConnectionManager>>;
 
 #[derive(Clone)]
@@ -130,10 +133,8 @@ impl Queue {
     /// Each ConnectionManager represents a single Redis connection with auto-reconnect.
     /// Creating separate managers for different queue types enables parallel Redis operations.
     ///
-    /// The connection is wrapped in a [`RefreshingConnection`] so it is dropped
-    /// and reopened once it exceeds `max_age_ms`, re-resolving DNS to follow
-    /// the endpoint wherever it currently points (e.g. after an ElastiCache
-    /// failover repoints the endpoint to a new node).
+    /// The connection is wrapped in a [`RefreshingConnection`] so it is
+    /// recycled on age and on read-only replies (see [`QueueStorage`]).
     async fn create_connection_manager(
         client: &redis::Client,
         queue_timeout: Duration,
@@ -186,11 +187,8 @@ impl Queue {
         // Worst case calculation: 3 attempts × 5s timeout + ~0.3s backoff = ~15.3s
         let queue_timeout = Duration::from_secs(5);
 
-        // Bounded connection lifetime: each queue connection is dropped and
-        // reopened once it exceeds this age so a fresh connect re-resolves the
-        // endpoint's DNS, letting it follow endpoint changes such as failover,
-        // scaling, or node replacement (e.g. an ElastiCache failover repointing
-        // the endpoint to a new node). `0` disables age-based recycling.
+        // Bounded connection lifetime (see `QueueStorage`). `0` disables only
+        // the age backstop, not reactive read-only healing.
         let max_age_ms = server_config.redis_connection_max_age_ms;
 
         // Create one ConnectionManager per queue to prevent connection contention.

@@ -160,13 +160,9 @@ pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<R
         }
     };
 
-    // Bounded connection lifetime for the PRIMARY (write) pool: periodically
-    // evict connections older than `redis_connection_max_age_ms` so the next
-    // `get()` opens a fresh connection that re-resolves the endpoint DNS. This
-    // lets pooled writes follow endpoint changes such as failover, scaling, or
-    // node replacement (e.g. an ElastiCache failover repointing the endpoint to
-    // a new node) instead of staying pinned to a stale, potentially unusable
-    // node. Applied to the primary pool only; the reader pool is left untouched.
+    // Bound the PRIMARY (write) pool's connection lifetime so fresh connections
+    // periodically re-resolve the endpoint DNS and follow it to its current
+    // node. A separately configured reader pool is left untouched.
     spawn_primary_pool_age_recycler(&primary_pool, config.redis_connection_max_age_ms);
 
     Ok(Arc::new(RedisConnections {
@@ -175,25 +171,20 @@ pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<R
     }))
 }
 
-/// Spawns a background task that evicts primary-pool connections older than
-/// `max_age_ms`.
-///
-/// deadpool-redis 0.22 does not expose a hook to swap in a custom `Manager`
-/// without changing the concrete `Pool` type (which would ripple into
-/// `RedisConnections`), so age eviction is implemented with `Pool::retain`,
-/// which drops connections whose age exceeds the bound. Fresh connections are
-/// then created lazily by deadpool on demand, re-resolving DNS so the pool
-/// follows whatever node the endpoint currently points to.
-///
-/// Age-eviction predicate for `Pool::retain`.
-///
-/// Returns `true` to KEEP the connection and `false` to DROP it. A connection
-/// is dropped once its age (time since creation) reaches `max_age`.
+/// Age-eviction predicate for `Pool::retain`: keeps a connection while its age
+/// is under `max_age`, dropping it once it reaches the bound.
 fn should_retain_connection(metrics: &Metrics, max_age: Duration) -> bool {
     metrics.created.elapsed() < max_age
 }
 
-/// When `max_age_ms == 0`, recycling is disabled and no task is spawned.
+/// Spawns a background task that evicts primary-pool connections older than
+/// `max_age_ms` via `Pool::retain`; deadpool then lazily opens fresh
+/// connections on demand, which re-resolve DNS. `max_age_ms == 0` disables
+/// recycling and spawns nothing.
+///
+/// (`Pool::retain` is used rather than a custom `Manager` because deadpool-redis
+/// 0.22 has no hook to swap the manager without changing the concrete `Pool`
+/// type that `RedisConnections` holds.)
 fn spawn_primary_pool_age_recycler(primary_pool: &Arc<Pool>, max_age_ms: u64) {
     if max_age_ms == 0 {
         return;

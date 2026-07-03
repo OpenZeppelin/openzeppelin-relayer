@@ -440,14 +440,10 @@ impl ServerConfig {
             .unwrap_or(10000)
     }
 
-    /// Gets the Redis connection max age from environment variable or default
+    /// Gets the Redis connection max age from environment variable or default.
     ///
-    /// Controls how long a Redis connection may live before it is proactively
-    /// dropped and reopened so a fresh connect re-resolves the endpoint DNS
-    /// (needed to follow endpoint changes such as failover, scaling, or node
-    /// replacement, e.g. an ElastiCache failover onto a new node). Defaults to
-    /// 60000ms. A value of `0` disables age-based recycling. Falls back to the
-    /// default on parse failure.
+    /// See the `redis_connection_max_age_ms` field docs. Defaults to 60000ms
+    /// (also on parse failure); `0` disables age-based recycling.
     pub fn get_redis_connection_max_age_ms() -> u64 {
         env::var("REDIS_CONNECTION_MAX_AGE_MS")
             .unwrap_or_else(|_| "60000".to_string())
