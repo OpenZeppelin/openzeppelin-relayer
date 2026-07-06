@@ -234,14 +234,22 @@ where
             .await
             .map_err(RelayerError::ProviderError)?;
 
-        info!(
-            next_sequence = %next,
-            "setting next sequence"
-        );
-        self.transaction_counter_service
-            .set(next)
+        // Raise the local counter to the on-chain floor *monotonically*: a blind `set` here
+        // would rewind the counter when concurrent allocations have already advanced it past
+        // the chain value, causing duplicate/gapped sequences and a TxBadSeq cascade
+        // (the live chain sequence is a floor, never the authoritative next assignment).
+        // `sync_floor` only advances when the chain is ahead.
+        let effective = self
+            .transaction_counter_service
+            .sync_floor(next)
             .await
             .map_err(RelayerError::from)?;
+
+        info!(
+            chain_sequence = %next,
+            effective_sequence = %effective,
+            "synced local sequence counter to chain floor"
+        );
         Ok(())
     }
 
@@ -1111,9 +1119,9 @@ mod tests {
             });
         let mut counter = MockTransactionCounterServiceTrait::new();
         counter
-            .expect_set()
+            .expect_sync_floor()
             .with(eq(6u64))
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .returning(|floor| Box::pin(async move { Ok(floor) }));
         let relayer_repo = MockRelayerRepository::new();
         let tx_repo = MockTransactionRepository::new();
         let job_producer = MockJobProducerTrait::new();
@@ -1136,6 +1144,73 @@ mod tests {
         .await
         .unwrap();
 
+        let result = relayer.sync_sequence().await;
+        assert!(result.is_ok());
+    }
+
+    /// Verifies `sync_sequence` never rewinds the counter below sequences already
+    /// allocated by concurrent `get_and_increment` calls. On the multi-threaded runtime,
+    /// a periodic/startup health-check sync racing with in-flight transaction submissions
+    /// must only ever raise the counter to the chain floor, never blindly `set` it.
+    #[tokio::test]
+    async fn test_sync_sequence_does_not_rewind_counter() {
+        let ctx = TestCtx::default();
+        ctx.setup_network().await;
+        let relayer_model = ctx.relayer_model.clone();
+        let mut provider = MockStellarProviderTrait::new();
+        // Chain reports on-chain sequence 5, so next usable sequence is 6.
+        provider
+            .expect_get_account()
+            .with(eq(relayer_model.address.clone()))
+            .returning(|_| {
+                Box::pin(async {
+                    Ok(AccountEntry {
+                        account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
+                        balance: 0,
+                        ext: AccountEntryExt::V0,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        inflation_dest: None,
+                        seq_num: SequenceNumber(5),
+                        num_sub_entries: 0,
+                        signers: VecM::default(),
+                        thresholds: Thresholds([0, 0, 0, 0]),
+                    })
+                })
+            });
+
+        let mut counter = MockTransactionCounterServiceTrait::new();
+        // Counter is already at 15 (advanced past the chain floor of 6 by concurrent
+        // allocations). `sync_floor` must return the higher existing value, not rewind.
+        counter
+            .expect_sync_floor()
+            .with(eq(6u64))
+            .returning(|floor| Box::pin(async move { Ok(std::cmp::max(floor, 15)) }));
+
+        let relayer_repo = MockRelayerRepository::new();
+        let tx_repo = MockTransactionRepository::new();
+        let job_producer = MockJobProducerTrait::new();
+        let signer = Arc::new(MockStellarSignTrait::new());
+        let dex_service = create_mock_dex_service();
+
+        let relayer = StellarRelayer::new(
+            relayer_model.clone(),
+            signer,
+            provider,
+            StellarRelayerDependencies::new(
+                Arc::new(relayer_repo),
+                ctx.network_repository.clone(),
+                Arc::new(tx_repo),
+                Arc::new(counter),
+                Arc::new(job_producer),
+            ),
+            dex_service,
+        )
+        .await
+        .unwrap();
+
+        // sync_sequence succeeds and, because it goes through sync_floor rather than a
+        // blind set, does not clobber the counter's higher, already-allocated value.
         let result = relayer.sync_sequence().await;
         assert!(result.is_ok());
     }
@@ -1765,8 +1840,8 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let mut counter = MockTransactionCounterServiceTrait::new();
         counter
-            .expect_set()
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(async move { Ok(floor) }));
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();
         let job_producer = MockJobProducerTrait::new();
@@ -1821,8 +1896,8 @@ mod tests {
         let tx_repo = MockTransactionRepository::new();
         let mut counter = MockTransactionCounterServiceTrait::new();
         counter
-            .expect_set()
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(async move { Ok(floor) }));
         let signer = Arc::new(MockStellarSignTrait::new());
         let dex_service = create_mock_dex_service();
         let job_producer = MockJobProducerTrait::new();
@@ -3157,8 +3232,8 @@ mod tests {
 
             let mut counter = MockTransactionCounterServiceTrait::new();
             counter
-                .expect_set()
-                .returning(|_| Box::pin(async { Ok(()) }));
+                .expect_sync_floor()
+                .returning(|floor| Box::pin(async move { Ok(floor) }));
 
             let relayer = StellarRelayer::new(
                 relayer_model.clone(),
@@ -3268,8 +3343,8 @@ mod tests {
 
             let mut counter = MockTransactionCounterServiceTrait::new();
             counter
-                .expect_set()
-                .returning(|_| Box::pin(async { Ok(()) }));
+                .expect_sync_floor()
+                .returning(|floor| Box::pin(async move { Ok(floor) }));
 
             let relayer = StellarRelayer::new(
                 relayer_model.clone(),

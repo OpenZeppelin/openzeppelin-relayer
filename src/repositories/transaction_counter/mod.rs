@@ -60,6 +60,19 @@ pub trait TransactionCounterTrait {
     async fn set(&self, relayer_id: &str, address: &str, value: u64)
         -> Result<(), RepositoryError>;
 
+    /// Monotonically raise the counter to `floor` only if the current value is lower.
+    ///
+    /// Used for race-safe bad-sequence recovery: the live chain sequence is treated as a
+    /// floor, never as the authoritative next assignment, so concurrent allocations that
+    /// have already advanced the counter beyond `floor` are never rewound. Returns the
+    /// effective value after the operation (always `>= floor`).
+    async fn sync_floor(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        floor: u64,
+    ) -> Result<u64, RepositoryError>;
+
     /// Remove all stored counter entries from the underlying backend.
     /// Intended for startup reset flows when `RESET_STORAGE_ON_START` is enabled.
     async fn drop_all_entries(&self) -> Result<(), RepositoryError>;
@@ -138,6 +151,22 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
             }
             TransactionCounterRepositoryStorage::Redis(counter) => {
                 counter.set(relayer_id, address, value).await
+            }
+        }
+    }
+
+    async fn sync_floor(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        floor: u64,
+    ) -> Result<u64, RepositoryError> {
+        match self {
+            TransactionCounterRepositoryStorage::InMemory(counter) => {
+                counter.sync_floor(relayer_id, address, floor).await
+            }
+            TransactionCounterRepositoryStorage::Redis(counter) => {
+                counter.sync_floor(relayer_id, address, floor).await
             }
         }
     }

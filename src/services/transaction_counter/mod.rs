@@ -35,6 +35,14 @@ pub trait TransactionCounterServiceTrait: Send + Sync {
     async fn get_and_increment(&self) -> Result<u64, TransactionCounterError>;
     async fn decrement(&self) -> Result<u64, TransactionCounterError>;
     async fn set(&self, value: u64) -> Result<(), TransactionCounterError>;
+
+    /// Monotonically raise the counter to `floor` only if the current value is lower.
+    ///
+    /// Used for race-safe sync with the live chain sequence: the chain value is treated as a
+    /// floor, never as the authoritative next assignment, so concurrent allocations that have
+    /// already advanced the counter beyond `floor` are never rewound. Returns the effective
+    /// value after the operation (always `>= floor`).
+    async fn sync_floor(&self, floor: u64) -> Result<u64, TransactionCounterError>;
 }
 
 #[async_trait]
@@ -70,6 +78,13 @@ where
             .await
             .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
     }
+
+    async fn sync_floor(&self, floor: u64) -> Result<u64, TransactionCounterError> {
+        self.store
+            .sync_floor(&self.relayer_id, &self.address, floor)
+            .await
+            .map_err(|e| TransactionCounterError::NotFound(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -89,5 +104,25 @@ mod tests {
         assert_eq!(service.decrement().await.unwrap(), 1);
         assert!(service.set(10).await.is_ok());
         assert_eq!(service.get().await.unwrap(), Some(10));
+    }
+
+    #[tokio::test]
+    async fn test_sync_floor_does_not_rewind() {
+        let store = Arc::new(InMemoryTransactionCounter::default());
+        let service =
+            TransactionCounterService::new("relayer_id".to_string(), "address".to_string(), store);
+
+        // Counter already advanced past the chain floor by concurrent allocations.
+        service.set(15).await.unwrap();
+
+        // A stale/lower chain floor must not rewind the counter.
+        let effective = service.sync_floor(6).await.unwrap();
+        assert_eq!(effective, 15);
+        assert_eq!(service.get().await.unwrap(), Some(15));
+
+        // A genuinely-ahead floor does advance the counter.
+        let effective = service.sync_floor(20).await.unwrap();
+        assert_eq!(effective, 20);
+        assert_eq!(service.get().await.unwrap(), Some(20));
     }
 }
