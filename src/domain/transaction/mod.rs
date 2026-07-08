@@ -599,7 +599,7 @@ impl RelayerTransactionFactory {
                 )?);
 
                 let signer_service =
-                    Arc::new(SolanaSignerFactory::create_solana_signer(&signer.into())?);
+                    Arc::new(SolanaSignerFactory::create_solana_signer(signer.into()).await?);
 
                 Ok(NetworkTransaction::Solana(SolanaRelayerTransaction::new(
                     relayer,
@@ -613,7 +613,8 @@ impl RelayerTransactionFactory {
             NetworkType::Stellar => {
                 // Create signer once and wrap in Arc, then clone Arc for both uses
                 // Arc implements Clone (cheap reference count increment)
-                let stellar_signer = StellarSignerFactory::create_stellar_signer(&signer.into())?;
+                let stellar_signer =
+                    StellarSignerFactory::create_stellar_signer(signer.into()).await?;
                 let signer_service = Arc::new(stellar_signer);
 
                 let network_repo = network_repository

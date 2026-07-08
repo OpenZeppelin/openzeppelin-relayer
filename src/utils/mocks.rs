@@ -328,6 +328,7 @@ pub mod mockutils {
             redis_connection_timeout_ms: 5000,
             redis_pool_max_size: 10,
             redis_pool_timeout_ms: 5000,
+            redis_connection_max_age_ms: 60000,
             redis_key_prefix: "test-oz-relayer".to_string(),
             rpc_timeout_ms: 10000,
             provider_max_retries: 3,

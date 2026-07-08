@@ -8,6 +8,7 @@ use std::sync::Arc;
 use actix_web::web::ThinData;
 use apalis::prelude::Storage;
 use async_trait::async_trait;
+use tokio::sync::watch;
 use tracing::info;
 
 use crate::{
@@ -30,6 +31,11 @@ use super::{QueueBackend, QueueBackendError, QueueHealth, QueueType, WorkerHandl
 #[derive(Clone)]
 pub struct RedisBackend {
     queue: Queue,
+    /// Shutdown signal sender — mirrors the SQS/PubSub `watch` pattern. Sending
+    /// `true` is select!'d into the Apalis Monitor's `run_with_signal` future so
+    /// `QueueBackend::shutdown()` can stop the Redis monitors on a programmatic
+    /// shutdown, not just on a raw SIGINT/SIGTERM.
+    shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
 impl std::fmt::Debug for RedisBackend {
@@ -57,7 +63,12 @@ impl RedisBackend {
             .await
             .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
 
-        Ok(Self { queue })
+        let (shutdown_tx, _) = watch::channel(false);
+
+        Ok(Self {
+            queue,
+            shutdown_tx: Arc::new(shutdown_tx),
+        })
     }
 
     /// Returns a reference to the underlying Queue for compatibility with existing code.
@@ -313,20 +324,35 @@ impl QueueBackend for RedisBackend {
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
         info!("Initializing Redis backend workers");
 
-        super::redis_worker::initialize_redis_workers((*app_state).clone())
-            .await
-            .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
+        let mut handles = Vec::new();
 
-        super::redis_worker::initialize_redis_token_swap_workers((*app_state).clone())
-            .await
-            .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
+        let monitor_handle = super::redis_worker::initialize_redis_workers(
+            (*app_state).clone(),
+            handle.clone(),
+            self.shutdown_tx.subscribe(),
+        )
+        .await
+        .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?;
+        handles.push(monitor_handle);
 
-        // Apalis workers are owned by the monitors; no explicit
-        // worker handles are returned from that flow.
-        Ok(vec![])
+        if let Some(swap_handle) = super::redis_worker::initialize_redis_token_swap_workers(
+            (*app_state).clone(),
+            handle,
+            self.shutdown_tx.subscribe(),
+        )
+        .await
+        .map_err(|e| QueueBackendError::WorkerInitError(e.to_string()))?
+        {
+            handles.push(swap_handle);
+        }
+
+        // The returned handles are the apalis Monitor futures (re-homed onto the
+        // pipeline runtime); joining them on shutdown lets in-flight work drain.
+        Ok(handles)
     }
 
     async fn health_check(&self) -> Result<Vec<QueueHealth>, QueueBackendError> {
@@ -338,6 +364,11 @@ impl QueueBackend for RedisBackend {
 
     fn backend_type(&self) -> QueueBackendType {
         QueueBackendType::Redis
+    }
+
+    fn shutdown(&self) {
+        info!("Redis backend: broadcasting shutdown signal to Apalis monitors");
+        let _ = self.shutdown_tx.send(true);
     }
 }
 

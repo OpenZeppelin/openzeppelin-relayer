@@ -67,6 +67,24 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         Ok(())
     }
 
+    async fn sync_floor(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        floor: u64,
+    ) -> Result<u64, RepositoryError> {
+        // Hold the shard entry lock across read-compare-write so the monotonic max is atomic
+        // with respect to concurrent `sync_floor`/`set` on the same key.
+        let mut entry = self
+            .store
+            .entry((relayer_id.to_string(), address.to_string()))
+            .or_insert(floor);
+        if *entry < floor {
+            *entry = floor;
+        }
+        Ok(*entry)
+    }
+
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
         self.store.clear();
         Ok(())
@@ -107,6 +125,38 @@ mod tests {
         // Decrement
         assert_eq!(store.decrement(relayer_id, address).await.unwrap(), 100);
         assert_eq!(store.get(relayer_id, address).await.unwrap(), Some(100));
+    }
+
+    #[tokio::test]
+    async fn test_sync_floor_no_rewind() {
+        let store = InMemoryTransactionCounter::new();
+        let (relayer, address) = ("relayer_1", "0xabc");
+
+        // Counter starts at sequence S = 5 (next to allocate).
+        store.set(relayer, address, 5).await.unwrap();
+        // Concurrent allocations advance it 10 ahead -> 15.
+        for _ in 0..10 {
+            store.get_and_increment(relayer, address).await.unwrap();
+        }
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(15));
+
+        // Recovery observes the stale chain floor (S+1 = 6); it MUST NOT rewind below 15.
+        let effective = store.sync_floor(relayer, address, 6).await.unwrap();
+        assert_eq!(effective, 15);
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(15));
+
+        // But it DOES advance when the chain floor is genuinely ahead.
+        let effective = store.sync_floor(relayer, address, 20).await.unwrap();
+        assert_eq!(effective, 20);
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(20));
+    }
+
+    #[tokio::test]
+    async fn test_sync_floor_seeds_when_unset() {
+        let store = InMemoryTransactionCounter::new();
+        let effective = store.sync_floor("relayer_1", "0xabc", 7).await.unwrap();
+        assert_eq!(effective, 7);
+        assert_eq!(store.get("relayer_1", "0xabc").await.unwrap(), Some(7));
     }
 
     #[tokio::test]

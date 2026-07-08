@@ -74,6 +74,13 @@ pub struct ServerConfig {
     pub redis_reader_pool_max_size: usize,
     /// Timeout in milliseconds waiting to get a connection from the pool.
     pub redis_pool_timeout_ms: u64,
+    /// Maximum lifetime in milliseconds for a Redis connection before it is
+    /// proactively dropped and reopened. Reopening re-resolves the endpoint's
+    /// DNS, which lets connections follow endpoint changes such as failover,
+    /// scaling, node replacement, or maintenance (e.g. after an ElastiCache
+    /// failover repoints the endpoint to a new node). A value of `0` disables
+    /// age-based recycling.
+    pub redis_connection_max_age_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -174,6 +181,7 @@ impl ServerConfig {
             redis_key_prefix: Self::get_redis_key_prefix(),
             redis_pool_max_size: Self::get_redis_pool_max_size(),
             redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
+            redis_connection_max_age_ms: Self::get_redis_connection_max_age_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -430,6 +438,21 @@ impl ServerConfig {
             .ok()
             .filter(|&v| v > 0)
             .unwrap_or(10000)
+    }
+
+    /// Gets the Redis connection max age from environment variable or default.
+    ///
+    /// See the `redis_connection_max_age_ms` field docs. Defaults to 60000ms
+    /// (also on parse failure); `0` disables age-based recycling.
+    ///
+    /// Note: the pool recycler sweeps at half this value clamped to
+    /// `[1s, 30s]`, so values under ~2000ms are effectively bounded by the 1s
+    /// sweep floor rather than the configured age.
+    pub fn get_redis_connection_max_age_ms() -> u64 {
+        env::var("REDIS_CONNECTION_MAX_AGE_MS")
+            .unwrap_or_else(|_| "60000".to_string())
+            .parse()
+            .unwrap_or(60000)
     }
 
     /// Gets the RPC timeout from environment variable or default
@@ -2132,6 +2155,46 @@ mod tests {
 
             env::remove_var("REDIS_URL");
             env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_redis_connection_max_age_ms_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value of 60000");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "120000");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 120000, "Should return env var value");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "not_a_number");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value when invalid");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_disables_recycling() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "0");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 0, "Should accept zero to disable recycling");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
         }
     }
 

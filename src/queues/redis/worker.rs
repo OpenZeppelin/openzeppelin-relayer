@@ -54,6 +54,7 @@ use crate::queues::retry_config::{
     TOKEN_SWAP_CRON_BACKOFF, TOKEN_SWAP_REQUEST_BACKOFF, TX_CLEANUP_BACKOFF, TX_REQUEST_BACKOFF,
     TX_SUBMISSION_BACKOFF,
 };
+use crate::queues::WorkerHandle;
 
 // ---------------------------------------------------------------------------
 // Apalis adapter functions
@@ -344,9 +345,14 @@ fn create_backoff_from_config(cfg: RetryBackoffConfig) -> Result<ExponentialBack
 ///
 /// # Arguments
 /// * `app_state` - Application state containing the job producer and configuration
+/// * `shutdown_rx` - Backend-level shutdown signal (mirrors the SQS/PubSub `watch`
+///   pattern). Selected alongside SIGINT/SIGTERM so `QueueBackend::shutdown()` can
+///   stop this monitor on a programmatic shutdown, not just on an OS signal.
 pub async fn initialize_redis_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<()>
+    handle: tokio::runtime::Handle,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> Result<WorkerHandle>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -548,7 +554,7 @@ where
         .on_event(monitor_handle_event)
         .shutdown_timeout(Duration::from_millis(5000));
 
-    let monitor_future = monitor.run_with_signal(async {
+    let monitor_future = monitor.run_with_signal(async move {
         let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
             .map_err(|e| std::io::Error::other(format!("Failed to create SIGINT signal: {e}")))?;
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -559,27 +565,37 @@ where
         tokio::select! {
             _ = sigint.recv() => debug!("Received SIGINT."),
             _ = sigterm.recv() => debug!("Received SIGTERM."),
+            _ = shutdown_rx.changed() => debug!("Received programmatic shutdown signal."),
         };
 
         debug!("Workers monitor shutting down");
 
         Ok(())
     });
-    tokio::spawn(async move {
+    // Re-home the apalis Monitor onto the multi-thread pipeline runtime so its
+    // queue workers distribute across worker threads instead of pinning to the
+    // actix System arbiter's single thread. The JoinHandle is returned so the
+    // Monitor can be joined on graceful shutdown (drain in-flight work).
+    let monitor_handle = handle.spawn(async move {
         if let Err(e) = monitor_future.await {
             error!(error = %e, "monitor error");
         }
     });
-    debug!("Workers monitor shutdown complete");
+    debug!("Workers monitor spawned on pipeline runtime");
 
-    Ok(())
+    Ok(WorkerHandle::Tokio(monitor_handle))
 }
 
 /// Initializes swap workers for Solana and Stellar relayers.
 /// This function creates and registers workers for relayers that have swap enabled and cron schedule set.
+///
+/// `shutdown_rx` mirrors the SQS/PubSub `watch` shutdown pattern (see
+/// [`initialize_redis_workers`]).
 pub async fn initialize_redis_token_swap_workers<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     app_state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
-) -> Result<()>
+    handle: tokio::runtime::Handle,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<WorkerHandle>>
 where
     J: JobProducerTrait + Send + Sync + 'static,
     RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
@@ -596,7 +612,7 @@ where
 
     if relayers_with_swap_enabled.is_empty() {
         debug!("No relayers with swap enabled");
-        return Ok(());
+        return Ok(None);
     }
     info!(
         "Found {} relayers with swap enabled",
@@ -687,7 +703,7 @@ where
         monitor = monitor.register(worker);
     }
 
-    let monitor_future = monitor.run_with_signal(async {
+    let monitor_future = monitor.run_with_signal(async move {
         let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
             .map_err(|e| std::io::Error::other(format!("Failed to create SIGINT signal: {e}")))?;
         let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
@@ -698,18 +714,19 @@ where
         tokio::select! {
             _ = sigint.recv() => debug!("Received SIGINT."),
             _ = sigterm.recv() => debug!("Received SIGTERM."),
+            _ = shutdown_rx.changed() => debug!("Received programmatic shutdown signal."),
         };
 
         debug!("Swap Monitor shutting down");
 
         Ok(())
     });
-    tokio::spawn(async move {
+    let monitor_handle = handle.spawn(async move {
         if let Err(e) = monitor_future.await {
             error!(error = %e, "monitor error");
         }
     });
-    Ok(())
+    Ok(Some(WorkerHandle::Tokio(monitor_handle)))
 }
 
 fn monitor_handle_event(e: Worker<Event>) {

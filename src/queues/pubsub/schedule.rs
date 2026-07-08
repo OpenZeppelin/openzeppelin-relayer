@@ -148,6 +148,7 @@ pub(crate) fn spawn_due_sweep(
     pool: Arc<Pool>,
     key_prefix: String,
     mut shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle {
     let interval = sweep_interval(queue_type);
     info!(
@@ -156,7 +157,7 @@ pub(crate) fn spawn_due_sweep(
         "Spawning Pub/Sub due-sweep"
     );
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         loop {
             if *shutdown_rx.borrow() {
                 break;

@@ -72,16 +72,20 @@ pub(crate) fn token_swap_cron_lock(relayer_id: &str) -> String {
 pub struct CronScheduler {
     app_state: Arc<ThinData<DefaultAppState>>,
     shutdown_rx: watch::Receiver<bool>,
+    /// Handle to the multi-thread pipeline runtime; cron tasks are spawned onto it.
+    runtime_handle: tokio::runtime::Handle,
 }
 
 impl CronScheduler {
     pub fn new(
         app_state: Arc<ThinData<DefaultAppState>>,
         shutdown_rx: watch::Receiver<bool>,
+        runtime_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             app_state,
             shutdown_rx,
+            runtime_handle,
         }
     }
 
@@ -96,6 +100,7 @@ impl CronScheduler {
             Duration::from_secs(TRANSACTION_CLEANUP_LOCK_TTL_SECS),
             self.app_state.clone(),
             self.shutdown_rx.clone(),
+            self.runtime_handle.clone(),
             |state| {
                 Box::pin(async move {
                     let ctx = WorkerContext::new(0, uuid::Uuid::new_v4().to_string());
@@ -119,6 +124,7 @@ impl CronScheduler {
             Duration::from_secs(SYSTEM_CLEANUP_LOCK_TTL_SECS),
             self.app_state.clone(),
             self.shutdown_rx.clone(),
+            self.runtime_handle.clone(),
             |state| {
                 Box::pin(async move {
                     let ctx = WorkerContext::new(0, uuid::Uuid::new_v4().to_string());
@@ -188,6 +194,7 @@ impl CronScheduler {
                 lock_ttl,
                 self.app_state.clone(),
                 self.shutdown_rx.clone(),
+                self.runtime_handle.clone(),
                 move |state| {
                     let rid = relayer_id.clone();
                     Box::pin(async move {
@@ -258,6 +265,7 @@ fn spawn_cron_task(
     lock_ttl: Duration,
     app_state: Arc<ThinData<DefaultAppState>>,
     mut shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
     handler: impl Fn(
             Arc<ThinData<DefaultAppState>>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
@@ -280,7 +288,7 @@ fn spawn_cron_task(
         "Registering cron task"
     );
 
-    let handle = tokio::spawn(async move {
+    let handle = runtime_handle.spawn(async move {
         loop {
             // Compute next tick
             let next = match schedule.upcoming(Utc).next() {
