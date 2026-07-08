@@ -115,6 +115,31 @@ where
                 );
                 return Ok(TransactionStatus::Mined);
             }
+            // For a user-cancelled transaction, attribute the terminal status by what
+            // ACTUALLY mined. Cancellation replaces the tx with a self-send NOOP
+            // (to == from). If that NOOP is what confirmed, the transaction was truly
+            // cancelled. If the original mined instead (the cancellation lost the nonce
+            // race), it executed for real and must be reported Confirmed, not Canceled.
+            // We key off the mined receipt rather than the locally-stored network_data,
+            // which may still describe the NOOP even while the original hash is what
+            // confirmed (e.g. before the replacement has been broadcast).
+            if tx.is_canceled == Some(true) {
+                if receipt.to == Some(receipt.from) {
+                    debug!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        tx_hash = %tx_hash,
+                        "cancellation NOOP confirmed on-chain; marking transaction as Canceled"
+                    );
+                    return Ok(TransactionStatus::Canceled);
+                }
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    tx_hash = %tx_hash,
+                    "cancelled transaction's original mined before the NOOP could replace it; reporting Confirmed"
+                );
+            }
             Ok(TransactionStatus::Confirmed)
         } else {
             debug!(
@@ -1524,6 +1549,23 @@ mod tests {
         }
     }
 
+    /// The fixed `from` address used by [`make_mock_receipt`].
+    fn mock_receipt_from() -> Address {
+        Address::from([0x11; 20])
+    }
+
+    /// Like [`make_mock_receipt`] but sets the receipt's `to`, so cancellation
+    /// attribution (a NOOP is a self-send: `to == from`) can be exercised.
+    fn make_mock_receipt_with_to(
+        status: bool,
+        block_number: Option<u64>,
+        to: Option<Address>,
+    ) -> TransactionReceipt {
+        let mut receipt = make_mock_receipt(status, block_number);
+        receipt.inner.to = to;
+        receipt
+    }
+
     // Tests for `check_transaction_status`
     mod check_transaction_status_tests {
         use super::*;
@@ -1608,6 +1650,125 @@ mod tests {
                 .return_once(|| Box::pin(async { Ok(113) }));
 
             // Mock network repository to return a test network model
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Confirmed);
+        }
+
+        /// When a user-cancelled tx confirms and the mined tx is the NOOP (a self-send,
+        /// receipt.to == receipt.from), it must terminate as Canceled.
+        #[tokio::test]
+        async fn test_cancellation_noop_confirmed_becomes_canceled() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.is_canceled = Some(true);
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xNoopHash".to_string());
+            }
+
+            // Mined receipt for a NOOP: to == from.
+            let noop_to = Some(mock_receipt_from());
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(move |_| {
+                    Box::pin(async move {
+                        Ok(Some(make_mock_receipt_with_to(true, Some(100), noop_to)))
+                    })
+                });
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Canceled);
+        }
+
+        /// If a user-cancelled tx confirms but the ORIGINAL transaction is what mined
+        /// (cancellation lost the nonce race: receipt.to != receipt.from), it actually
+        /// executed and must be reported Confirmed, not Canceled.
+        #[tokio::test]
+        async fn test_cancellation_original_mined_stays_confirmed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.is_canceled = Some(true);
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xOriginalHash".to_string());
+            }
+
+            // Mined receipt for the ORIGINAL transfer: to is a different address than from.
+            let original_to = Some(Address::from([0x22; 20]));
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(move |_| {
+                    Box::pin(async move {
+                        Ok(Some(make_mock_receipt_with_to(
+                            true,
+                            Some(100),
+                            original_to,
+                        )))
+                    })
+                });
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Confirmed);
+        }
+
+        /// A confirmed self-send that is NOT a user cancellation (is_canceled=false) — e.g.
+        /// a nonce-clearing NOOP from timeout handling — must still confirm normally.
+        #[tokio::test]
+        async fn test_non_cancellation_noop_confirmed_stays_confirmed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            // is_canceled stays Some(false) from the helper.
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xNoopHash".to_string());
+            }
+
+            // Even with a self-send receipt (to == from), a non-cancelled tx stays Confirmed.
+            let noop_to = Some(mock_receipt_from());
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(move |_| {
+                    Box::pin(async move {
+                        Ok(Some(make_mock_receipt_with_to(true, Some(100), noop_to)))
+                    })
+                });
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
             mocks
                 .network_repo
                 .expect_get_by_chain_id()

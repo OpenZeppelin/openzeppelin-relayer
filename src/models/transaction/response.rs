@@ -71,6 +71,11 @@ pub struct EvmTransactionResponse {
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
+    /// Whether this transaction was cancelled by the user. While true and still in a
+    /// non-terminal status, it is being replaced on-chain by a NOOP that consumes its
+    /// nonce; it terminates as `canceled` once that NOOP mines.
+    #[schema(nullable = false)]
+    pub is_canceled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -144,6 +149,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
                     signature: evm_data.signature,
                     speed: evm_data.speed,
+                    is_canceled: model.is_canceled,
                 }))
             }
             NetworkTransactionData::Solana(solana_data) => {

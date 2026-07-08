@@ -1578,6 +1578,108 @@ impl TransactionRepository for RedisTransactionRepository {
         })
     }
 
+    async fn find_by_status_paginated_filtered(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+        exclude_canceled: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        if !exclude_canceled {
+            return self
+                .find_by_status_paginated(relayer_id, statuses, query, oldest_first)
+                .await;
+        }
+
+        // Excluding cancelled-in-progress transactions means removing them BEFORE
+        // counting and paginating, which the per-status sorted-set fast path (zcard +
+        // ZRANGE) cannot do. So for this listing-only path we load all matching
+        // transactions, drop the cancelled ones, then sort/paginate in memory. The hot
+        // internal callers use the unfiltered fast method above.
+        for status in statuses {
+            self.ensure_status_sorted_set(relayer_id, status).await?;
+        }
+
+        let mut conn = self
+            .get_connection(
+                self.connections.reader(),
+                "find_by_status_paginated_filtered",
+            )
+            .await?;
+
+        // Collect all ids (with scores) across the requested statuses.
+        let mut all_ids: Vec<(String, f64)> = Vec::new();
+        for status in statuses {
+            let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
+            let ids_with_scores: Vec<(String, f64)> = redis::cmd("ZRANGE")
+                .arg(&sorted_key)
+                .arg(0)
+                .arg(-1)
+                .arg("WITHSCORES")
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "find_by_status_paginated_filtered"))?;
+            all_ids.extend(ids_with_scores);
+        }
+
+        drop(conn);
+
+        // Dedup across statuses, keeping the extreme score for the sort direction.
+        let mut id_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        for (id, score) in all_ids {
+            id_map
+                .entry(id)
+                .and_modify(|s| {
+                    if oldest_first {
+                        if score < *s {
+                            *s = score
+                        }
+                    } else if score > *s {
+                        *s = score
+                    }
+                })
+                .or_insert(score);
+        }
+
+        let mut sorted_ids: Vec<(String, f64)> = id_map.into_iter().collect();
+        if oldest_first {
+            sorted_ids.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            sorted_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        let ordered_ids: Vec<String> = sorted_ids.into_iter().map(|(id, _)| id).collect();
+
+        // Load all matching transactions, then filter + paginate, preserving sort order.
+        let fetched = self.get_transactions_by_ids(&ordered_ids).await?;
+        let mut by_id: std::collections::HashMap<String, TransactionRepoModel> = fetched
+            .results
+            .into_iter()
+            .map(|t| (t.id.clone(), t))
+            .collect();
+
+        let filtered: Vec<TransactionRepoModel> = ordered_ids
+            .iter()
+            .filter_map(|id| by_id.remove(id))
+            .filter(|t| t.is_canceled != Some(true))
+            .collect();
+
+        let total = filtered.len() as u64;
+        let start = ((query.page.saturating_sub(1)) * query.per_page) as usize;
+        let items: Vec<TransactionRepoModel> = filtered
+            .into_iter()
+            .skip(start)
+            .take(query.per_page as usize)
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
     async fn find_by_nonce(
         &self,
         relayer_id: &str,
