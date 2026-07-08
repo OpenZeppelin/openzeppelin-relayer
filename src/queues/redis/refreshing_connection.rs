@@ -133,9 +133,15 @@ impl<C: ConnectionLike + Clone + Send> ConnState<C> {
     /// non-expired connection (one build in flight, no thundering herd), and a
     /// failed build cannot retry faster than the gap. A successful build
     /// resets the clock fully via `install`.
+    ///
+    /// If the configured max age is shorter than `gap`, the effective retry
+    /// gap for failed builds is the max age itself. `checked_sub` guards
+    /// against `Instant` underflow on hosts whose monotonic clock started
+    /// recently; the fallback defers retry by one full age window instead.
     fn defer_expiry(&mut self, gap: Duration) {
         if let Some(age) = self.max_age {
-            self.created_at = Instant::now() - age.saturating_sub(gap);
+            let now = Instant::now();
+            self.created_at = now.checked_sub(age.saturating_sub(gap)).unwrap_or(now);
         }
     }
 }
@@ -482,17 +488,29 @@ mod tests {
         (conn, rebuild_count)
     }
 
+    /// An `Instant` far enough in the past to trip any age/gap check.
+    /// `checked_sub` with fallbacks: a bare `Instant - Duration` panics on
+    /// hosts whose monotonic clock started less than an hour ago (fresh
+    /// VMs/containers), which would make these tests flake.
+    fn distant_past() -> Instant {
+        let now = Instant::now();
+        [3600u64, 600, 60, 5]
+            .iter()
+            .find_map(|&secs| now.checked_sub(Duration::from_secs(secs)))
+            .unwrap_or(now)
+    }
+
     /// Force the shared state to look expired regardless of jitter.
     fn force_expire(conn: &RefreshingConnection<FakeConn>) {
         let mut guard = conn.lock();
-        guard.created_at = Instant::now() - Duration::from_secs(3600);
+        guard.created_at = distant_past();
     }
 
     /// Push `last_reconnect` far enough into the past that the reactive rate
     /// limit no longer blocks another rebuild.
     fn elapse_reconnect_gap(conn: &RefreshingConnection<FakeConn>) {
         let mut guard = conn.lock();
-        guard.last_reconnect = Some(Instant::now() - Duration::from_secs(3600));
+        guard.last_reconnect = Some(distant_past());
     }
 
     #[tokio::test]

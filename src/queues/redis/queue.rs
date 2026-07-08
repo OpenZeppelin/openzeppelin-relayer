@@ -33,7 +33,7 @@ use crate::jobs::{
 /// reactively when a reply indicates the connection is pinned to a read-only
 /// node, which accelerates recovery; the bounded lifetime remains the
 /// guaranteed backstop.
-type QueueStorage<T> = RedisStorage<T, RefreshingConnection<ConnectionManager>>;
+pub type QueueStorage<T> = RedisStorage<T, RefreshingConnection<ConnectionManager>>;
 
 #[derive(Clone)]
 pub struct Queue {

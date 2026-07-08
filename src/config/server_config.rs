@@ -444,6 +444,10 @@ impl ServerConfig {
     ///
     /// See the `redis_connection_max_age_ms` field docs. Defaults to 60000ms
     /// (also on parse failure); `0` disables age-based recycling.
+    ///
+    /// Note: the pool recycler sweeps at half this value clamped to
+    /// `[1s, 30s]`, so values under ~2000ms are effectively bounded by the 1s
+    /// sweep floor rather than the configured age.
     pub fn get_redis_connection_max_age_ms() -> u64 {
         env::var("REDIS_CONNECTION_MAX_AGE_MS")
             .unwrap_or_else(|_| "60000".to_string())
