@@ -619,16 +619,29 @@ main() {
   : >"${HARNESS_LOG}"
   : >"${RELAYER_LOG}"
   : >"${VERDICTS_FILE}"
-  trap cleanup EXIT
 
   need_cmd docker
   need_cmd curl
   need_cmd jq
   need_cmd cargo
 
+  local selection
+  if ! selection="$(select_scenarios "${REQUESTED_SCENARIO}")"; then
+    exit 64
+  fi
+  scenarios=()
+  while IFS= read -r scenario; do
+    [[ -n "${scenario}" ]] && scenarios+=("${scenario}")
+  done <<< "${selection}"
+  if (( ${#scenarios[@]} == 0 )); then
+    log "error: no scenarios selected for '${REQUESTED_SCENARIO}'" >&2
+    exit 64
+  fi
+
+  trap cleanup EXIT
+
   bootstrap_local_signer_keystore
 
-  while IFS= read -r scenario; do scenarios+=("${scenario}"); done < <(select_scenarios "${REQUESTED_SCENARIO}")
   start_wiremock
   start_redis
   start_relayer

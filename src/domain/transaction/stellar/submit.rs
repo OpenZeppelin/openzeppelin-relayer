@@ -178,6 +178,19 @@ where
                     .record_stellar_try_again_later_retry(tx.id.clone(), Utc::now().to_rfc3339())
                     .await?;
 
+                // The repo returns the transaction unchanged if it reached a final state
+                // between this submission and the record call (e.g. a racing job finalized
+                // it). Nothing left to rescue — skip metrics and scheduling.
+                if is_final_state(&updated_tx.status) {
+                    debug!(
+                        tx_id = %updated_tx.id,
+                        relayer_id = %updated_tx.relayer_id,
+                        status = ?updated_tx.status,
+                        "transaction reached final state during retry recording; skipping fast resubmit"
+                    );
+                    return Ok(updated_tx);
+                }
+
                 let retries = updated_tx
                     .metadata
                     .as_ref()
@@ -271,6 +284,19 @@ where
                             Utc::now().to_rfc3339(),
                         )
                         .await?;
+
+                    // The repo returns the transaction unchanged if it reached a final state
+                    // between this submission and the record call (e.g. a racing job finalized
+                    // it). Nothing left to rescue — skip metrics and scheduling.
+                    if is_final_state(&updated_tx.status) {
+                        debug!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            status = ?updated_tx.status,
+                            "transaction reached final state during retry recording; skipping fast resubmit"
+                        );
+                        return Ok(updated_tx);
+                    }
 
                     let retries = updated_tx
                         .metadata
@@ -1311,6 +1337,64 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn submit_transaction_try_again_later_final_state_skips_enqueue() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Confirmed;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                consecutive_failures: 0,
+                total_failures: 0,
+                insufficient_fee_retries: 0,
+                try_again_later_retries: 0,
+                nonce_too_high_retries: 0,
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            assert!(res.is_ok());
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Confirmed);
+        }
+
+        #[tokio::test]
         async fn submit_transaction_error_status_fails() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
@@ -1577,6 +1661,65 @@ mod tests {
                     .map(|metadata| metadata.insufficient_fee_retries),
                 Some(STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1)
             );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_final_state_skips_enqueue() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Confirmed;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                consecutive_failures: 0,
+                total_failures: 0,
+                insufficient_fee_retries: 0,
+                try_again_later_retries: 0,
+                nonce_too_high_retries: 0,
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            assert!(res.is_ok());
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Confirmed);
         }
 
         #[tokio::test]
