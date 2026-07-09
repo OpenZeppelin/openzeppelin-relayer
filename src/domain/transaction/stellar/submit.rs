@@ -277,13 +277,17 @@ where
                         .as_ref()
                         .map_or(0, |metadata| metadata.insufficient_fee_retries);
 
+                    // This can only happen when a concurrent submission increments the counter
+                    // between our read and record. That winner already scheduled the retry; skip
+                    // this enqueue so the next rejection terminates normally at the pre-record cap.
                     if retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
-                        STELLAR_SUBMISSION_FAILURES
-                            .with_label_values(&["error", "tx_insufficient_fee"])
-                            .inc();
-                        return Err(TransactionError::UnexpectedError(format!(
-                            "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
-                        )));
+                        warn!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            insufficient_fee_retries = retries,
+                            "post-record retry count exceeds cap; skipping fast resubmit - concurrent submission detected"
+                        );
+                        return Ok(updated_tx);
                     }
 
                     let delay_seconds =
@@ -1518,7 +1522,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn submit_transaction_insufficient_fee_post_record_retry_limit_fails() {
+        async fn submit_transaction_insufficient_fee_post_record_over_cap_skips_enqueue() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
@@ -1564,10 +1568,15 @@ mod tests {
 
             let res = handler.submit_core(tx).await;
 
-            let err = res.unwrap_err();
-            assert!(err.to_string().contains(&format!(
-                "insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
-            )));
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1)
+            );
         }
 
         #[tokio::test]
