@@ -535,9 +535,8 @@ impl StellarProvider {
                     let json_response: serde_json::Value =
                         response.json().await.map_err(ProviderError::from)?;
 
-                    // Map JSON-RPC error objects here, inside the retried operation, so
-                    // retriable codes (e.g. -32005 rate limited, -32603 internal error)
-                    // participate in retry/failover.
+                    // Map JSON-RPC error objects inside the retried operation so
+                    // retriable codes (e.g. -32005 rate limited) can retry/fail over.
                     if let Some(error) = json_response.get("error") {
                         return Err(json_rpc_error_to_provider_error(error));
                     }
@@ -551,7 +550,9 @@ impl StellarProvider {
     }
 
     /// Executes a JSON-RPC request over the raw reqwest HTTP path and returns the
-    /// `result` field, mapping JSON-RPC error objects to `ProviderError`.
+    /// `result` field. HTTP status and JSON-RPC error objects are mapped to
+    /// `ProviderError` inside `retry_raw_request`, where they participate in
+    /// retry/failover.
     ///
     /// Unlike the `stellar-rpc-client` (jsonrpsee) client, the raw reqwest path
     /// negotiates zstd response compression (`Accept-Encoding: zstd`), which
@@ -576,8 +577,6 @@ impl StellarProvider {
             "params": params,
         });
 
-        // JSON-RPC error objects are mapped to `ProviderError` inside
-        // `retry_raw_request` so they participate in retry/failover.
         let response = self.retry_raw_request(operation_name, request).await?;
 
         // Extract result
@@ -735,9 +734,8 @@ impl StellarProviderTrait for StellarProvider {
     /// Fetches a transaction via the raw reqwest path rather than the
     /// `stellar-rpc-client` (jsonrpsee) client: `getTransaction` responses carry
     /// envelope/result/meta XDR that can reach hundreds of KB for Soroban
-    /// transactions, and jsonrpsee cannot decompress responses. The raw path
-    /// negotiates zstd compression, cutting transfer time on this high-volume
-    /// status-polling call.
+    /// transactions, and jsonrpsee cannot decompress responses; the raw path
+    /// negotiates zstd compression.
     async fn get_transaction(&self, tx_id: &Hash) -> Result<GetTransactionResponse, ProviderError> {
         let params = serde_json::json!({ "hash": tx_id });
 
