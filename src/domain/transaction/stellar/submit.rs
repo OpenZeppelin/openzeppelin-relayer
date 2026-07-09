@@ -276,6 +276,16 @@ where
                         .metadata
                         .as_ref()
                         .map_or(0, |metadata| metadata.insufficient_fee_retries);
+
+                    if retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                        STELLAR_SUBMISSION_FAILURES
+                            .with_label_values(&["error", "tx_insufficient_fee"])
+                            .inc();
+                        return Err(TransactionError::UnexpectedError(format!(
+                            "Transaction submission error: insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+                        )));
+                    }
+
                     let delay_seconds =
                         STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS * i64::from(retries);
 
@@ -1434,6 +1444,9 @@ mod tests {
         async fn submit_transaction_insufficient_fee_escalates_delay() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
+            let before_submit = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+            let before_submit_for_mock = before_submit.clone();
+            let expected_delay = STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS * 3;
 
             let mut response = create_send_tx_response(
                 "ERROR",
@@ -1470,11 +1483,14 @@ mod tests {
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
-                .withf(|_, scheduled_on| {
+                .withf(move |_, scheduled_on| {
+                    let before_submit =
+                        before_submit_for_mock.load(std::sync::atomic::Ordering::SeqCst);
                     let now = Utc::now().timestamp();
-                    scheduled_on.is_some()
-                        && scheduled_on.unwrap() >= now + 10
-                        && scheduled_on.unwrap() <= now + 20
+                    scheduled_on.is_some_and(|scheduled_on| {
+                        scheduled_on >= before_submit + expected_delay - 1
+                            && scheduled_on <= now + expected_delay + 1
+                    })
                 })
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
@@ -1487,6 +1503,7 @@ mod tests {
                 data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
             }
 
+            before_submit.store(Utc::now().timestamp(), std::sync::atomic::Ordering::SeqCst);
             let res = handler.submit_transaction_impl(tx).await;
 
             let returned_tx = res.unwrap();
@@ -1498,6 +1515,59 @@ mod tests {
                     .map(|metadata| metadata.insufficient_fee_retries),
                 Some(3)
             );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_post_record_retry_limit_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            let err = res.unwrap_err();
+            assert!(err.to_string().contains(&format!(
+                "insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+            )));
         }
 
         #[tokio::test]

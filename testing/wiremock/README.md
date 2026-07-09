@@ -124,6 +124,10 @@ Prerequisites:
 - Rust/Cargo for `cargo build --bin openzeppelin-relayer`.
 - `curl` and `jq`.
 - Network access to Stellar testnet, Horizon testnet, and friendbot.
+- The local signer keystore is generated automatically at
+  `testing/wiremock/e2e/local-signer.keystore` if missing, using
+  `KEYSTORE_PASSPHRASE`, and the generated testnet account is funded through friendbot before
+  the relayer starts.
 
 The runner starts WireMock, starts a disposable Redis container for the Redis queue backend, builds
 and starts `target/debug/openzeppelin-relayer`, funds the configured Stellar testnet account if

@@ -19,6 +19,7 @@ RELAYER_PORT="${RELAYER_PORT:-18080}"
 RELAYER_URL="${RELAYER_URL:-http://127.0.0.1:${RELAYER_PORT}}"
 RELAYER_CONFIG_DIR="${WIREMOCK_DIR}/e2e"
 RELAYER_CONFIG_FILE_NAME="fast-resubmit-config.json"
+LOCAL_SIGNER_KEYSTORE="${REPO_ROOT}/testing/wiremock/e2e/local-signer.keystore"
 
 API_KEY="${API_KEY:-multi-threaded-stellar-example-api-key}"
 KEYSTORE_PASSPHRASE="${KEYSTORE_PASSPHRASE:-MtStellarRuntime123!}"
@@ -110,6 +111,84 @@ compose_cmd() {
     printf 'missing docker compose\n' >&2
     exit 127
   fi
+}
+
+write_key_address_tool() {
+  local tool_dir="$1"
+  mkdir -p "${tool_dir}/src"
+  cat >"${tool_dir}/Cargo.toml" <<'EOF'
+[package]
+name = "stellar-keystore-address"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
+oz-keystore = "0.1.4"
+stellar-strkey = "0.0.14"
+EOF
+  cat >"${tool_dir}/src/main.rs" <<'EOF'
+use std::{env, io, path::PathBuf};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = env::args().skip(1);
+    let keystore = args.next().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "missing keystore path argument")
+    })?;
+    let passphrase = args.next().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "missing passphrase argument")
+    })?;
+
+    let raw_key = oz_keystore::LocalClient::load(PathBuf::from(keystore), passphrase);
+    let key_bytes: [u8; 32] = raw_key.try_into().map_err(|raw: Vec<u8>| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("expected a 32-byte Stellar key, got {} bytes", raw.len()),
+        )
+    })?;
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
+    let public_key = stellar_strkey::ed25519::PublicKey(signing_key.verifying_key().to_bytes());
+
+    println!("{public_key}");
+    Ok(())
+}
+EOF
+}
+
+derive_stellar_address() {
+  local keystore="$1" tool_dir
+  tool_dir="${ARTIFACT_DIR}/stellar-keystore-address"
+  write_key_address_tool "${tool_dir}"
+  CARGO_TARGET_DIR="${REPO_ROOT}/target" \
+    cargo run --quiet --manifest-path "${tool_dir}/Cargo.toml" -- "${keystore}" "${KEYSTORE_PASSPHRASE}" 2>>"${HARNESS_LOG}"
+}
+
+bootstrap_local_signer_keystore() {
+  local keystore_dir keystore_name address
+  if [[ -f "${LOCAL_SIGNER_KEYSTORE}" ]]; then
+    log "local signer keystore exists at ${LOCAL_SIGNER_KEYSTORE}; skipping bootstrap generation"
+    return 0
+  fi
+
+  log "local signer keystore missing; generating ${LOCAL_SIGNER_KEYSTORE}"
+  keystore_dir="$(dirname "${LOCAL_SIGNER_KEYSTORE}")"
+  keystore_name="$(basename "${LOCAL_SIGNER_KEYSTORE}")"
+  (
+    cd "${REPO_ROOT}"
+    cargo run --quiet --example create_key -- \
+      --password "${KEYSTORE_PASSPHRASE}" \
+      --output-dir "${keystore_dir}" \
+      --filename "${keystore_name}"
+  ) >>"${HARNESS_LOG}" 2>&1
+  [[ -f "${LOCAL_SIGNER_KEYSTORE}" ]] || { log "keystore generation did not create ${LOCAL_SIGNER_KEYSTORE}"; return 1; }
+
+  if ! address="$(derive_stellar_address "${LOCAL_SIGNER_KEYSTORE}")"; then
+    log "failed to derive Stellar address from generated keystore"
+    return 1
+  fi
+  [[ "${address}" == G* && "${#address}" -eq 56 ]] || { log "failed to derive Stellar address from generated keystore"; return 1; }
+  ensure_funded "${address}"
+  log "bootstrapped local signer keystore for ${address}"
 }
 
 delete_dynamic_stubs() {
@@ -546,6 +625,8 @@ main() {
   need_cmd curl
   need_cmd jq
   need_cmd cargo
+
+  bootstrap_local_signer_keystore
 
   while IFS= read -r scenario; do scenarios+=("${scenario}"); done < <(select_scenarios "${REQUESTED_SCENARIO}")
   start_wiremock
