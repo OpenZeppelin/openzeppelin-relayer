@@ -66,12 +66,6 @@ tower = "0.5"
 oz-keystore = { version = "0.1.4"}
 hex = { version = "0.4"}
 bytes = { version = "1.9" }
-# The `zstd` feature makes every reqwest client advertise `Accept-Encoding: zstd`
-# and transparently decompress responses. Via cargo feature unification this also
-# applies to the reqwest clients inside `alloy-transport-http` (EVM) and
-# `solana-rpc-client`, so RPC providers that support zstd (e.g. QuickNode) return
-# compressed responses everywhere. zstd/zstd-sys were already in the dependency
-# tree (no new supply-chain surface).
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "zstd"] }
 base64 = { version =  "0.22" }
 hmac = { version = "0.12" }
@@ -147,7 +141,6 @@ proptest = "1.6.0"
 rand = "0.9.0"
 tempfile = "3.2"
 serial_test = "3.2"
-# For compressing test fixtures that exercise reqwest's zstd response decompression.
 zstd = "0.13"
 clap = { version = "4.5", features = ["derive"] }
 
