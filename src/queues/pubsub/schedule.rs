@@ -59,6 +59,7 @@ pub(crate) fn spawn_due_sweep(
     pool: Arc<Pool>,
     key_prefix: String,
     shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle {
     let publish = move |job: ScheduledJob| {
         let publisher = publisher.clone();
@@ -80,6 +81,7 @@ pub(crate) fn spawn_due_sweep(
         pool,
         key_prefix,
         shutdown_rx,
+        runtime_handle,
     )
 }
 

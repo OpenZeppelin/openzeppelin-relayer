@@ -77,6 +77,7 @@ pub(crate) fn spawn_consumer_for_queue(
     key_prefix: String,
     redacted_url: String,
     shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle {
     let concurrency = get_concurrency_for_queue(queue_type);
     let config = ConsumerConfig {
@@ -96,7 +97,7 @@ pub(crate) fn spawn_consumer_for_queue(
         "Spawning RabbitMQ consumer"
     );
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         run_consumer_loop(
             connection,
             config,

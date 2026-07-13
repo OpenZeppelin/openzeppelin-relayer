@@ -480,8 +480,8 @@ mod prepare_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .expect_sync_floor()
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // Mock finalize_transaction_state for failure handling
         mocks
@@ -577,8 +577,8 @@ mod prepare_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .expect_sync_floor()
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // signer fails
         mocks.signer.expect_sign_transaction().returning(|_| {
@@ -703,10 +703,10 @@ mod prepare_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
+            .expect_sync_floor()
             .times(1)
-            .withf(|_, _, seq| *seq == 42) // Next usable = 41 + 1
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .withf(|_, _, floor| *floor == 42) // Next usable = 41 + 1
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // Mock signer to fail after sequence is incremented
         mocks
@@ -809,9 +809,9 @@ mod prepare_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
+            .expect_sync_floor()
             .times(1)
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // Mock provider to fail simulation for Soroban operations
         mocks
@@ -916,9 +916,9 @@ mod prepare_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
+            .expect_sync_floor()
             .times(1)
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // Mock transaction update for failure
         mocks
@@ -1093,8 +1093,8 @@ mod refactoring_tests {
 
         mocks
             .counter
-            .expect_set()
-            .returning(|_, _, _| Box::pin(ready(Ok(()))));
+            .expect_sync_floor()
+            .returning(|_, _, floor| Box::pin(ready(Ok(floor))));
 
         // Mock finalize_transaction_state for failure
         mocks.tx_repo.expect_partial_update().returning(|id, upd| {

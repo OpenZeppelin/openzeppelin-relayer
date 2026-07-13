@@ -72,6 +72,7 @@ pub(crate) fn spawn_worker_for_subscription(
     redis_pool: Arc<Pool>,
     key_prefix: String,
     shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle {
     let concurrency = get_concurrency_for_queue(queue_type);
     let config = WorkerConfig {
@@ -90,7 +91,7 @@ pub(crate) fn spawn_worker_for_subscription(
         "Spawning Pub/Sub worker"
     );
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         let subscription = client.subscription(&subscription_name);
         let semaphore = Arc::new(Semaphore::new(concurrency));
         run_pull_loop(

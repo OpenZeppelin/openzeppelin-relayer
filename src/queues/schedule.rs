@@ -164,6 +164,7 @@ pub(crate) fn spawn_due_sweep<F, Fut>(
     pool: Arc<Pool>,
     key_prefix: String,
     mut shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle
 where
     F: Fn(ScheduledJob) -> Fut + Send + Sync + 'static,
@@ -177,7 +178,7 @@ where
         "Spawning due-sweep"
     );
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         loop {
             if *shutdown_rx.borrow() {
                 break;

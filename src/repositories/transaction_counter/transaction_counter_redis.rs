@@ -213,6 +213,53 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         Ok(())
     }
 
+    async fn sync_floor(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        floor: u64,
+    ) -> Result<u64, RepositoryError> {
+        if relayer_id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Relayer ID cannot be empty".to_string(),
+            ));
+        }
+
+        if address.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Address cannot be empty".to_string(),
+            ));
+        }
+
+        let key = self.counter_key(relayer_id, address);
+        debug!(relayer_id = %relayer_id, address = %address, floor = %floor, "syncing counter floor for relayer and address");
+
+        let mut conn = self
+            .get_connection(self.connections.primary(), "sync_floor")
+            .await?;
+
+        // Atomic monotonic max: raise to `floor` only if the current value is lower (or unset),
+        // never rewind below an already-allocated sequence. Returns the effective value.
+        const SYNC_FLOOR_LUA: &str = r#"
+            local cur = redis.call('GET', KEYS[1])
+            if (not cur) or (tonumber(cur) < tonumber(ARGV[1])) then
+                redis.call('SET', KEYS[1], ARGV[1])
+                return tonumber(ARGV[1])
+            end
+            return tonumber(cur)
+        "#;
+
+        let effective: u64 = redis::Script::new(SYNC_FLOOR_LUA)
+            .key(&key)
+            .arg(floor)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "sync_floor"))?;
+
+        debug!(effective = %effective, "counter floor synced");
+        Ok(effective)
+    }
+
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
         let mut conn = self
             .get_connection(self.connections.primary(), "drop_all_entries")
@@ -310,6 +357,43 @@ mod tests {
         repo.set(&relayer_id, &address, 100).await.unwrap();
         let result = repo.get(&relayer_id, &address).await.unwrap();
         assert_eq!(result, Some(100));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_sync_floor_no_rewind() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let address = uuid::Uuid::new_v4().to_string();
+
+        // Counter starts at S = 5 then concurrent INCRs advance it to S+10 = 15.
+        repo.set(&relayer_id, &address, 5).await.unwrap();
+        for _ in 0..10 {
+            repo.get_and_increment(&relayer_id, &address).await.unwrap();
+        }
+        assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(15));
+
+        // Stale chain floor S+1 = 6 MUST NOT rewind the counter.
+        let effective = repo.sync_floor(&relayer_id, &address, 6).await.unwrap();
+        assert_eq!(effective, 15);
+        assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(15));
+
+        // A genuinely-ahead floor DOES advance the counter.
+        let effective = repo.sync_floor(&relayer_id, &address, 20).await.unwrap();
+        assert_eq!(effective, 20);
+        assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(20));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_sync_floor_seeds_when_unset() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let address = uuid::Uuid::new_v4().to_string();
+
+        let effective = repo.sync_floor(&relayer_id, &address, 7).await.unwrap();
+        assert_eq!(effective, 7);
+        assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(7));
     }
 
     #[tokio::test]

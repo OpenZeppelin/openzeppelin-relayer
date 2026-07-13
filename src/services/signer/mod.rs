@@ -15,6 +15,7 @@
 //!   │   |── LocalSigner
 //!   |   |── TurnkeySigner
 //!   |   └── AwsKmsSigner
+//!   |   └── AzureKeyVaultSigner
 //!   ├── SolanaSigner
 //!   │   |── LocalSigner
 //!   |   |── GoogleCloudKmsSigner
@@ -155,11 +156,13 @@ impl SignerFactory {
                 NetworkSigner::Evm(evm_signer)
             }
             NetworkType::Solana => {
-                let solana_signer = SolanaSignerFactory::create_solana_signer(signer_model)?;
+                let solana_signer =
+                    SolanaSignerFactory::create_solana_signer(signer_model.clone()).await?;
                 NetworkSigner::Solana(solana_signer)
             }
             NetworkType::Stellar => {
-                let stellar_signer = StellarSignerFactory::create_stellar_signer(signer_model)?;
+                let stellar_signer =
+                    StellarSignerFactory::create_stellar_signer(signer_model.clone()).await?;
                 NetworkSigner::Stellar(stellar_signer)
             }
         };

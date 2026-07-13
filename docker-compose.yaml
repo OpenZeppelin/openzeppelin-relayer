@@ -19,6 +19,12 @@ services:
       RATE_LIMIT_REQUESTS_PER_SECOND: ${RATE_LIMIT_REQUESTS_PER_SECOND:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
       METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      # Pipeline runtime / HTTP worker sizing. Pin these to the container's vCPU quota
+      # (NOT host cores) — auto-detection returns host cores on AWS Fargate (cpu.shares).
+      # ACTIX_WORKERS + TOKIO_WORKER_THREADS should be <= the allocated vCPU. Unset =
+      # auto (actix = vcpu/2, tokio = remainder).
+      TOKIO_WORKER_THREADS: ${TOKIO_WORKER_THREADS:-}
+      ACTIX_WORKERS: ${ACTIX_WORKERS:-}
       WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY:-/dev/null}
       KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE:-/dev/null}
       API_KEY: ${API_KEY}

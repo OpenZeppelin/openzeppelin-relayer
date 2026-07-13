@@ -84,6 +84,7 @@ pub async fn spawn_worker_for_queue(
     queue_url: String,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> Result<WorkerHandle, QueueBackendError> {
     let concurrency = get_concurrency_for_queue(queue_type);
     let max_retries = queue_type.max_retries();
@@ -108,7 +109,9 @@ pub async fn spawn_worker_for_queue(
     // All pollers share the same semaphore so total concurrency is bounded.
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    // Re-home the poll loop onto the pipeline runtime; the inner JoinSet pollers
+    // inherit this runtime, so all SQS polling distributes across worker threads.
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         let mut poller_handles: JoinSet<()> = JoinSet::new();
 
         for poller_id in 0..poller_count {
@@ -514,9 +517,14 @@ async fn process_message(
         .unwrap_or(1);
     // SQS receive count starts at 1; Apalis Attempt starts at 0.
     let attempt_number = receive_count.saturating_sub(1);
-    // Persisted retry attempt for self-reenqueued status checks. Falls back to receive_count-based
-    // attempt when attribute is missing.
-    let logical_retry_attempt = parse_retry_attempt(&message).unwrap_or(attempt_number);
+    // Attempt count handed to the handler for its max_attempts decision.
+    // Prefers the persisted `retry_attempt` attribute (set on standard-queue
+    // re-enqueues, where receive_count resets to 1 every retry) and falls back
+    // to receive_count-1 for FIFO (same physical message redelivered).
+    // Using receive_count alone would peg standard-queue retries at attempt 0
+    // forever, so max_attempts would never trigger and the job would loop.
+    let logical_retry_attempt =
+        effective_handler_attempt(receive_count, parse_retry_attempt(&message));
 
     // Use SQS MessageId as the worker task_id for log correlation.
     let sqs_message_id = message.message_id().unwrap_or("unknown").to_string();
@@ -536,7 +544,7 @@ async fn process_message(
             process_job::<TransactionRequest, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionRequest",
                 transaction_request_handler,
@@ -547,7 +555,7 @@ async fn process_message(
             process_job::<TransactionSend, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionSend",
                 transaction_submission_handler,
@@ -558,7 +566,7 @@ async fn process_message(
             process_job::<TransactionStatusCheck, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TransactionStatusCheck",
                 transaction_status_handler,
@@ -569,7 +577,7 @@ async fn process_message(
             process_job::<NotificationSend, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "NotificationSend",
                 notification_handler,
@@ -580,7 +588,7 @@ async fn process_message(
             process_job::<TokenSwapRequest, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "TokenSwapRequest",
                 token_swap_request_handler,
@@ -591,7 +599,7 @@ async fn process_message(
             process_job::<RelayerHealthCheck, _, _>(
                 body,
                 app_state,
-                attempt_number,
+                logical_retry_attempt,
                 sqs_message_id,
                 "RelayerHealthCheck",
                 relayer_health_check_handler,
@@ -776,6 +784,22 @@ fn parse_retry_attempt(message: &Message) -> Option<usize> {
         .and_then(|attrs| attrs.get("retry_attempt"))
         .and_then(|value| value.string_value())
         .and_then(|value| value.parse::<usize>().ok())
+}
+
+/// The attempt number handed to a job handler for its `max_attempts` decision.
+///
+/// Standard-queue retries re-enqueue a brand-new message, so the SQS
+/// `ApproximateReceiveCount` resets to 1 on every retry; the true retry count
+/// is carried instead in the persisted `retry_attempt` message attribute.
+/// FIFO retries reuse the same physical message via `change_message_visibility`,
+/// so `receive_count` climbs and no `retry_attempt` attribute is set.
+///
+/// Preferring the persisted `retry_attempt` (falling back to `receive_count - 1`)
+/// yields a monotonically increasing attempt count on BOTH queue types, so the
+/// handler's `max_attempts` ceiling is actually enforced and a permanently
+/// failing job cannot loop forever on a standard queue.
+fn effective_handler_attempt(receive_count: usize, retry_attempt: Option<usize>) -> usize {
+    retry_attempt.unwrap_or_else(|| receive_count.saturating_sub(1))
 }
 
 /// Compute pickup latency in seconds, clamping negative deltas to 0 so a
@@ -1636,6 +1660,27 @@ mod tests {
             .build();
 
         assert_eq!(queue_pickup_baseline_ms(&message), Some(777_000));
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_prefers_persisted_retry_attempt() {
+        // Standard-queue retry: re-enqueued as a NEW message (receive_count=1)
+        // but carrying retry_attempt=3. The handler must see attempt 3, not 0,
+        // otherwise max_attempts is never reached and the job loops forever.
+        assert_eq!(effective_handler_attempt(1, Some(3)), 3);
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_falls_back_to_receive_count_for_fifo() {
+        // FIFO retry: same physical message redelivered, receive_count climbs,
+        // and there is no retry_attempt attribute to read.
+        assert_eq!(effective_handler_attempt(4, None), 3);
+    }
+
+    #[test]
+    fn test_effective_handler_attempt_first_delivery_is_zero() {
+        assert_eq!(effective_handler_attempt(1, None), 0);
+        assert_eq!(effective_handler_attempt(1, Some(0)), 0);
     }
 
     #[test]

@@ -873,12 +873,12 @@ mod tests {
                 })
             });
 
-            // Mock counter set for sync_sequence_from_chain
+            // Mock counter sync_floor for sync_sequence_from_chain
             mocks
                 .counter
-                .expect_set()
+                .expect_sync_floor()
                 .times(1)
-                .returning(|_, _, _| Box::pin(async { Ok(()) }));
+                .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
 
             // Mock partial_update for reset_transaction_for_retry - should reset to Pending
             mocks
