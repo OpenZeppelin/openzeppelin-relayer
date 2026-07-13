@@ -74,6 +74,13 @@ pub struct ServerConfig {
     pub redis_reader_pool_max_size: usize,
     /// Timeout in milliseconds waiting to get a connection from the pool.
     pub redis_pool_timeout_ms: u64,
+    /// Maximum lifetime in milliseconds for a Redis connection before it is
+    /// proactively dropped and reopened. Reopening re-resolves the endpoint's
+    /// DNS, which lets connections follow endpoint changes such as failover,
+    /// scaling, node replacement, or maintenance (e.g. after an ElastiCache
+    /// failover repoints the endpoint to a new node). A value of `0` disables
+    /// age-based recycling.
+    pub redis_connection_max_age_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -174,6 +181,7 @@ impl ServerConfig {
             redis_key_prefix: Self::get_redis_key_prefix(),
             redis_pool_max_size: Self::get_redis_pool_max_size(),
             redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
+            redis_connection_max_age_ms: Self::get_redis_connection_max_age_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -304,6 +312,37 @@ impl ServerConfig {
         })
     }
 
+    /// Gets the GCP project ID for the Pub/Sub backend.
+    ///
+    /// Required when using the Pub/Sub queue backend (even against the emulator).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `PUBSUB_PROJECT_ID` is not set.
+    pub fn get_pubsub_project_id() -> Result<String, String> {
+        env::var("PUBSUB_PROJECT_ID")
+            .map_err(|_| "PUBSUB_PROJECT_ID not set. Required for the Pub/Sub backend.".to_string())
+    }
+
+    /// Gets the prefix applied to all Pub/Sub topic and subscription names.
+    ///
+    /// The separator is inserted by the name builders, so the prefix needs no
+    /// trailing `-` (topics are `{prefix}-{queue}`). Defaults to `relayer` when
+    /// not set.
+    pub fn get_pubsub_topic_prefix() -> String {
+        env::var("PUBSUB_TOPIC_PREFIX").unwrap_or_else(|_| "relayer".to_string())
+    }
+
+    /// Gets the Pub/Sub emulator host, if configured.
+    ///
+    /// When set (e.g. `localhost:8085`), the client targets the emulator and
+    /// skips authentication; Cloud Monitoring depth reads are unavailable.
+    pub fn get_pubsub_emulator_host() -> Option<String> {
+        env::var("PUBSUB_EMULATOR_HOST")
+            .ok()
+            .filter(|v| !v.is_empty())
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
@@ -399,6 +438,21 @@ impl ServerConfig {
             .ok()
             .filter(|&v| v > 0)
             .unwrap_or(10000)
+    }
+
+    /// Gets the Redis connection max age from environment variable or default.
+    ///
+    /// See the `redis_connection_max_age_ms` field docs. Defaults to 60000ms
+    /// (also on parse failure); `0` disables age-based recycling.
+    ///
+    /// Note: the pool recycler sweeps at half this value clamped to
+    /// `[1s, 30s]`, so values under ~2000ms are effectively bounded by the 1s
+    /// sweep floor rather than the configured age.
+    pub fn get_redis_connection_max_age_ms() -> u64 {
+        env::var("REDIS_CONNECTION_MAX_AGE_MS")
+            .unwrap_or_else(|_| "60000".to_string())
+            .parse()
+            .unwrap_or(60000)
     }
 
     /// Gets the RPC timeout from environment variable or default
@@ -717,6 +771,46 @@ mod tests {
     // Use a mutex to ensure tests don't run in parallel when modifying env vars
     lazy_static! {
         static ref ENV_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    #[test]
+    fn test_pubsub_config_getters() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::remove_var("PUBSUB_PROJECT_ID");
+        env::remove_var("PUBSUB_TOPIC_PREFIX");
+        env::remove_var("PUBSUB_EMULATOR_HOST");
+
+        // Defaults / required behavior when unset.
+        assert!(
+            ServerConfig::get_pubsub_project_id().is_err(),
+            "project id must be required (error) when unset"
+        );
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "relayer");
+        assert_eq!(ServerConfig::get_pubsub_emulator_host(), None);
+
+        // Custom values.
+        env::set_var("PUBSUB_PROJECT_ID", "my-project");
+        env::set_var("PUBSUB_TOPIC_PREFIX", "test");
+        env::set_var("PUBSUB_EMULATOR_HOST", "localhost:8085");
+
+        assert_eq!(ServerConfig::get_pubsub_project_id().unwrap(), "my-project");
+        assert_eq!(ServerConfig::get_pubsub_topic_prefix(), "test");
+        assert_eq!(
+            ServerConfig::get_pubsub_emulator_host(),
+            Some("localhost:8085".to_string())
+        );
+
+        // Empty emulator host is treated as unset.
+        env::set_var("PUBSUB_EMULATOR_HOST", "");
+        assert_eq!(ServerConfig::get_pubsub_emulator_host(), None);
+
+        env::remove_var("PUBSUB_PROJECT_ID");
+        env::remove_var("PUBSUB_TOPIC_PREFIX");
+        env::remove_var("PUBSUB_EMULATOR_HOST");
     }
 
     fn setup() {
@@ -2061,6 +2155,46 @@ mod tests {
 
             env::remove_var("REDIS_URL");
             env::remove_var("API_KEY");
+        }
+    }
+
+    mod get_redis_connection_max_age_ms_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value of 60000");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "120000");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 120000, "Should return env var value");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "not_a_number");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value when invalid");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_disables_recycling() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "0");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 0, "Should accept zero to disable recycling");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
         }
     }
 

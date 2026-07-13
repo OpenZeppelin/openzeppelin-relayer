@@ -9,7 +9,7 @@
 //! Serves as the exit point for signer data to external clients, ensuring
 //! proper data formatting and security considerations.
 
-use crate::models::{Signer, SignerConfig, SignerRepoModel, SignerType};
+use crate::models::{AzureKeyVaultAuthType, Signer, SignerConfig, SignerRepoModel, SignerType};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -42,6 +42,15 @@ pub enum SignerConfigResponse {
     AwsKms {
         region: Option<String>,
         key_id: String,
+    },
+    #[serde(rename = "azure_key_vault")]
+    AzureKeyVault {
+        auth_type: AzureKeyVaultAuthType,
+        tenant_id: Option<String>,
+        client_id: Option<String>,
+        vault_url: String,
+        key_name: String,
+        key_version: Option<String>,
     },
     Turnkey {
         api_public_key: String,
@@ -106,6 +115,14 @@ impl From<SignerConfig> for SignerConfigResponse {
             SignerConfig::AwsKms(c) => SignerConfigResponse::AwsKms {
                 region: c.region,
                 key_id: c.key_id,
+            },
+            SignerConfig::AzureKeyVault(c) => SignerConfigResponse::AzureKeyVault {
+                auth_type: c.auth_type(),
+                tenant_id: c.tenant_id.map(|value| (*value.to_str()).clone()),
+                client_id: c.client_id.map(|value| (*value.to_str()).clone()),
+                vault_url: (*c.vault_url.to_str()).clone(),
+                key_name: (*c.key_name.to_str()).clone(),
+                key_version: c.key_version,
             },
             SignerConfig::Turnkey(c) => SignerConfigResponse::Turnkey {
                 api_public_key: c.api_public_key,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::Result;
-use deadpool_redis::{Config, Pool, Runtime};
+use deadpool_redis::{Config, Metrics, Pool, Runtime};
 use tracing::{debug, info, warn};
 
 use crate::config::ServerConfig;
@@ -160,10 +160,77 @@ pub async fn initialize_redis_connections(config: &ServerConfig) -> Result<Arc<R
         }
     };
 
+    // Bound pool connection lifetimes so fresh connections periodically
+    // re-resolve the endpoint DNS and follow it to its current node. A
+    // separately configured reader endpoint can repoint the same way (node
+    // replacement, scaling, blue/green), so a distinct reader pool gets its
+    // own recycler; without one, `reader_pool` aliases `primary_pool` and a
+    // single recycler covers both.
+    spawn_pool_age_recycler(&primary_pool, config.redis_connection_max_age_ms, "primary");
+    if !Arc::ptr_eq(&reader_pool, &primary_pool) {
+        spawn_pool_age_recycler(&reader_pool, config.redis_connection_max_age_ms, "reader");
+    }
+
     Ok(Arc::new(RedisConnections {
         primary_pool,
         reader_pool,
     }))
+}
+
+/// Age-eviction predicate for `Pool::retain`: keeps a connection while its age
+/// is under `max_age`, dropping it once it reaches the bound.
+fn should_retain_connection(metrics: &Metrics, max_age: Duration) -> bool {
+    metrics.created.elapsed() < max_age
+}
+
+/// Spawns a background task that evicts pool connections older than
+/// `max_age_ms` via `Pool::retain`; deadpool then lazily opens fresh
+/// connections on demand, which re-resolve DNS. `max_age_ms == 0` disables
+/// recycling and spawns nothing.
+///
+/// The sweep runs at half the max age, clamped to `[1s, 30s]`, so a
+/// connection can outlive the bound by up to one sweep interval — and for
+/// `max_age_ms` under ~2000 the 1s floor means the effective lifetime bound
+/// is roughly one second, not the configured value.
+///
+/// The task holds only a `Weak` reference to the pool and exits once the
+/// owning `RedisConnections` (and any checked-out connections) are dropped.
+///
+/// (`Pool::retain` is used rather than a custom `Manager` because deadpool-redis
+/// 0.22 has no hook to swap the manager without changing the concrete `Pool`
+/// type that `RedisConnections` holds.)
+fn spawn_pool_age_recycler(pool: &Arc<Pool>, max_age_ms: u64, pool_label: &'static str) {
+    if max_age_ms == 0 {
+        return;
+    }
+
+    let max_age = Duration::from_millis(max_age_ms);
+    let pool = Arc::downgrade(pool);
+
+    // Sweep at roughly half the max age (bounded to a sane range) so an aged
+    // connection is dropped well within one max-age window without hammering.
+    let interval = max_age
+        .div_f64(2.0)
+        .clamp(Duration::from_secs(1), Duration::from_secs(30));
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+            let Some(pool) = pool.upgrade() else {
+                break;
+            };
+            let result = pool.retain(|_, metrics| should_retain_connection(&metrics, max_age));
+            if !result.removed.is_empty() {
+                debug!(
+                    pool = pool_label,
+                    removed = result.removed.len(),
+                    retained = result.retained,
+                    max_age_ms = max_age_ms,
+                    "recycled aged Redis connections"
+                );
+            }
+        }
+    });
 }
 
 /// A distributed lock implementation using Redis SET NX EX pattern.
@@ -749,6 +816,32 @@ mod tests {
 
         // First part should be parseable as u32 (process ID)
         assert!(parts[0].parse::<u32>().is_ok());
+    }
+
+    #[test]
+    fn test_should_retain_connection_keeps_young_connection() {
+        // A freshly created connection is younger than any positive max age.
+        let metrics = Metrics::default();
+        assert!(
+            should_retain_connection(&metrics, Duration::from_secs(60)),
+            "young connection should be retained"
+        );
+    }
+
+    #[test]
+    fn test_should_retain_connection_drops_over_age_connection() {
+        // Simulate a connection created well in the past → over max age → dropped.
+        // checked_sub: a bare `Instant - Duration` panics on hosts whose
+        // monotonic clock started less than 120s ago (fresh VMs/containers).
+        let Some(past) = std::time::Instant::now().checked_sub(Duration::from_secs(120)) else {
+            return;
+        };
+        let mut metrics = Metrics::default();
+        metrics.created = past;
+        assert!(
+            !should_retain_connection(&metrics, Duration::from_secs(60)),
+            "over-age connection should be dropped"
+        );
     }
 
     #[test]

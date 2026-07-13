@@ -240,11 +240,14 @@ impl SolanaSignTrait for SolanaSigner {
 pub struct SolanaSignerFactory;
 
 impl SolanaSignerFactory {
-    pub fn create_solana_signer(
-        signer_model: &SignerDomainModel,
+    pub async fn create_solana_signer(
+        signer_model: SignerDomainModel,
     ) -> Result<SolanaSigner, SignerFactoryError> {
+        // Taken by value (like create_evm_signer): an `async fn` holding a
+        // `&SignerDomainModel` across `.await` is `!Send` because `Signer` is `!Sync`,
+        // and these futures are spawned on the multi-thread runtime.
         let signer = match &signer_model.config {
-            SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(signer_model)?),
+            SignerConfig::Local(_) => SolanaSigner::Local(LocalSigner::new(&signer_model)?),
             SignerConfig::Vault(config) => {
                 let vault_config = VaultConfig::new(
                     config.address.clone(),
@@ -276,20 +279,23 @@ impl SolanaSignerFactory {
                 });
 
                 return Ok(SolanaSigner::VaultTransit(VaultTransitSigner::new(
-                    signer_model,
+                    &signer_model,
                     vault_service,
                 )));
             }
             SignerConfig::AwsKms(config) => {
-                let aws_kms_service = futures::executor::block_on(AwsKmsService::new(
-                    config.clone(),
-                ))
-                .map_err(|e| {
+                // Async construction (mirrors create_evm_signer); see create_stellar_signer.
+                let aws_kms_service = AwsKmsService::new(config.clone()).await.map_err(|e| {
                     SignerFactoryError::InvalidConfig(format!(
                         "Failed to create AWS KMS service: {e}"
                     ))
                 })?;
                 return Ok(SolanaSigner::AwsKms(AwsKmsSigner::new(aws_kms_service)));
+            }
+            SignerConfig::AzureKeyVault(_) => {
+                return Err(SignerFactoryError::UnsupportedType(
+                    "Azure Key Vault".into(),
+                ));
             }
             SignerConfig::Cdp(config) => {
                 let cdp_signer = CdpSigner::new(config.clone()).map_err(|e| {
@@ -350,8 +356,8 @@ mod solana_signer_factory_tests {
         Address::Solana("9C6hybhQ6Aycep9jaUnP6uL9ZYvDjUp1aSkFWPUFJtpj".to_string())
     }
 
-    #[test]
-    fn test_create_solana_signer_local() {
+    #[tokio::test]
+    async fn test_create_solana_signer_local() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig {
@@ -359,7 +365,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::Local(_) => {}
@@ -367,8 +375,8 @@ mod solana_signer_factory_tests {
         }
     }
 
-    #[test]
-    fn test_create_solana_signer_vault() {
+    #[tokio::test]
+    async fn test_create_solana_signer_vault() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Vault(VaultSignerConfig {
@@ -381,7 +389,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::Vault(_) => {}
@@ -389,8 +399,8 @@ mod solana_signer_factory_tests {
         }
     }
 
-    #[test]
-    fn test_create_solana_signer_vault_transit() {
+    #[tokio::test]
+    async fn test_create_solana_signer_vault_transit() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::VaultTransit(VaultTransitSignerConfig {
@@ -404,7 +414,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::VaultTransit(_) => {}
@@ -412,8 +424,8 @@ mod solana_signer_factory_tests {
         }
     }
 
-    #[test]
-    fn test_create_solana_signer_turnkey() {
+    #[tokio::test]
+    async fn test_create_solana_signer_turnkey() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Turnkey(TurnkeySignerConfig {
@@ -425,7 +437,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::Turnkey(_) => {}
@@ -433,8 +447,8 @@ mod solana_signer_factory_tests {
         }
     }
 
-    #[test]
-    fn test_create_solana_signer_cdp() {
+    #[tokio::test]
+    async fn test_create_solana_signer_cdp() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Cdp(CdpSignerConfig {
@@ -445,7 +459,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::Cdp(_) => {}
@@ -479,7 +495,9 @@ mod solana_signer_factory_tests {
             })),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         match signer {
             SolanaSigner::GoogleCloudKms(_) => {}
@@ -496,7 +514,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
         let signer_pubkey = signer.pubkey().await.unwrap();
 
@@ -521,7 +541,9 @@ mod solana_signer_factory_tests {
         let expected_pubkey =
             Address::Solana("9SNR5Sf993aphA7hzWSQsGv63x93trfuN8WjaToXcqKA".to_string());
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
         let signer_pubkey = signer.pubkey().await.unwrap();
 
@@ -545,7 +567,9 @@ mod solana_signer_factory_tests {
         let expected_pubkey =
             Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
         let signer_pubkey = signer.pubkey().await.unwrap();
 
@@ -567,7 +591,9 @@ mod solana_signer_factory_tests {
         let expected_pubkey =
             Address::Solana("6s7RsvzcdXFJi1tXeDoGfSKZFzN3juVt9fTar6WEhEm2".to_string());
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let signer_address = signer.address().await.unwrap();
         let signer_pubkey = signer.pubkey().await.unwrap();
 
@@ -601,7 +627,9 @@ mod solana_signer_factory_tests {
             })),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let signer_address = signer.address().await;
         let signer_pubkey = signer.pubkey().await;
 
@@ -619,7 +647,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let message = b"test message";
         let signature = signer.sign(message).await;
 
@@ -635,7 +665,9 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
         let message = b"test message";
         let signature = signer.sign(message).await;
 
@@ -656,7 +688,9 @@ mod solana_signer_factory_tests {
                 raw_key: test_key_bytes(),
             }),
         };
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         // Create a simple transaction with our signer as the first account
         let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
@@ -695,7 +729,9 @@ mod solana_signer_factory_tests {
                 raw_key: test_key_bytes(),
             }),
         };
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         // Create a transaction where our signer is NOT in the account keys
         let other_pubkey = Pubkey::new_unique();
@@ -736,7 +772,9 @@ mod solana_signer_factory_tests {
                 raw_key: test_key_bytes(),
             }),
         };
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         // Create a transaction where our signer is in account_keys but NOT marked as required
         let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
@@ -786,7 +824,9 @@ mod solana_signer_factory_tests {
                 raw_key: test_key_bytes(),
             }),
         };
-        let signer = SolanaSignerFactory::create_solana_signer(&signer_model).unwrap();
+        let signer = SolanaSignerFactory::create_solana_signer(signer_model.clone())
+            .await
+            .unwrap();
 
         // Create a domain transaction data
         let signer_pubkey = Pubkey::from_str(&test_key_bytes_pubkey().to_string()).unwrap();
@@ -825,8 +865,8 @@ mod solana_signer_factory_tests {
         }
     }
 
-    #[test]
-    fn test_create_solana_signer_aws_kms_supported() {
+    #[tokio::test]
+    async fn test_create_solana_signer_aws_kms_supported() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::AwsKms(AwsKmsSignerConfig {
@@ -835,7 +875,7 @@ mod solana_signer_factory_tests {
             }),
         };
 
-        let result = SolanaSignerFactory::create_solana_signer(&signer_model);
+        let result = SolanaSignerFactory::create_solana_signer(signer_model).await;
         assert!(result.is_ok(), "AWS KMS should be supported for Solana");
     }
 

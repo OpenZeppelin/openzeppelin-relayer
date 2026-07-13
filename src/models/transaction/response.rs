@@ -7,7 +7,10 @@ use crate::{
         evm::Speed, EvmTransactionDataSignature, NetworkTransactionData, SolanaInstructionSpec,
         TransactionRepoModel, TransactionStatus, U256,
     },
-    utils::{deserialize_optional_u128, deserialize_optional_u64, serialize_optional_u128},
+    utils::{
+        deserialize_i64, deserialize_optional_u128, deserialize_optional_u64, serialize_i64,
+        serialize_optional_u128,
+    },
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -68,6 +71,11 @@ pub struct EvmTransactionResponse {
     pub max_priority_fee_per_gas: Option<u128>,
     pub signature: Option<EvmTransactionDataSignature>,
     pub speed: Option<Speed>,
+    /// Whether this transaction was cancelled by the user. While true and still in a
+    /// non-terminal status, it is being replaced on-chain by a NOOP that consumes its
+    /// nonce; it terminates as `canceled` once that NOOP mines.
+    #[schema(nullable = false)]
+    pub is_canceled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Deserialize, ToSchema)]
@@ -107,6 +115,9 @@ pub struct StellarTransactionResponse {
     pub confirmed_at: Option<String>,
     pub source_account: String,
     pub fee: u32,
+    /// Stellar sequence number encoded as a decimal string to preserve precision.
+    #[serde(serialize_with = "serialize_i64", deserialize_with = "deserialize_i64")]
+    #[schema(value_type = String, pattern = "^-?[0-9]+$")]
     pub sequence_number: i64,
     pub relayer_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +149,7 @@ impl From<TransactionRepoModel> for TransactionResponse {
                     max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
                     signature: evm_data.signature,
                     speed: evm_data.speed,
+                    is_canceled: model.is_canceled,
                 }))
             }
             NetworkTransactionData::Solana(solana_data) => {
@@ -417,6 +429,33 @@ mod tests {
             }
             _ => panic!("Expected StellarTransactionResponse"),
         }
+    }
+
+    #[test]
+    fn test_stellar_sequence_number_serializes_as_string() {
+        let response = StellarTransactionResponse {
+            id: "tx123".to_string(),
+            hash: None,
+            status: TransactionStatus::Confirmed,
+            status_reason: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            sent_at: None,
+            confirmed_at: None,
+            source_account: "source_account_id".to_string(),
+            fee: 100,
+            sequence_number: 643918676885760,
+            relayer_id: "relayer3".to_string(),
+            transaction_result_xdr: None,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(
+            json.contains(r#""sequence_number":"643918676885760""#),
+            "sequence_number should serialize as a string, got: {json}"
+        );
+
+        let decoded: StellarTransactionResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.sequence_number, 643918676885760);
     }
 
     #[test]

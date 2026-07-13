@@ -1,11 +1,12 @@
 //! Queue backend abstraction layer.
 //!
 //! This module provides a backend-agnostic interface for job queue operations.
-//! Implementations can use Redis/Apalis (current) or AWS SQS (new) as the backend.
+//! Implementations can use Redis/Apalis, AWS SQS, or GCP Pub/Sub as the backend.
 //!
 //! # Environment Variables
 //!
-//! - `QUEUE_BACKEND`: Backend to use ("redis" or "sqs", default: "redis")
+//! - `QUEUE_BACKEND`: Backend to use ("redis", "sqs", or "pubsub" / "gcp-pubsub",
+//!   default: "redis")
 //!
 //! # Example
 //!
@@ -16,8 +17,8 @@
 //! // Produce a job
 //! backend.produce_transaction_request(job, None).await?;
 //!
-//! // Initialize workers
-//! let workers = backend.initialize_workers(app_state).await?;
+//! // Initialize workers on the pipeline runtime
+//! let workers = backend.initialize_workers(app_state, handle).await?;
 //! ```
 
 use async_trait::async_trait;
@@ -34,7 +35,9 @@ use crate::{
 };
 use actix_web::web::ThinData;
 
+pub mod cron;
 pub mod errors;
+pub mod pubsub;
 pub mod queue_type;
 pub mod redis;
 pub mod retry_config;
@@ -54,6 +57,7 @@ pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 pub enum QueueBackendType {
     Redis,
     Sqs,
+    PubSub,
 }
 
 impl QueueBackendType {
@@ -61,6 +65,7 @@ impl QueueBackendType {
         match self {
             Self::Redis => "redis",
             Self::Sqs => "sqs",
+            Self::PubSub => "pubsub",
         }
     }
 }
@@ -136,12 +141,17 @@ pub trait QueueBackend: Send + Sync {
     ///
     /// # Arguments
     /// * `app_state` - Application state containing handlers and configuration
+    /// * `handle` - Handle to the multi-thread pipeline runtime. Workers MUST be
+    ///   spawned via `handle.spawn` (not bare `tokio::spawn`) so background work
+    ///   is distributed across the pipeline runtime's worker threads instead of
+    ///   landing on the actix `System` arbiter's single thread.
     ///
     /// # Returns
     /// Vector of worker handles that can be used to monitor or stop workers
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError>;
 
     /// Performs a health check on all queues.
@@ -155,9 +165,10 @@ pub trait QueueBackend: Send + Sync {
 
     /// Signals all workers to shut down gracefully.
     ///
-    /// The default implementation is a no-op (e.g. Redis/Apalis workers handle
-    /// shutdown via Monitor's signal handling). SQS backend overrides this to
-    /// broadcast a shutdown signal to all polling loops and cron tasks.
+    /// The default implementation is a no-op. Redis, SQS, and Pub/Sub backends all
+    /// override this to broadcast a shutdown signal (via a `watch` channel) into
+    /// their respective polling loops / cron tasks / Apalis Monitor signal futures,
+    /// so a programmatic shutdown (no OS signal) still stops them promptly.
     fn shutdown(&self) {}
 }
 
@@ -170,6 +181,7 @@ pub trait QueueBackend: Send + Sync {
 pub enum QueueBackendStorage {
     Redis(Box<redis::backend::RedisBackend>),
     Sqs(sqs::backend::SqsBackend),
+    PubSub(Box<pubsub::backend::PubSubBackend>),
 }
 
 impl std::fmt::Debug for QueueBackendStorage {
@@ -177,6 +189,7 @@ impl std::fmt::Debug for QueueBackendStorage {
         match self {
             Self::Redis(b) => std::fmt::Debug::fmt(b, f),
             Self::Sqs(b) => std::fmt::Debug::fmt(b, f),
+            Self::PubSub(b) => std::fmt::Debug::fmt(b, f),
         }
     }
 }
@@ -184,11 +197,12 @@ impl std::fmt::Debug for QueueBackendStorage {
 impl QueueBackendStorage {
     /// Returns a reference to the underlying `Queue` when the backend is Redis.
     ///
-    /// Returns `None` for non-Redis backends (e.g. SQS) that do not use a `Queue`.
+    /// Returns `None` for non-Redis backends (e.g. SQS, Pub/Sub) that do not use
+    /// a `Queue`.
     pub fn queue(&self) -> Option<&Queue> {
         match self {
             Self::Redis(b) => Some(b.queue()),
-            Self::Sqs(_) => None,
+            Self::Sqs(_) | Self::PubSub(_) => None,
         }
     }
 
@@ -210,6 +224,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_transaction_request(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_request(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_transaction_request(job, scheduled_on).await,
         }
     }
 
@@ -221,6 +236,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_transaction_submission(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_submission(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_transaction_submission(job, scheduled_on).await,
         }
     }
 
@@ -232,6 +248,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_transaction_status_check(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_status_check(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_transaction_status_check(job, scheduled_on).await,
         }
     }
 
@@ -243,6 +260,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_notification(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_notification(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_notification(job, scheduled_on).await,
         }
     }
 
@@ -254,6 +272,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_token_swap_request(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_token_swap_request(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_token_swap_request(job, scheduled_on).await,
         }
     }
 
@@ -265,16 +284,19 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.produce_relayer_health_check(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_relayer_health_check(job, scheduled_on).await,
+            Self::PubSub(b) => b.produce_relayer_health_check(job, scheduled_on).await,
         }
     }
 
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
         match self {
-            Self::Redis(b) => b.initialize_workers(app_state).await,
-            Self::Sqs(b) => b.initialize_workers(app_state).await,
+            Self::Redis(b) => b.initialize_workers(app_state, handle).await,
+            Self::Sqs(b) => b.initialize_workers(app_state, handle).await,
+            Self::PubSub(b) => b.initialize_workers(app_state, handle).await,
         }
     }
 
@@ -282,6 +304,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.health_check().await,
             Self::Sqs(b) => b.health_check().await,
+            Self::PubSub(b) => b.health_check().await,
         }
     }
 
@@ -289,6 +312,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.backend_type(),
             Self::Sqs(b) => b.backend_type(),
+            Self::PubSub(b) => b.backend_type(),
         }
     }
 
@@ -296,6 +320,7 @@ impl QueueBackend for QueueBackendStorage {
         match self {
             Self::Redis(b) => b.shutdown(),
             Self::Sqs(b) => b.shutdown(),
+            Self::PubSub(b) => b.shutdown(),
         }
     }
 }
@@ -329,9 +354,13 @@ pub async fn create_queue_backend(
             let backend = sqs::backend::SqsBackend::new().await?;
             QueueBackendStorage::Sqs(backend)
         }
+        "pubsub" | "gcp-pubsub" => {
+            let backend = pubsub::backend::PubSubBackend::new(redis_connections).await?;
+            QueueBackendStorage::PubSub(Box::new(backend))
+        }
         other => {
             return Err(QueueBackendError::ConfigError(format!(
-                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis' or 'sqs'"
+                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis', 'sqs', or 'pubsub' (alias 'gcp-pubsub')"
             )));
         }
     };
@@ -419,7 +448,113 @@ mod tests {
     fn test_queue_backend_type_string_representations() {
         assert_eq!(QueueBackendType::Redis.as_str(), "redis");
         assert_eq!(QueueBackendType::Sqs.as_str(), "sqs");
+        assert_eq!(QueueBackendType::PubSub.as_str(), "pubsub");
         assert_eq!(QueueBackendType::Redis.to_string(), "redis");
         assert_eq!(QueueBackendType::Sqs.to_string(), "sqs");
+        assert_eq!(QueueBackendType::PubSub.to_string(), "pubsub");
+    }
+
+    // ── create_queue_backend dispatch ──────────────────────────────
+    //
+    // Serializes the env mutation these tests need. The Pub/Sub path fast-fails
+    // on a missing PUBSUB_PROJECT_ID *before* any network/auth, so both the
+    // alias-routing and unsupported-value checks stay deterministic and offline.
+    use std::sync::Mutex as StdMutex;
+    static BACKEND_ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn dummy_redis_connections() -> Arc<RedisConnections> {
+        // deadpool builds lazily, so this never opens a connection.
+        let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:6379")
+            .builder()
+            .expect("pool builder")
+            .max_size(1)
+            .runtime(deadpool_redis::Runtime::Tokio1)
+            .build()
+            .expect("pool build");
+        Arc::new(RedisConnections::new_single_pool(Arc::new(pool)))
+    }
+
+    #[tokio::test]
+    async fn test_create_queue_backend_rejects_unsupported_value() {
+        let _lock = BACKEND_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var("QUEUE_BACKEND").ok();
+
+        std::env::set_var("QUEUE_BACKEND", "kafka-not-real");
+        let result = create_queue_backend(dummy_redis_connections()).await;
+
+        match prev {
+            Some(v) => std::env::set_var("QUEUE_BACKEND", v),
+            None => std::env::remove_var("QUEUE_BACKEND"),
+        }
+
+        let err = result
+            .expect_err("unsupported backend must error")
+            .to_string();
+        assert!(
+            err.contains("Unsupported QUEUE_BACKEND"),
+            "expected unsupported error, got: {err}"
+        );
+        // The error must advertise pubsub as a valid option.
+        assert!(err.contains("pubsub"), "error should list pubsub: {err}");
+    }
+
+    // No regression: adding the Pub/Sub backend must not remove redis/sqs
+    // from the dispatch — both are still recognized as valid backend selectors.
+    #[tokio::test]
+    async fn test_redis_and_sqs_backends_still_recognized() {
+        let _lock = BACKEND_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var("QUEUE_BACKEND").ok();
+
+        std::env::set_var("QUEUE_BACKEND", "definitely-not-a-backend");
+        let err = create_queue_backend(dummy_redis_connections())
+            .await
+            .expect_err("unsupported value must error")
+            .to_string();
+
+        match prev {
+            Some(v) => std::env::set_var("QUEUE_BACKEND", v),
+            None => std::env::remove_var("QUEUE_BACKEND"),
+        }
+
+        // The unsupported-value error still lists redis and sqs alongside pubsub,
+        // proving the pre-existing backends were not dropped from the dispatch.
+        assert!(err.contains("redis"), "redis must remain selectable: {err}");
+        assert!(err.contains("sqs"), "sqs must remain selectable: {err}");
+        assert!(err.contains("pubsub"), "pubsub must be selectable: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_create_queue_backend_routes_pubsub_aliases() {
+        let _lock = BACKEND_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev_backend = std::env::var("QUEUE_BACKEND").ok();
+        let prev_project = std::env::var("PUBSUB_PROJECT_ID").ok();
+
+        // Force the Pub/Sub path to fast-fail before any network call.
+        std::env::remove_var("PUBSUB_PROJECT_ID");
+
+        for alias in ["pubsub", "gcp-pubsub"] {
+            std::env::set_var("QUEUE_BACKEND", alias);
+            let err = create_queue_backend(dummy_redis_connections())
+                .await
+                .expect_err("missing PUBSUB_PROJECT_ID must error")
+                .to_string();
+            // Routed to the Pub/Sub branch (NOT the catch-all "Unsupported").
+            assert!(
+                !err.contains("Unsupported QUEUE_BACKEND"),
+                "alias '{alias}' should route to the Pub/Sub backend, got: {err}"
+            );
+            assert!(
+                err.contains("PUBSUB_PROJECT_ID"),
+                "alias '{alias}' should fail fast on missing project id, got: {err}"
+            );
+        }
+
+        match prev_backend {
+            Some(v) => std::env::set_var("QUEUE_BACKEND", v),
+            None => std::env::remove_var("QUEUE_BACKEND"),
+        }
+        if let Some(v) = prev_project {
+            std::env::set_var("PUBSUB_PROJECT_ID", v);
+        }
     }
 }

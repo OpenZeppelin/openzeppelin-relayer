@@ -1578,6 +1578,108 @@ impl TransactionRepository for RedisTransactionRepository {
         })
     }
 
+    async fn find_by_status_paginated_filtered(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+        exclude_canceled: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        if !exclude_canceled {
+            return self
+                .find_by_status_paginated(relayer_id, statuses, query, oldest_first)
+                .await;
+        }
+
+        // Excluding cancelled-in-progress transactions means removing them BEFORE
+        // counting and paginating, which the per-status sorted-set fast path (zcard +
+        // ZRANGE) cannot do. So for this listing-only path we load all matching
+        // transactions, drop the cancelled ones, then sort/paginate in memory. The hot
+        // internal callers use the unfiltered fast method above.
+        for status in statuses {
+            self.ensure_status_sorted_set(relayer_id, status).await?;
+        }
+
+        let mut conn = self
+            .get_connection(
+                self.connections.reader(),
+                "find_by_status_paginated_filtered",
+            )
+            .await?;
+
+        // Collect all ids (with scores) across the requested statuses.
+        let mut all_ids: Vec<(String, f64)> = Vec::new();
+        for status in statuses {
+            let sorted_key = self.relayer_status_sorted_key(relayer_id, status);
+            let ids_with_scores: Vec<(String, f64)> = redis::cmd("ZRANGE")
+                .arg(&sorted_key)
+                .arg(0)
+                .arg(-1)
+                .arg("WITHSCORES")
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "find_by_status_paginated_filtered"))?;
+            all_ids.extend(ids_with_scores);
+        }
+
+        drop(conn);
+
+        // Dedup across statuses, keeping the extreme score for the sort direction.
+        let mut id_map: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        for (id, score) in all_ids {
+            id_map
+                .entry(id)
+                .and_modify(|s| {
+                    if oldest_first {
+                        if score < *s {
+                            *s = score
+                        }
+                    } else if score > *s {
+                        *s = score
+                    }
+                })
+                .or_insert(score);
+        }
+
+        let mut sorted_ids: Vec<(String, f64)> = id_map.into_iter().collect();
+        if oldest_first {
+            sorted_ids.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            sorted_ids.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        let ordered_ids: Vec<String> = sorted_ids.into_iter().map(|(id, _)| id).collect();
+
+        // Load all matching transactions, then filter + paginate, preserving sort order.
+        let fetched = self.get_transactions_by_ids(&ordered_ids).await?;
+        let mut by_id: std::collections::HashMap<String, TransactionRepoModel> = fetched
+            .results
+            .into_iter()
+            .map(|t| (t.id.clone(), t))
+            .collect();
+
+        let filtered: Vec<TransactionRepoModel> = ordered_ids
+            .iter()
+            .filter_map(|id| by_id.remove(id))
+            .filter(|t| t.is_canceled != Some(true))
+            .collect();
+
+        let total = filtered.len() as u64;
+        let start = ((query.page.saturating_sub(1)) * query.per_page) as usize;
+        let items: Vec<TransactionRepoModel> = filtered
+            .into_iter()
+            .skip(start)
+            .take(query.per_page as usize)
+            .collect();
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
     async fn find_by_nonce(
         &self,
         relayer_id: &str,
@@ -2225,7 +2327,10 @@ impl TransactionRepository for RedisTransactionRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{evm::Speed, EvmTransactionData, NetworkType};
+    use crate::models::{
+        evm::Speed, EvmTransactionData, MemoSpec, NetworkType, StellarTransactionData,
+        TransactionInput,
+    };
     use alloy::primitives::U256;
     use deadpool_redis::{Config, Runtime};
     use lazy_static::lazy_static;
@@ -2280,6 +2385,35 @@ mod tests {
     fn create_test_transaction_with_relayer(id: &str, relayer_id: &str) -> TransactionRepoModel {
         let mut tx = create_test_transaction(id);
         tx.relayer_id = relayer_id.to_string();
+        tx
+    }
+
+    fn create_stellar_test_transaction(
+        id: &str,
+        relayer_id: &str,
+        sequence_number: i64,
+        max_fee: i64,
+        memo_id: u64,
+    ) -> TransactionRepoModel {
+        let mut tx = create_test_transaction_with_relayer(id, relayer_id);
+        tx.network_type = NetworkType::Stellar;
+        tx.network_data = NetworkTransactionData::Stellar(StellarTransactionData {
+            source_account: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            fee: Some(100),
+            sequence_number: Some(sequence_number),
+            memo: Some(MemoSpec::Id { value: memo_id }),
+            valid_until: None,
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            signatures: vec![],
+            hash: None,
+            simulation_transaction_data: None,
+            transaction_input: TransactionInput::SignedXdr {
+                xdr: "AAAA".to_string(),
+                max_fee,
+            },
+            signed_envelope_xdr: None,
+            transaction_result_xdr: None,
+        });
         tx
     }
 
@@ -3073,6 +3207,59 @@ mod tests {
             updated.sent_at,
             Some("2025-01-27T16:00:00.000000+00:00".to_string())
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_preserves_large_stellar_i64_fields() {
+        // End-to-end regression against a real Redis: large i64/u64 fields
+        // (sequence_number, SignedXdr.max_fee, and the memo Id) must survive the
+        // partial_update Lua `cjson` decode->encode round-trip. Before the
+        // string-serde fix, cjson re-emitted these as floats (e.g.
+        // 643918676885760.0) and the read-back failed with "invalid type:
+        // floating point, expected i64".
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        // All values exceed 2^32 so they exercise the large-integer path that
+        // the pre-fix code corrupted.
+        let seq = 643918676885760_i64;
+        let max_fee = 549755813888_i64;
+        let memo_id = 1099511627776_u64;
+
+        let tx = create_stellar_test_transaction(&tx_id, &relayer_id, seq, max_fee, memo_id);
+        repo.create(tx).await.unwrap();
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            sent_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+
+        // The Lua script returns the re-encoded JSON; this deserialization is
+        // exactly where the float corruption used to blow up.
+        let updated = repo.partial_update(tx_id.clone(), update).await.unwrap();
+        assert_large_stellar_fields(&updated, seq, max_fee, memo_id);
+
+        // Re-read from Redis to confirm what was actually persisted, not just
+        // the script's return value.
+        let reloaded = repo.get_by_id(tx_id).await.unwrap();
+        assert_large_stellar_fields(&reloaded, seq, max_fee, memo_id);
+    }
+
+    fn assert_large_stellar_fields(
+        tx: &TransactionRepoModel,
+        seq: i64,
+        max_fee: i64,
+        memo_id: u64,
+    ) {
+        let stellar = tx.network_data.get_stellar_transaction_data().unwrap();
+        assert_eq!(stellar.sequence_number, Some(seq));
+        assert_eq!(stellar.memo, Some(MemoSpec::Id { value: memo_id }));
+        match stellar.transaction_input {
+            TransactionInput::SignedXdr { max_fee: mf, .. } => assert_eq!(mf, max_fee),
+            other => panic!("expected SignedXdr, got {other:?}"),
+        }
     }
 
     #[tokio::test]

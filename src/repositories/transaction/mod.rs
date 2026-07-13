@@ -81,6 +81,22 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         oldest_first: bool,
     ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
 
+    /// Like [`find_by_status_paginated`], but when `exclude_canceled` is true,
+    /// transactions flagged `is_canceled` are removed BEFORE counting and pagination,
+    /// so the returned page and `total` stay consistent (no short/empty pages).
+    ///
+    /// Used by the listing API to hide cancelled-in-progress transactions from
+    /// active-status queries; internal callers use the unfiltered variant so they
+    /// still see the still-active replacement NOOP.
+    async fn find_by_status_paginated_filtered(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+        exclude_canceled: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+
     /// Find a transaction by relayer ID and nonce
     async fn find_by_nonce(
         &self,
@@ -225,6 +241,7 @@ mockall::mock! {
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
+      async fn find_by_status_paginated_filtered(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool, exclude_canceled: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
@@ -341,6 +358,38 @@ impl TransactionRepository for TransactionRepositoryStorage {
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.find_by_status_paginated(relayer_id, statuses, query, oldest_first)
                     .await
+            }
+        }
+    }
+
+    async fn find_by_status_paginated_filtered(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+        exclude_canceled: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.find_by_status_paginated_filtered(
+                    relayer_id,
+                    statuses,
+                    query,
+                    oldest_first,
+                    exclude_canceled,
+                )
+                .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.find_by_status_paginated_filtered(
+                    relayer_id,
+                    statuses,
+                    query,
+                    oldest_first,
+                    exclude_canceled,
+                )
+                .await
             }
         }
     }

@@ -58,6 +58,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics                |
 | [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                 |
 | [`vault-transit-signer`](./examples/vault-transit-signer/)                           | Using Vault Transit for secure signing                   |
+| [`evm-azure-key-vault-signer`](./examples/evm-azure-key-vault-signer/)               | Using Azure Key Vault for EVM secure signing             |
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing              |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing           |
 | [`solana-google-cloud-kms-signer`](./examples/solana-google-cloud-kms-signer/)       | Using Google Cloud KMS Signer for Solana secure signing  |
@@ -66,6 +67,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`network-configuration-config-file`](./examples/network-configuration-config-file/) | Using Custom network configuration via config file       |
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file         |
 | [`aws-sqs-queue-storage`](./examples/aws-sqs-queue-storage/)                         | Local SQS queue backend setup using LocalStack           |
+| [`gcp-pubsub-queue-storage`](./examples/gcp-pubsub-queue-storage/)                   | GCP Pub/Sub queue backend setup (emulator or real GCP)   |
 | [`x402-facilitator-plugin`](./examples/x402-facilitator-plugin/)                     | x402 Facilitator plugin                                  |
 
 Each example includes:
@@ -320,12 +322,14 @@ Create `.env` with correct values according to your needs from `.env.example` fi
 cp .env.example .env
 ```
 
-### Queue backend configuration (Redis or SQS)
+### Queue backend configuration (Redis, SQS, or Pub/Sub)
 
-The relayer supports two queue backends:
+The relayer supports three queue backends:
 
 - `redis` (default): uses Apalis + Redis queues
 - `sqs`: uses AWS SQS workers/cron and minimizes Apalis queue usage
+- `pubsub` (alias `gcp-pubsub`): uses GCP Pub/Sub workers/cron; deferred jobs and
+  retry backoff are held in Redis and published when due
 
 Set in `.env`:
 
@@ -333,6 +337,8 @@ Set in `.env`:
 QUEUE_BACKEND=redis
 # or
 # QUEUE_BACKEND=sqs
+# or
+# QUEUE_BACKEND=pubsub
 ```
 
 When using SQS:
@@ -348,6 +354,24 @@ AWS_ACCOUNT_ID=123456789012
 ```
 
 By default (`SQS_QUEUE_TYPE=auto`), the relayer auto-detects whether queues are standard or FIFO at startup.
+
+When using Pub/Sub:
+
+```bash
+QUEUE_BACKEND=pubsub
+PUBSUB_PROJECT_ID=my-gcp-project
+# Optional: prefix applied to all topic/subscription names (default: relayer)
+# PUBSUB_TOPIC_PREFIX=relayer
+# Optional: target the emulator and skip auth (local dev/test)
+# PUBSUB_EMULATOR_HOST=localhost:8085
+```
+
+Pre-create the 8 topics/subscriptions (`{prefix}{queue}` / `{prefix}{queue}-sub`)
+via your infrastructure. Authentication uses Application Default Credentials; the
+on-demand backlog-depth read additionally needs `roles/monitoring.viewer`. No
+dead-letter topic is required. See the
+[`gcp-pubsub-queue-storage`](./examples/gcp-pubsub-queue-storage/) example for a
+local emulator setup.
 
 Use distributed mode for multi-instance deployments so scheduled workers use Redis-based distributed locks and avoid duplicate execution:
 

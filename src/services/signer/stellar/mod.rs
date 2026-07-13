@@ -147,12 +147,15 @@ impl StellarSignTrait for StellarSigner {
 pub struct StellarSignerFactory;
 
 impl StellarSignerFactory {
-    pub fn create_stellar_signer(
-        m: &SignerDomainModel,
+    pub async fn create_stellar_signer(
+        m: SignerDomainModel,
     ) -> Result<StellarSigner, SignerFactoryError> {
+        // Taken by value (like create_evm_signer): an `async fn` holding a
+        // `&SignerDomainModel` across `.await` is `!Send` because `Signer` is `!Sync`,
+        // and these futures are spawned on the multi-thread runtime.
         let signer = match &m.config {
             SignerConfig::Local(_) => {
-                let local_signer = LocalSigner::new(m)?;
+                let local_signer = LocalSigner::new(&m)?;
                 StellarSigner::Local(Box::new(local_signer))
             }
             SignerConfig::Vault(config) => {
@@ -186,15 +189,20 @@ impl StellarSignerFactory {
                 StellarSigner::Turnkey(TurnkeySigner::new(service))
             }
             SignerConfig::AwsKms(config) => {
-                let aws_kms_service = futures::executor::block_on(AwsKmsService::new(
-                    config.clone(),
-                ))
-                .map_err(|e| {
+                // Async construction (mirrors create_evm_signer): `block_on` here would
+                // park the carrier worker thread and not drive the reactor — under the
+                // multi-thread runtime a burst of cold-cache builds could park all workers.
+                let aws_kms_service = AwsKmsService::new(config.clone()).await.map_err(|e| {
                     SignerFactoryError::InvalidConfig(format!(
                         "Failed to create AWS KMS service: {e}"
                     ))
                 })?;
                 StellarSigner::AwsKms(AwsKmsSigner::new(aws_kms_service))
+            }
+            SignerConfig::AzureKeyVault(_) => {
+                return Err(SignerFactoryError::UnsupportedType(
+                    "Azure Key Vault".into(),
+                ))
             }
             SignerConfig::VaultTransit(_) => {
                 return Err(SignerFactoryError::UnsupportedType("Vault Transit".into()))

@@ -1862,8 +1862,8 @@ mod xdr_transaction_tests {
 
         mocks
             .counter
-            .expect_set()
-            .returning(|_, _, _| Box::pin(async { Ok(()) }));
+            .expect_sync_floor()
+            .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
 
         // Mock finalize_transaction_state for failure handling
         mocks

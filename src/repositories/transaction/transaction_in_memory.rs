@@ -299,6 +299,65 @@ impl TransactionRepository for InMemoryTransactionRepository {
         })
     }
 
+    async fn find_by_status_paginated_filtered(
+        &self,
+        relayer_id: &str,
+        statuses: &[TransactionStatus],
+        query: PaginationQuery,
+        oldest_first: bool,
+        exclude_canceled: bool,
+    ) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError> {
+        if !exclude_canceled {
+            return self
+                .find_by_status_paginated(relayer_id, statuses, query, oldest_first)
+                .await;
+        }
+
+        let store = Self::acquire_lock(&self.store).await?;
+
+        // Drop cancelled-in-progress transactions BEFORE counting/paginating so the
+        // page and total stay consistent.
+        let filtered: Vec<TransactionRepoModel> = store
+            .values()
+            .filter(|tx| {
+                tx.relayer_id == relayer_id
+                    && statuses.contains(&tx.status)
+                    && tx.is_canceled != Some(true)
+            })
+            .cloned()
+            .collect();
+
+        let total = filtered.len() as u64;
+        let start = ((query.page.saturating_sub(1)) * query.per_page) as usize;
+
+        let items: Vec<TransactionRepoModel> = if oldest_first {
+            filtered
+                .into_iter()
+                .sorted_by(|a, b| {
+                    let (a_key, _) = Self::get_sort_key(a);
+                    let (b_key, _) = Self::get_sort_key(b);
+                    a_key.cmp(b_key).then_with(|| a.id.cmp(&b.id))
+                })
+                .skip(start)
+                .take(query.per_page as usize)
+                .collect()
+        } else {
+            filtered
+                .into_iter()
+                .sorted_by(Self::compare_for_sort)
+                .skip(start)
+                .take(query.per_page as usize)
+                .collect()
+        };
+
+        Ok(PaginatedResult {
+            items,
+            total,
+            page: query.page,
+            per_page: query.per_page,
+        })
+    }
+
     async fn find_by_nonce(
         &self,
         relayer_id: &str,
@@ -1395,6 +1454,94 @@ mod tests {
 
         assert_eq!(result.total, 0);
         assert_eq!(result.items.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_find_by_status_paginated_filtered_excludes_canceled() {
+        let repo = InMemoryTransactionRepository::new();
+
+        let make = |id: &str, ts: &str, is_canceled: Option<bool>| -> TransactionRepoModel {
+            let mut tx = create_test_transaction_pending_state(id);
+            tx.created_at = ts.to_string();
+            tx.status = TransactionStatus::Submitted;
+            tx.is_canceled = is_canceled;
+            tx
+        };
+
+        // 3 normal Submitted txs and 1 cancelled-in-progress (still Submitted) in the middle.
+        repo.create(make("tx1", "2025-01-27T11:00:00.000000+00:00", None))
+            .await
+            .unwrap();
+        repo.create(make("tx2", "2025-01-27T12:00:00.000000+00:00", Some(true)))
+            .await
+            .unwrap();
+        repo.create(make("tx3", "2025-01-27T13:00:00.000000+00:00", Some(false)))
+            .await
+            .unwrap();
+        repo.create(make("tx4", "2025-01-27T14:00:00.000000+00:00", None))
+            .await
+            .unwrap();
+
+        let statuses = [TransactionStatus::Submitted];
+        let query = PaginationQuery {
+            page: 1,
+            per_page: 10,
+        };
+
+        // exclude_canceled = false → all 4 returned (unchanged behaviour).
+        let all = repo
+            .find_by_status_paginated_filtered("relayer-1", &statuses, query.clone(), false, false)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 4);
+        assert_eq!(all.items.len(), 4);
+
+        // exclude_canceled = true → the cancelled tx is dropped BEFORE counting, so total
+        // and items are both consistent (no short/empty page, no over-counted total).
+        let filtered = repo
+            .find_by_status_paginated_filtered("relayer-1", &statuses, query, false, true)
+            .await
+            .unwrap();
+        assert_eq!(filtered.total, 3, "total must reflect the filtered set");
+        assert_eq!(filtered.items.len(), 3);
+        let ids: Vec<&str> = filtered.items.iter().map(|t| t.id.as_str()).collect();
+        assert!(
+            !ids.contains(&"tx2"),
+            "cancelled tx must be excluded, got {ids:?}"
+        );
+
+        // Pagination stays consistent across pages: 2 per page → page 1 has 2, page 2 has 1,
+        // and tx2 never appears, with no empty intermediate page.
+        let p1 = repo
+            .find_by_status_paginated_filtered(
+                "relayer-1",
+                &statuses,
+                PaginationQuery {
+                    page: 1,
+                    per_page: 2,
+                },
+                false,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(p1.total, 3);
+        assert_eq!(p1.items.len(), 2);
+        let p2 = repo
+            .find_by_status_paginated_filtered(
+                "relayer-1",
+                &statuses,
+                PaginationQuery {
+                    page: 2,
+                    per_page: 2,
+                },
+                false,
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(p2.total, 3);
+        assert_eq!(p2.items.len(), 1);
     }
 
     #[tokio::test]

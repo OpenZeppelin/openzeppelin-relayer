@@ -13,8 +13,9 @@ use crate::{
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id,
-        GasAbstractionTrait, Relayer, RelayerFactory, RelayerFactoryTrait, SignDataRequest,
-        SignDataResponse, SignTransactionRequest, SignTypedDataRequest, Transaction,
+        transaction::is_final_state, GasAbstractionTrait, Relayer, RelayerFactory,
+        RelayerFactoryTrait, SignDataRequest, SignDataResponse, SignTransactionRequest,
+        SignTypedDataRequest, Transaction,
     },
     jobs::JobProducerTrait,
     models::{
@@ -26,7 +27,8 @@ use crate::{
         NetworkTransactionRequest, NetworkType, NotificationRepoModel, PaginationMeta,
         PaginationQuery, Relayer as RelayerDomainModel, RelayerRepoModel, RelayerRepoUpdater,
         RelayerResponse, Signer as SignerDomainModel, SignerRepoModel, ThinDataAppState,
-        TransactionRepoModel, TransactionResponse, TransactionStatus, UpdateRelayerRequestRaw,
+        TransactionListQuery, TransactionRepoModel, TransactionResponse, TransactionStatus,
+        UpdateRelayerRequestRaw,
     },
     repositories::{
         ApiKeyRepositoryTrait, NetworkRepository, PluginRepositoryTrait, RelayerRepository,
@@ -540,7 +542,7 @@ where
 /// A paginated list of transactions
 pub async fn list_transactions<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     relayer_id: String,
-    query: PaginationQuery,
+    query: TransactionListQuery,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
 ) -> Result<HttpResponse, ApiError>
 where
@@ -556,10 +558,35 @@ where
 {
     get_relayer_by_id(relayer_id.clone(), &state).await?;
 
-    let transactions = state
-        .transaction_repository
-        .find_by_relayer_id(&relayer_id, query)
-        .await?;
+    let pagination = PaginationQuery::from(query.clone());
+    let transactions = match &query.status {
+        Some(status) => {
+            // Hide cancelled-in-progress transactions from active-status listings: a
+            // cancelled tx keeps its non-terminal status with is_canceled=true until its
+            // replacement NOOP mines (then it becomes Canceled), so without this it would
+            // still appear under e.g. ?status=Submitted. We only exclude for non-terminal
+            // statuses, so ?status=Canceled still returns settled cancellations. The
+            // exclusion is applied in the repository (before pagination) so the page and
+            // total stay consistent.
+            let exclude_canceled = !is_final_state(status);
+            state
+                .transaction_repository
+                .find_by_status_paginated_filtered(
+                    &relayer_id,
+                    std::slice::from_ref(status),
+                    pagination,
+                    false,
+                    exclude_canceled,
+                )
+                .await?
+        }
+        None => {
+            state
+                .transaction_repository
+                .find_by_relayer_id(&relayer_id, pagination)
+                .await?
+        }
+    };
 
     let transaction_response_list: Vec<TransactionResponse> =
         transactions.items.into_iter().map(|t| t.into()).collect();
@@ -1553,6 +1580,99 @@ mod tests {
         assert!(api_response.success);
         let data = api_response.data.unwrap();
         assert_eq!(data.len(), 0);
+    }
+
+    // LIST TRANSACTIONS TESTS
+
+    /// Builds a transaction for `test-relayer` with a specific id, status and cancel flag.
+    fn tx_for_listing(
+        id: &str,
+        status: TransactionStatus,
+        is_canceled: Option<bool>,
+    ) -> TransactionRepoModel {
+        let mut tx = create_mock_transaction();
+        tx.id = id.to_string();
+        tx.relayer_id = "test-relayer".to_string();
+        tx.status = status;
+        tx.is_canceled = is_canceled;
+        tx
+    }
+
+    fn returned_ids(body: &[u8]) -> Vec<String> {
+        let api_response: ApiResponse<Vec<serde_json::Value>> =
+            serde_json::from_slice(body).unwrap();
+        assert!(api_response.success);
+        api_response
+            .data
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    /// A cancelled-in-progress transaction (non-terminal status + is_canceled=true) must be
+    /// hidden from active-status listings such as ?status=Submitted.
+    #[actix_web::test]
+    async fn test_list_transactions_excludes_canceled_from_active_status() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let txs = vec![
+            tx_for_listing("tx-submitted-1", TransactionStatus::Submitted, None),
+            tx_for_listing("tx-submitted-2", TransactionStatus::Submitted, Some(false)),
+            tx_for_listing(
+                "tx-cancel-inflight",
+                TransactionStatus::Submitted,
+                Some(true),
+            ),
+        ];
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, Some(txs)).await;
+
+        let query = TransactionListQuery {
+            page: 1,
+            per_page: 10,
+            status: Some(TransactionStatus::Submitted),
+        };
+
+        let result =
+            list_transactions("test-relayer".to_string(), query, web::ThinData(app_state)).await;
+
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+        let ids = returned_ids(&to_bytes(response.into_body()).await.unwrap());
+
+        assert!(
+            !ids.contains(&"tx-cancel-inflight".to_string()),
+            "cancelled-in-progress tx must not appear under ?status=Submitted, got {ids:?}"
+        );
+        assert_eq!(ids.len(), 2, "only the two non-cancelled txs should remain");
+    }
+
+    /// Once the cancellation NOOP mines, the transaction becomes terminal Canceled and must
+    /// remain visible under ?status=Canceled (the exclusion only applies to active statuses).
+    #[actix_web::test]
+    async fn test_list_transactions_includes_canceled_under_canceled_status() {
+        let relayer = create_mock_relayer("test-relayer".to_string(), false);
+        let txs = vec![
+            tx_for_listing("tx-submitted-1", TransactionStatus::Submitted, None),
+            tx_for_listing("tx-canceled-done", TransactionStatus::Canceled, Some(true)),
+        ];
+        let app_state =
+            create_mock_app_state(None, Some(vec![relayer]), None, None, None, Some(txs)).await;
+
+        let query = TransactionListQuery {
+            page: 1,
+            per_page: 10,
+            status: Some(TransactionStatus::Canceled),
+        };
+
+        let result =
+            list_transactions("test-relayer".to_string(), query, web::ThinData(app_state)).await;
+
+        let response = result.unwrap();
+        assert_eq!(response.status(), 200);
+        let ids = returned_ids(&to_bytes(response.into_body()).await.unwrap());
+
+        assert_eq!(ids, vec!["tx-canceled-done".to_string()]);
     }
 
     // GET RELAYER TESTS

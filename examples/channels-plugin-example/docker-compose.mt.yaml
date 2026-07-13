@@ -1,0 +1,24 @@
+---
+# Overlay for running the channels-plugin-example on the explicit multi-thread
+# tokio runtime with the observability needed to validate spec 005 (T025 ordering
+# + thread distribution on the real plugin/fund/channel topology).
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.mt.yaml up --build
+#
+# The multi-thread runtime is the default in this build; this overlay only pins
+# the worker-thread budget and turns on JSON logs + debug + the metrics endpoint
+# so submission ordering and thread spread can be observed. It does NOT modify
+# the committed docker-compose.yaml.
+services:
+  relayer:
+    ports:
+      - 8081:8081/tcp
+    environment:
+      # Pin the pipeline + HTTP runtimes for clean ThreadId bucketing.
+      TOKIO_WORKER_THREADS: 4
+      ACTIX_WORKERS: 2
+      # Observability: JSON logs carry the OS thread id; debug surfaces the
+      # submit_gate ordering line + per-job thread attribution; metrics on :8081.
+      LOG_FORMAT: json
+      LOG_LEVEL: debug
+      METRICS_ENABLED: 'true'
