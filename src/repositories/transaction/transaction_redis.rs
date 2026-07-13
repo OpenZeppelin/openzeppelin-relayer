@@ -733,10 +733,16 @@ impl RedisTransactionRepository {
     }
 
     /// Update indexes atomically with comprehensive error handling
+    ///
+    /// `include_status_indexes` must be false when the caller already maintained
+    /// the status sorted sets atomically (the partial_update Lua script): replaying
+    /// them here from a possibly stale snapshot can race a concurrent transition
+    /// and re-add an index entry the other writer just removed.
     async fn update_indexes(
         &self,
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
+        include_status_indexes: bool,
     ) -> Result<(), RepositoryError> {
         let mut conn = self
             .get_connection(self.connections.primary(), "update_indexes")
@@ -750,16 +756,18 @@ impl RedisTransactionRepository {
         let relayer_list_key = self.relayer_list_key();
         pipe.sadd(&relayer_list_key, &tx.relayer_id);
 
-        // Compute scores for sorted sets
-        // Status sorted set: uses confirmed_at for Confirmed status, created_at for others
-        let status_score = self.status_sorted_score(tx);
         // Global tx_by_created_at: always uses created_at for consistent ordering
         let created_at_score = self.timestamp_to_score(&tx.created_at);
 
-        // Handle status index updates - write to SORTED SET (new format)
-        let new_status_sorted_key = self.relayer_status_sorted_key(&tx.relayer_id, &tx.status);
-        pipe.zadd(&new_status_sorted_key, &tx.id, status_score);
-        debug!(tx_id = %tx.id, status = %tx.status, score = %status_score, "added transaction to status sorted set");
+        if include_status_indexes {
+            // Status sorted set: uses confirmed_at for Confirmed status, created_at for others
+            let status_score = self.status_sorted_score(tx);
+
+            // Handle status index updates - write to SORTED SET (new format)
+            let new_status_sorted_key = self.relayer_status_sorted_key(&tx.relayer_id, &tx.status);
+            pipe.zadd(&new_status_sorted_key, &tx.id, status_score);
+            debug!(tx_id = %tx.id, status = %tx.status, score = %status_score, "added transaction to status sorted set");
+        }
 
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
@@ -774,7 +782,7 @@ impl RedisTransactionRepository {
 
         // Remove old indexes if updating
         if let Some(old) = old_tx {
-            if old.status != tx.status {
+            if include_status_indexes && old.status != tx.status {
                 // Remove from old status sorted set (new format)
                 let old_status_sorted_key =
                     self.relayer_status_sorted_key(&old.relayer_id, &old.status);
@@ -1097,7 +1105,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .map_err(|e| self.map_redis_error(e, "create_transaction"))?;
 
         // Update indexes separately to handle partial failures gracefully
-        if let Err(e) = self.update_indexes(&entity, None).await {
+        if let Err(e) = self.update_indexes(&entity, None, true).await {
             error!(tx_id = %entity.id, error = %e, "failed to update indexes for new transaction");
             return Err(e);
         }
@@ -1324,7 +1332,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .map_err(|e| self.map_redis_error(e, "update_transaction"))?;
 
         // Update indexes
-        self.update_indexes(&entity, Some(&old_tx)).await?;
+        self.update_indexes(&entity, Some(&old_tx), true).await?;
 
         debug!(tx_id = %id, "successfully updated transaction");
         Ok(entity)
@@ -2202,8 +2210,11 @@ impl TransactionRepository for RedisTransactionRepository {
         let updated_tx =
             self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
 
-        // Update indexes using the full pre-update state (status, network_data, nonce, etc.)
-        self.update_indexes(&updated_tx, Some(&original_tx)).await?;
+        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
+        // Status sorted sets are excluded: the Lua script above already moved
+        // them atomically with the body write.
+        self.update_indexes(&updated_tx, Some(&original_tx), false)
+            .await?;
 
         debug!(tx_id = %tx_id, "successfully updated transaction via patch");
 

@@ -252,6 +252,34 @@ async fn process_single_relayer(
 
     let mut total_cleaned = 0usize;
 
+    // Reconcile before deleting so ghosts repaired into a final index are
+    // reaped in this run instead of waiting for the next cron cycle.
+    // A reconcile failure must not block deletion, so the error is only
+    // recorded and surfaced after the cleanup loop.
+    let reconcile_error = match transaction_repo
+        .reconcile_stale_status_indexes(&relayer.id)
+        .await
+    {
+        Ok(repaired_count) => {
+            if repaired_count > 0 {
+                info!(
+                    repaired_count,
+                    relayer_id = %relayer.id,
+                    "repaired stale transaction status indexes"
+                );
+            }
+            None
+        }
+        Err(e) => {
+            error!(
+                error = %e,
+                relayer_id = %relayer.id,
+                "failed to reconcile stale transaction status indexes"
+            );
+            Some(e.to_string())
+        }
+    };
+
     for status in FINAL_TRANSACTION_STATUSES {
         match process_status_cleanup(&relayer.id, status, &transaction_repo, now).await {
             Ok(cleaned) => total_cleaned += cleaned,
@@ -271,33 +299,6 @@ async fn process_single_relayer(
         }
     }
 
-    match transaction_repo
-        .reconcile_stale_status_indexes(&relayer.id)
-        .await
-    {
-        Ok(repaired_count) => {
-            if repaired_count > 0 {
-                info!(
-                    repaired_count,
-                    relayer_id = %relayer.id,
-                    "repaired stale transaction status indexes"
-                );
-            }
-        }
-        Err(e) => {
-            error!(
-                error = %e,
-                relayer_id = %relayer.id,
-                "failed to reconcile stale transaction status indexes"
-            );
-            return RelayerCleanupResult {
-                relayer_id: relayer.id,
-                cleaned_count: total_cleaned,
-                error: Some(e.to_string()),
-            };
-        }
-    }
-
     if total_cleaned > 0 {
         info!(
             cleaned_count = total_cleaned,
@@ -309,7 +310,7 @@ async fn process_single_relayer(
     RelayerCleanupResult {
         relayer_id: relayer.id,
         cleaned_count: total_cleaned,
-        error: None,
+        error: reconcile_error,
     }
 }
 
