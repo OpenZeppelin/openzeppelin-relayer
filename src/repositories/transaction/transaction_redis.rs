@@ -1,7 +1,7 @@
 //! Redis-backed implementation of the TransactionRepository.
 
 use crate::config::ServerConfig;
-use crate::constants::FINAL_TRANSACTION_STATUSES;
+use crate::constants::{ALL_TRANSACTION_STATUSES, FINAL_TRANSACTION_STATUSES};
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
     TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED,
@@ -38,22 +38,24 @@ const TX_BY_CREATED_AT_PREFIX: &str = "tx_by_created_at";
 const STALE_INDEX_MIN_AGE_SECS: i64 = 3600;
 const STALE_INDEX_PAGE_SIZE: usize = 100;
 const MAX_STALE_INDEX_RECONCILE_ITERATIONS_PER_STATUS: u32 = 1500;
-const ALL_TRANSACTION_STATUSES: &[TransactionStatus] = &[
-    TransactionStatus::Canceled,
-    TransactionStatus::Pending,
-    TransactionStatus::Sent,
-    TransactionStatus::Submitted,
-    TransactionStatus::Mined,
-    TransactionStatus::Confirmed,
-    TransactionStatus::Failed,
-    TransactionStatus::Expired,
-];
 const NON_FINAL_STATUS_INDEXES: &[TransactionStatus] = &[
     TransactionStatus::Pending,
     TransactionStatus::Sent,
     TransactionStatus::Submitted,
     TransactionStatus::Mined,
 ];
+
+/// How `reconcile_status_index` repairs a stale entry for a given index.
+#[derive(Clone, Copy, PartialEq)]
+enum ReconcileMode {
+    /// Non-final index: promote finalized transactions into their final index
+    /// and leave active (still non-final) mismatches for finalization to repair.
+    Promote,
+    /// Final index: only purge entries whose body is gone. A present body is
+    /// authoritative, so it is left untouched (cross-final mismatches self-heal
+    /// at cleanup). Never re-adds an entry to another index.
+    PurgeOrphans,
+}
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
@@ -399,6 +401,7 @@ impl RedisTransactionRepository {
         relayer_id: &str,
         index_status: &TransactionStatus,
         cutoff_ms: i64,
+        mode: ReconcileMode,
     ) -> Result<usize, RepositoryError> {
         let sorted_key = self.relayer_status_sorted_key(relayer_id, index_status);
         let legacy_key = self.relayer_status_key(relayer_id, index_status);
@@ -460,6 +463,14 @@ impl RedisTransactionRepository {
                     pipe.zrem(&sorted_key, tx_id);
                     pipe.srem(&legacy_key, tx_id);
                     repaired_on_page += 1;
+                    continue;
+                }
+
+                // Final indexes are terminal: a present body is authoritative.
+                // Body-less orphans are already removed by the arm above; a
+                // cross-final mismatch self-heals at cleanup, so never promote
+                // (zadd) here — that is the very race this sweep guards against.
+                if mode == ReconcileMode::PurgeOrphans {
                     continue;
                 }
 
@@ -2061,7 +2072,13 @@ impl TransactionRepository for RedisTransactionRepository {
             None
         };
         let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
-        let index_metadata_json = self.partial_update_index_metadata(&tx_id, &update)?;
+        // The Lua script only decodes ARGV[5] on a status change, so skip
+        // building the metadata for non-status patches.
+        let index_metadata_json = if update.status.is_some() {
+            self.partial_update_index_metadata(&tx_id, &update)?
+        } else {
+            String::new()
+        };
 
         let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
 
@@ -2242,9 +2259,24 @@ impl TransactionRepository for RedisTransactionRepository {
         let mut total_repaired = 0usize;
         let mut per_status_counts = Vec::new();
 
+        // Non-final indexes: promote finalized ghosts into their final index so
+        // the following cleanup run reaps them; purge entries whose body is gone.
         for status in NON_FINAL_STATUS_INDEXES {
             let repaired = self
-                .reconcile_status_index(relayer_id, status, cutoff_ms)
+                .reconcile_status_index(relayer_id, status, cutoff_ms, ReconcileMode::Promote)
+                .await?;
+            if repaired > 0 {
+                per_status_counts.push((status.to_string(), repaired));
+                total_repaired += repaired;
+            }
+        }
+
+        // Final indexes: purge body-less orphans. These are dangles left when a
+        // body was deleted (crash or partial delete) but its final-index entry
+        // survived — nothing else ever reaps them.
+        for status in FINAL_TRANSACTION_STATUSES {
+            let repaired = self
+                .reconcile_status_index(relayer_id, status, cutoff_ms, ReconcileMode::PurgeOrphans)
                 .await?;
             if repaired > 0 {
                 per_status_counts.push((status.to_string(), repaired));
@@ -3764,6 +3796,167 @@ mod tests {
         assert_eq!(repaired, 0);
         assert!(
             status_member_exists(&repo, &relayer_id, &TransactionStatus::Submitted, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_removes_final_index_orphan_with_missing_body() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // A body-less dangle in a final index: the body was deleted but its
+        // Confirmed entry survived. Nothing but this sweep reaps it.
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        assert!(
+            !status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_keeps_live_final_index_entry() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+        // Finalize with an old confirmed_at so the Confirmed entry falls within
+        // the reconcile scan window but keeps a present, matching body.
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+        let body = repo.get_by_id(tx_id.clone()).await.unwrap();
+        assert_eq!(body.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_respects_cutoff_for_final_orphan() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Body-less, but scored just now: below the 1h staleness floor, so the
+        // sweep must leave it (a freshly-finalized tx whose body write is racing).
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            Utc::now().timestamp_millis() as f64,
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_final_index_never_zadds() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        // A final-index orphan is purged, never promoted: the id must not appear
+        // in any other status index afterwards.
+        for status in ALL_TRANSACTION_STATUSES {
+            assert!(
+                !status_member_exists(&repo, &relayer_id, status, &tx_id).await,
+                "orphan should not have been re-added to {status:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_leaves_present_mismatched_final_body() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            ..Default::default()
+        };
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        // Fabricate a stale entry in a *different* final index than the body's
+        // status. The sweep leaves present bodies alone; this self-heals when
+        // the tx is deleted at cleanup (remove_all_indexes clears every index).
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
         );
     }
 

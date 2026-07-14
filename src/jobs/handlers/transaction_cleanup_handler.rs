@@ -653,6 +653,8 @@ async fn report_cleanup_results(cleanup_results: Vec<RelayerCleanupResult>) -> R
 mod tests {
 
     use super::*;
+    use chrono::{Duration, Utc};
+
     use crate::{
         models::{
             NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
@@ -663,7 +665,6 @@ mod tests {
         },
         utils::mocks::mockutils::create_mock_transaction,
     };
-    use chrono::{Duration, Utc};
 
     fn create_test_transaction(
         id: &str,
