@@ -167,6 +167,8 @@ Set `QUEUE_BACKEND` to choose the queue system:
 - `pubsub`: GCP Pub/Sub queue backend (requires Redis for deferred-job scheduling)
 - `rabbitmq`: RabbitMQ queue backend (requires Redis for deferred-job scheduling)
 
+The `redis` backend is the simplest to run and is a good default for single-instance and development setups. For high-throughput or multi-instance production deployments, we recommend `sqs`, `pubsub`, or `rabbitmq`.
+
 Example for SQS:
 
 ```bash

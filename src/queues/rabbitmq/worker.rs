@@ -189,7 +189,11 @@ async fn run_consumer_loop(
         let mut shutting_down = false;
         loop {
             // Reap finished handlers so the JoinSet doesn't grow unbounded.
-            while inflight.try_join_next().is_some() {}
+            while let Some(res) = inflight.try_join_next() {
+                if let Err(e) = res {
+                    warn!(queue_type = %queue_type, error = %e, "In-flight handler task failed");
+                }
+            }
 
             if *shutdown_rx.borrow() {
                 shutting_down = true;
@@ -293,7 +297,13 @@ async fn drain_inflight(inflight: &mut JoinSet<()>, queue_type: QueueType) {
         count = inflight.len(),
         "Draining in-flight RabbitMQ handlers before shutdown"
     );
-    let drain = async { while inflight.join_next().await.is_some() {} };
+    let drain = async {
+        while let Some(res) = inflight.join_next().await {
+            if let Err(e) = res {
+                warn!(queue_type = %queue_type, error = %e, "In-flight handler task failed during drain");
+            }
+        }
+    };
     if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
         warn!(
             queue_type = %queue_type,

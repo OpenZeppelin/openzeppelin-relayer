@@ -163,8 +163,7 @@ docker compose -f examples/rabbitmq-queue-storage/docker-compose.yaml down
 
 ## Production notes
 
-Full operator reference: [`contracts/config-and-queues.md`](../../specs/003-rabbitmq-queue-backend/contracts/config-and-queues.md)
-and the [configuration docs](../../docs/configuration/index.mdx).
+Full operator reference: see the [configuration docs](../../docs/configuration/index.mdx).
 
 - **TLS:** use `amqps://…` for the broker URL; tune the heartbeat with the
   standard URI query parameter, e.g. `?heartbeat=20`.
