@@ -1,7 +1,7 @@
 //! Redis-backed implementation of the TransactionRepository.
 
 use crate::config::ServerConfig;
-use crate::constants::FINAL_TRANSACTION_STATUSES;
+use crate::constants::{ALL_TRANSACTION_STATUSES, FINAL_TRANSACTION_STATUSES};
 use crate::domain::transaction::common::is_final_state;
 use crate::metrics::{
     TRANSACTIONS_BY_STATUS, TRANSACTIONS_CREATED, TRANSACTIONS_FAILED,
@@ -22,9 +22,10 @@ use crate::utils::RedisConnections;
 use async_trait::async_trait;
 use chrono::Utc;
 use redis::{AsyncCommands, Script};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
 const TX_PREFIX: &str = "tx";
@@ -34,6 +35,27 @@ const NONCE_PREFIX: &str = "nonce";
 const TX_TO_RELAYER_PREFIX: &str = "tx_to_relayer";
 const RELAYER_LIST_KEY: &str = "relayer_list";
 const TX_BY_CREATED_AT_PREFIX: &str = "tx_by_created_at";
+const STALE_INDEX_MIN_AGE_SECS: i64 = 3600;
+const STALE_INDEX_PAGE_SIZE: usize = 100;
+const MAX_STALE_INDEX_RECONCILE_ITERATIONS_PER_STATUS: u32 = 1500;
+const NON_FINAL_STATUS_INDEXES: &[TransactionStatus] = &[
+    TransactionStatus::Pending,
+    TransactionStatus::Sent,
+    TransactionStatus::Submitted,
+    TransactionStatus::Mined,
+];
+
+/// How `reconcile_status_index` repairs a stale entry for a given index.
+#[derive(Clone, Copy, PartialEq)]
+enum ReconcileMode {
+    /// Non-final index: promote finalized transactions into their final index
+    /// and leave active (still non-final) mismatches for finalization to repair.
+    Promote,
+    /// Final index: only purge entries whose body is gone. A present body is
+    /// authoritative, so it is left untouched (cross-final mismatches self-heal
+    /// at cleanup). Never re-adds an entry to another index.
+    PurgeOrphans,
+}
 
 #[derive(Clone)]
 pub struct RedisTransactionRepository {
@@ -79,8 +101,11 @@ impl RedisTransactionRepository {
     /// Generate key for relayer status index (legacy SET): relayer:{relayer_id}:status:{status}
     fn relayer_status_key(&self, relayer_id: &str, status: &TransactionStatus) -> String {
         format!(
-            "{}:{}:{}:{}:{}",
-            self.key_prefix, RELAYER_PREFIX, relayer_id, STATUS_PREFIX, status
+            "{}:{}:{}{}",
+            self.key_prefix,
+            RELAYER_PREFIX,
+            relayer_id,
+            Self::relayer_status_key_suffix(status)
         )
     }
 
@@ -88,9 +113,20 @@ impl RedisTransactionRepository {
     /// Score is created_at timestamp in milliseconds for efficient ordering.
     fn relayer_status_sorted_key(&self, relayer_id: &str, status: &TransactionStatus) -> String {
         format!(
-            "{}:{}:{}:{}:{}",
-            self.key_prefix, RELAYER_PREFIX, relayer_id, STATUS_SORTED_PREFIX, status
+            "{}:{}:{}{}",
+            self.key_prefix,
+            RELAYER_PREFIX,
+            relayer_id,
+            Self::relayer_status_sorted_key_suffix(status)
         )
+    }
+
+    fn relayer_status_key_suffix(status: &TransactionStatus) -> String {
+        format!(":{STATUS_PREFIX}:{status}")
+    }
+
+    fn relayer_status_sorted_key_suffix(status: &TransactionStatus) -> String {
+        format!(":{STATUS_SORTED_PREFIX}:{status}")
     }
 
     /// Generate key for relayer nonce index: relayer:{relayer_id}:nonce:{nonce}
@@ -109,9 +145,16 @@ impl RedisTransactionRepository {
     /// Generate key for relayer's sorted set by created_at: relayer:{relayer_id}:tx_by_created_at
     fn relayer_tx_by_created_at_key(&self, relayer_id: &str) -> String {
         format!(
-            "{}:{}:{}:{}",
-            self.key_prefix, RELAYER_PREFIX, relayer_id, TX_BY_CREATED_AT_PREFIX
+            "{}:{}:{}{}",
+            self.key_prefix,
+            RELAYER_PREFIX,
+            relayer_id,
+            Self::relayer_tx_by_created_at_key_suffix()
         )
+    }
+
+    fn relayer_tx_by_created_at_key_suffix() -> String {
+        format!(":{TX_BY_CREATED_AT_PREFIX}")
     }
 
     /// Returns the components needed for Lua scripts to resolve a tx key from
@@ -291,6 +334,195 @@ impl RedisTransactionRepository {
             warn!(tx_id = %tx.id, "Confirmed transaction missing confirmed_at, using created_at");
         }
         self.timestamp_to_score(&tx.created_at)
+    }
+
+    fn status_json_key(status: &TransactionStatus) -> Result<String, RepositoryError> {
+        let value = serde_json::to_value(status).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize transaction status: {e}"))
+        })?;
+
+        value.as_str().map(str::to_string).ok_or_else(|| {
+            RepositoryError::InvalidData("Transaction status serialized as non-string".to_string())
+        })
+    }
+
+    fn partial_update_index_metadata(
+        &self,
+        tx_id: &str,
+        update: &TransactionUpdateRequest,
+    ) -> Result<String, RepositoryError> {
+        let mut sorted_suffixes = serde_json::Map::new();
+        let mut legacy_suffixes = serde_json::Map::new();
+
+        for status in ALL_TRANSACTION_STATUSES {
+            let status_key = Self::status_json_key(status)?;
+            sorted_suffixes.insert(
+                status_key.clone(),
+                serde_json::Value::String(Self::relayer_status_sorted_key_suffix(status)),
+            );
+            legacy_suffixes.insert(
+                status_key,
+                serde_json::Value::String(Self::relayer_status_key_suffix(status)),
+            );
+        }
+
+        let nonfinal_statuses = NON_FINAL_STATUS_INDEXES
+            .iter()
+            .map(Self::status_json_key)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let confirmed_score = if update.status.as_ref() == Some(&TransactionStatus::Confirmed) {
+            update
+                .confirmed_at
+                .as_deref()
+                .map(|confirmed_at| self.timestamp_to_score(confirmed_at).to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        serde_json::to_string(&serde_json::json!({
+            "sorted": sorted_suffixes,
+            "legacy": legacy_suffixes,
+            "nonfinal": nonfinal_statuses,
+            "created_key_suffix": Self::relayer_tx_by_created_at_key_suffix(),
+            "confirmed_score": confirmed_score,
+            "tx_id": tx_id,
+        }))
+        .map_err(|e| {
+            RepositoryError::InvalidData(format!(
+                "Failed to serialize partial update index metadata: {e}"
+            ))
+        })
+    }
+
+    async fn reconcile_status_index(
+        &self,
+        relayer_id: &str,
+        index_status: &TransactionStatus,
+        cutoff_ms: i64,
+        mode: ReconcileMode,
+    ) -> Result<usize, RepositoryError> {
+        let sorted_key = self.relayer_status_sorted_key(relayer_id, index_status);
+        let legacy_key = self.relayer_status_key(relayer_id, index_status);
+        let mut offset = 0usize;
+        let mut total_repaired = 0usize;
+        let mut iterations = 0u32;
+
+        loop {
+            if iterations >= MAX_STALE_INDEX_RECONCILE_ITERATIONS_PER_STATUS {
+                warn!(
+                    relayer_id = %relayer_id,
+                    status = %index_status,
+                    iterations,
+                    total_repaired,
+                    "reached max stale status-index reconciliation iterations, stopping"
+                );
+                break;
+            }
+            iterations += 1;
+
+            let ids: Vec<String> = {
+                let mut conn = self
+                    .get_connection(
+                        self.connections.primary(),
+                        "reconcile_stale_status_indexes_scan",
+                    )
+                    .await?;
+
+                redis::cmd("ZRANGEBYSCORE")
+                    .arg(&sorted_key)
+                    .arg("-inf")
+                    .arg(cutoff_ms)
+                    .arg("LIMIT")
+                    .arg(offset)
+                    .arg(STALE_INDEX_PAGE_SIZE)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "reconcile_stale_status_indexes_scan"))?
+            };
+
+            if ids.is_empty() {
+                break;
+            }
+
+            let batch = self.get_transactions_by_ids(&ids).await?;
+            let failed_ids: HashSet<&str> = batch.failed_ids.iter().map(String::as_str).collect();
+            let transactions_by_id: HashMap<&str, &TransactionRepoModel> = batch
+                .results
+                .iter()
+                .map(|tx| (tx.id.as_str(), tx))
+                .collect();
+
+            let mut pipe = redis::pipe();
+            pipe.atomic();
+            let mut repaired_on_page = 0usize;
+
+            for tx_id in &ids {
+                if failed_ids.contains(tx_id.as_str()) {
+                    pipe.zrem(&sorted_key, tx_id);
+                    pipe.srem(&legacy_key, tx_id);
+                    repaired_on_page += 1;
+                    continue;
+                }
+
+                // Final indexes are terminal: a present body is authoritative.
+                // Body-less orphans are already removed by the arm above; a
+                // cross-final mismatch self-heals at cleanup, so never promote
+                // (zadd) here — that is the very race this sweep guards against.
+                if mode == ReconcileMode::PurgeOrphans {
+                    continue;
+                }
+
+                let Some(tx) = transactions_by_id.get(tx_id.as_str()) else {
+                    warn!(
+                        relayer_id = %relayer_id,
+                        status = %index_status,
+                        tx_id = %tx_id,
+                        "transaction body could not be reconciled from stale status index"
+                    );
+                    continue;
+                };
+
+                if FINAL_TRANSACTION_STATUSES.contains(&tx.status) && tx.status != *index_status {
+                    let final_status_key =
+                        self.relayer_status_sorted_key(&tx.relayer_id, &tx.status);
+                    let final_status_score = self.status_sorted_score(tx);
+
+                    pipe.zrem(&sorted_key, tx_id);
+                    pipe.srem(&legacy_key, tx_id);
+                    pipe.zadd(&final_status_key, tx_id, final_status_score);
+                    repaired_on_page += 1;
+                } else if tx.status != *index_status {
+                    // Non-final mismatches may be active transitions; finalization
+                    // is the durable repair point, so do not move them here.
+                    warn!(
+                        relayer_id = %relayer_id,
+                        index_status = %index_status,
+                        body_status = %tx.status,
+                        tx_id = %tx_id,
+                        "skipping non-final transaction status-index mismatch"
+                    );
+                }
+            }
+
+            if repaired_on_page > 0 {
+                let mut conn = self
+                    .get_connection(
+                        self.connections.primary(),
+                        "reconcile_stale_status_indexes_update",
+                    )
+                    .await?;
+                pipe.query_async::<()>(&mut conn).await.map_err(|e| {
+                    self.map_redis_error(e, "reconcile_stale_status_indexes_update")
+                })?;
+                total_repaired += repaired_on_page;
+            } else {
+                offset += ids.len();
+            }
+        }
+
+        Ok(total_repaired)
     }
 
     /// Batch fetch transactions by IDs using reverse lookup
@@ -512,10 +744,16 @@ impl RedisTransactionRepository {
     }
 
     /// Update indexes atomically with comprehensive error handling
+    ///
+    /// `include_status_indexes` must be false when the caller already maintained
+    /// the status sorted sets atomically (the partial_update Lua script): replaying
+    /// them here from a possibly stale snapshot can race a concurrent transition
+    /// and re-add an index entry the other writer just removed.
     async fn update_indexes(
         &self,
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
+        include_status_indexes: bool,
     ) -> Result<(), RepositoryError> {
         let mut conn = self
             .get_connection(self.connections.primary(), "update_indexes")
@@ -529,16 +767,18 @@ impl RedisTransactionRepository {
         let relayer_list_key = self.relayer_list_key();
         pipe.sadd(&relayer_list_key, &tx.relayer_id);
 
-        // Compute scores for sorted sets
-        // Status sorted set: uses confirmed_at for Confirmed status, created_at for others
-        let status_score = self.status_sorted_score(tx);
         // Global tx_by_created_at: always uses created_at for consistent ordering
         let created_at_score = self.timestamp_to_score(&tx.created_at);
 
-        // Handle status index updates - write to SORTED SET (new format)
-        let new_status_sorted_key = self.relayer_status_sorted_key(&tx.relayer_id, &tx.status);
-        pipe.zadd(&new_status_sorted_key, &tx.id, status_score);
-        debug!(tx_id = %tx.id, status = %tx.status, score = %status_score, "added transaction to status sorted set");
+        if include_status_indexes {
+            // Status sorted set: uses confirmed_at for Confirmed status, created_at for others
+            let status_score = self.status_sorted_score(tx);
+
+            // Handle status index updates - write to SORTED SET (new format)
+            let new_status_sorted_key = self.relayer_status_sorted_key(&tx.relayer_id, &tx.status);
+            pipe.zadd(&new_status_sorted_key, &tx.id, status_score);
+            debug!(tx_id = %tx.id, status = %tx.status, score = %status_score, "added transaction to status sorted set");
+        }
 
         if let Some(nonce) = self.extract_nonce(&tx.network_data) {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
@@ -553,7 +793,7 @@ impl RedisTransactionRepository {
 
         // Remove old indexes if updating
         if let Some(old) = old_tx {
-            if old.status != tx.status {
+            if include_status_indexes && old.status != tx.status {
                 // Remove from old status sorted set (new format)
                 let old_status_sorted_key =
                     self.relayer_status_sorted_key(&old.relayer_id, &old.status);
@@ -876,7 +1116,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .map_err(|e| self.map_redis_error(e, "create_transaction"))?;
 
         // Update indexes separately to handle partial failures gracefully
-        if let Err(e) = self.update_indexes(&entity, None).await {
+        if let Err(e) = self.update_indexes(&entity, None, true).await {
             error!(tx_id = %entity.id, error = %e, "failed to update indexes for new transaction");
             return Err(e);
         }
@@ -1103,7 +1343,7 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
             .map_err(|e| self.map_redis_error(e, "update_transaction"))?;
 
         // Update indexes
-        self.update_indexes(&entity, Some(&old_tx)).await?;
+        self.update_indexes(&entity, Some(&old_tx), true).await?;
 
         debug!(tx_id = %id, "successfully updated transaction");
         Ok(entity)
@@ -1832,6 +2072,13 @@ impl TransactionRepository for RedisTransactionRepository {
             None
         };
         let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
+        // The Lua script only decodes ARGV[5] on a status change, so skip
+        // building the metadata for non-status patches.
+        let index_metadata_json = if update.status.is_some() {
+            self.partial_update_index_metadata(&tx_id, &update)?
+        } else {
+            String::new()
+        };
 
         let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
 
@@ -1861,6 +2108,7 @@ impl TransactionRepository for RedisTransactionRepository {
             end
 
             local old_snapshot = current
+            local old_status = tx["status"]
 
             -- lua-cjson cannot distinguish empty Lua tables from empty
             -- arrays, so a decode/encode round-trip turns [] into {}.
@@ -1889,6 +2137,7 @@ impl TransactionRepository for RedisTransactionRepository {
             end
 
             local updated = cjson.encode(tx)
+            local new_status = tx["status"]
 
             -- Restore empty arrays that cjson.encode converted to {}
             for k, _ in pairs(empty_arrs) do
@@ -1897,7 +2146,53 @@ impl TransactionRepository for RedisTransactionRepository {
                 )
             end
 
+            local index_meta = nil
+            if patch["status"] and new_status ~= old_status then
+                index_meta = cjson.decode(ARGV[5])
+            end
+
             redis.call('SET', tx_key, updated)
+
+            if index_meta then
+                local tx_id = index_meta["tx_id"]
+                local new_status_sorted_suffix = index_meta["sorted"][new_status]
+                local old_status_sorted_suffix = index_meta["sorted"][old_status]
+                local old_status_legacy_suffix = index_meta["legacy"][old_status]
+
+                if new_status_sorted_suffix then
+                    local score = nil
+                    if new_status == "confirmed" and index_meta["confirmed_score"] ~= "" then
+                        score = index_meta["confirmed_score"]
+                    else
+                        local created_key = ARGV[1] .. relayer_id .. index_meta["created_key_suffix"]
+                        score = redis.call('ZSCORE', created_key, tx_id)
+                        if not score then score = 0 end
+                    end
+
+                    redis.call('ZADD', ARGV[1] .. relayer_id .. new_status_sorted_suffix, score, tx_id)
+                end
+
+                if old_status_sorted_suffix then
+                    redis.call('ZREM', ARGV[1] .. relayer_id .. old_status_sorted_suffix, tx_id)
+                end
+                if old_status_legacy_suffix then
+                    redis.call('SREM', ARGV[1] .. relayer_id .. old_status_legacy_suffix, tx_id)
+                end
+
+                if final_states[new_status] then
+                    for _, status in ipairs(index_meta["nonfinal"]) do
+                        local sorted_suffix = index_meta["sorted"][status]
+                        local legacy_suffix = index_meta["legacy"][status]
+                        if sorted_suffix then
+                            redis.call('ZREM', ARGV[1] .. relayer_id .. sorted_suffix, tx_id)
+                        end
+                        if legacy_suffix then
+                            redis.call('SREM', ARGV[1] .. relayer_id .. legacy_suffix, tx_id)
+                        end
+                    end
+                end
+            end
+
             return {old_snapshot, updated}
             "#,
         );
@@ -1908,7 +2203,7 @@ impl TransactionRepository for RedisTransactionRepository {
                 &lookup_key,
                 &key_prefix,
                 &key_suffix,
-                &[&patch_json, delete_at_arg],
+                &[&patch_json, delete_at_arg, &index_metadata_json],
                 "partial_update",
             )
             .await?;
@@ -1932,8 +2227,11 @@ impl TransactionRepository for RedisTransactionRepository {
         let updated_tx =
             self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
 
-        // Update indexes using the full pre-update state (status, network_data, nonce, etc.)
-        self.update_indexes(&updated_tx, Some(&original_tx)).await?;
+        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
+        // Status sorted sets are excluded: the Lua script above already moved
+        // them atomically with the body write.
+        self.update_indexes(&updated_tx, Some(&original_tx), false)
+            .await?;
 
         debug!(tx_id = %tx_id, "successfully updated transaction via patch");
 
@@ -1950,6 +2248,52 @@ impl TransactionRepository for RedisTransactionRepository {
         }
 
         Ok(updated_tx)
+    }
+
+    async fn reconcile_stale_status_indexes(
+        &self,
+        relayer_id: &str,
+    ) -> Result<usize, RepositoryError> {
+        let cutoff_ms =
+            (Utc::now() - chrono::Duration::seconds(STALE_INDEX_MIN_AGE_SECS)).timestamp_millis();
+        let mut total_repaired = 0usize;
+        let mut per_status_counts = Vec::new();
+
+        // Non-final indexes: promote finalized ghosts into their final index so
+        // the following cleanup run reaps them; purge entries whose body is gone.
+        for status in NON_FINAL_STATUS_INDEXES {
+            let repaired = self
+                .reconcile_status_index(relayer_id, status, cutoff_ms, ReconcileMode::Promote)
+                .await?;
+            if repaired > 0 {
+                per_status_counts.push((status.to_string(), repaired));
+                total_repaired += repaired;
+            }
+        }
+
+        // Final indexes: purge body-less orphans. These are dangles left when a
+        // body was deleted (crash or partial delete) but its final-index entry
+        // survived — nothing else ever reaps them.
+        for status in FINAL_TRANSACTION_STATUSES {
+            let repaired = self
+                .reconcile_status_index(relayer_id, status, cutoff_ms, ReconcileMode::PurgeOrphans)
+                .await?;
+            if repaired > 0 {
+                per_status_counts.push((status.to_string(), repaired));
+                total_repaired += repaired;
+            }
+        }
+
+        if total_repaired > 0 {
+            info!(
+                relayer_id = %relayer_id,
+                repaired_count = total_repaired,
+                per_status_counts = ?per_status_counts,
+                "reconciled stale transaction status indexes"
+            );
+        }
+
+        Ok(total_repaired)
     }
 
     async fn update_network_data(
@@ -2462,6 +2806,70 @@ mod tests {
 
         RedisTransactionRepository::new(connections, key_prefix)
             .expect("Failed to create RedisTransactionRepository")
+    }
+
+    fn old_status_score() -> f64 {
+        (Utc::now() - chrono::Duration::hours(2)).timestamp_millis() as f64
+    }
+
+    async fn zadd_status_member(
+        repo: &RedisTransactionRepository,
+        relayer_id: &str,
+        status: &TransactionStatus,
+        tx_id: &str,
+        score: f64,
+    ) {
+        let key = repo.relayer_status_sorted_key(relayer_id, status);
+        let mut conn = repo
+            .get_connection(repo.connections.primary(), "test_zadd_status_member")
+            .await
+            .unwrap();
+        redis::cmd("ZADD")
+            .arg(&key)
+            .arg(score)
+            .arg(tx_id)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    async fn zrem_status_member(
+        repo: &RedisTransactionRepository,
+        relayer_id: &str,
+        status: &TransactionStatus,
+        tx_id: &str,
+    ) {
+        let key = repo.relayer_status_sorted_key(relayer_id, status);
+        let mut conn = repo
+            .get_connection(repo.connections.primary(), "test_zrem_status_member")
+            .await
+            .unwrap();
+        redis::cmd("ZREM")
+            .arg(&key)
+            .arg(tx_id)
+            .query_async::<()>(&mut conn)
+            .await
+            .unwrap();
+    }
+
+    async fn status_member_exists(
+        repo: &RedisTransactionRepository,
+        relayer_id: &str,
+        status: &TransactionStatus,
+        tx_id: &str,
+    ) -> bool {
+        let key = repo.relayer_status_sorted_key(relayer_id, status);
+        let mut conn = repo
+            .get_connection(repo.connections.primary(), "test_status_member_exists")
+            .await
+            .unwrap();
+        let score: Option<f64> = redis::cmd("ZSCORE")
+            .arg(&key)
+            .arg(tx_id)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        score.is_some()
     }
 
     #[tokio::test]
@@ -3206,6 +3614,349 @@ mod tests {
         assert_eq!(
             updated.sent_at,
             Some("2025-01-27T16:00:00.000000+00:00".to_string())
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_confirmed_updates_status_indexes() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+        tx.confirmed_at = None;
+
+        repo.create(tx).await.unwrap();
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        assert!(
+            !status_member_exists(&repo, &relayer_id, &TransactionStatus::Submitted, &tx_id).await
+        );
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_finalization_purges_stale_nonfinal_indexes() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+        tx.confirmed_at = None;
+
+        repo.create(tx).await.unwrap();
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Sent,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        for status in NON_FINAL_STATUS_INDEXES {
+            assert!(
+                !status_member_exists(&repo, &relayer_id, status, &tx_id).await,
+                "transaction should not remain in {status:?}"
+            );
+        }
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_stale_status_indexes_heals_final_status_ghost() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Submitted,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+        zrem_status_member(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        assert!(
+            !status_member_exists(&repo, &relayer_id, &TransactionStatus::Submitted, &tx_id).await
+        );
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_stale_status_indexes_removes_dangling_entry() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Sent,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        assert!(!status_member_exists(&repo, &relayer_id, &TransactionStatus::Sent, &tx_id).await);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_stale_status_indexes_skips_young_entry() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Submitted,
+            &tx_id,
+            Utc::now().timestamp_millis() as f64,
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Submitted, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_stale_status_indexes_skips_legit_inflight_entry() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Submitted, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_removes_final_index_orphan_with_missing_body() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // A body-less dangle in a final index: the body was deleted but its
+        // Confirmed entry survived. Nothing but this sweep reaps it.
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        assert!(
+            !status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_keeps_live_final_index_entry() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+        // Finalize with an old confirmed_at so the Confirmed entry falls within
+        // the reconcile scan window but keeps a present, matching body.
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Confirmed),
+            confirmed_at: Some("2025-01-27T16:00:00.000000+00:00".to_string()),
+            ..Default::default()
+        };
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+        let body = repo.get_by_id(tx_id.clone()).await.unwrap();
+        assert_eq!(body.status, TransactionStatus::Confirmed);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_respects_cutoff_for_final_orphan() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        // Body-less, but scored just now: below the 1h staleness floor, so the
+        // sweep must leave it (a freshly-finalized tx whose body write is racing).
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            Utc::now().timestamp_millis() as f64,
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_final_index_never_zadds() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 1);
+        // A final-index orphan is purged, never promoted: the id must not appear
+        // in any other status index afterwards.
+        for status in ALL_TRANSACTION_STATUSES {
+            assert!(
+                !status_member_exists(&repo, &relayer_id, status, &tx_id).await,
+                "orphan should not have been re-added to {status:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reconcile_leaves_present_mismatched_final_body() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+
+        repo.create(tx).await.unwrap();
+        let update = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            ..Default::default()
+        };
+        repo.partial_update(tx_id.clone(), update).await.unwrap();
+
+        // Fabricate a stale entry in a *different* final index than the body's
+        // status. The sweep leaves present bodies alone; this self-heals when
+        // the tx is deleted at cleanup (remove_all_indexes clears every index).
+        zadd_status_member(
+            &repo,
+            &relayer_id,
+            &TransactionStatus::Confirmed,
+            &tx_id,
+            old_status_score(),
+        )
+        .await;
+
+        let repaired = repo
+            .reconcile_stale_status_indexes(&relayer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(repaired, 0);
+        assert!(
+            status_member_exists(&repo, &relayer_id, &TransactionStatus::Confirmed, &tx_id).await
         );
     }
 
