@@ -290,10 +290,17 @@ async fn process_single_relayer(
                     status = ?status,
                     "failed to cleanup transactions for status"
                 );
+                // Preserve a reconcile failure alongside the cleanup failure so
+                // neither error is lost in the combined-failure path.
                 return RelayerCleanupResult {
                     relayer_id: relayer.id,
                     cleaned_count: total_cleaned,
-                    error: Some(e.to_string()),
+                    error: Some(match &reconcile_error {
+                        Some(reconcile_error) => {
+                            format!("{reconcile_error}; status cleanup failed: {e}")
+                        }
+                        None => e.to_string(),
+                    }),
                 };
             }
         }
