@@ -114,6 +114,10 @@ impl ProviderConfig {
 
 /// Pre-configured `reqwest::ClientBuilder` with standard pool, keepalive, TLS,
 /// and redirect settings. Callers chain on extras (e.g., `.timeout(...)`) then `.build()`.
+///
+/// Response compression: the crate-level reqwest `zstd` feature (see Cargo.toml)
+/// makes clients built here send `Accept-Encoding: zstd` and transparently
+/// decompress zstd responses from providers that support it (e.g. QuickNode).
 fn base_rpc_client_builder() -> reqwest::ClientBuilder {
     ReqwestClient::builder()
         .connect_timeout(Duration::from_secs(
@@ -698,6 +702,37 @@ mod tests {
 
         let provider_error = categorize_reqwest_error(&err);
         assert!(matches!(provider_error, ProviderError::Other(_)));
+    }
+
+    #[actix_rt::test]
+    async fn test_shared_rpc_client_zstd_response_decompression() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": {"ok": true}});
+        let compressed = zstd::encode_all(body.to_string().as_bytes(), 3).unwrap();
+
+        let mock = mock_server
+            .mock("POST", "/")
+            .match_header(
+                "accept-encoding",
+                mockito::Matcher::Regex("zstd".to_string()),
+            )
+            .with_header("content-encoding", "zstd")
+            .with_body(compressed)
+            .create_async()
+            .await;
+
+        let client = get_shared_rpc_http_client().unwrap();
+        let response = client
+            .post(mock_server.url())
+            .json(&serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "test"}))
+            .send()
+            .await
+            .unwrap();
+
+        let json: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(json["result"]["ok"], true);
+        mock.assert_async().await;
     }
 
     #[test]

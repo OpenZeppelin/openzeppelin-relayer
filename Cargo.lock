@@ -2943,6 +2943,8 @@ dependencies = [
  "compression-core",
  "flate2",
  "memchr",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -6459,6 +6461,7 @@ dependencies = [
  "validator",
  "vaultrs",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]
