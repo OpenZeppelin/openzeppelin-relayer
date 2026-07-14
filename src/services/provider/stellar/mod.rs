@@ -528,8 +528,12 @@ impl StellarProvider {
                     // Surface HTTP-level errors (429/5xx/...) with their status code so
                     // `is_retriable_error` and `should_mark_provider_failed` classify them,
                     // instead of losing the status as a JSON decode error on non-JSON bodies.
-                    if let Err(status_err) = response.error_for_status_ref() {
-                        return Err(ProviderError::from(&status_err));
+                    // Read the body on failure so the provider's own error detail is
+                    // preserved for diagnosis rather than dropped by `error_for_status`.
+                    let status = response.status();
+                    if !status.is_success() {
+                        let body = response.text().await.unwrap_or_default();
+                        return Err(http_status_error_to_provider_error(status, body));
                     }
 
                     let json_response: serde_json::Value =
@@ -537,7 +541,9 @@ impl StellarProvider {
 
                     // Map JSON-RPC error objects inside the retried operation so
                     // retriable codes (e.g. -32005 rate limited) can retry/fail over.
-                    if let Some(error) = json_response.get("error") {
+                    // Some non-strict providers send `"error": null` on success, so
+                    // skip null to avoid misclassifying a valid response as an error.
+                    if let Some(error) = json_response.get("error").filter(|e| !e.is_null()) {
                         return Err(json_rpc_error_to_provider_error(error));
                     }
 
@@ -584,6 +590,28 @@ impl StellarProvider {
             .get("result")
             .cloned()
             .ok_or_else(|| ProviderError::Other("No result field in JSON-RPC response".to_string()))
+    }
+}
+
+/// Maps a non-success HTTP status and its response body to a `ProviderError`,
+/// keeping the status-based classification used by `is_retriable_error` and
+/// `should_mark_provider_failed` while preserving the provider's body text for
+/// diagnosis. The body is decompressed transparently when zstd-encoded.
+fn http_status_error_to_provider_error(status: reqwest::StatusCode, body: String) -> ProviderError {
+    match status.as_u16() {
+        429 => ProviderError::RateLimited,
+        502 => ProviderError::BadGateway,
+        code => {
+            let detail = if body.trim().is_empty() {
+                status.to_string()
+            } else {
+                body
+            };
+            ProviderError::RequestError {
+                error: detail,
+                status_code: code,
+            }
+        }
     }
 }
 
@@ -2118,6 +2146,73 @@ mod stellar_rpc_tests {
             matches!(err, ProviderError::RpcErrorCode { code: -32601, .. }),
             "Unexpected error: {err}"
         );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_raw_path_null_error_field_is_treated_as_success() {
+        let _env_guard = setup_test_env();
+
+        let mut mock_server = mockito::Server::new_async().await;
+        // Non-strict providers may include `"error": null` on a successful response.
+        let mock = mock_server
+            .mock("POST", "/")
+            .with_body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": null,
+                    "result": { "status": "NOT_FOUND" }
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(mock_server.url())],
+            5,
+        ))
+        .unwrap();
+
+        let response = provider.get_transaction(&dummy_hash()).await.unwrap();
+        assert_eq!(response.status, "NOT_FOUND");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_raw_path_http_error_surfaces_provider_body() {
+        let _env_guard = setup_test_env();
+        // 400 is non-retriable, so a single attempt is enough to observe the body.
+        std::env::set_var("PROVIDER_MAX_RETRIES", "1");
+
+        let mut mock_server = mockito::Server::new_async().await;
+        let mock = mock_server
+            .mock("POST", "/")
+            .with_status(400)
+            .with_body("provider says: bad params")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(mock_server.url())],
+            5,
+        ))
+        .unwrap();
+
+        let err = provider.get_transaction(&dummy_hash()).await.unwrap_err();
+        match err {
+            ProviderError::RequestError { error, status_code } => {
+                assert_eq!(status_code, 400);
+                assert!(
+                    error.contains("provider says: bad params"),
+                    "Body detail not surfaced: {error}"
+                );
+            }
+            other => panic!("Unexpected error: {other}"),
+        }
         mock.assert_async().await;
     }
 
