@@ -1,46 +1,29 @@
-//! Redis-backed scheduled-job store and due-sweep for the Pub/Sub backend.
+//! Pub/Sub adapter over the shared Redis-backed scheduler
+//! (`crate::queues::schedule`).
 //!
-//! Deferred and retrying jobs live in a per-queue Redis sorted set
-//! `{key_prefix}:pubsub:scheduled:{queue_name}` (member = serialized
-//! [`ScheduledJob`], score = target run time in Unix seconds). A due-sweep
-//! atomically claims due members (so one fleet instance publishes each) and
-//! publishes them to the queue's topic — the apalis store-and-run-when-due
-//! pattern. The topic therefore only ever carries already-due jobs.
+//! The generic store-and-run-when-due scheduler lives in `queues/schedule.rs`;
+//! this module pins the Pub/Sub key segment (`pubsub`, keeping the existing
+//! `{key_prefix}:pubsub:scheduled:{queue}` keys **byte-identical** for
+//! merged-to-main deployments) and adapts the generic publish callback to a
+//! Pub/Sub `Publisher`. The Pub/Sub backend/worker call these thin wrappers
+//! unchanged.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use deadpool_redis::Pool;
-use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
 
 use gcloud_pubsub::publisher::Publisher;
 
 use super::backend::message_from_body;
 use super::{QueueBackendError, QueueType, WorkerHandle};
 
-/// A job awaiting its due time in the Redis scheduled set.
-///
-/// The `body` is the JSON-serialized `Job<T>` (becomes the published message
-/// `data`); `retry_attempt` is the logical counter carried as the published
-/// message's `retry_attempt` attribute.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct ScheduledJob {
-    pub body: String,
-    pub retry_attempt: usize,
-}
+pub(crate) use crate::queues::schedule::ScheduledJob;
 
-/// Redis sorted-set key holding a queue's deferred/retrying jobs.
-pub(crate) fn scheduled_set_key(key_prefix: &str, queue_type: QueueType) -> String {
-    format!("{key_prefix}:pubsub:scheduled:{}", queue_type.queue_name())
-}
+/// Backend key segment for Pub/Sub scheduled sets (kept byte-identical).
+const SEGMENT: &str = "pubsub";
 
-/// Adds a job to the scheduled set, scored by its target run time (Unix secs).
-///
-/// The member is the serialized [`ScheduledJob`]; the score is `run_at`.
-/// Re-adding a member with the same content updates its score (idempotent).
+/// Adds a job to the Pub/Sub scheduled set, scored by run time (Unix secs).
 pub(crate) async fn zadd_scheduled(
     pool: &Arc<Pool>,
     key_prefix: &str,
@@ -48,33 +31,16 @@ pub(crate) async fn zadd_scheduled(
     job: &ScheduledJob,
     run_at: i64,
 ) -> Result<(), QueueBackendError> {
-    let key = scheduled_set_key(key_prefix, queue_type);
-    let member = serde_json::to_vec(job)
-        .map_err(|e| QueueBackendError::SerializationError(e.to_string()))?;
-
-    let mut conn = pool
-        .get()
+    crate::queues::schedule::zadd_scheduled(pool, key_prefix, SEGMENT, queue_type, job, run_at)
         .await
-        .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
-
-    let _: () = redis::cmd("ZADD")
-        .arg(&key)
-        .arg(run_at)
-        .arg(member)
-        .query_async(&mut conn)
-        .await
-        .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
-
-    Ok(())
 }
 
-/// Atomically claims up to `max` due members (`score <= now`), removing them so
-/// only one fleet instance publishes each.
+/// Atomically claims up to `max` due members from the Pub/Sub scheduled set.
 ///
-/// Implemented as a single Lua script (`ZRANGEBYSCORE` + `ZREM`) so the
-/// range-and-remove is one atomic step — every instance runs the sweep and the
-/// atomic claim dedups (no leader election). Corrupt members are skipped (logged
-/// and dropped) so one bad entry can't wedge the sweep.
+/// Test-only: production due-sweeps go through `crate::queues::schedule`'s
+/// generic `spawn_due_sweep`; this thin wrapper exists for the gated
+/// emulator/Redis integration tests.
+#[cfg(test)]
 pub(crate) async fn claim_due(
     pool: &Arc<Pool>,
     key_prefix: &str,
@@ -82,169 +48,61 @@ pub(crate) async fn claim_due(
     now: i64,
     max: usize,
 ) -> Result<Vec<ScheduledJob>, QueueBackendError> {
-    let key = scheduled_set_key(key_prefix, queue_type);
-
-    // Range due members oldest-first (bounded), then remove them in one step.
-    let script = redis::Script::new(
-        r#"
-        local due = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
-        if #due > 0 then
-            redis.call('ZREM', KEYS[1], unpack(due))
-        end
-        return due
-        "#,
-    );
-
-    let mut conn = pool
-        .get()
-        .await
-        .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
-
-    let raw: Vec<Vec<u8>> = script
-        .key(&key)
-        .arg(now)
-        .arg(max as i64)
-        .invoke_async(&mut conn)
-        .await
-        .map_err(|e| QueueBackendError::RedisError(e.to_string()))?;
-
-    let mut jobs = Vec::with_capacity(raw.len());
-    for bytes in raw {
-        match serde_json::from_slice::<ScheduledJob>(&bytes) {
-            Ok(job) => jobs.push(job),
-            Err(e) => warn!(
-                queue_type = %queue_type,
-                error = %e,
-                "Dropping corrupt scheduled-set member"
-            ),
-        }
-    }
-    Ok(jobs)
+    crate::queues::schedule::claim_due(pool, key_prefix, SEGMENT, queue_type, now, max).await
 }
 
-/// Maximum due members claimed and published per sweep tick (bounds a burst).
-const DUE_SWEEP_BATCH: usize = 256;
-
-/// Per-queue sweep cadence. Status-check queues sweep fast (~1s) to match the
-/// proven apalis 2s fast-queue poll and preserve status-check latency; other
-/// queues sweep coarser. This cadence is the floor on retry/schedule latency.
-pub(crate) fn sweep_interval(queue_type: QueueType) -> Duration {
-    if queue_type.is_status_check() {
-        Duration::from_secs(1)
-    } else {
-        Duration::from_secs(5)
-    }
-}
-
-/// Spawns the due-sweep task for one queue: every `sweep_interval`, atomically
-/// claim due jobs and publish them to the topic.
-///
-/// Every fleet instance runs the sweep; the atomic claim (`claim_due`) dedups so
-/// each due job is published once. A rare double-publish is harmless (at-least-
-/// once + idempotent handlers). Fully interruptible by `shutdown_rx`.
+/// Spawns the Pub/Sub due-sweep: publishes due jobs to the queue's topic via the
+/// supplied `Publisher`, deferring re-queue-on-failure to the shared scheduler.
 pub(crate) fn spawn_due_sweep(
     queue_type: QueueType,
     publisher: Publisher,
     pool: Arc<Pool>,
     key_prefix: String,
-    mut shutdown_rx: watch::Receiver<bool>,
+    shutdown_rx: watch::Receiver<bool>,
     runtime_handle: tokio::runtime::Handle,
 ) -> WorkerHandle {
-    let interval = sweep_interval(queue_type);
-    info!(
-        queue_type = %queue_type,
-        sweep_interval_secs = interval.as_secs(),
-        "Spawning Pub/Sub due-sweep"
-    );
-
-    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
-        loop {
-            if *shutdown_rx.borrow() {
-                break;
-            }
-
-            let now = chrono::Utc::now().timestamp();
-            match claim_due(&pool, &key_prefix, queue_type, now, DUE_SWEEP_BATCH).await {
-                Ok(jobs) => {
-                    for job in jobs {
-                        publish_scheduled(&publisher, &pool, &key_prefix, queue_type, &job).await;
-                    }
-                }
-                Err(e) => warn!(
-                    queue_type = %queue_type,
-                    error = %e,
-                    "Due-sweep claim failed; will retry next tick"
-                ),
-            }
-
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        break;
-                    }
-                }
-            }
+    let publish = move |job: ScheduledJob| {
+        let publisher = publisher.clone();
+        async move {
+            let message = message_from_body(job.body.into_bytes(), job.retry_attempt);
+            publisher
+                .publish(message)
+                .await
+                .get()
+                .await
+                .map(|_| ())
+                .map_err(|e| QueueBackendError::QueueError(format!("Pub/Sub publish failed: {e}")))
         }
-        info!(queue_type = %queue_type, "Pub/Sub due-sweep stopped");
-    });
-
-    WorkerHandle::Tokio(handle)
-}
-
-/// Publishes one claimed scheduled job to its topic.
-///
-/// `claim_due` has already removed the job from Redis, so on publish failure the
-/// job is re-queued into the scheduled set (scored for immediate re-sweep) to
-/// avoid silently dropping a deferred or retrying job on a transient Pub/Sub
-/// error. A re-publish of a job that actually succeeded is harmless: Pub/Sub is
-/// at-least-once and the handlers are idempotent.
-async fn publish_scheduled(
-    publisher: &Publisher,
-    pool: &Arc<Pool>,
-    key_prefix: &str,
-    queue_type: QueueType,
-    job: &ScheduledJob,
-) {
-    let message = message_from_body(job.body.clone().into_bytes(), job.retry_attempt);
-    let awaiter = publisher.publish(message).await;
-    match awaiter.get().await {
-        Ok(message_id) => debug!(
-            queue_type = %queue_type,
-            message_id = %message_id,
-            retry_attempt = job.retry_attempt,
-            "Published due job from scheduled set"
-        ),
-        Err(e) => {
-            error!(
-                queue_type = %queue_type,
-                error = %e,
-                "Failed to publish due job; re-queuing to the scheduled set"
-            );
-            let now = chrono::Utc::now().timestamp();
-            if let Err(re) = zadd_scheduled(pool, key_prefix, queue_type, job, now).await {
-                error!(
-                    queue_type = %queue_type,
-                    error = %re,
-                    "Failed to re-queue due job after publish failure; job dropped this tick"
-                );
-            }
-        }
-    }
+    };
+    crate::queues::schedule::spawn_due_sweep(
+        SEGMENT,
+        queue_type,
+        publish,
+        pool,
+        key_prefix,
+        shutdown_rx,
+        runtime_handle,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Pub/Sub key format helper for tests — production code calls the shared
+    /// `scheduled_set_key` with the `"pubsub"` segment directly.
+    fn pubsub_key(key_prefix: &str, queue_type: QueueType) -> String {
+        crate::queues::schedule::scheduled_set_key(key_prefix, SEGMENT, queue_type)
+    }
+
     #[test]
     fn test_scheduled_set_key_format() {
         assert_eq!(
-            scheduled_set_key("oz-relayer", QueueType::StatusCheckEvm),
+            pubsub_key("oz-relayer", QueueType::StatusCheckEvm),
             "oz-relayer:pubsub:scheduled:status-check-evm"
         );
         assert_eq!(
-            scheduled_set_key("custom", QueueType::TransactionRequest),
+            pubsub_key("custom", QueueType::TransactionRequest),
             "custom:pubsub:scheduled:transaction-request"
         );
     }
@@ -254,7 +112,7 @@ mod tests {
         let prefix = "oz-relayer";
         let keys: std::collections::HashSet<String> = super::super::backend::ALL_QUEUE_TYPES
             .iter()
-            .map(|&qt| scheduled_set_key(prefix, qt))
+            .map(|&qt| pubsub_key(prefix, qt))
             .collect();
         assert_eq!(keys.len(), 8, "each queue type must have a distinct key");
     }
@@ -272,6 +130,8 @@ mod tests {
 
     #[test]
     fn test_sweep_interval_status_checks_are_fast() {
+        use crate::queues::schedule::sweep_interval;
+        use std::time::Duration;
         // Status checks sweep at ~1s; others coarser.
         assert_eq!(
             sweep_interval(QueueType::StatusCheck),
@@ -312,7 +172,7 @@ mod tests {
         // Unique prefix per run so concurrent CI runs don't collide.
         let prefix = format!("test-pubsub-{}", uuid::Uuid::new_v4());
         let queue = QueueType::StatusCheckEvm;
-        let key = scheduled_set_key(&prefix, queue);
+        let key = pubsub_key(&prefix, queue);
 
         // One due member (run_at in the past).
         let job = ScheduledJob {
@@ -362,7 +222,7 @@ mod tests {
         let pool = test_pool().expect("Redis required for this test");
         let prefix = format!("test-pubsub-{}", uuid::Uuid::new_v4());
         let queue = QueueType::TransactionRequest;
-        let key = scheduled_set_key(&prefix, queue);
+        let key = pubsub_key(&prefix, queue);
 
         let now = chrono::Utc::now().timestamp();
         let future = ScheduledJob {

@@ -68,6 +68,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`network-configuration-json-file`](./examples/network-configuration-json-file/)     | Using Custom network configuration via json file         |
 | [`aws-sqs-queue-storage`](./examples/aws-sqs-queue-storage/)                         | Local SQS queue backend setup using LocalStack           |
 | [`gcp-pubsub-queue-storage`](./examples/gcp-pubsub-queue-storage/)                   | GCP Pub/Sub queue backend setup (emulator or real GCP)   |
+| [`rabbitmq-queue-storage`](./examples/rabbitmq-queue-storage/)                       | RabbitMQ queue backend setup (real broker, one command)  |
 | [`x402-facilitator-plugin`](./examples/x402-facilitator-plugin/)                     | x402 Facilitator plugin                                  |
 
 Each example includes:
@@ -322,14 +323,18 @@ Create `.env` with correct values according to your needs from `.env.example` fi
 cp .env.example .env
 ```
 
-### Queue backend configuration (Redis, SQS, or Pub/Sub)
+### Queue backend configuration (Redis, SQS, Pub/Sub, or RabbitMQ)
 
-The relayer supports three queue backends:
+The relayer supports four queue backends:
 
 - `redis` (default): uses Apalis + Redis queues
 - `sqs`: uses AWS SQS workers/cron and minimizes Apalis queue usage
 - `pubsub` (alias `gcp-pubsub`): uses GCP Pub/Sub workers/cron; deferred jobs and
   retry backoff are held in Redis and published when due
+- `rabbitmq`: uses RabbitMQ workers/cron; one durable classic queue per queue
+  type, publisher-confirmed durable publishes, automatic reconnect; deferred
+  jobs and retry backoff are held in Redis and published when due (no broker
+  plugins required)
 
 Set in `.env`:
 
@@ -339,6 +344,8 @@ QUEUE_BACKEND=redis
 # QUEUE_BACKEND=sqs
 # or
 # QUEUE_BACKEND=pubsub
+# or
+# QUEUE_BACKEND=rabbitmq
 ```
 
 When using SQS:
@@ -372,6 +379,29 @@ on-demand backlog-depth read additionally needs `roles/monitoring.viewer`. No
 dead-letter topic is required. See the
 [`gcp-pubsub-queue-storage`](./examples/gcp-pubsub-queue-storage/) example for a
 local emulator setup.
+
+When using RabbitMQ:
+
+```bash
+QUEUE_BACKEND=rabbitmq
+# Full AMQP URI (use amqps:// for TLS). Embeds credentials, so it is redacted in
+# all logs/errors. Standard URI query params (e.g. ?heartbeat=20) pass through.
+RABBITMQ_URL=amqp://user:pass@host:5672/%2f
+# Optional: queue-name prefix (default: relayer); queues are {prefix}-{queue}
+# RABBITMQ_QUEUE_PREFIX=relayer
+# Optional: verify-only mode — never create queues, just check they exist
+# (for locked-down brokers or pre-provisioned quorum queues). Default: false
+# RABBITMQ_PASSIVE_QUEUES=false
+```
+
+By default the relayer declares its 8 durable queues at startup (needs
+`configure` + `write` + `read` on `^{prefix}-.*`). With
+`RABBITMQ_PASSIVE_QUEUES=true` it only verifies them (needs `write` + `read`) and
+fails fast naming anything missing. Deferred jobs and retry backoff are held in
+Redis and published when due. No broker plugins are required — works on
+self-hosted RabbitMQ 3.13+/4.x, Amazon MQ for RabbitMQ, and CloudAMQP. See the
+[`rabbitmq-queue-storage`](./examples/rabbitmq-queue-storage/) example for a
+one-command local broker setup.
 
 Use distributed mode for multi-instance deployments so scheduled workers use Redis-based distributed locks and avoid duplicate execution:
 

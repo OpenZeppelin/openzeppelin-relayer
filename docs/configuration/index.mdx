@@ -64,7 +64,7 @@ This table lists the environment variables and their default values.
 | `REDIS_READER_POOL_MAX_SIZE`                                       | `1000`                   | `<number>`                                                                  | Maximum number of connections in the reader Redis connection pool. Only used when `REDIS_READER_URL` is set. Useful for read-heavy workloads. See [Storage Configuration](./configuration/storage) for pool sizing recommendations.                                                  |
 | `REDIS_POOL_TIMEOUT_MS`                                            | `10000`                  | `<timeout in milliseconds>`                                                 | Maximum time to wait for a connection from the pool. See [Storage Configuration](./configuration/storage) for performance tuning.                                                                                                                                                     |
 | `REDIS_KEY_PREFIX`                                                 | `oz-relayer`             | `string`                                                                    | Redis key prefix for namespacing. See [Storage Configuration](./configuration/storage) for more information.                                                                                                                                                                         |
-| `QUEUE_BACKEND`                                                    | `redis`                  | `redis, sqs, pubsub`                                                        | Queue backend implementation. `redis` uses Apalis + Redis queues. `sqs` uses AWS SQS workers. `pubsub` uses GCP Pub/Sub workers (and still requires Redis for deferred-job scheduling).                                                                                              |
+| `QUEUE_BACKEND`                                                    | `redis`                  | `redis, sqs, pubsub, rabbitmq`                                              | Queue backend implementation. `redis` uses Apalis + Redis queues. `sqs` uses AWS SQS workers. `pubsub` uses GCP Pub/Sub workers. `rabbitmq` uses RabbitMQ workers. The `sqs`/`pubsub`/`rabbitmq` backends still require Redis for deferred-job scheduling.                |
 | `AWS_REGION`                                                       | (none)                   | `<aws region>`                                                              | Required when `QUEUE_BACKEND=sqs`. Used to build/resolve SQS queue endpoints.                                                                                                                                                                                                       |
 | `AWS_ACCOUNT_ID`                                                   | (none)                   | `<aws account id>`                                                          | Required when `QUEUE_BACKEND=sqs` and `SQS_QUEUE_URL_PREFIX` is not set. Used to construct default SQS queue URLs.                                                                                                                                                                  |
 | `SQS_QUEUE_URL_PREFIX`                                             | (none)                   | `<sqs queue url prefix>`                                                    | Optional override for SQS queue URL prefix (example: `https://sqs.us-east-1.amazonaws.com/123456789012/relayer-`). When set, `AWS_ACCOUNT_ID` is not required.                                                                                                                     |
@@ -88,6 +88,9 @@ This table lists the environment variables and their default values.
 | `PUBSUB_PROJECT_ID`                                                | (none)                   | `<gcp project id>`                                                          | Required when `QUEUE_BACKEND=pubsub`. GCP project that holds the Pub/Sub topics and subscriptions; resolved for ADC and the Cloud Monitoring backlog read.                                                                                                                           |
 | `PUBSUB_TOPIC_PREFIX`                                              | `relayer`                | `<topic prefix>`                                                            | Prefix for Pub/Sub topic and subscription names; the `-` separator is added automatically (topics `<prefix>-<queue>`, subscriptions `<prefix>-<queue>-sub`). Only applies when `QUEUE_BACKEND=pubsub`.                                                                               |
 | `PUBSUB_EMULATOR_HOST`                                             | (none)                   | `<host:port>`                                                               | Optional. When set (example: `localhost:8085`), targets the local Pub/Sub emulator instead of real GCP and skips ADC resolution. Leave unset for real GCP.                                                                                                                           |
+| `RABBITMQ_URL`                                                    | (none)                   | `<amqp uri>`                                                                | Required when `QUEUE_BACKEND=rabbitmq`. Full AMQP 0-9-1 URI (`amqp://user:pass@host:5672/vhost`, or `amqps://…` for TLS); standard query params like `?heartbeat=20` pass through. Embeds credentials, so it is redacted in all logs/errors (scheme+host+port+vhost only).            |
+| `RABBITMQ_QUEUE_PREFIX`                                           | `relayer`                | `<queue prefix>`                                                            | Prefix for RabbitMQ queue names; the `-` separator is added automatically (queues `<prefix>-<queue>`). Only applies when `QUEUE_BACKEND=rabbitmq`.                                                                                                                                   |
+| `RABBITMQ_PASSIVE_QUEUES`                                         | `false`                  | `bool` (`true/false`)                                                       | When `false` the relayer declares its 8 durable queues at startup (needs `configure`+`write`+`read`). When `true` it only verifies they exist (needs `write`+`read`) and fails fast naming anything missing — for locked-down brokers or pre-provisioned quorum queues.              |
 | `DISTRIBUTED_MODE`                                                 | `false`                  | `bool` (`true/false`, `1/0`)                                                | Enables Redis-based distributed locks for cron/cleanup tasks in multi-instance deployments, preventing duplicate scheduled execution across nodes.                                                                                                                                    |
 | `STORAGE_ENCRYPTION_KEY`                                           | ``                       | `string`                                                                    | Encryption key used to encrypt data at rest in Redis storage. See [Storage Configuration](./configuration/storage) for security details.                                                                                                                                             |
 | `RPC_TIMEOUT_MS`                                                   | `10000`                  | `<timeout in milliseconds>`                                                 | Sets the maximum time to wait for RPC connections before timing out.                                                                                                                                                                                                                 |
@@ -162,6 +165,9 @@ Set `QUEUE_BACKEND` to choose the queue system:
 - `redis` (default): Redis queue backend via Apalis workers
 - `sqs`: AWS SQS queue backend (standard or FIFO queues)
 - `pubsub`: GCP Pub/Sub queue backend (requires Redis for deferred-job scheduling)
+- `rabbitmq`: RabbitMQ queue backend (requires Redis for deferred-job scheduling)
+
+The `redis` backend is the simplest to run and is a good default for single-instance and development setups. For high-throughput or multi-instance production deployments, we recommend `sqs`, `pubsub`, or `rabbitmq`.
 
 Example for SQS:
 
@@ -191,6 +197,25 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 ```
 
 Pub/Sub has no native delayed delivery, so the backend still requires Redis (`REDIS_URL`): deferred jobs and retry backoff are held in a Redis sorted set and published to the topic when due.
+
+Example for RabbitMQ:
+
+```bash
+QUEUE_BACKEND=rabbitmq
+# Full AMQP URI (use amqps:// for TLS). Embeds credentials → redacted in logs.
+RABBITMQ_URL=amqp://user:pass@host:5672/%2f
+# Optional (default: relayer; the "-" separator is added automatically)
+# RABBITMQ_QUEUE_PREFIX=relayer
+# Optional: verify-only mode (never create queues) for locked-down brokers
+# or pre-provisioned quorum queues. Default: false
+# RABBITMQ_PASSIVE_QUEUES=false
+```
+
+Like Pub/Sub, RabbitMQ has no native arbitrary delayed delivery (and the
+delayed-message-exchange plugin is archived / incompatible with RabbitMQ 4.3+),
+so the backend still requires Redis (`REDIS_URL`): deferred jobs and retry
+backoff are held in a Redis sorted set and published to the broker when due. See
+the [RabbitMQ queue provisioning guide](#rabbitmq-queue-provisioning-guide).
 
 For distributed deployments (multiple relayer instances), set:
 
@@ -354,6 +379,36 @@ Set `PUBSUB_EMULATOR_HOST` (for example `localhost:8085`) to target the local [P
 Pub/Sub has no native delayed delivery, so deferred jobs and retry backoff are held in a **Redis sorted set and published when due** — the Pub/Sub backend therefore requires `REDIS_URL` in addition to the Pub/Sub settings. Status-check queues are unbounded and re-run with backoff until the transaction reaches a final state.
 
 Backlog depth is read from Cloud Monitoring (`subscription/num_undelivered_messages`) and exposed via the `queue_depth` gauge; under the emulator (which does not serve Cloud Monitoring) it is reported as unavailable rather than `0`.
+
+### RabbitMQ queue provisioning guide
+
+When `QUEUE_BACKEND=rabbitmq`, the relayer maps each of the 8 queue types to **one durable classic queue** named `{prefix}-{queue}` (default prefix `relayer`, override with `RABBITMQ_QUEUE_PREFIX`), published via the **default exchange** (`routing_key = queue name`). There are no custom exchanges or bindings.
+
+| # | Queue |
+|---|---|
+| 1 | `relayer-transaction-request` |
+| 2 | `relayer-transaction-submission` |
+| 3 | `relayer-status-check` |
+| 4 | `relayer-status-check-evm` |
+| 5 | `relayer-status-check-stellar` |
+| 6 | `relayer-notification` |
+| 7 | `relayer-token-swap-request` |
+| 8 | `relayer-relayer-health-check` |
+
+Queue properties (what the relayer declares, and what pre-provisioned queues must match in passive mode): `durable=true`, `exclusive=false`, `auto_delete=false`, no extra arguments. No dead-letter exchanges are required — a bounded job that exhausts `max_retries` stops retrying and the transaction's terminal state in the repository is the durable record (matching the other backends).
+
+#### Resource policy: declare vs verify-only
+
+- **Default (`RABBITMQ_PASSIVE_QUEUES=false`):** the relayer **declares** all 8 queues idempotently at startup. The broker user needs `configure` + `write` + `read` on `^{prefix}-.*`.
+- **Verify-only (`RABBITMQ_PASSIVE_QUEUES=true`):** the relayer issues **passive** declares — it checks each queue exists and fails fast naming any missing one, never creating anything. Needs only `write` + `read`. Use this for locked-down brokers, or to pre-provision **quorum** queues (a non-passive declare against a quorum queue fails with `406 inequivalent arg` by design — quorum queues are always durable, so the relayer's persistent publishing is correct on them).
+
+#### TLS and credentials
+
+Use `amqps://…` for TLS; tune the heartbeat with the standard URI query parameter (e.g. `?heartbeat=20`). `RABBITMQ_URL` embeds the broker password, so the relayer redacts it in every log and error message (logging scheme + host + port + vhost only). The default `guest` user is restricted to loopback connections by the broker; create a dedicated user with scoped permissions for non-local deployments.
+
+#### Scheduling, retries, and backlog depth
+
+RabbitMQ has no native arbitrary delayed delivery (the delayed-message-exchange plugin is archived and incompatible with RabbitMQ 4.3+), so deferred jobs and retry backoff are held in a **Redis sorted set and published when due** — the RabbitMQ backend therefore requires `REDIS_URL`. Publishes are publisher-confirmed (produce returns only after the broker acks a persistent message to a durable queue). Backlog depth is read with a passive `queue_declare` over the live connection and exposed via the `queue_depth` gauge (no management API required); while disconnected it is reported as unavailable rather than `0`. Works on self-hosted RabbitMQ 3.13+/4.x, Amazon MQ for RabbitMQ, and CloudAMQP — **no broker plugins required**. See the [`rabbitmq-queue-storage` example](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/main/examples/rabbitmq-queue-storage) for a one-command local broker setup.
 
 ## Main configuration file (config.json)
 

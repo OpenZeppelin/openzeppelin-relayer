@@ -102,8 +102,8 @@ soroban-rs = "0.2.6"
 jsonrpsee-core = "0.20.4"
 p256 = { version = "0.13.2" }
 google-cloud-auth = "0.22.1"
-# GCP Pub/Sub queue backend. EXACT-pinned (Constitution I: transport deps must be
-# pinned + supply-chain reviewed). Isolated from `google-cloud-auth 0.22` above
+# GCP Pub/Sub queue backend. EXACT-pinned (transport deps must be pinned +
+# supply-chain reviewed). Isolated from `google-cloud-auth 0.22` above
 # (distinct `gcloud-*` crate names → no version conflict). The Cloud Monitoring
 # depth read uses the relayer's existing direct `reqwest` (0.12) + this crate's
 # `gcloud-auth` token source — no extra HTTP crate for the read itself. Note for
@@ -113,15 +113,23 @@ gcloud-pubsub = "=1.7.1"
 gcloud-googleapis = { version = "=1.3.0", features = ["pubsub"] }
 # Already in the tree via gcloud-pubsub; promoted to a direct dep only to name
 # the `TokenSource` trait for the Cloud Monitoring depth read (no new supply-chain
-# surface). EXACT-pinned (Constitution I).
+# surface). EXACT-pinned.
 token-source = "=1.0.0"
 # Already in the tree (0.23.36) transitively. Promoted to a direct dep only to
 # install a process-default CryptoProvider: both rustls providers (aws-lc-rs +
 # ring) are compiled in via the AWS SDK / Solana / gcloud trees, so rustls cannot
 # auto-select one, and gcloud-pubsub's TLS (which uses the process default) panics
 # on the first real-GCP connection without it. EXACT-pinned to the resolved
-# version (Constitution I); aws_lc_rs matches gcloud-pubsub's own provider.
+# version; aws_lc_rs matches gcloud-pubsub's own provider.
 rustls = { version = "=0.23.36", features = ["aws_lc_rs"] }
+# RabbitMQ queue backend. EXACT-pinned (transport deps must be pinned +
+# supply-chain reviewed); lapin broke API between 4.0→4.1, so a loose
+# range is unsafe. The tokio/rustls features pin the crypto provider to
+# `rustls--aws_lc_rs`, matching the process-default CryptoProvider the Pub/Sub
+# backend installs (never enable `rustls--ring` — one provider only). No pooling
+# crate: the backend holds one connection with built-in auto-recovery and
+# multiplexes channels over it.
+lapin = { version = "=4.10.0", default-features = false, features = ["tokio", "rustls", "rustls--aws_lc_rs"] }
 http = { version = "1.3.1" }
 pem = { version = "3" }
 simple_asn1 = { version = "0.6" }

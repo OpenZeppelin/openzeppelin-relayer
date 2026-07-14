@@ -343,6 +343,48 @@ impl ServerConfig {
             .filter(|v| !v.is_empty())
     }
 
+    /// Gets the RabbitMQ connection URL for the RabbitMQ queue backend.
+    ///
+    /// Full AMQP 0-9-1 URI: `amqp://user:pass@host:5672/vhost` or `amqps://…`
+    /// for TLS. Standard URI query parameters (e.g. `?heartbeat=20`) pass through
+    /// to the client. Required when the RabbitMQ backend is selected.
+    ///
+    /// The URL embeds credentials, so it MUST be redacted before logging — it is
+    /// parsed up front and only its endpoint is ever logged, see
+    /// [`crate::queues::rabbitmq::backend::redact_amqp_uri`].
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `RABBITMQ_URL` is not set.
+    pub fn get_rabbitmq_url() -> Result<String, String> {
+        env::var("RABBITMQ_URL").map_err(|_| {
+            "RABBITMQ_URL not set. Required for the RabbitMQ backend. Expected an AMQP URI like \
+             amqp://user:pass@host:5672/vhost (or amqps://… for TLS)."
+                .to_string()
+        })
+    }
+
+    /// Gets the prefix applied to all RabbitMQ queue names.
+    ///
+    /// The separator is inserted by the name builder, so the prefix needs no
+    /// trailing `-` (queues are `{prefix}-{queue}`). Defaults to `relayer` when
+    /// not set (same rule as `PUBSUB_TOPIC_PREFIX`).
+    pub fn get_rabbitmq_queue_prefix() -> String {
+        env::var("RABBITMQ_QUEUE_PREFIX").unwrap_or_else(|_| "relayer".to_string())
+    }
+
+    /// Whether the RabbitMQ backend runs in passive (verify-only) mode.
+    ///
+    /// `false` (default): declare all queues idempotently at startup. `true`:
+    /// passive declares only — never creates; a missing queue fails fast. For
+    /// locked-down brokers (app user without `configure` permission) or
+    /// pre-provisioned quorum queues.
+    pub fn get_rabbitmq_passive_queues() -> bool {
+        env::var("RABBITMQ_PASSIVE_QUEUES")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
@@ -811,6 +853,49 @@ mod tests {
         env::remove_var("PUBSUB_PROJECT_ID");
         env::remove_var("PUBSUB_TOPIC_PREFIX");
         env::remove_var("PUBSUB_EMULATOR_HOST");
+    }
+
+    #[test]
+    fn test_rabbitmq_config_getters() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::remove_var("RABBITMQ_URL");
+        env::remove_var("RABBITMQ_QUEUE_PREFIX");
+        env::remove_var("RABBITMQ_PASSIVE_QUEUES");
+
+        // Defaults / required behavior when unset.
+        let err =
+            ServerConfig::get_rabbitmq_url().expect_err("URL must be required (error) when unset");
+        assert!(err.contains("RABBITMQ_URL"), "error must name the variable");
+        assert!(
+            err.contains("amqp://"),
+            "error must describe the expected URI shape"
+        );
+        assert_eq!(ServerConfig::get_rabbitmq_queue_prefix(), "relayer");
+        assert!(!ServerConfig::get_rabbitmq_passive_queues());
+
+        // Custom values.
+        env::set_var("RABBITMQ_URL", "amqps://u:p@broker:5671/vh");
+        env::set_var("RABBITMQ_QUEUE_PREFIX", "test");
+        env::set_var("RABBITMQ_PASSIVE_QUEUES", "TRUE"); // case-insensitive
+
+        assert_eq!(
+            ServerConfig::get_rabbitmq_url().unwrap(),
+            "amqps://u:p@broker:5671/vh"
+        );
+        assert_eq!(ServerConfig::get_rabbitmq_queue_prefix(), "test");
+        assert!(ServerConfig::get_rabbitmq_passive_queues());
+
+        // Any non-"true" value is false.
+        env::set_var("RABBITMQ_PASSIVE_QUEUES", "yes");
+        assert!(!ServerConfig::get_rabbitmq_passive_queues());
+
+        env::remove_var("RABBITMQ_URL");
+        env::remove_var("RABBITMQ_QUEUE_PREFIX");
+        env::remove_var("RABBITMQ_PASSIVE_QUEUES");
     }
 
     fn setup() {

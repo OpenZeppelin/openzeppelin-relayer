@@ -39,10 +39,13 @@ pub mod cron;
 pub mod errors;
 pub mod pubsub;
 pub mod queue_type;
+pub mod rabbitmq;
 pub mod redis;
 pub mod retry_config;
+pub mod schedule;
 pub mod sqs;
 pub mod swap_filter;
+pub mod worker_shared;
 pub mod worker_types;
 
 pub use errors::QueueBackendError;
@@ -52,12 +55,29 @@ pub use retry_config::{backoff_config_for_queue, retry_delay_secs, status_check_
 pub use swap_filter::filter_relayers_for_swap;
 pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 
+/// Installs a process-default rustls `CryptoProvider` if none is set yet.
+///
+/// rustls 0.23 needs a process-default `CryptoProvider` when more than one
+/// provider is compiled in. Both are present in this binary (aws-lc-rs via the
+/// gcloud / AWS SDK / lapin trees, ring via aws-config / Solana), so rustls
+/// cannot select one automatically and any TLS that relies on the process
+/// default — gcloud-pubsub's gRPC TLS, lapin's `amqps://` — panics on the first
+/// real connection without this. Install once, ignore if a default is already
+/// set. (Shared by the Pub/Sub and RabbitMQ backends.)
+pub(crate) fn ensure_crypto_provider() {
+    use rustls::crypto::{aws_lc_rs, CryptoProvider};
+    if CryptoProvider::get_default().is_none() {
+        let _ = aws_lc_rs::default_provider().install_default();
+    }
+}
+
 /// Supported queue backend implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueBackendType {
     Redis,
     Sqs,
     PubSub,
+    RabbitMq,
 }
 
 impl QueueBackendType {
@@ -66,6 +86,7 @@ impl QueueBackendType {
             Self::Redis => "redis",
             Self::Sqs => "sqs",
             Self::PubSub => "pubsub",
+            Self::RabbitMq => "rabbitmq",
         }
     }
 }
@@ -182,6 +203,7 @@ pub enum QueueBackendStorage {
     Redis(Box<redis::backend::RedisBackend>),
     Sqs(sqs::backend::SqsBackend),
     PubSub(Box<pubsub::backend::PubSubBackend>),
+    RabbitMq(Box<rabbitmq::backend::RabbitMqBackend>),
 }
 
 impl std::fmt::Debug for QueueBackendStorage {
@@ -190,6 +212,7 @@ impl std::fmt::Debug for QueueBackendStorage {
             Self::Redis(b) => std::fmt::Debug::fmt(b, f),
             Self::Sqs(b) => std::fmt::Debug::fmt(b, f),
             Self::PubSub(b) => std::fmt::Debug::fmt(b, f),
+            Self::RabbitMq(b) => std::fmt::Debug::fmt(b, f),
         }
     }
 }
@@ -202,7 +225,7 @@ impl QueueBackendStorage {
     pub fn queue(&self) -> Option<&Queue> {
         match self {
             Self::Redis(b) => Some(b.queue()),
-            Self::Sqs(_) | Self::PubSub(_) => None,
+            Self::Sqs(_) | Self::PubSub(_) | Self::RabbitMq(_) => None,
         }
     }
 
@@ -225,6 +248,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_transaction_request(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_request(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_transaction_request(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_transaction_request(job, scheduled_on).await,
         }
     }
 
@@ -237,6 +261,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_transaction_submission(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_submission(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_transaction_submission(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_transaction_submission(job, scheduled_on).await,
         }
     }
 
@@ -249,6 +274,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_transaction_status_check(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_transaction_status_check(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_transaction_status_check(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_transaction_status_check(job, scheduled_on).await,
         }
     }
 
@@ -261,6 +287,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_notification(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_notification(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_notification(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_notification(job, scheduled_on).await,
         }
     }
 
@@ -273,6 +300,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_token_swap_request(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_token_swap_request(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_token_swap_request(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_token_swap_request(job, scheduled_on).await,
         }
     }
 
@@ -285,6 +313,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.produce_relayer_health_check(job, scheduled_on).await,
             Self::Sqs(b) => b.produce_relayer_health_check(job, scheduled_on).await,
             Self::PubSub(b) => b.produce_relayer_health_check(job, scheduled_on).await,
+            Self::RabbitMq(b) => b.produce_relayer_health_check(job, scheduled_on).await,
         }
     }
 
@@ -297,6 +326,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.initialize_workers(app_state, handle).await,
             Self::Sqs(b) => b.initialize_workers(app_state, handle).await,
             Self::PubSub(b) => b.initialize_workers(app_state, handle).await,
+            Self::RabbitMq(b) => b.initialize_workers(app_state, handle).await,
         }
     }
 
@@ -305,6 +335,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.health_check().await,
             Self::Sqs(b) => b.health_check().await,
             Self::PubSub(b) => b.health_check().await,
+            Self::RabbitMq(b) => b.health_check().await,
         }
     }
 
@@ -313,6 +344,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.backend_type(),
             Self::Sqs(b) => b.backend_type(),
             Self::PubSub(b) => b.backend_type(),
+            Self::RabbitMq(b) => b.backend_type(),
         }
     }
 
@@ -321,6 +353,7 @@ impl QueueBackend for QueueBackendStorage {
             Self::Redis(b) => b.shutdown(),
             Self::Sqs(b) => b.shutdown(),
             Self::PubSub(b) => b.shutdown(),
+            Self::RabbitMq(b) => b.shutdown(),
         }
     }
 }
@@ -358,9 +391,13 @@ pub async fn create_queue_backend(
             let backend = pubsub::backend::PubSubBackend::new(redis_connections).await?;
             QueueBackendStorage::PubSub(Box::new(backend))
         }
+        "rabbitmq" => {
+            let backend = rabbitmq::backend::RabbitMqBackend::new(redis_connections).await?;
+            QueueBackendStorage::RabbitMq(Box::new(backend))
+        }
         other => {
             return Err(QueueBackendError::ConfigError(format!(
-                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis', 'sqs', or 'pubsub' (alias 'gcp-pubsub')"
+                "Unsupported QUEUE_BACKEND value: {other}. Must be 'redis', 'sqs', 'pubsub' (alias 'gcp-pubsub'), or 'rabbitmq'"
             )));
         }
     };
@@ -449,9 +486,11 @@ mod tests {
         assert_eq!(QueueBackendType::Redis.as_str(), "redis");
         assert_eq!(QueueBackendType::Sqs.as_str(), "sqs");
         assert_eq!(QueueBackendType::PubSub.as_str(), "pubsub");
+        assert_eq!(QueueBackendType::RabbitMq.as_str(), "rabbitmq");
         assert_eq!(QueueBackendType::Redis.to_string(), "redis");
         assert_eq!(QueueBackendType::Sqs.to_string(), "sqs");
         assert_eq!(QueueBackendType::PubSub.to_string(), "pubsub");
+        assert_eq!(QueueBackendType::RabbitMq.to_string(), "rabbitmq");
     }
 
     // ── create_queue_backend dispatch ──────────────────────────────
@@ -494,8 +533,12 @@ mod tests {
             err.contains("Unsupported QUEUE_BACKEND"),
             "expected unsupported error, got: {err}"
         );
-        // The error must advertise pubsub as a valid option.
+        // The error must advertise pubsub and rabbitmq as valid options.
         assert!(err.contains("pubsub"), "error should list pubsub: {err}");
+        assert!(
+            err.contains("rabbitmq"),
+            "error should list rabbitmq: {err}"
+        );
     }
 
     // No regression: adding the Pub/Sub backend must not remove redis/sqs
@@ -516,11 +559,15 @@ mod tests {
             None => std::env::remove_var("QUEUE_BACKEND"),
         }
 
-        // The unsupported-value error still lists redis and sqs alongside pubsub,
-        // proving the pre-existing backends were not dropped from the dispatch.
+        // The unsupported-value error still lists redis and sqs alongside the
+        // newer backends, proving the pre-existing backends were not dropped.
         assert!(err.contains("redis"), "redis must remain selectable: {err}");
         assert!(err.contains("sqs"), "sqs must remain selectable: {err}");
         assert!(err.contains("pubsub"), "pubsub must be selectable: {err}");
+        assert!(
+            err.contains("rabbitmq"),
+            "rabbitmq must be selectable: {err}"
+        );
     }
 
     #[tokio::test]
@@ -555,6 +602,39 @@ mod tests {
         }
         if let Some(v) = prev_project {
             std::env::set_var("PUBSUB_PROJECT_ID", v);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_queue_backend_routes_rabbitmq() {
+        let _lock = BACKEND_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev_backend = std::env::var("QUEUE_BACKEND").ok();
+        let prev_url = std::env::var("RABBITMQ_URL").ok();
+
+        // Force the RabbitMQ path to fast-fail before any network/connection.
+        std::env::remove_var("RABBITMQ_URL");
+
+        std::env::set_var("QUEUE_BACKEND", "rabbitmq");
+        let err = create_queue_backend(dummy_redis_connections())
+            .await
+            .expect_err("missing RABBITMQ_URL must error")
+            .to_string();
+        // Routed to the RabbitMQ branch (NOT the catch-all "Unsupported").
+        assert!(
+            !err.contains("Unsupported QUEUE_BACKEND"),
+            "'rabbitmq' should route to the RabbitMQ backend, got: {err}"
+        );
+        assert!(
+            err.contains("RABBITMQ_URL"),
+            "'rabbitmq' should fail fast on missing RABBITMQ_URL, got: {err}"
+        );
+
+        match prev_backend {
+            Some(v) => std::env::set_var("QUEUE_BACKEND", v),
+            None => std::env::remove_var("QUEUE_BACKEND"),
+        }
+        if let Some(v) = prev_url {
+            std::env::set_var("RABBITMQ_URL", v);
         }
     }
 }
