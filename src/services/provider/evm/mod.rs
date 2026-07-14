@@ -154,13 +154,29 @@ pub trait EvmProviderTrait: Send + Sync {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError>;
 
-    /// Re-executes `tx` as an `eth_call` at `block_number` and returns the on-chain revert
-    /// payload, if the call reverts with data.
+    /// Like [`Self::raw_request_dyn`], but a failure never marks the provider as failed.
     ///
-    /// Returns `Ok(None)` when the call does not revert or returns no revert data. Transport
-    /// errors propagate as `Err` and are treated by callers as "no data recovered". This
-    /// bypasses the lossy `From<RpcError>` conversion so the JSON-RPC error `data` field
-    /// (which carries the revert payload) is not discarded.
+    /// Intended for best-effort, diagnostic calls (e.g. `debug_traceTransaction` during
+    /// revert-data recovery) that must not influence provider health accounting: a node that
+    /// gates the method rejects it with a non-retriable 403/404/`-32601`, which the normal path
+    /// would count as a provider failure and could pause an otherwise-healthy RPC for all traffic.
+    async fn raw_request_dyn_best_effort(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError>;
+
+    /// Re-executes `tx` as an `eth_call` at `block_number` and extracts the on-chain revert
+    /// payload from the JSON-RPC error `data` field, bypassing the lossy `From<RpcError>`
+    /// conversion that would otherwise discard it.
+    ///
+    /// Returns:
+    /// - `Ok(Some(bytes))` when the call reverts with a decodable revert payload.
+    /// - `Ok(None)` only when the call unexpectedly succeeds (no revert to surface).
+    /// - `Err(..)` for every other error response — including a revert-less error response —
+    ///   so retriable JSON-RPC codes still reach the retry/failover path instead of being
+    ///   silently collapsed into "no revert data". This call is best-effort and never marks the
+    ///   provider as failed.
     async fn get_call_revert_data(
         &self,
         tx: &TransactionRequest,
@@ -281,6 +297,74 @@ impl EvmProvider {
             Some(self.retry_config.clone()),
         )
         .await
+    }
+
+    /// Like [`Self::retry_rpc_call`], but never marks the provider as failed.
+    ///
+    /// Best-effort, diagnostic calls (e.g. revert-data recovery) must not affect provider
+    /// health accounting: a gateway that gates `debug_*` behind a plan rejects it with a
+    /// non-retriable 403/404 (or a `-32601`), which the normal path would count as a provider
+    /// failure and could pause an otherwise-healthy RPC for all traffic. Retries and failover
+    /// still apply; only the "mark failed" side effect is suppressed.
+    async fn retry_rpc_call_best_effort<T, F, Fut>(
+        &self,
+        operation_name: &str,
+        operation: F,
+    ) -> Result<T, ProviderError>
+    where
+        F: Fn(EvmProviderType) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ProviderError>>,
+    {
+        retry_rpc_call(
+            &self.selector,
+            operation_name,
+            is_retriable_error,
+            |_| false,
+            |url| match self.initialize_provider(url) {
+                Ok(provider) => Ok(provider),
+                Err(e) => Err(e),
+            },
+            operation,
+            Some(self.retry_config.clone()),
+        )
+        .await
+    }
+
+    /// Shared body for [`EvmProviderTrait::raw_request_dyn`] and its best-effort variant. When
+    /// `best_effort` is set, a failure never marks the provider as failed.
+    async fn raw_request_dyn_inner(
+        &self,
+        operation_name: &str,
+        method: &str,
+        params: serde_json::Value,
+        best_effort: bool,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let operation = move |provider: EvmProviderType| {
+            let params_clone = params.clone();
+            let method = method.to_string();
+            async move {
+                // Convert params to RawValue and use Cow for method
+                let params_raw = serde_json::value::to_raw_value(&params_clone).map_err(|e| {
+                    ProviderError::Other(format!("Failed to serialize params: {e}"))
+                })?;
+
+                let result = provider
+                    .raw_request_dyn(std::borrow::Cow::Owned(method), &params_raw)
+                    .await
+                    .map_err(ProviderError::from)?;
+
+                // Convert RawValue back to Value
+                serde_json::from_str(result.get())
+                    .map_err(|e| ProviderError::Other(format!("Failed to deserialize result: {e}")))
+            }
+        };
+
+        if best_effort {
+            self.retry_rpc_call_best_effort(operation_name, operation)
+                .await
+        } else {
+            self.retry_rpc_call(operation_name, operation).await
+        }
     }
 }
 
@@ -516,25 +600,17 @@ impl EvmProviderTrait for EvmProvider {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ProviderError> {
-        self.retry_rpc_call("raw_request_dyn", move |provider| {
-            let params_clone = params.clone();
-            async move {
-                // Convert params to RawValue and use Cow for method
-                let params_raw = serde_json::value::to_raw_value(&params_clone).map_err(|e| {
-                    ProviderError::Other(format!("Failed to serialize params: {e}"))
-                })?;
+        self.raw_request_dyn_inner("raw_request_dyn", method, params, false)
+            .await
+    }
 
-                let result = provider
-                    .raw_request_dyn(std::borrow::Cow::Owned(method.to_string()), &params_raw)
-                    .await
-                    .map_err(ProviderError::from)?;
-
-                // Convert RawValue back to Value
-                serde_json::from_str(result.get())
-                    .map_err(|e| ProviderError::Other(format!("Failed to deserialize result: {e}")))
-            }
-        })
-        .await
+    async fn raw_request_dyn_best_effort(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        self.raw_request_dyn_inner("raw_request_dyn_best_effort", method, params, true)
+            .await
     }
 
     async fn get_call_revert_data(
@@ -546,8 +622,9 @@ impl EvmProviderTrait for EvmProvider {
         // it directly here, before the lossy `From<RpcError>` conversion would drop it. Error
         // responses that carry no revert data (rate limits, internal errors, etc.) are forwarded as
         // `Err` so the selector can retry/failover on retriable codes instead of mistaking a
-        // transient failure for "no revert data".
-        self.retry_rpc_call("get_call_revert_data", move |provider| {
+        // transient failure for "no revert data". Best-effort recovery must not mark the provider
+        // as failed, so this uses the non-marking retry path.
+        self.retry_rpc_call_best_effort("get_call_revert_data", move |provider| {
             let tx_req = tx.clone();
             async move {
                 match provider

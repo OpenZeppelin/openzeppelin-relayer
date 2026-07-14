@@ -93,13 +93,24 @@ fn build_revert_call_request(
 }
 
 /// Extracts the revert payload from a `callTracer` trace result. The top-level `output` field
-/// carries the revert bytes; an empty/`"0x"` value means no payload.
+/// carries the revert bytes; an empty/`"0x"` value means no payload. The output is
+/// RPC-controlled, so it is validated as `0x`-prefixed hex before being accepted — this rejects
+/// malformed/non-ASCII payloads that would otherwise be recorded verbatim and could panic the
+/// byte-index slicing in [`truncate_revert_hex`].
 fn extract_trace_output(trace: &serde_json::Value) -> Option<String> {
     trace
         .get("output")
         .and_then(|v| v.as_str())
-        .filter(|s| s.starts_with("0x") && *s != "0x")
+        .filter(|s| is_revert_hex(s))
         .map(|s| s.to_string())
+}
+
+/// Returns `true` when `s` is `0x` followed by at least one ASCII hex digit and nothing else.
+fn is_revert_hex(s: &str) -> bool {
+    match s.strip_prefix("0x") {
+        Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
 }
 
 impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
@@ -1176,7 +1187,7 @@ where
         // so fall through to eth_call.
         match self
             .provider()
-            .raw_request_dyn(
+            .raw_request_dyn_best_effort(
                 "debug_traceTransaction",
                 json!([hash, {"tracer": "callTracer"}]),
             )
@@ -3174,7 +3185,12 @@ mod tests {
         #[tokio::test]
         async fn test_impl_submitted_to_failed_sets_status_reason() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let mut relayer = create_test_relayer();
+            // Opt in to revert-data recovery so the transition-to-Failed path exercises it.
+            relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: Some(true),
+                ..Default::default()
+            });
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
@@ -3192,7 +3208,7 @@ mod tests {
             // eth_call, so recovery yields the legacy generic reason.
             mocks
                 .provider
-                .expect_raw_request_dyn()
+                .expect_raw_request_dyn_best_effort()
                 .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
 
             // Mock get_by_id for the DB reload after status change.
@@ -3257,11 +3273,35 @@ mod tests {
 
     // Tests for on-chain revert-data recovery on the transition into Failed.
     mod revert_data_recovery_tests {
+        use super::super::{extract_trace_output, truncate_revert_hex, MAX_REVERT_DATA_HEX_LEN};
         use super::*;
         use crate::services::provider::ProviderError;
         use alloy::primitives::Bytes;
 
         const LEGACY_REASON: &str = "Transaction reverted on-chain (receipt status: failed)";
+
+        // Trace output is RPC-controlled: only well-formed `0x`-prefixed hex is accepted. This
+        // rejects malformed/non-ASCII payloads that would otherwise be recorded verbatim and
+        // could panic the byte-index slicing in `truncate_revert_hex`.
+        #[test]
+        fn test_extract_trace_output_accepts_only_hex() {
+            let hex = |out: &str| extract_trace_output(&serde_json::json!({ "output": out }));
+            assert_eq!(hex("0xdeadbeef"), Some("0xdeadbeef".to_string()));
+            assert_eq!(hex("0x"), None); // no payload
+            assert_eq!(hex("0xZZZZ"), None); // non-hex digits
+            assert_eq!(hex("0x日本語"), None); // non-ASCII
+            assert_eq!(hex("deadbeef"), None); // missing 0x prefix
+            assert_eq!(extract_trace_output(&serde_json::json!({})), None); // missing field
+        }
+
+        // A very long (but valid-hex) payload truncates on a byte boundary without panicking.
+        #[test]
+        fn test_truncate_revert_hex_bounds_long_payload() {
+            let long = format!("0x{}", "ab".repeat(MAX_REVERT_DATA_HEX_LEN));
+            let truncated = truncate_revert_hex(&long);
+            assert!(truncated.ends_with("...(truncated)"));
+            assert!(truncated.starts_with("0xabab"));
+        }
 
         /// A Submitted tx (aged past the resubmit grace) with valid EVM fields and a hash,
         /// poised to transition to Failed from a failed receipt.
@@ -3309,14 +3349,14 @@ mod tests {
         #[tokio::test]
         async fn test_eth_call_revert_data_enriches_status_reason() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let relayer = relayer_with_revert_policy(Some(true));
             let tx = failing_submitted_tx();
 
             expect_failed_receipt(&mut mocks);
             // Trace path yields no output -> fall back to eth_call.
             mocks
                 .provider
-                .expect_raw_request_dyn()
+                .expect_raw_request_dyn_best_effort()
                 .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
             mocks
                 .provider
@@ -3340,13 +3380,13 @@ mod tests {
         #[tokio::test]
         async fn test_no_revert_data_uses_legacy_reason() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let relayer = relayer_with_revert_policy(Some(true));
             let tx = failing_submitted_tx();
 
             expect_failed_receipt(&mut mocks);
             mocks
                 .provider
-                .expect_raw_request_dyn()
+                .expect_raw_request_dyn_best_effort()
                 .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
             mocks
                 .provider
@@ -3382,13 +3422,16 @@ mod tests {
         #[tokio::test]
         async fn test_trace_output_used_without_eth_call() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let relayer = relayer_with_revert_policy(Some(true));
             let tx = failing_submitted_tx();
 
             expect_failed_receipt(&mut mocks);
-            mocks.provider.expect_raw_request_dyn().returning(|_, _| {
-                Box::pin(async { Ok(serde_json::json!({"output": "0xdeadbeef"})) })
-            });
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async { Ok(serde_json::json!({"output": "0xdeadbeef"})) })
+                });
             // eth_call fallback must never run when the trace path produced a payload.
             mocks.provider.expect_get_call_revert_data().never();
             expect_reload_and_capture(&mut mocks);
@@ -3406,13 +3449,18 @@ mod tests {
         #[tokio::test]
         async fn test_trace_unavailable_falls_back_to_eth_call() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let relayer = relayer_with_revert_policy(Some(true));
             let tx = failing_submitted_tx();
 
             expect_failed_receipt(&mut mocks);
-            mocks.provider.expect_raw_request_dyn().returning(|_, _| {
-                Box::pin(async { Err(ProviderError::Other("method not supported".to_string())) })
-            });
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(ProviderError::Other("method not supported".to_string()))
+                    })
+                });
             mocks
                 .provider
                 .expect_get_call_revert_data()
@@ -3437,13 +3485,16 @@ mod tests {
         #[tokio::test]
         async fn test_both_paths_fail_uses_legacy_reason() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let relayer = relayer_with_revert_policy(Some(true));
             let tx = failing_submitted_tx();
 
             expect_failed_receipt(&mut mocks);
-            mocks.provider.expect_raw_request_dyn().returning(|_, _| {
-                Box::pin(async { Err(ProviderError::Other("trace down".to_string())) })
-            });
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async { Err(ProviderError::Other("trace down".to_string())) })
+                });
             mocks
                 .provider
                 .expect_get_call_revert_data()
@@ -3468,55 +3519,57 @@ mod tests {
             relayer
         }
 
-        // include_revert_data = Some(false) -> zero recovery RPCs, generic reason.
+        // None (the default) and Some(false) -> zero recovery RPCs, generic reason.
         #[tokio::test]
         async fn test_recovery_disabled_issues_no_recovery_rpcs() {
-            let mut mocks = default_test_mocks();
-            let relayer = relayer_with_revert_policy(Some(false));
-            let tx = failing_submitted_tx();
-
-            // Only the status-check receipt fetch is allowed; recovery must issue none of these.
-            expect_failed_receipt(&mut mocks);
-            mocks.provider.expect_raw_request_dyn().never();
-            mocks.provider.expect_get_call_revert_data().never();
-            expect_reload_and_capture(&mut mocks);
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
-            assert_eq!(result.status, TransactionStatus::Failed);
-            assert_eq!(result.status_reason.unwrap(), LEGACY_REASON);
-        }
-
-        // None (default-on) and Some(true) -> recovery is attempted.
-        #[tokio::test]
-        async fn test_recovery_attempted_when_enabled() {
-            for include in [None, Some(true)] {
+            for include in [None, Some(false)] {
                 let mut mocks = default_test_mocks();
                 let relayer = relayer_with_revert_policy(include);
                 let tx = failing_submitted_tx();
 
+                // Only the status-check receipt fetch is allowed; recovery must issue none of these.
                 expect_failed_receipt(&mut mocks);
-                // Asserting the trace RPC is issued exactly once proves recovery was attempted.
-                mocks
-                    .provider
-                    .expect_raw_request_dyn()
-                    .times(1)
-                    .returning(|_, _| {
-                        Box::pin(async { Ok(serde_json::json!({"output": "0xfeed"})) })
-                    });
+                mocks.provider.expect_raw_request_dyn_best_effort().never();
+                mocks.provider.expect_get_call_revert_data().never();
                 expect_reload_and_capture(&mut mocks);
 
                 let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
                 let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
                 assert_eq!(result.status, TransactionStatus::Failed);
-                assert!(
-                    result
-                        .status_reason
-                        .unwrap()
-                        .contains("revert_data: 0xfeed"),
-                    "recovery should run for include_revert_data = {include:?}"
+                assert_eq!(
+                    result.status_reason.unwrap(),
+                    LEGACY_REASON,
+                    "recovery must not run for include_revert_data = {include:?}"
                 );
             }
+        }
+
+        // Only an explicit opt-in (Some(true)) attempts recovery; None is off by default.
+        #[tokio::test]
+        async fn test_recovery_attempted_when_enabled() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            // Asserting the trace RPC is issued exactly once proves recovery was attempted.
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(serde_json::json!({"output": "0xfeed"})) }));
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(
+                result
+                    .status_reason
+                    .unwrap()
+                    .contains("revert_data: 0xfeed"),
+                "recovery should run for include_revert_data = Some(true)"
+            );
         }
     }
 

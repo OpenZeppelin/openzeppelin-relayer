@@ -495,7 +495,7 @@ Available configuration fields
 | stellar | concurrent_transactions | `bool` | Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools. Optional. |
 | evm | gas_price_cap | `unsigned 128` | Specify a maximum gas price for every transaction sent with the Relayer. When enabled, any transaction exceeding the cap will have its gasPrice or maxFeePerGas overwritten. (Optional) |
 | evm | gas_limit_estimation | `bool` | Automatic gas_limit calculation. Enabled by default. (Optional) |
-| evm | include_revert_data | `bool` | Best-effort recovery of the on-chain revert payload into a failed transaction's `status_reason`. Enabled by default; set to `false` to skip the extra RPC calls issued when a transaction fails. (Optional) |
+| evm | include_revert_data | `bool` | Best-effort recovery of the on-chain revert payload into a failed transaction's `status_reason`. Disabled by default; set to `true` to opt in. Issues extra RPC calls on every failed transaction (preferring `debug_traceTransaction`, falling back to `eth_call`); confirm your provider supports these methods before enabling, as many hosted/public RPCs do not expose `debug_traceTransaction`. (Optional) |
 | evm | whitelist_receivers | `Vector<String>` | A list of authorized contracts for each transaction sent using the Relayer. Transactions will be rejected if the destination address is not on the list. (Optional) |
 
 #### RPC URL Configuration

@@ -13,8 +13,12 @@ pub const DEFAULT_EVM_GAS_PRICE_CAP: u128 = 100_000_000_000;
 pub const DEFAULT_EVM_EIP1559_ENABLED: bool = true;
 /// Default gas limit estimation enabled
 pub const DEFAULT_EVM_GAS_LIMIT_ESTIMATION: bool = true;
-/// Default on-chain revert-data recovery enabled
-pub const DEFAULT_EVM_INCLUDE_REVERT_DATA: bool = true;
+/// Default on-chain revert-data recovery disabled.
+///
+/// Recovery issues extra RPC calls on every failed transaction and prefers
+/// `debug_traceTransaction`, which is unavailable on many hosted/public RPC configurations.
+/// Left off by default so common deployments opt in only when their provider supports it.
+pub const DEFAULT_EVM_INCLUDE_REVERT_DATA: bool = false;
 
 // === Stellar Policy Defaults ===
 /// Default concurrent transactions enabled setting for Stellar
