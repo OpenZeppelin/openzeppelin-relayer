@@ -222,7 +222,7 @@ impl StellarSignerFactory {
                     token_ttl: None,
                 });
 
-                StellarSigner::VaultTransit(VaultTransitSigner::new(m, vault_service).map_err(
+                StellarSigner::VaultTransit(VaultTransitSigner::new(&m, vault_service).map_err(
                     |e| {
                         SignerFactoryError::InvalidConfig(format!(
                             "Failed to create Vault Transit signer: {e}"
@@ -401,18 +401,19 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that the factory creates a local Stellar signer.
-    fn test_create_stellar_signer_local() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_local_signer_model()).unwrap();
+    async fn test_create_stellar_signer_local() {
+        let signer = StellarSignerFactory::create_stellar_signer(create_local_signer_model())
+            .await
+            .unwrap();
 
         assert!(matches!(signer, StellarSigner::Local(_)));
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that the factory creates a Vault-backed Stellar signer.
-    fn test_create_stellar_signer_vault() {
+    async fn test_create_stellar_signer_vault() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Vault(VaultSignerConfig {
@@ -425,33 +426,37 @@ mod tests {
             }),
         };
 
-        let signer = StellarSignerFactory::create_stellar_signer(&signer_model).unwrap();
+        let signer = StellarSignerFactory::create_stellar_signer(signer_model)
+            .await
+            .unwrap();
 
         assert!(matches!(signer, StellarSigner::Vault(_)));
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that the factory creates a Vault Transit Stellar signer.
-    fn test_create_stellar_signer_vault_transit() {
+    async fn test_create_stellar_signer_vault_transit() {
         let signer =
-            StellarSignerFactory::create_stellar_signer(&create_vault_transit_signer_model())
+            StellarSignerFactory::create_stellar_signer(create_vault_transit_signer_model())
+                .await
                 .unwrap();
 
         assert!(matches!(signer, StellarSigner::VaultTransit(_)));
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that the factory creates a Turnkey-backed Stellar signer.
-    fn test_create_stellar_signer_turnkey() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_turnkey_signer_model()).unwrap();
+    async fn test_create_stellar_signer_turnkey() {
+        let signer = StellarSignerFactory::create_stellar_signer(create_turnkey_signer_model())
+            .await
+            .unwrap();
 
         assert!(matches!(signer, StellarSigner::Turnkey(_)));
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that Azure Key Vault remains unsupported for Stellar signers.
-    fn test_create_stellar_signer_azure_key_vault_unsupported() {
+    async fn test_create_stellar_signer_azure_key_vault_unsupported() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
@@ -466,7 +471,7 @@ mod tests {
             }),
         };
 
-        let result = StellarSignerFactory::create_stellar_signer(&signer_model);
+        let result = StellarSignerFactory::create_stellar_signer(signer_model).await;
 
         assert!(matches!(
             result,
@@ -475,9 +480,9 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[tokio::test]
     /// Verifies that CDP remains unsupported for Stellar signers.
-    fn test_create_stellar_signer_cdp_unsupported() {
+    async fn test_create_stellar_signer_cdp_unsupported() {
         let signer_model = SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Cdp(crate::models::CdpSignerConfig {
@@ -488,7 +493,7 @@ mod tests {
             }),
         };
 
-        let result = StellarSignerFactory::create_stellar_signer(&signer_model);
+        let result = StellarSignerFactory::create_stellar_signer(signer_model).await;
 
         assert!(matches!(
             result,
@@ -499,8 +504,9 @@ mod tests {
     #[tokio::test]
     /// Verifies that address dispatch works for the local Stellar signer variant.
     async fn test_stellar_signer_local_address_dispatch() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_local_signer_model()).unwrap();
+        let signer = StellarSignerFactory::create_stellar_signer(create_local_signer_model())
+            .await
+            .unwrap();
 
         let address = signer.address().await.unwrap();
 
@@ -517,7 +523,8 @@ mod tests {
     /// Verifies that address dispatch works for the Vault Transit Stellar signer variant.
     async fn test_stellar_signer_vault_transit_address_dispatch() {
         let signer =
-            StellarSignerFactory::create_stellar_signer(&create_vault_transit_signer_model())
+            StellarSignerFactory::create_stellar_signer(create_vault_transit_signer_model())
+                .await
                 .unwrap();
 
         let address = signer.address().await.unwrap();
@@ -534,8 +541,9 @@ mod tests {
     #[tokio::test]
     /// Verifies that address dispatch works for the Turnkey Stellar signer variant.
     async fn test_stellar_signer_turnkey_address_dispatch() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_turnkey_signer_model()).unwrap();
+        let signer = StellarSignerFactory::create_stellar_signer(create_turnkey_signer_model())
+            .await
+            .unwrap();
 
         let address = signer.address().await.unwrap();
 
@@ -551,8 +559,9 @@ mod tests {
     #[tokio::test]
     /// Verifies that transaction signing dispatch works for the local Stellar signer variant.
     async fn test_stellar_signer_local_sign_transaction_dispatch() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_local_signer_model()).unwrap();
+        let signer = StellarSignerFactory::create_stellar_signer(create_local_signer_model())
+            .await
+            .unwrap();
         let source_account = signer.address().await.unwrap().to_string();
 
         let result = signer
@@ -574,8 +583,9 @@ mod tests {
     #[tokio::test]
     /// Verifies that XDR signing dispatch works for the local Stellar signer variant.
     async fn test_stellar_signer_local_sign_xdr_transaction_dispatch() {
-        let signer =
-            StellarSignerFactory::create_stellar_signer(&create_local_signer_model()).unwrap();
+        let signer = StellarSignerFactory::create_stellar_signer(create_local_signer_model())
+            .await
+            .unwrap();
         let source_account = signer.address().await.unwrap().to_string();
         let unsigned_xdr = create_unsigned_xdr(&source_account);
 

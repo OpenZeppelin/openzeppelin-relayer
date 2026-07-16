@@ -36,7 +36,7 @@ Vault will run in dev mode and be available at [http://localhost:8200](http://lo
 If you have the Vault CLI installed, point it at the dev server:
 
 ```bash
-export VAULT_ADDR='http://0.0.0.0:8200'
+export VAULT_ADDR='http://127.0.0.1:8200'
 export VAULT_TOKEN='dev-only-token'
 ```
 
