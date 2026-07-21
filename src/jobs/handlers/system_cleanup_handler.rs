@@ -139,7 +139,7 @@ async fn handle_cleanup_request(
     {
         Some(connections) => connections,
         None => {
-            debug!("redis queue connections unavailable, skipping system cleanup");
+            warn!("queue backend reports Redis but no Redis connections available; skipping system cleanup");
             return Ok(());
         }
     };
