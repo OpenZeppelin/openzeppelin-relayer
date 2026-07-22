@@ -275,6 +275,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: Some(100),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),

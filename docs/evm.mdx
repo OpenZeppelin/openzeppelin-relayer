@@ -103,6 +103,7 @@ In addition to standard relayer configuration and policies, EVM relayers support
 - `whitelist_receivers`: List of authorized contract addresses for transactions
 - `min_balance`: Minimum balance required for the relayer to operate (in wei)
 - `eip1559_pricing`: Enable/disable EIP-1559 pricing methodology for transaction fees
+- `include_revert_data`: Enable/disable best-effort recovery of the on-chain revert payload into a failed transaction's `status_reason`. Disabled by default; set to `true` to opt in. Recovery issues extra RPC calls on every failed transaction, preferring `debug_traceTransaction` and falling back to `eth_call` at the execution block. Before enabling, confirm your provider supports these methods — many hosted/public RPCs do not expose `debug_traceTransaction`
 
 You can check all options in [User Documentation - Relayers](/relayer#3_relayers).
 

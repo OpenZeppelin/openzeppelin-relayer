@@ -3,9 +3,12 @@
 //! or replace transactions with NOOPs, and updating transaction status in the repository.
 
 use alloy::network::ReceiptResponse;
+use alloy::primitives::{Address, TxKind};
+use alloy::rpc::types::{TransactionInput, TransactionRequest};
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
-use tracing::{debug, error, warn};
+use serde_json::json;
+use tracing::{debug, error, info, warn};
 
 use super::super::common::is_active_nonce_status;
 use super::EvmRelayerTransaction;
@@ -17,7 +20,7 @@ use super::{
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
+    DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -29,13 +32,86 @@ use crate::{
     domain::transaction::evm::price_calculator::PriceCalculatorTrait,
     jobs::{JobProducerTrait, StatusCheckContext},
     models::{
-        NetworkTransactionData, RelayerRepoModel, TransactionError, TransactionRepoModel,
-        TransactionStatus, TransactionUpdateRequest,
+        EvmTransactionData, NetworkTransactionData, RelayerRepoModel, TransactionError,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{Repository, TransactionCounterTrait, TransactionRepository},
     services::{provider::EvmProviderTrait, signer::Signer},
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
+
+/// The reason recorded on a failed EVM transaction when the on-chain revert payload cannot be
+/// recovered (or recovery is disabled). Kept byte-for-byte for consumers that match on it.
+const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt status: failed)";
+
+/// Upper bound (in characters) on the revert-data hex embedded in `status_reason`. Revert payloads
+/// are normally tiny, but they are RPC/contract-controlled, so we cap the recovered hex before it
+/// is persisted to avoid an oversized DB write or notification payload.
+const MAX_REVERT_DATA_HEX_LEN: usize = 4096;
+
+/// Caps an overlong revert-data hex string to [`MAX_REVERT_DATA_HEX_LEN`], appending a marker so
+/// consumers can tell the payload was clipped. The hex is ASCII, so slicing on a byte index is safe.
+fn truncate_revert_hex(hex: &str) -> String {
+    if hex.len() <= MAX_REVERT_DATA_HEX_LEN {
+        return hex.to_string();
+    }
+    format!("{}...(truncated)", &hex[..MAX_REVERT_DATA_HEX_LEN])
+}
+
+/// Reconstructs an `eth_call` request from persisted transaction data to reproduce the call as a
+/// state read. The fee fields (gas price / EIP-1559 caps) are carried through because contracts
+/// can branch on `tx.gasprice`, which would otherwise change the revert path versus the mined tx.
+fn build_revert_call_request(
+    evm_data: &EvmTransactionData,
+) -> Result<TransactionRequest, TransactionError> {
+    let from = evm_data.from.parse::<Address>().map_err(|e| {
+        TransactionError::UnexpectedError(format!("Invalid from address for revert recovery: {e}"))
+    })?;
+    let to = match evm_data.to.as_ref() {
+        Some(addr) => TxKind::Call(addr.parse::<Address>().map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Invalid to address for revert recovery: {e}"
+            ))
+        })?),
+        None => TxKind::Create,
+    };
+    let input = evm_data.data_to_bytes().map_err(|e| {
+        TransactionError::UnexpectedError(format!("Invalid input data for revert recovery: {e}"))
+    })?;
+
+    Ok(TransactionRequest {
+        from: Some(from),
+        to: Some(to),
+        value: Some(evm_data.value),
+        input: TransactionInput::from(input),
+        gas: evm_data.gas_limit,
+        gas_price: evm_data.gas_price,
+        max_fee_per_gas: evm_data.max_fee_per_gas,
+        max_priority_fee_per_gas: evm_data.max_priority_fee_per_gas,
+        ..Default::default()
+    })
+}
+
+/// Extracts the revert payload from a `callTracer` trace result. The top-level `output` field
+/// carries the revert bytes; an empty/`"0x"` value means no payload. The output is
+/// RPC-controlled, so it is validated as `0x`-prefixed hex before being accepted — this rejects
+/// malformed/non-ASCII payloads that would otherwise be recorded verbatim and could panic the
+/// byte-index slicing in [`truncate_revert_hex`].
+fn extract_trace_output(trace: &serde_json::Value) -> Option<String> {
+    trace
+        .get("output")
+        .and_then(|v| v.as_str())
+        .filter(|s| is_revert_hex(s))
+        .map(|s| s.to_string())
+}
+
+/// Returns `true` when `s` is `0x` followed by at least one ASCII hex digit and nothing else.
+fn is_revert_hex(s: &str) -> bool {
+    match s.strip_prefix("0x") {
+        Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
+}
 
 impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
@@ -1055,10 +1131,10 @@ where
             TransactionStatus::Submitted => self.handle_submitted_state(tx).await,
             TransactionStatus::Mined => self.handle_mined_state(tx).await,
             TransactionStatus::Failed => {
-                // Provide a descriptive status_reason when transitioning to Failed
-                // from an on-chain receipt check (i.e., receipt status was false).
+                // On the transition into Failed, attempt best-effort recovery of the on-chain
+                // revert payload; on re-polls of an already-Failed tx, leave the reason untouched.
                 let status_reason = if tx.status != TransactionStatus::Failed {
-                    Some("Transaction reverted on-chain (receipt status: failed)".to_string())
+                    Some(self.build_failed_status_reason(&tx).await)
                 } else {
                     None
                 };
@@ -1067,6 +1143,147 @@ where
             TransactionStatus::Confirmed
             | TransactionStatus::Expired
             | TransactionStatus::Canceled => self.handle_final_state(tx, status, None).await,
+        }
+    }
+
+    /// Builds the `status_reason` recorded when a transaction transitions into Failed from a
+    /// failed on-chain receipt. When revert-data recovery is enabled (default) and a payload is
+    /// recovered, returns the enriched reason; otherwise returns the generic string.
+    async fn build_failed_status_reason(&self, tx: &TransactionRepoModel) -> String {
+        if !self
+            .relayer()
+            .policies
+            .get_evm_policy()
+            .include_revert_data
+            .unwrap_or(DEFAULT_EVM_INCLUDE_REVERT_DATA)
+        {
+            debug!(
+                tx_id = %tx.id,
+                "revert-data recovery disabled by policy; using generic reason"
+            );
+            return REVERT_REASON_GENERIC.to_string();
+        }
+
+        match self.recover_revert_data(tx).await {
+            Some(hex) => {
+                let hex = truncate_revert_hex(&hex);
+                format!("Transaction reverted on-chain (revert_data: {hex})")
+            }
+            None => REVERT_REASON_GENERIC.to_string(),
+        }
+    }
+
+    /// Best-effort recovery of the on-chain revert payload for a transaction entering Failed.
+    ///
+    /// Prefers `debug_traceTransaction` with `callTracer`; falls back to an `eth_call` re-executed
+    /// at the transaction's execution block. Every error is contained and mapped to `None`, so a
+    /// recovery failure can never propagate out of the status flow. Returns the `0x`-prefixed
+    /// revert hex when recovered.
+    async fn recover_revert_data(&self, tx: &TransactionRepoModel) -> Option<String> {
+        let evm_data = tx.network_data.get_evm_transaction_data().ok()?;
+        let hash = evm_data.hash.as_ref()?;
+
+        // Preferred: debug_traceTransaction. An Err means tracing is unavailable on this RPC,
+        // so fall through to eth_call.
+        match self
+            .provider()
+            .raw_request_dyn_best_effort(
+                "debug_traceTransaction",
+                json!([hash, {"tracer": "callTracer"}]),
+            )
+            .await
+        {
+            Ok(trace) => {
+                if let Some(hex) = extract_trace_output(&trace) {
+                    info!(
+                        tx_id = %tx.id,
+                        method = "trace",
+                        "recovered on-chain revert data"
+                    );
+                    return Some(hex);
+                }
+                debug!(
+                    tx_id = %tx.id,
+                    "trace returned no revert output; trying eth_call fallback"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "debug_traceTransaction unavailable; trying eth_call fallback"
+                );
+            }
+        }
+
+        // Fallback: re-fetch the receipt to learn the execution block, then re-run the
+        // transaction as an eth_call at that block.
+        let block_number = match self.provider().get_transaction_receipt(hash).await {
+            Ok(Some(receipt)) => match receipt.block_number {
+                Some(bn) => bn,
+                None => {
+                    debug!(
+                        tx_id = %tx.id,
+                        "receipt missing block number; skipping eth_call recovery"
+                    );
+                    return None;
+                }
+            },
+            Ok(None) => {
+                debug!(
+                    tx_id = %tx.id,
+                    "no receipt found; skipping eth_call recovery"
+                );
+                return None;
+            }
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to re-fetch receipt for revert recovery"
+                );
+                return None;
+            }
+        };
+
+        let request = match build_revert_call_request(&evm_data) {
+            Ok(req) => req,
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to reconstruct eth_call request for revert recovery"
+                );
+                return None;
+            }
+        };
+
+        match self
+            .provider()
+            .get_call_revert_data(&request, block_number)
+            .await
+        {
+            Ok(Some(bytes)) if !bytes.is_empty() => {
+                let hex = format!("0x{}", hex::encode(&bytes));
+                info!(
+                    tx_id = %tx.id,
+                    method = "eth_call",
+                    "recovered on-chain revert data"
+                );
+                Some(hex)
+            }
+            Ok(_) => {
+                debug!(tx_id = %tx.id, "no revert data recovered");
+                None
+            }
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "eth_call revert recovery failed"
+                );
+                None
+            }
         }
     }
 
@@ -2968,7 +3185,12 @@ mod tests {
         #[tokio::test]
         async fn test_impl_submitted_to_failed_sets_status_reason() {
             let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
+            let mut relayer = create_test_relayer();
+            // Opt in to revert-data recovery so the transition-to-Failed path exercises it.
+            relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: Some(true),
+                ..Default::default()
+            });
             let mut tx = make_test_transaction(TransactionStatus::Submitted);
             tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
@@ -2980,6 +3202,14 @@ mod tests {
                 .provider
                 .expect_get_transaction_receipt()
                 .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(false, Some(100)))) }));
+
+            // Revert-data recovery runs on the transition to Failed. The trace path returns no
+            // usable output here, and the placeholder tx data can't be reconstructed into an
+            // eth_call, so recovery yields the legacy generic reason.
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
 
             // Mock get_by_id for the DB reload after status change.
             let tx_clone = tx.clone();
@@ -3038,6 +3268,308 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Expired);
+        }
+    }
+
+    // Tests for on-chain revert-data recovery on the transition into Failed.
+    mod revert_data_recovery_tests {
+        use super::super::{extract_trace_output, truncate_revert_hex, MAX_REVERT_DATA_HEX_LEN};
+        use super::*;
+        use crate::services::provider::ProviderError;
+        use alloy::primitives::Bytes;
+
+        const LEGACY_REASON: &str = "Transaction reverted on-chain (receipt status: failed)";
+
+        // Trace output is RPC-controlled: only well-formed `0x`-prefixed hex is accepted. This
+        // rejects malformed/non-ASCII payloads that would otherwise be recorded verbatim and
+        // could panic the byte-index slicing in `truncate_revert_hex`.
+        #[test]
+        fn test_extract_trace_output_accepts_only_hex() {
+            let hex = |out: &str| extract_trace_output(&serde_json::json!({ "output": out }));
+            assert_eq!(hex("0xdeadbeef"), Some("0xdeadbeef".to_string()));
+            assert_eq!(hex("0x"), None); // no payload
+            assert_eq!(hex("0xZZZZ"), None); // non-hex digits
+            assert_eq!(hex("0x日本語"), None); // non-ASCII
+            assert_eq!(hex("deadbeef"), None); // missing 0x prefix
+            assert_eq!(extract_trace_output(&serde_json::json!({})), None); // missing field
+        }
+
+        // A very long (but valid-hex) payload truncates on a byte boundary without panicking.
+        #[test]
+        fn test_truncate_revert_hex_bounds_long_payload() {
+            let long = format!("0x{}", "ab".repeat(MAX_REVERT_DATA_HEX_LEN));
+            let truncated = truncate_revert_hex(&long);
+            assert!(truncated.ends_with("...(truncated)"));
+            assert!(truncated.starts_with("0xabab"));
+        }
+
+        /// A Submitted tx (aged past the resubmit grace) with valid EVM fields and a hash,
+        /// poised to transition to Failed from a failed receipt.
+        fn failing_submitted_tx() -> TransactionRepoModel {
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.from = "0x0000000000000000000000000000000000000001".to_string();
+                evm_data.to = Some("0x0000000000000000000000000000000000000002".to_string());
+                evm_data.data = Some("0xabcdef".to_string());
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+            tx
+        }
+
+        /// Receipt with status=false (reverted) at block 100. Reused for the status check and
+        /// the recovery re-fetch.
+        fn expect_failed_receipt(mocks: &mut TestMocks) {
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(false, Some(100)))) }));
+        }
+
+        /// DB reload after the status change, plus a partial_update that captures the
+        /// status_reason onto the returned transaction so assertions can inspect it.
+        fn expect_reload_and_capture(mocks: &mut TestMocks) {
+            mocks.tx_repo.expect_get_by_id().returning(|_| {
+                let mut reloaded = failing_submitted_tx();
+                reloaded.status = TransactionStatus::Submitted;
+                Ok(reloaded)
+            });
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+        }
+
+        // eth_call surfaces revert data -> enriched status_reason.
+        #[tokio::test]
+        async fn test_eth_call_revert_data_enriches_status_reason() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            // Trace path yields no output -> fall back to eth_call.
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
+            mocks
+                .provider
+                .expect_get_call_revert_data()
+                .returning(|_, _| {
+                    Box::pin(async { Ok(Some(Bytes::from(hex::decode("5592f1b2").unwrap()))) })
+                });
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            let reason = result.status_reason.unwrap();
+            assert!(
+                reason.contains("revert_data: 0x5592f1b2"),
+                "expected enriched revert_data, got: {reason}"
+            );
+        }
+
+        // No revert data recovered -> generic reason, byte-for-byte.
+        #[tokio::test]
+        async fn test_no_revert_data_uses_legacy_reason() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| Box::pin(async { Ok(serde_json::json!({})) }));
+            mocks
+                .provider
+                .expect_get_call_revert_data()
+                .returning(|_, _| Box::pin(async { Ok(None) }));
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert_eq!(result.status_reason.unwrap(), LEGACY_REASON);
+        }
+
+        // Tx already Failed -> no recovery RPC, reason not rewritten.
+        #[tokio::test]
+        async fn test_already_failed_skips_recovery() {
+            // No provider expectations set: any recovery RPC (trace/eth_call/receipt) would panic.
+            let mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let tx = make_test_transaction(TransactionStatus::Failed);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(
+                result.status_reason.is_none(),
+                "status_reason should not be rewritten on re-poll, got: {:?}",
+                result.status_reason
+            );
+        }
+
+        // Trace output is used and eth_call is NOT invoked.
+        #[tokio::test]
+        async fn test_trace_output_used_without_eth_call() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async { Ok(serde_json::json!({"output": "0xdeadbeef"})) })
+                });
+            // eth_call fallback must never run when the trace path produced a payload.
+            mocks.provider.expect_get_call_revert_data().never();
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result
+                .status_reason
+                .unwrap()
+                .contains("revert_data: 0xdeadbeef"));
+        }
+
+        // Trace unavailable -> eth_call fallback produces the payload.
+        #[tokio::test]
+        async fn test_trace_unavailable_falls_back_to_eth_call() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(ProviderError::Other("method not supported".to_string()))
+                    })
+                });
+            mocks
+                .provider
+                .expect_get_call_revert_data()
+                // The reconstructed call must carry the persisted fee context (legacy gas_price
+                // here) so contracts that branch on tx.gasprice revert as they did on-chain.
+                .withf(|req, _block| req.gas_price == Some(20000000000))
+                .returning(|_, _| {
+                    Box::pin(async { Ok(Some(Bytes::from(hex::decode("08c379a0").unwrap()))) })
+                });
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result
+                .status_reason
+                .unwrap()
+                .contains("revert_data: 0x08c379a0"));
+        }
+
+        // Both trace and eth_call fail/empty -> generic reason, status still Failed, no error.
+        #[tokio::test]
+        async fn test_both_paths_fail_uses_legacy_reason() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .returning(|_, _| {
+                    Box::pin(async { Err(ProviderError::Other("trace down".to_string())) })
+                });
+            mocks
+                .provider
+                .expect_get_call_revert_data()
+                .returning(|_, _| {
+                    Box::pin(async { Err(ProviderError::Other("eth_call down".to_string())) })
+                });
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert_eq!(result.status_reason.unwrap(), LEGACY_REASON);
+        }
+
+        /// Builds a relayer whose EVM policy sets `include_revert_data` to the given value.
+        fn relayer_with_revert_policy(include: Option<bool>) -> RelayerRepoModel {
+            let mut relayer = create_test_relayer();
+            relayer.policies = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: include,
+                ..Default::default()
+            });
+            relayer
+        }
+
+        // None (the default) and Some(false) -> zero recovery RPCs, generic reason.
+        #[tokio::test]
+        async fn test_recovery_disabled_issues_no_recovery_rpcs() {
+            for include in [None, Some(false)] {
+                let mut mocks = default_test_mocks();
+                let relayer = relayer_with_revert_policy(include);
+                let tx = failing_submitted_tx();
+
+                // Only the status-check receipt fetch is allowed; recovery must issue none of these.
+                expect_failed_receipt(&mut mocks);
+                mocks.provider.expect_raw_request_dyn_best_effort().never();
+                mocks.provider.expect_get_call_revert_data().never();
+                expect_reload_and_capture(&mut mocks);
+
+                let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+                let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+                assert_eq!(result.status, TransactionStatus::Failed);
+                assert_eq!(
+                    result.status_reason.unwrap(),
+                    LEGACY_REASON,
+                    "recovery must not run for include_revert_data = {include:?}"
+                );
+            }
+        }
+
+        // Only an explicit opt-in (Some(true)) attempts recovery; None is off by default.
+        #[tokio::test]
+        async fn test_recovery_attempted_when_enabled() {
+            let mut mocks = default_test_mocks();
+            let relayer = relayer_with_revert_policy(Some(true));
+            let tx = failing_submitted_tx();
+
+            expect_failed_receipt(&mut mocks);
+            // Asserting the trace RPC is issued exactly once proves recovery was attempted.
+            mocks
+                .provider
+                .expect_raw_request_dyn_best_effort()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(serde_json::json!({"output": "0xfeed"})) }));
+            expect_reload_and_capture(&mut mocks);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(
+                result
+                    .status_reason
+                    .unwrap()
+                    .contains("revert_data: 0xfeed"),
+                "recovery should run for include_revert_data = Some(true)"
+            );
         }
     }
 
