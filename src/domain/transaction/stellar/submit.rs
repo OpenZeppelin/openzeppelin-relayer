@@ -1088,8 +1088,30 @@ mod tests {
                 .times(1)
                 .returning(|_, _, _| Box::pin(async { Ok(150) }));
 
-            // The failing tx was reset (sequence_number cleared) before the sync ran,
-            // so its record no longer bounds the rewind — target is the chain floor
+            // The reset must run BEFORE the occupancy scan: the reset clears this tx's
+            // burned sequence_number, so its record no longer bounds the rewind. The
+            // Sequence pins that ordering — reverting to sync-before-reset fails here.
+            let mut call_order = mockall::Sequence::new();
+
+            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    if let Some(network_data) = upd.network_data {
+                        tx.network_data = network_data;
+                    }
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // The scan then sees the reset tx (sequence_number cleared) — target is
+            // the chain floor
             let mut reset_tx = create_test_transaction(&relayer.id);
             reset_tx.status = TransactionStatus::Pending;
             if let NetworkTransactionData::Stellar(ref mut data) = reset_tx.network_data {
@@ -1099,6 +1121,7 @@ mod tests {
                 .tx_repo
                 .expect_find_by_status()
                 .times(1)
+                .in_sequence(&mut call_order)
                 .returning(move |_, _| Ok(vec![reset_tx.clone()]));
 
             // The drifted counter is rewound 150 → 101 via CAS
@@ -1113,22 +1136,6 @@ mod tests {
                 })
                 .times(1)
                 .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
-
-            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
-                .times(1)
-                .returning(|id, upd| {
-                    let mut tx = create_test_transaction("relayer-1");
-                    tx.id = id;
-                    tx.status = upd.status.unwrap();
-                    if let Some(network_data) = upd.network_data {
-                        tx.network_data = network_data;
-                    }
-                    Ok::<_, RepositoryError>(tx)
-                });
 
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
