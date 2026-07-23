@@ -4,7 +4,7 @@
 
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use eyre::Result;
 use std::sync::OnceLock;
 use std::time::{Duration as StdDuration, Instant};
@@ -55,16 +55,22 @@ impl TtlDebounce {
     }
 
     fn should_fire(&self, key: &str) -> bool {
-        // The read guard must drop before the insert to avoid a shard deadlock.
-        let recent = self
-            .entries
-            .get(key)
-            .is_some_and(|last| last.elapsed() < self.ttl);
-        if recent {
-            return false;
+        // Entry holds the shard lock across check-and-set, so concurrent
+        // callers cannot both fire within the same TTL window.
+        match self.entries.entry(key.to_string()) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().elapsed() < self.ttl {
+                    false
+                } else {
+                    entry.insert(Instant::now());
+                    true
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Instant::now());
+                true
+            }
         }
-        self.entries.insert(key.to_string(), Instant::now());
-        true
     }
 }
 
