@@ -25,7 +25,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::lane_gate;
 
@@ -273,6 +273,95 @@ where
             effective_sequence = %effective_seq,
             "synced local sequence counter to chain floor"
         );
+
+        // The floor sync only raises. A failure between `get_and_increment` and the
+        // tx-record persist burns the sequence and leaves the counter above the chain;
+        // without a downward reconcile the tx re-prepares at ever-higher sequences and
+        // thrashes TxBadSeq forever, so also try to rewind over the burned region.
+        if effective_seq > next_usable_seq {
+            self.try_rewind_sequence_counter(relayer_address, next_usable_seq, effective_seq)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Trims the burned head of the sequence counter down to on-chain reality.
+    ///
+    /// Rewinds the counter from `observed` to `target`, where `target` is one past the
+    /// highest `sequence_number` held by any active (Pending/Sent/Submitted) transaction
+    /// of this relayer, or `next_usable_from_chain` if no active transaction holds one.
+    /// Transactions reset via `reset_to_pre_prepare_state` have their `sequence_number`
+    /// cleared, so they never bound the rewind and their burned sequences are reclaimed.
+    ///
+    /// The nonce occupancy index is EVM-only, so occupancy is derived by reading the
+    /// Stellar `sequence_number` from the active transaction records directly.
+    ///
+    /// The write is a CAS against `observed`; if the counter moved concurrently the
+    /// write is a no-op — an under-rewind or missed rewind self-heals on the next
+    /// TxBadSeq recovery cycle.
+    async fn try_rewind_sequence_counter(
+        &self,
+        relayer_address: &str,
+        next_usable_from_chain: u64,
+        observed: u64,
+    ) -> Result<(), TransactionError> {
+        if observed <= next_usable_from_chain {
+            return Ok(());
+        }
+
+        let active_txs = self
+            .transaction_repository()
+            .find_by_status(
+                &self.relayer().id,
+                &[
+                    TransactionStatus::Pending,
+                    TransactionStatus::Sent,
+                    TransactionStatus::Submitted,
+                ],
+            )
+            .await
+            .map_err(TransactionError::from)?;
+
+        let highest_active_seq = active_txs
+            .iter()
+            .filter_map(|tx| tx.network_data.get_stellar_transaction_data().ok())
+            .filter_map(|data| data.sequence_number)
+            .filter_map(|seq| u64::try_from(seq).ok())
+            .max();
+
+        let target = match highest_active_seq {
+            Some(seq) => std::cmp::max(next_usable_from_chain, seq + 1),
+            None => next_usable_from_chain,
+        };
+
+        if target >= observed {
+            return Ok(());
+        }
+
+        let applied = self
+            .transaction_counter_service()
+            .set_if_equals(&self.relayer().id, relayer_address, observed, target)
+            .await
+            .map_err(|e| {
+                TransactionError::UnexpectedError(format!("Failed to rewind sequence counter: {e}"))
+            })?;
+
+        if applied {
+            info!(
+                relayer_id = %self.relayer().id,
+                observed = observed,
+                target = target,
+                next_usable_from_chain = next_usable_from_chain,
+                "rewound sequence counter over burned region"
+            );
+        } else {
+            debug!(
+                relayer_id = %self.relayer().id,
+                "counter moved concurrently; skipping rewind, next TxBadSeq recovery will retry"
+            );
+        }
+
         Ok(())
     }
 
@@ -737,6 +826,173 @@ mod tests {
             }
             _ => panic!("Expected UnexpectedError"),
         }
+    }
+
+    /// Builds an `AccountEntry` for the test relayer with the given on-chain sequence.
+    fn test_account_entry(seq: i64) -> soroban_rs::xdr::AccountEntry {
+        use soroban_rs::xdr::{
+            AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+            Thresholds, Uint256,
+        };
+        use stellar_strkey::ed25519;
+
+        let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+        let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+        AccountEntry {
+            account_id,
+            balance: 1000000,
+            seq_num: SequenceNumber(seq),
+            num_sub_entries: 0,
+            inflation_dest: None,
+            flags: 0,
+            home_domain: String32::default(),
+            thresholds: Thresholds([1, 1, 1, 1]),
+            signers: Default::default(),
+            ext: AccountEntryExt::V0,
+        }
+    }
+
+    /// Rewind (a): no active tx holds a sequence — the drifted counter rewinds to the chain floor.
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_empty_region_rewinds_to_chain_floor() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Chain sequence 100 → next usable 101.
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        // Counter sits at 150, well above the chain floor.
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        // Only reset txs remain: sequence_number is cleared, so nothing bounds the rewind.
+        let mut reset_tx = create_test_transaction(&relayer.id);
+        if let NetworkTransactionData::Stellar(ref mut data) = reset_tx.network_data {
+            data.sequence_number = None;
+        }
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .withf(|relayer_id, statuses| {
+                relayer_id == "relayer-1"
+                    && statuses
+                        == [
+                            TransactionStatus::Pending,
+                            TransactionStatus::Sent,
+                            TransactionStatus::Submitted,
+                        ]
+            })
+            .times(1)
+            .returning(move |_, _| Ok(vec![reset_tx.clone()]));
+
+        // Empty drift region → CAS lowers 150 → 101.
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .withf(|relayer_id, addr, expected, value| {
+                relayer_id == "relayer-1" && addr == TEST_PK && *expected == 150 && *value == 101
+            })
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
+    /// Rewind (b): an active tx holding a sequence bounds the rewind to one past it.
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_bounded_by_active_tx() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        // An active Submitted tx holds sequence 120; a reset tx (None) is skipped.
+        let mut active_tx = create_test_transaction(&relayer.id);
+        active_tx.status = TransactionStatus::Submitted;
+        if let NetworkTransactionData::Stellar(ref mut data) = active_tx.network_data {
+            data.sequence_number = Some(120);
+        }
+        let mut reset_tx = create_test_transaction(&relayer.id);
+        reset_tx.id = "tx-2".to_string();
+        if let NetworkTransactionData::Stellar(ref mut data) = reset_tx.network_data {
+            data.sequence_number = None;
+        }
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(move |_, _| Ok(vec![active_tx.clone(), reset_tx.clone()]));
+
+        // Highest active sequence 120 → target 121; CAS lowers 150 → 121.
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .withf(|_, _, expected, value| *expected == 150 && *value == 121)
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
+    /// Rewind (c): the CAS returns false (counter moved concurrently) — no error is surfaced.
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_cas_miss_is_ok() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+
+        // Counter moved since observed; rewind is skipped without error.
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(false) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
     }
 
     #[test]
