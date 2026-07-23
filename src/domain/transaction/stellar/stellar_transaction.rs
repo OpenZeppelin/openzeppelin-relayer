@@ -958,6 +958,89 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// Rewind (d): an active tx at `observed - 1` makes the target equal `observed` —
+    /// no CAS write is attempted (either mock call would panic as unexpected).
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_noop_when_active_tx_at_observed() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        // An active tx holds 149 → target = 150 = observed → rewind is a no-op.
+        // No set_if_equals expectation: a CAS attempt panics the test.
+        let mut active_tx = create_test_transaction(&relayer.id);
+        active_tx.status = TransactionStatus::Sent;
+        if let NetworkTransactionData::Stellar(ref mut data) = active_tx.network_data {
+            data.sequence_number = Some(149);
+        }
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(move |_, _| Ok(vec![active_tx.clone()]));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
+    /// Rewind (e): an active tx whose sequence is below the chain floor does not drag
+    /// the target under it — the chain floor wins the max().
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_chain_floor_wins_over_stale_active_seq() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        // A stale active tx holds 42, below the chain floor of 101.
+        let mut active_tx = create_test_transaction(&relayer.id);
+        active_tx.status = TransactionStatus::Sent;
+        if let NetworkTransactionData::Stellar(ref mut data) = active_tx.network_data {
+            data.sequence_number = Some(42);
+        }
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(move |_, _| Ok(vec![active_tx.clone()]));
+
+        // target = max(101, 42 + 1) = 101; CAS lowers 150 → 101.
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .withf(|_, _, expected, value| *expected == 150 && *value == 101)
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
     /// Rewind (c): the CAS returns false (counter moved concurrently) — no error is surfaced.
     #[tokio::test]
     async fn test_sync_sequence_rewind_cas_miss_is_ok() {
