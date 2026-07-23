@@ -19,7 +19,7 @@ use crate::{
     jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
     models::{
         EvmNetwork, EvmTransactionData, NetworkRepoModel, NetworkType, RelayerRepoModel,
-        TransactionRepoModel, TransactionStatus,
+        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
@@ -34,6 +34,15 @@ use super::EvmRelayer;
 /// time to persist their reserved nonces to the repository. Best-effort mitigation
 /// for the counter-increment-before-persist race. See `detect_nonce_gaps` docs.
 const NONCE_GAP_SETTLE_DURATION: Duration = Duration::from_secs(2);
+
+/// Upper bound on the width of a drift region we are willing to scan for occupancy
+/// before rewinding the counter. A rewind is NEVER performed on a partial scan, so
+/// a region wider than this is skipped entirely rather than verified piecemeal.
+const MAX_REWIND_SCAN_RANGE: u64 = 100_000;
+
+/// Chunk size for the occupancy scan over the drift region (one `get_nonce_occupancy`
+/// range query per chunk).
+const REWIND_SCAN_CHUNK: u64 = 1000;
 
 // ── Nonce synchronization & gap detection ─────────────────────────────────────
 
@@ -59,26 +68,20 @@ where
     pub(crate) async fn sync_nonce(&self) -> Result<(), RelayerError> {
         let on_chain_nonce = self.get_on_chain_nonce().await?;
 
-        let transaction_counter_nonce = self
+        // Treat the chain nonce as a floor only: atomically raise the counter to it
+        // when the counter is behind, never lower it here. Concurrent allocations that
+        // have already advanced the counter past the chain nonce are preserved.
+        let effective = self
             .transaction_counter_service
-            .get()
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-
-        let nonce = std::cmp::max(on_chain_nonce, transaction_counter_nonce);
+            .sync_floor(on_chain_nonce)
+            .await?;
 
         debug!(
             relayer_id = %self.relayer.id,
             on_chain_nonce = %on_chain_nonce,
-            transaction_counter_nonce = %transaction_counter_nonce,
-            "syncing nonce"
+            effective_nonce = %effective,
+            "synced nonce counter to on-chain floor"
         );
-
-        debug!(nonce = %nonce, "setting nonce for relayer");
-
-        self.transaction_counter_service.set(nonce).await?;
 
         Ok(())
     }
@@ -187,13 +190,31 @@ where
         Ok(gaps)
     }
 
-    /// Detects and resolves nonce gaps by creating gap-filling NOOP transactions.
+    /// Detects and resolves nonce drift by trimming the empty head of the counter
+    /// and filling genuine gaps with NOOP transactions.
     ///
     /// # Algorithm
-    /// 1. Snapshot the counter + settle pause (allows in-flight `prepare_transaction` to persist)
-    /// 2. Run `sync_nonce()` — raises counter to max(on_chain, local)
-    /// 3. Run `detect_nonce_gaps()` with the snapshot — only scans nonces reserved before the pause
-    /// 4. For each gap: double-check, create NOOP, push through prepare/submit pipeline
+    /// 1. Read `observed` (the current counter) BEFORE the settle pause. Any increment
+    ///    that landed before this read is given the pause+scan window to persist its tx
+    ///    record; any increment after this read makes the rewind CAS fail (safe no-op).
+    /// 2. If a nonce hint is provided, `sync_floor(hint + 1)` so new txs don't collide
+    ///    with the NOOPs we may create (handles counter resets). Order relative to the
+    ///    `observed` read is immaterial — the hint path only raises, the rewind only lowers.
+    /// 3. Settle pause: let in-flight `prepare_transaction` calls persist their reserved
+    ///    nonces before we scan (best-effort, see `detect_nonce_gaps`).
+    /// 4. `get_on_chain_nonce()` + `sync_floor(on_chain_nonce)` — raise the counter to the
+    ///    chain floor.
+    /// 5. Rewind trim: `try_rewind_counter` verifies the region `[on_chain, observed)` is
+    ///    empty of any tx record and CAS-lowers the counter to the top of on-chain reality.
+    /// 6. `detect_nonce_gaps()` + double-check + NOOP fill for any real gaps below the
+    ///    highest known tx (runs in the same pass, regardless of the rewind outcome).
+    ///
+    /// # Residual race
+    /// A `prepare` that INCRed the counter before our `observed` read but persists its tx
+    /// record slower than pause+scan is protected only up to the read: if it persists after
+    /// the scan, the rewind can move the counter past it. That collapses to the existing
+    /// self-correcting same-nonce collision class (see `detect_nonce_gaps` docs at the
+    /// "Self-correcting" note) — the persist precedes signing, so no funds are ever at risk.
     ///
     /// # Returns
     /// Number of gaps filled, or error.
@@ -206,27 +227,26 @@ where
         )
     )]
     async fn resolve_nonce_gaps(&self, nonce_hint: Option<u64>) -> Result<usize, RelayerError> {
+        // Read the counter BEFORE the settle pause so it anchors the rewind CAS. A None
+        // counter → 0 means there is nothing above the chain nonce to rewind.
+        let observed = self.transaction_counter_service.get().await?.unwrap_or(0);
+
         // If a nonce hint is provided (e.g., from a tx stuck ahead of on-chain),
         // ensure the counter covers at least hint + 1 so new txs don't collide
         // with the NOOPs we're about to create. This handles counter resets.
         if let Some(hint) = nonce_hint {
             let required = hint + 1;
-            let current = self
+            let effective = self
                 .transaction_counter_service
-                .get()
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            if current < required {
+                .sync_floor(required)
+                .await?;
+            if observed < required {
                 info!(
                     relayer_id = %self.relayer.id,
-                    counter = current,
                     nonce_hint = hint,
-                    new_counter = required,
-                    "raising counter to cover nonce hint"
+                    effective = effective,
+                    "raised counter to cover nonce hint"
                 );
-                self.transaction_counter_service.set(required).await?;
             }
         }
 
@@ -237,7 +257,21 @@ where
 
         let on_chain_nonce = self.get_on_chain_nonce().await?;
 
-        self.sync_nonce().await?;
+        // Raise the counter to the chain floor without a second on-chain nonce fetch.
+        let effective = self
+            .transaction_counter_service
+            .sync_floor(on_chain_nonce)
+            .await?;
+        debug!(
+            relayer_id = %self.relayer.id,
+            on_chain_nonce = %on_chain_nonce,
+            effective_nonce = %effective,
+            "synced nonce counter to on-chain floor"
+        );
+
+        // Trim the empty head: lower the counter back to on-chain reality over any
+        // region verified free of tx records. Best-effort — outcome does not gate the fill.
+        self.try_rewind_counter(on_chain_nonce, observed).await?;
 
         let gaps = self
             .detect_nonce_gaps(Some(on_chain_nonce), nonce_hint)
@@ -288,6 +322,91 @@ where
         );
 
         Ok(filled)
+    }
+
+    /// Trims the empty head of the nonce counter down to on-chain reality.
+    ///
+    /// Rewinds the counter from `observed` to `target`, where `target` is the highest
+    /// slot in `[on_chain_nonce, observed)` holding a tx record of ANY status (plus one),
+    /// or `on_chain_nonce` if the region is entirely empty. Records of any status bound
+    /// the rewind: a `Failed` record may be a reverted-on-chain tx whose nonce was still
+    /// consumed (a stale on-chain read), so it is never trimmed past.
+    ///
+    /// Invariants:
+    /// - Never rewinds on a partial scan: a region wider than `MAX_REWIND_SCAN_RANGE` is
+    ///   skipped entirely rather than verified in part.
+    /// - The write is a CAS against `observed`; if the counter moved since we read it, the
+    ///   write is a no-op and the next health run retries.
+    async fn try_rewind_counter(
+        &self,
+        on_chain_nonce: u64,
+        observed: u64,
+    ) -> Result<(), RelayerError> {
+        if observed <= on_chain_nonce {
+            return Ok(());
+        }
+
+        if observed - on_chain_nonce > MAX_REWIND_SCAN_RANGE {
+            error!(
+                relayer_id = %self.relayer.id,
+                on_chain_nonce = on_chain_nonce,
+                observed = observed,
+                "nonce drift region too large to verify; skipping rewind"
+            );
+            return Ok(());
+        }
+
+        // Scan chunks top-down from `observed` toward `on_chain_nonce`. The first chunk
+        // containing any tx record holds the region's highest-occupied slot, so scanning
+        // stops there; only a fully-empty region scans all the way to `on_chain_nonce`.
+        let mut highest_occupied: Option<u64> = None;
+        let mut chunk_end = observed;
+        while chunk_end > on_chain_nonce {
+            let chunk_start =
+                std::cmp::max(on_chain_nonce, chunk_end.saturating_sub(REWIND_SCAN_CHUNK));
+            let occupancy = self
+                .transaction_repository
+                .get_nonce_occupancy(&self.relayer.id, chunk_start, chunk_end)
+                .await
+                .map_err(|e| RelayerError::Internal(e.to_string()))?;
+
+            if let Some((nonce, _)) = occupancy.iter().rev().find(|(_, status)| status.is_some()) {
+                highest_occupied = Some(*nonce);
+                break;
+            }
+            chunk_end = chunk_start;
+        }
+
+        let target = match highest_occupied {
+            Some(n) => std::cmp::max(on_chain_nonce, n + 1),
+            None => on_chain_nonce,
+        };
+
+        if target >= observed {
+            return Ok(());
+        }
+
+        let applied = self
+            .transaction_counter_service
+            .set_if_equals(observed, target)
+            .await?;
+
+        if applied {
+            info!(
+                relayer_id = %self.relayer.id,
+                observed = observed,
+                target = target,
+                on_chain_nonce = on_chain_nonce,
+                "rewound nonce counter over verified-empty region"
+            );
+        } else {
+            debug!(
+                relayer_id = %self.relayer.id,
+                "counter moved concurrently; skipping rewind, next health run will retry"
+            );
+        }
+
+        Ok(())
     }
 
     /// Creates a gap-filling NOOP transaction for a specific nonce.
@@ -359,24 +478,66 @@ where
             .await
             .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-        // Push through prepare pipeline first, then schedule delayed status check as safety net
-        self.job_producer
+        // Push through prepare pipeline first, then schedule delayed status check as safety
+        // net. Attempt both jobs independently: the status-check job re-drives a stuck Pending
+        // tx via handle_pending_state, so a single successful enqueue is enough to progress.
+        let request_result = self
+            .job_producer
             .produce_transaction_request_job(
                 TransactionRequest::new(tx.id.clone(), tx.relayer_id.clone()),
                 None,
             )
-            .await
-            .map_err(RelayerError::from)?;
+            .await;
+        if let Err(e) = &request_result {
+            error!(
+                tx_id = %tx.id,
+                nonce = nonce,
+                error = %e,
+                "failed to enqueue gap-filling NOOP request job, continuing"
+            );
+        }
 
-        self.job_producer
+        let status_result = self
+            .job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
                 Some(calculate_scheduled_timestamp(
                     EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
                 )),
             )
-            .await
-            .map_err(RelayerError::from)?;
+            .await;
+        if let Err(e) = &status_result {
+            error!(
+                tx_id = %tx.id,
+                nonce = nonce,
+                error = %e,
+                "failed to enqueue gap-filling NOOP status-check job"
+            );
+        }
+
+        if let (Err(request_err), Err(_)) = (request_result, status_result) {
+            // Neither job scheduled: the Pending record would occupy the gap slot forever
+            // (Pending counts as active occupancy). Fail it so a future health run re-fills.
+            if let Err(update_err) = self
+                .transaction_repository
+                .partial_update(
+                    tx.id.clone(),
+                    TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Failed),
+                        status_reason: Some("Gap-filling NOOP could not be scheduled".to_string()),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                error!(
+                    tx_id = %tx.id,
+                    error = %update_err,
+                    "failed to mark unscheduled gap-filling NOOP as Failed"
+                );
+            }
+            return Err(RelayerError::from(request_err));
+        }
 
         info!(
             tx_id = %tx.id,
@@ -573,6 +734,29 @@ mod tests {
             status,
             ..Default::default()
         }
+    }
+
+    fn create_test_network_model() -> NetworkRepoModel {
+        use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+        let config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "mainnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                    "https://mainnet.infura.io/v3/test".to_string(),
+                )]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec!["mainnet".to_string()]),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(1),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+        };
+        NetworkRepoModel::new_evm(config)
     }
 
     #[tokio::test]
@@ -805,12 +989,14 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(5u64))));
 
-        // sync_nonce calls get() then set(); detect_nonce_gaps calls get() again
+        // resolve_nonce_gaps reads get() (observed); sync_nonce calls sync_floor()
         counter
             .expect_get()
             .returning(|| Box::pin(ready(Ok(Some(5u64)))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
+        counter
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         // Scan finds no txs → empty gaps
         tx_repo
@@ -854,12 +1040,14 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(5u64))));
 
-        // sync_nonce calls get() then set(); detect_nonce_gaps calls get() again
+        // resolve_nonce_gaps reads get() (observed); sync_nonce calls sync_floor()
         counter
             .expect_get()
             .returning(|| Box::pin(ready(Ok(Some(8u64)))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
+        counter
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         // detect_nonce_gaps uses batch occupancy check
         tx_repo.expect_get_nonce_occupancy().returning(|_, _, _| {
@@ -930,9 +1118,7 @@ mod tests {
         assert_eq!(result, 1);
     }
 
-    /// When nonce_hint is provided and counter is behind it, resolve_nonce_gaps
-    /// should raise the counter before scanning. This simulates a counter reset
-    /// where a tx at nonce 10 exists but counter was reset to 5.
+    /// When a nonce hint is provided and the counter is behind it, resolve_nonce_gaps raises the counter before scanning.
     #[tokio::test]
     async fn test_resolve_nonce_gaps_with_hint_raises_counter() {
         use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
@@ -954,7 +1140,7 @@ mod tests {
             .returning(|_| Box::pin(ready(Ok(5u64))));
 
         // Counter is at 5 (was reset), but hint says there's a tx at nonce 10
-        // So resolve_nonce_gaps should raise counter to 11 before scanning.
+        // So resolve_nonce_gaps should raise counter to 11 via sync_floor before scanning.
         let counter_values = std::sync::Arc::new(std::sync::Mutex::new(5u64));
         let cv_get = counter_values.clone();
         counter.expect_get().returning(move || {
@@ -962,10 +1148,13 @@ mod tests {
             Box::pin(ready(Ok(Some(val))))
         });
 
-        let cv_set = counter_values.clone();
-        counter.expect_set().returning(move |val| {
-            *cv_set.lock().unwrap() = val;
-            Box::pin(ready(Ok(())))
+        let cv_sf = counter_values.clone();
+        counter.expect_sync_floor().returning(move |floor| {
+            let mut guard = cv_sf.lock().unwrap();
+            if *guard < floor {
+                *guard = floor;
+            }
+            Box::pin(ready(Ok(*guard)))
         });
 
         // Occupancy scan: nonce 5-9 empty (gaps), nonce 10 has an active Submitted tx
@@ -1040,6 +1229,586 @@ mod tests {
 
         // Verify counter was raised
         assert_eq!(*counter_values.lock().unwrap(), 11);
+    }
+
+    /// Rewind (a): a fully-empty drift region rewinds the counter down to the chain nonce.
+    #[tokio::test]
+    async fn test_try_rewind_counter_empty_region_rewinds_to_chain() {
+        use mockall::predicate::eq;
+
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Region [100, 365) is entirely empty.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+
+        // Empty region → target == on_chain_nonce; CAS lowers 365 → 100.
+        counter
+            .expect_set_if_equals()
+            .with(eq(365u64), eq(100u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.try_rewind_counter(100, 365).await.unwrap();
+    }
+
+    /// Rewind (b): a terminal (Failed) record bounds the rewind — the counter stops just above it.
+    #[tokio::test]
+    async fn test_try_rewind_counter_bounded_by_terminal_record() {
+        use mockall::predicate::eq;
+
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // A Failed record sits at nonce 150 within the region.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 150 {
+                            (n, Some(TransactionStatus::Failed))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
+
+        // Highest record at 150 → target 151; CAS lowers 365 → 151.
+        counter
+            .expect_set_if_equals()
+            .with(eq(365u64), eq(151u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.try_rewind_counter(100, 365).await.unwrap();
+    }
+
+    /// Rewind (e): a region wider than `MAX_REWIND_SCAN_RANGE` is skipped without any scan or CAS write.
+    #[tokio::test]
+    async fn test_try_rewind_counter_region_too_large_skips() {
+        let (provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // No get_nonce_occupancy and no set_if_equals expectations: either call panics,
+        // proving the oversized region is skipped without a partial scan.
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer
+            .try_rewind_counter(0, MAX_REWIND_SCAN_RANGE + 2)
+            .await
+            .unwrap();
+    }
+
+    /// Rewind (c): an active record bounds the rewind, and the gap-fill still runs in the same pass.
+    #[tokio::test]
+    async fn test_resolve_nonce_gaps_rewinds_and_fills_in_same_run() {
+        use mockall::predicate::eq;
+
+        let (
+            mut provider,
+            relayer_repo,
+            mut network_repo,
+            mut tx_repo,
+            mut job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // on-chain nonce 100, counter (observed) at 105.
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100u64))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(105u64)))));
+
+        counter
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
+
+        // A single active record sits at nonce 102.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 102 {
+                            (n, Some(TransactionStatus::Submitted))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
+
+        // Highest record 102 → target 103; CAS lowers 105 → 103.
+        counter
+            .expect_set_if_equals()
+            .with(eq(105u64), eq(103u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        // Double-check finds the gap slots empty.
+        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+
+        let network_model = create_test_network_model();
+        network_repo
+            .expect_get_by_name()
+            .returning(move |_, _| Ok(Some(network_model.clone())));
+
+        tx_repo.expect_create().returning(Ok);
+
+        job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        // Gaps below the anchor at 102 are nonces 100 and 101.
+        let filled = relayer.resolve_nonce_gaps(None).await.unwrap();
+        assert_eq!(filled, 2);
+    }
+
+    /// Rewind (d): the CAS returns false (counter moved concurrently) — no error, and gap-fill still runs.
+    #[tokio::test]
+    async fn test_resolve_nonce_gaps_rewind_cas_false_continues_to_fill() {
+        let (
+            mut provider,
+            relayer_repo,
+            mut network_repo,
+            mut tx_repo,
+            mut job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100u64))));
+
+        counter
+            .expect_get()
+            .returning(|| Box::pin(ready(Ok(Some(105u64)))));
+
+        counter
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
+
+        // Active record at 103 → rewind target 104.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 103 {
+                            (n, Some(TransactionStatus::Submitted))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
+
+        // CAS fails — counter moved since observed; rewind is skipped without error.
+        counter
+            .expect_set_if_equals()
+            .returning(|_, _| Box::pin(ready(Ok(false))));
+
+        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+
+        let network_model = create_test_network_model();
+        network_repo
+            .expect_get_by_name()
+            .returning(move |_, _| Ok(Some(network_model.clone())));
+
+        tx_repo.expect_create().returning(Ok);
+
+        job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        // Gaps below the anchor at 103 are nonces 100, 101, 102.
+        let filled = relayer.resolve_nonce_gaps(None).await.unwrap();
+        assert_eq!(filled, 3);
+    }
+
+    /// Rewind (f): a failing counter `get()` propagates as an error.
+    #[tokio::test]
+    async fn test_resolve_nonce_gaps_propagates_counter_get_error() {
+        let (provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        counter.expect_get().returning(|| {
+            Box::pin(ready(Err(
+                crate::repositories::TransactionCounterError::NotFound(
+                    "transient read failure".to_string(),
+                ),
+            )))
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.resolve_nonce_gaps(None).await;
+        assert!(result.is_err());
+    }
+
+    /// Gap-fill NOOP (g1): one job enqueues successfully — creation returns Ok and the record is not failed.
+    #[tokio::test]
+    async fn test_create_gap_filling_noop_one_job_enqueued_returns_ok() {
+        let (
+            provider,
+            relayer_repo,
+            mut network_repo,
+            mut tx_repo,
+            mut job_producer,
+            signer,
+            counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let network_model = create_test_network_model();
+        network_repo
+            .expect_get_by_name()
+            .returning(move |_, _| Ok(Some(network_model.clone())));
+
+        tx_repo.expect_create().returning(Ok);
+
+        // Request job fails to enqueue.
+        job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "queue down".to_string(),
+                ))))
+            });
+        // Status-check job succeeds — one enqueue is enough to progress.
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        // partial_update must NOT be called (no expectation → any call panics).
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let tx = relayer.create_gap_filling_noop(7).await.unwrap();
+        assert_eq!(tx.status, TransactionStatus::Pending);
+    }
+
+    /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.
+    #[tokio::test]
+    async fn test_create_gap_filling_noop_both_jobs_fail_marks_failed() {
+        let (
+            provider,
+            relayer_repo,
+            mut network_repo,
+            mut tx_repo,
+            mut job_producer,
+            signer,
+            counter,
+        ) = setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        let network_model = create_test_network_model();
+        network_repo
+            .expect_get_by_name()
+            .returning(move |_, _| Ok(Some(network_model.clone())));
+
+        tx_repo.expect_create().returning(Ok);
+
+        job_producer
+            .expect_produce_transaction_request_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "queue down".to_string(),
+                ))))
+            });
+        job_producer
+            .expect_produce_check_transaction_status_job()
+            .returning(|_, _| {
+                Box::pin(ready(Err(crate::jobs::JobProducerError::QueueError(
+                    "queue down".to_string(),
+                ))))
+            });
+
+        // The stranded Pending record is failed so a future health run can re-fill.
+        tx_repo
+            .expect_partial_update()
+            .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+            .times(1)
+            .returning(|_, _| Ok(make_tx_with_status(TransactionStatus::Failed)));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.create_gap_filling_noop(7).await;
+        assert!(result.is_err());
+    }
+
+    /// `sync_nonce` raises the counter to the chain floor via a single atomic `sync_floor` call and never lowers it.
+    #[tokio::test]
+    async fn issue818_t2_sync_nonce_raises_counter_to_chain_floor_only() {
+        use mockall::predicate::eq;
+
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // On-chain nonce is 100 (chain has moved less far than local counter).
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100u64))));
+
+        // sync_nonce calls sync_floor(100) exactly once; the counter is already at 365
+        // so the effective value stays 365. `get`/`set` are never called (no expectations).
+        counter
+            .expect_sync_floor()
+            .with(eq(100u64))
+            .times(1)
+            .returning(|_| Box::pin(ready(Ok(365u64))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.sync_nonce().await.unwrap();
+    }
+
+    /// A failing `sync_floor` store call propagates as an error from `sync_nonce`.
+    #[tokio::test]
+    async fn issue818_t3_sync_nonce_propagates_counter_store_error() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // On-chain nonce is 100.
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100u64))));
+
+        // The atomic sync_floor fails with a transient store error.
+        counter.expect_sync_floor().returning(|_| {
+            Box::pin(ready(Err(
+                crate::repositories::TransactionCounterError::NotFound(
+                    "transient store failure".to_string(),
+                ),
+            )))
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let result = relayer.sync_nonce().await;
+        assert!(
+            result.is_err(),
+            "sync_nonce must propagate the counter store failure: {result:?}"
+        );
+    }
+
+    /// A gap slot occupied by a `Pending` record (e.g. a stalled NOOP) counts as active occupancy, so `detect_nonce_gaps` does not report it as a gap.
+    #[tokio::test]
+    async fn issue818_t4_zombie_noop_pending_slot_hides_gap() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Occupancy: nonce 6 is a stalled gap-fill NOOP still in `Pending`,
+        // wedged between two genuinely active txs.
+        tx_repo.expect_get_nonce_occupancy().returning(|_, _, _| {
+            Ok(vec![
+                (5, Some(TransactionStatus::Submitted)),
+                (6, Some(TransactionStatus::Pending)),
+                (7, Some(TransactionStatus::Sent)),
+            ])
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        // on_chain_nonce provided (5) so no provider RPC is needed.
+        let gaps = relayer.detect_nonce_gaps(Some(5), None).await.unwrap();
+
+        assert!(
+            gaps.is_empty(),
+            "expected zero gaps because Pending slot 6 counts as active occupancy, got {gaps:?}"
+        );
+        assert!(
+            !gaps.contains(&6),
+            "slot 6 must NOT be reported as a gap while its NOOP record is Pending"
+        );
+    }
+
+    /// When the scan window contains no tx record at all, `detect_nonce_gaps` has no anchor and reports zero gaps.
+    #[tokio::test]
+    async fn issue818_t4_no_anchor_empty_scan_window_reports_zero_gaps() {
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Counter has drifted far ahead (365) while on-chain nonce is 100, but the
+        // entire scan window [100, 200) is EMPTY — no tx records exist there.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        // on-chain nonce 100, NO nonce hint. Scan window is [100, 100+100) = [100, 200).
+        let gaps = relayer.detect_nonce_gaps(Some(100), None).await.unwrap();
+
+        assert!(
+            gaps.is_empty(),
+            "expected zero gaps because the scan window has no anchor tx, got {gaps:?}"
+        );
     }
 
     #[tokio::test]

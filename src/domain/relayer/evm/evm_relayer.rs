@@ -1150,12 +1150,9 @@ mod tests {
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
         counter
-            .expect_set()
-            .returning(|_nonce| Box::pin(ready(Ok(()))));
-
-        counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .with(eq(42u64))
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
@@ -1184,14 +1181,11 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(40u64))));
 
+        // Chain nonce (40) is below the counter; sync_floor(40) leaves it at 42.
         counter
-            .expect_set()
-            .with(eq(42u64))
-            .returning(|_nonce| Box::pin(ready(Ok(()))));
-
-        counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .with(eq(40u64))
+            .returning(|_| Box::pin(ready(Ok(42u64))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
@@ -1220,14 +1214,11 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
+        // Chain nonce (42) is above the counter; sync_floor(42) raises it to 42.
         counter
-            .expect_set()
+            .expect_sync_floor()
             .with(eq(42u64))
-            .returning(|_nonce| Box::pin(ready(Ok(()))));
-
-        counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(40u64)))));
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         let relayer = EvmRelayer::new(
             relayer_model,
@@ -2842,11 +2833,9 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
-
         counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         provider
             .expect_get_balance()
@@ -2893,11 +2882,9 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
-
         counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         provider
             .expect_get_balance()
@@ -2946,11 +2933,9 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
-
         counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         provider
             .expect_get_balance()
@@ -3017,11 +3002,9 @@ mod tests {
             .expect_get_transaction_count()
             .returning(|_| Box::pin(ready(Ok(42u64))));
 
-        counter.expect_set().returning(|_| Box::pin(ready(Ok(()))));
-
         counter
-            .expect_get()
-            .returning(|| Box::pin(ready(Ok(Some(42u64)))));
+            .expect_sync_floor()
+            .returning(|floor| Box::pin(ready(Ok(floor))));
 
         provider
             .expect_get_balance()
