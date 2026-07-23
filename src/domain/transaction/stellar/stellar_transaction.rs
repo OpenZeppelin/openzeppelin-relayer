@@ -8,9 +8,9 @@ use crate::{
     domain::transaction::{stellar::fetch_next_sequence_from_chain, Transaction},
     jobs::{JobProducer, JobProducerTrait, StatusCheckContext, TransactionRequest},
     models::{
-        produce_transaction_update_notification_payload, NetworkTransactionRequest,
-        PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel, TransactionError,
-        TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
+        produce_transaction_update_notification_payload, NetworkTransactionData,
+        NetworkTransactionRequest, PaginationQuery, RelayerNetworkPolicy, RelayerRepoModel,
+        TransactionError, TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
     repositories::{
         RelayerRepositoryStorage, Repository, TransactionCounterRepositoryStorage,
@@ -325,8 +325,10 @@ where
 
         let highest_active_seq = active_txs
             .iter()
-            .filter_map(|tx| tx.network_data.get_stellar_transaction_data().ok())
-            .filter_map(|data| data.sequence_number)
+            .filter_map(|tx| match &tx.network_data {
+                NetworkTransactionData::Stellar(data) => data.sequence_number,
+                _ => None,
+            })
             .filter_map(|seq| u64::try_from(seq).ok())
             .max();
 
