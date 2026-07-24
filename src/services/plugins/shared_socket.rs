@@ -431,7 +431,8 @@ impl SharedSocketService {
 
     /// Start the shared socket service
     /// This spawns a background task that listens for connections
-    /// Safe to call multiple times - will only start once per instance
+    /// Safe to call multiple times - idempotent while the listener is running;
+    /// a failed bind or abnormal listener exit resets state so a later call retries
     #[allow(clippy::type_complexity)]
     pub async fn start<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         self: Arc<Self>,
