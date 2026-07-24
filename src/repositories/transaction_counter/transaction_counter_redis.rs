@@ -240,13 +240,22 @@ impl TransactionCounterTrait for RedisTransactionCounter {
 
         // Atomic monotonic max: raise to `floor` only if the current value is lower (or unset),
         // never rewind below an already-allocated sequence. Returns the effective value.
+        //
+        // Comparison and return are string-based: Lua 5.1 numbers are f64, exact only to
+        // 2^53 — not enough for Stellar sequences (~2^57+). Length-then-lexicographic
+        // ordering is correct because the key only ever holds canonical non-negative
+        // decimals (written via SET from u64 / INCR).
         const SYNC_FLOOR_LUA: &str = r#"
-            local cur = redis.call('GET', KEYS[1])
-            if (not cur) or (tonumber(cur) < tonumber(ARGV[1])) then
-                redis.call('SET', KEYS[1], ARGV[1])
-                return tonumber(ARGV[1])
+            local function numlt(a, b)
+                if #a ~= #b then return #a < #b end
+                return a < b
             end
-            return tonumber(cur)
+            local cur = redis.call('GET', KEYS[1])
+            if (not cur) or numlt(cur, ARGV[1]) then
+                redis.call('SET', KEYS[1], ARGV[1])
+                return ARGV[1]
+            end
+            return cur
         "#;
 
         let effective: u64 = redis::Script::new(SYNC_FLOOR_LUA)
@@ -289,9 +298,18 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         // Atomic compare-and-set: only lower the counter to `value` if the current value is
         // exactly `expected` and `value` is genuinely lower, guarding against clobbering a
         // counter that has moved on since it was last observed.
+        //
+        // Comparisons are string-based: Lua 5.1 numbers are f64, exact only to 2^53 —
+        // adjacent Stellar sequences (~2^57+) would collide as doubles and let a stale
+        // CAS apply. Equality is exact on canonical decimals; ordering is
+        // length-then-lexicographic (valid for canonical non-negative decimals).
         const SET_IF_EQUALS_LUA: &str = r#"
+            local function numlt(a, b)
+                if #a ~= #b then return #a < #b end
+                return a < b
+            end
             local cur = redis.call('GET', KEYS[1])
-            if cur and (tonumber(cur) == tonumber(ARGV[1])) and (tonumber(ARGV[2]) < tonumber(ARGV[1])) then
+            if cur and (cur == ARGV[1]) and numlt(ARGV[2], ARGV[1]) then
                 redis.call('SET', KEYS[1], ARGV[2])
                 return 1
             end
@@ -510,6 +528,66 @@ mod tests {
             .unwrap();
         assert!(!applied);
         assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(15));
+    }
+
+    /// Values above 2^53 are indistinguishable as Lua doubles — adjacent Stellar-scale
+    /// sequences must still compare exactly (string comparison, not `tonumber`).
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_set_if_equals_exact_above_f64_precision() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let address = uuid::Uuid::new_v4().to_string();
+
+        // 2^57 and 2^57 + 1 round to the same f64.
+        let big = 1u64 << 57;
+        repo.set(&relayer_id, &address, big).await.unwrap();
+
+        // Stale expected (off by one) must NOT match.
+        let applied = repo
+            .set_if_equals(&relayer_id, &address, big + 1, big - 10)
+            .await
+            .unwrap();
+        assert!(!applied);
+        assert_eq!(repo.get(&relayer_id, &address).await.unwrap(), Some(big));
+
+        // Exact expected must match, and `value` one below must count as lower.
+        let applied = repo
+            .set_if_equals(&relayer_id, &address, big, big - 1)
+            .await
+            .unwrap();
+        assert!(applied);
+        assert_eq!(
+            repo.get(&relayer_id, &address).await.unwrap(),
+            Some(big - 1)
+        );
+    }
+
+    /// `sync_floor` must distinguish adjacent values above 2^53 and return them intact.
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_sync_floor_exact_above_f64_precision() {
+        let repo = setup_test_repo().await;
+        let relayer_id = uuid::Uuid::new_v4().to_string();
+        let address = uuid::Uuid::new_v4().to_string();
+
+        let big = 1u64 << 57;
+        repo.set(&relayer_id, &address, big).await.unwrap();
+
+        // One above must raise (equal-as-f64, greater-as-integer).
+        let effective = repo
+            .sync_floor(&relayer_id, &address, big + 1)
+            .await
+            .unwrap();
+        assert_eq!(effective, big + 1);
+        assert_eq!(
+            repo.get(&relayer_id, &address).await.unwrap(),
+            Some(big + 1)
+        );
+
+        // One below must not lower, and the returned value must be exact.
+        let effective = repo.sync_floor(&relayer_id, &address, big).await.unwrap();
+        assert_eq!(effective, big + 1);
     }
 
     #[tokio::test]

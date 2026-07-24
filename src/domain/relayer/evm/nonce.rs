@@ -5,8 +5,11 @@
 //! through the health check queue.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use dashmap::DashMap;
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
@@ -43,6 +46,16 @@ const MAX_REWIND_SCAN_RANGE: u64 = 100_000;
 /// Chunk size for the occupancy scan over the drift region (one `get_nonce_occupancy`
 /// range query per chunk).
 const REWIND_SCAN_CHUNK: u64 = 1000;
+
+/// Per-relayer in-process locks serializing nonce-health runs when no distributed
+/// lock is available (non-distributed mode, or missing connection info).
+///
+/// The rewind CAS alone is not enough there: concurrent health runs plus fresh
+/// allocations can reproduce the observed counter value (ABA), letting a stale
+/// rewind apply beneath live allocations. Serializing runs per relayer closes the
+/// health-vs-health interleaving; the prepare-persist race remains covered by the
+/// settle pause and the self-correcting collision class.
+static NONCE_HEALTH_LOCAL_LOCKS: OnceLock<DashMap<String, Arc<Mutex<()>>>> = OnceLock::new();
 
 // ── Nonce synchronization & gap detection ─────────────────────────────────────
 
@@ -212,9 +225,11 @@ where
     /// # Residual race
     /// A `prepare` that INCRed the counter before our `observed` read but persists its tx
     /// record slower than pause+scan is protected only up to the read: if it persists after
-    /// the scan, the rewind can move the counter past it. That collapses to the existing
-    /// self-correcting same-nonce collision class (see `detect_nonce_gaps` docs at the
-    /// "Self-correcting" note) — the persist precedes signing, so no funds are ever at risk.
+    /// the scan, the rewind can move the counter past it and the nonce is handed out again.
+    /// The slow `prepare` still persists, signs, and broadcasts, so the failure mode is two
+    /// relayer-signed transactions competing for one nonce — exactly one mines, and the
+    /// loser collapses to the existing self-correcting same-nonce collision class (see
+    /// `detect_nonce_gaps` docs at the "Self-correcting" note).
     ///
     /// # Returns
     /// Number of gaps filled, or error.
@@ -400,8 +415,12 @@ where
                 "rewound nonce counter over verified-empty region"
             );
         } else {
-            debug!(
+            // warn, not debug: repeated misses are the only visible signal that the
+            // rewind is being starved by concurrent counter movement.
+            warn!(
                 relayer_id = %self.relayer.id,
+                observed = observed,
+                target = target,
                 "counter moved concurrently; skipping rewind, next health run will retry"
             );
         }
@@ -604,6 +623,29 @@ where
                         }
                     } else {
                         None
+                    }
+                } else {
+                    None
+                };
+
+                // Without a distributed lock, serialize health runs in-process per
+                // relayer (see `NONCE_HEALTH_LOCAL_LOCKS`). Mirror the distributed
+                // behavior: if a run is already active, skip instead of queueing.
+                let _local_guard = if _lock_guard.is_none() {
+                    let locks = NONCE_HEALTH_LOCAL_LOCKS.get_or_init(DashMap::new);
+                    let lock = locks
+                        .entry(self.relayer.id.clone())
+                        .or_insert_with(|| Arc::new(Mutex::new(())))
+                        .clone();
+                    match lock.try_lock_owned() {
+                        Ok(guard) => Some(guard),
+                        Err(_) => {
+                            info!(
+                                relayer_id = %self.relayer.id,
+                                "nonce health already running in-process for this relayer, skipping"
+                            );
+                            return Ok(true);
+                        }
                     }
                 } else {
                     None

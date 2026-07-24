@@ -72,6 +72,12 @@ impl TtlDebounce {
             }
         }
     }
+
+    /// Releases the window for `key` so the next caller can fire immediately.
+    /// Used when the action gated by `should_fire` failed and should be retried.
+    fn clear(&self, key: &str) {
+        self.entries.remove(key);
+    }
 }
 
 /// Per-relayer debounce for nonce-health job *production* in `detect_nonce_gap_ahead`.
@@ -550,6 +556,9 @@ where
                     error = %e,
                     "failed to schedule nonce health job for nonce gap"
                 );
+                // A failed enqueue must not hold the window: no job was produced, so
+                // let the next detection on this relayer retry immediately.
+                debounce.clear(&tx.relayer_id);
             }
         } else {
             debug!(
@@ -2592,6 +2601,25 @@ mod tests {
             let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
 
             assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// A failed enqueue must not hold the debounce window: after `clear`, the
+        /// next caller fires immediately instead of waiting out the TTL.
+        #[test]
+        fn ttl_debounce_clear_releases_window() {
+            use crate::domain::transaction::evm::status::TtlDebounce;
+
+            let debounce = TtlDebounce::new(std::time::Duration::from_secs(3600));
+            assert!(debounce.should_fire("relayer-1"));
+            assert!(!debounce.should_fire("relayer-1"));
+
+            debounce.clear("relayer-1");
+            assert!(debounce.should_fire("relayer-1"));
+
+            // Clearing one key must not affect another relayer's window.
+            assert!(debounce.should_fire("relayer-2"));
+            debounce.clear("relayer-1");
+            assert!(!debounce.should_fire("relayer-2"));
         }
 
         /// A second gap detection for the same relayer within the debounce TTL skips
