@@ -57,6 +57,11 @@ pub trait TransactionCounterTrait {
 
     async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError>;
 
+    /// Blind unconditional write of the counter to `value`.
+    ///
+    /// This overwrites the counter regardless of its current value. Production code should
+    /// prefer `sync_floor` (to atomically raise the counter) or `set_if_equals` (to atomically
+    /// lower it under a compare-and-set guard); `set` is intended for tests and bootstrap.
     async fn set(&self, relayer_id: &str, address: &str, value: u64)
         -> Result<(), RepositoryError>;
 
@@ -72,6 +77,20 @@ pub trait TransactionCounterTrait {
         address: &str,
         floor: u64,
     ) -> Result<u64, RepositoryError>;
+
+    /// Atomic compare-and-set used for rewind/rollback.
+    ///
+    /// Sets the counter to `value` only if the current value equals `expected` AND
+    /// `value < expected`, guarding against clobbering a counter that has moved on
+    /// since it was last observed. Returns whether the write applied. A missing key
+    /// is a no-op and returns `false`.
+    async fn set_if_equals(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        expected: u64,
+        value: u64,
+    ) -> Result<bool, RepositoryError>;
 
     /// Remove all stored counter entries from the underlying backend.
     /// Intended for startup reset flows when `RESET_STORAGE_ON_START` is enabled.
@@ -167,6 +186,27 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
             }
             TransactionCounterRepositoryStorage::Redis(counter) => {
                 counter.sync_floor(relayer_id, address, floor).await
+            }
+        }
+    }
+
+    async fn set_if_equals(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        expected: u64,
+        value: u64,
+    ) -> Result<bool, RepositoryError> {
+        match self {
+            TransactionCounterRepositoryStorage::InMemory(counter) => {
+                counter
+                    .set_if_equals(relayer_id, address, expected, value)
+                    .await
+            }
+            TransactionCounterRepositoryStorage::Redis(counter) => {
+                counter
+                    .set_if_equals(relayer_id, address, expected, value)
+                    .await
             }
         }
     }

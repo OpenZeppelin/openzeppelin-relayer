@@ -4,7 +4,10 @@
 
 use alloy::network::ReceiptResponse;
 use chrono::{DateTime, Duration, Utc};
+use dashmap::{mapref::entry::Entry, DashMap};
 use eyre::Result;
+use std::sync::OnceLock;
+use std::time::{Duration as StdDuration, Instant};
 use tracing::{debug, error, warn};
 
 use super::super::common::is_active_nonce_status;
@@ -36,6 +39,57 @@ use crate::{
     services::{provider::EvmProviderTrait, signer::Signer},
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
+
+/// Per-key TTL gate: `should_fire` returns true at most once per `ttl` per key.
+struct TtlDebounce {
+    entries: DashMap<String, Instant>,
+    ttl: StdDuration,
+}
+
+impl TtlDebounce {
+    fn new(ttl: StdDuration) -> Self {
+        Self {
+            entries: DashMap::new(),
+            ttl,
+        }
+    }
+
+    fn should_fire(&self, key: &str) -> bool {
+        // Entry holds the shard lock across check-and-set, so concurrent
+        // callers cannot both fire within the same TTL window.
+        match self.entries.entry(key.to_string()) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().elapsed() < self.ttl {
+                    false
+                } else {
+                    entry.insert(Instant::now());
+                    true
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(Instant::now());
+                true
+            }
+        }
+    }
+
+    /// Releases the window for `key` so the next caller can fire immediately.
+    /// Used when the action gated by `should_fire` failed and should be retried.
+    fn clear(&self, key: &str) {
+        self.entries.remove(key);
+    }
+}
+
+/// Per-relayer debounce for nonce-health job *production* in `detect_nonce_gap_ahead`.
+///
+/// The distributed lock taken when the health job runs already dedupes concurrent
+/// *execution*, but with many transactions stuck on the same gapped relayer, every
+/// status-check cycle for every one of them would otherwise enqueue its own job.
+/// This bounds enqueue volume to at most one per relayer per TTL window.
+static NONCE_HEALTH_DEBOUNCE: OnceLock<TtlDebounce> = OnceLock::new();
+
+/// TTL for the `NONCE_HEALTH_DEBOUNCE` window.
+const NONCE_HEALTH_DEBOUNCE_TTL: StdDuration = StdDuration::from_secs(30);
 
 impl<P, RR, NR, TR, J, S, TCR, PC> EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
@@ -492,11 +546,25 @@ where
             "nonce gaps confirmed below tx, scheduling nonce health to fill"
         );
 
-        if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
-            warn!(
+        // Debounce job *production* per relayer — detection/return value is unaffected.
+        let debounce =
+            NONCE_HEALTH_DEBOUNCE.get_or_init(|| TtlDebounce::new(NONCE_HEALTH_DEBOUNCE_TTL));
+        if debounce.should_fire(&tx.relayer_id) {
+            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to schedule nonce health job for nonce gap"
+                );
+                // A failed enqueue must not hold the window: no job was produced, so
+                // let the next detection on this relayer retry immediately.
+                debounce.clear(&tx.relayer_id);
+            }
+        } else {
+            debug!(
                 tx_id = %tx.id,
-                error = %e,
-                "failed to schedule nonce health job for nonce gap"
+                relayer_id = %tx.relayer_id,
+                "nonce health job production debounced for relayer"
             );
         }
 
@@ -1114,6 +1182,14 @@ where
         let age_since_sent = get_age_since_status_change(&tx)?;
 
         if age_since_sent > get_evm_resend_timeout() {
+            // A nonce gap below this tx makes any resubmit futile; the detector schedules
+            // the nonce-health job itself. Only worth the RPC once the tx is already stale.
+            if let Some(true) = self.detect_nonce_gap_ahead(&tx).await {
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
+                    .await;
+            }
+
             warn!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -2325,6 +2401,296 @@ mod tests {
             let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
 
             assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// An aged `Sent` tx with a confirmed nonce gap below it skips the resubmit
+        /// and schedules a nonce-health job instead (tx stays `Sent`).
+        #[tokio::test]
+        async fn issue818_t5_sent_state_nonce_gap_ahead_skips_resubmit() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Arc as StdArc;
+
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            // Aged Sent tx (60s > 25s resend timeout) with nonce 300. Unique relayer id
+            // so the nonce-health debounce doesn't interact with other tests.
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "issue818-t5-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(300),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            // should_noop: network lookup + block gas limit (does not noop).
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // Chain nonce is far behind tx nonce (100 vs 300).
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(100) }));
+
+            // Scan is capped to on_chain_nonce + MAX_GAP_SCAN_RANGE (100 + 100 = 200).
+            // All slots empty -> confirmed gap.
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .withf(|relayer_id, from, to| {
+                    relayer_id == "issue818-t5-relayer" && *from == 100 && *to == 200
+                })
+                .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+
+            // Nonce health job should be produced (unique relayer id, so not debounced).
+            let health_calls = StdArc::new(AtomicUsize::new(0));
+            let health_calls_clone = health_calls.clone();
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, _| {
+                    job.metadata.as_ref().map_or(false, |m| {
+                        m.get("health_check_action") == Some(&"nonce_health".to_string())
+                    })
+                })
+                .returning(move |_, _| {
+                    health_calls_clone.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(()) })
+                });
+
+            // Should NOT call produce_submit_transaction_job (resubmit skipped) —
+            // mockall will panic if an unexpected call is made.
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+            assert_eq!(
+                health_calls.load(Ordering::SeqCst),
+                1,
+                "nonce health job should be produced when the Sent-state gap check confirms a gap"
+            );
+        }
+
+        /// When `detect_nonce_gap_ahead` can't determine an answer (RPC error),
+        /// the Sent-state resubmit fails open and proceeds.
+        #[tokio::test]
+        async fn issue818_sent_state_gap_check_rpc_failure_proceeds_to_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "issue818-rpc-failure-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(300),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // RPC fails for the on-chain nonce lookup — gap check is skipped (None).
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(crate::services::provider::ProviderError::Other(
+                            "rpc timeout".to_string(),
+                        ))
+                    })
+                });
+
+            // Resubmission should still proceed (fail-open).
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// With no nonce gap below the tx, the Sent-state resubmit proceeds normally.
+        #[tokio::test]
+        async fn issue818_sent_state_no_gap_proceeds_to_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "issue818-no-gap-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(270),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // tx_nonce=270, on_chain=269 -> single slot to check.
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(269) }));
+
+            // Nonce 269 has an active Submitted tx -> no gap.
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .returning(|_, from, to| {
+                    Ok((from..to)
+                        .map(|n| (n, Some(TransactionStatus::Submitted)))
+                        .collect())
+                });
+
+            // Should proceed to resubmit (no health job expected).
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            mocks
+                .job_producer
+                .expect_produce_check_transaction_status_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// A failed enqueue must not hold the debounce window: after `clear`, the
+        /// next caller fires immediately instead of waiting out the TTL.
+        #[test]
+        fn ttl_debounce_clear_releases_window() {
+            use crate::domain::transaction::evm::status::TtlDebounce;
+
+            let debounce = TtlDebounce::new(std::time::Duration::from_secs(3600));
+            assert!(debounce.should_fire("relayer-1"));
+            assert!(!debounce.should_fire("relayer-1"));
+
+            debounce.clear("relayer-1");
+            assert!(debounce.should_fire("relayer-1"));
+
+            // Clearing one key must not affect another relayer's window.
+            assert!(debounce.should_fire("relayer-2"));
+            debounce.clear("relayer-1");
+            assert!(!debounce.should_fire("relayer-2"));
+        }
+
+        /// A second gap detection for the same relayer within the debounce TTL skips
+        /// resubmission both times but enqueues only one nonce-health job.
+        #[tokio::test]
+        async fn issue818_nonce_health_debounce_produces_once_within_ttl() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Arc as StdArc;
+
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "issue818-debounce-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(300),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(100) }));
+
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+
+            let health_calls = StdArc::new(AtomicUsize::new(0));
+            let health_calls_clone = health_calls.clone();
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .returning(move |_, _| {
+                    health_calls_clone.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(()) })
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            // First detection for this relayer: produces the health job.
+            let result1 = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+            assert_eq!(result1.status, TransactionStatus::Sent);
+
+            // Second detection immediately after, same relayer: debounced, no
+            // second job produced. Resubmit is still skipped in both cases —
+            // debounce only affects job *production*, not gap detection.
+            let result2 = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+            assert_eq!(result2.status, TransactionStatus::Sent);
+
+            assert_eq!(
+                health_calls.load(Ordering::SeqCst),
+                1,
+                "nonce health job should be produced only once within the debounce TTL"
+            );
         }
     }
 
