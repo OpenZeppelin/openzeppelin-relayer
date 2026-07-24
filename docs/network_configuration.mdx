@@ -350,6 +350,7 @@ Once networks are defined, reference them in your relayer configurations:
 - Use private/dedicated RPC endpoints for production
 - Ensure URLs are secure (HTTPS) when accessing over public networks
 - Configure `RPC_ALLOWED_HOSTS` and `RPC_BLOCK_PRIVATE_IPS` environment variables for SSRF protection in production. See [Configuration → RPC URL Security](/relayer/configuration#rpc-url-security) for details.
+- Benchmark provider latency and reliability before committing to a primary endpoint. Independent cross-provider measurements across the major EVM chains (Ethereum, Arbitrum, Base, Optimism, Polygon, BNB, Avalanche, Linea, Scroll, Mantle) and Solana are published continuously at [OpenChainBench](https://openchainbench.com/benchmarks/rpc-capabilities).
 
 ### 3. Confirmation Requirements
 
