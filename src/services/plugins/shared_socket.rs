@@ -431,7 +431,8 @@ impl SharedSocketService {
 
     /// Start the shared socket service
     /// This spawns a background task that listens for connections
-    /// Safe to call multiple times - will only start once per instance
+    /// Safe to call multiple times - idempotent while the listener is running;
+    /// a failed bind or abnormal listener exit resets state so a later call retries
     #[allow(clippy::type_complexity)]
     pub async fn start<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         self: Arc<Self>,
@@ -458,8 +459,17 @@ impl SharedSocketService {
         }
 
         // Create the listener and move it into the task
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {e}")))?;
+        let listener = match UnixListener::bind(&self.socket_path) {
+            Ok(listener) => listener,
+            Err(e) => {
+                // Undo the `started` swap above, otherwise every future start()
+                // becomes a no-op and plugin executions are bricked until restart.
+                self.started.store(false, Ordering::Release);
+                return Err(PluginError::SocketError(format!(
+                    "Failed to bind listener: {e}"
+                )));
+            }
+        };
         let executions = self.executions.clone();
         let relayer_api = Arc::new(RelayerApi);
         let socket_path = self.socket_path.clone();
@@ -471,7 +481,9 @@ impl SharedSocketService {
             socket_path
         );
 
-        // Spawn the listener task onto the pipeline runtime.
+        // Spawn the listener task onto the pipeline runtime. Weak so the task
+        // doesn't keep the service alive (its Drop sends the shutdown signal).
+        let service = Arc::downgrade(&self);
         spawn_on_pipeline(async move {
             debug!("Shared socket service: listener task started");
             // Bound consecutive accept() failures so a shutting-down runtime can never
@@ -560,6 +572,20 @@ impl SharedSocketService {
 
             // Cleanup on shutdown
             let _ = std::fs::remove_file(&socket_path);
+            // On a non-shutdown exit (e.g. persistent accept errors), reset the
+            // started flag — after the socket file is removed, so a concurrent
+            // start() can't race the bind against the stale file — allowing the
+            // listener to be rebuilt. Graceful shutdown leaves `started == true`
+            // so ensure_shared_socket_started() stays a no-op during teardown.
+            if !*shutdown_rx.borrow() {
+                if let Some(service) = service.upgrade() {
+                    service.started.store(false, Ordering::Release);
+                    warn!(
+                        "Shared socket service: listener stopped without shutdown signal; \
+                        it will be rebuilt on the next plugin execution"
+                    );
+                }
+            }
             info!("Shared socket service: listener stopped");
         });
 
@@ -1788,6 +1814,36 @@ mod tests {
 
         // Second start should also succeed (early return)
         service.clone().start(thin).await.unwrap();
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bind_failure_resets_started_flag() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_bind_fail.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let thin = Arc::new(web::ThinData(state));
+
+        // Occupy the socket path with a plain file so UnixListener::bind fails.
+        std::fs::write(&socket_path, b"occupied").unwrap();
+
+        let result = service.clone().start(thin.clone()).await;
+        assert!(result.is_err(), "start() should fail when bind fails");
+
+        // The failed start must have reset the started flag: after clearing the
+        // path, a second start() should bind successfully instead of no-op'ing
+        // on a stale flag (which would leave the service permanently dead).
+        std::fs::remove_file(&socket_path).unwrap();
+        service.clone().start(thin).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            std::path::Path::new(socket_path.to_str().unwrap()).exists(),
+            "Listener should be bound after retry"
+        );
 
         service.shutdown().await;
     }
