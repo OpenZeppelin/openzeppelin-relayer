@@ -635,6 +635,116 @@ mod prepare_transaction_tests {
         lane_gate::free(&relayer.id, another_tx_id); // cleanup
     }
 
+    /// A prepare failure after the counter increment heals the drift at the origin: the
+    /// failing tx never persisted a sequence, so handle_prepare_failure's chain sync
+    /// rewinds the counter over the freshly burned sequence before any TxBadSeq occurs.
+    #[tokio::test]
+    async fn prepare_failure_rewinds_freshly_burned_sequence() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Allocation burns 149 and leaves the counter at 150
+        mocks
+            .counter
+            .expect_get_and_increment()
+            .returning(|_, _| Box::pin(ready(Ok(149))));
+
+        // Signer fails after the increment — the sequence is never persisted
+        mocks.signer.expect_sign_transaction().returning(|_| {
+            Box::pin(async {
+                Err(crate::models::SignerError::SigningError(
+                    "Signer failure".to_string(),
+                ))
+            })
+        });
+
+        // Chain sync in handle_prepare_failure: chain seq 100 → floor 101
+        mocks.provider.expect_get_account().returning(|_| {
+            Box::pin(async {
+                use soroban_rs::xdr::{
+                    AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
+                    Thresholds, Uint256,
+                };
+                use stellar_strkey::ed25519;
+
+                let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                Ok(AccountEntry {
+                    account_id,
+                    balance: 1000000,
+                    seq_num: SequenceNumber(100),
+                    num_sub_entries: 0,
+                    inflation_dest: None,
+                    flags: 0,
+                    home_domain: String32::default(),
+                    thresholds: Thresholds([1, 1, 1, 1]),
+                    signers: Default::default(),
+                    ext: AccountEntryExt::V0,
+                })
+            })
+        });
+
+        // Counter sits at 150, above the chain floor
+        mocks
+            .counter
+            .expect_sync_floor()
+            .returning(|_, _, _| Box::pin(ready(Ok(150))));
+
+        // No active tx holds a sequence (the failing tx never persisted one)
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+
+        // The burned head is rewound 150 → 101 before any TxBadSeq thrash starts
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .withf(|relayer_id, addr, expected, value| {
+                relayer_id == "relayer-1" && addr == TEST_PK && *expected == 150 && *value == 101
+            })
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(ready(Ok(true))));
+
+        // Failure handling marks the tx Failed and notifies
+        mocks
+            .tx_repo
+            .expect_partial_update()
+            .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+            .returning(|id, upd| {
+                let mut tx = create_test_transaction("relayer-1");
+                tx.id = id;
+                tx.status = upd.status.unwrap();
+                Ok::<_, RepositoryError>(tx)
+            });
+
+        mocks
+            .job_producer
+            .expect_produce_send_notification_job()
+            .times(1)
+            .returning(|_, _| Box::pin(async { Ok(()) }));
+
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .returning(move |_, _, _, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+        let tx = create_test_transaction(&relayer.id);
+
+        let result = handler.prepare_transaction_impl(tx.clone()).await;
+        assert!(result.is_err());
+    }
+
     #[tokio::test]
     async fn prepare_transaction_already_claimed_lane_returns_original() {
         let mut relayer = create_test_relayer();

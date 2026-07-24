@@ -411,7 +411,20 @@ where
         }
 
         if is_bad_sequence_error(&error_reason) {
-            // For bad sequence errors, sync sequence from chain first
+            // Reset the transaction to pending state BEFORE syncing the counter: the
+            // reset clears this tx's (bad) sequence_number, so the drift rewind inside
+            // sync_sequence_from_chain is not bounded by the failing tx's own record —
+            // otherwise the tx would pin the counter one past its burned sequence and
+            // the drift would never heal.
+            // Status check will handle resubmission when it detects a pending transaction without hash
+            info!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                "bad sequence error detected, resetting transaction to pending state"
+            );
+            let reset_result = self.reset_transaction_for_retry(tx.clone()).await;
+
+            // Sync sequence from chain (best effort)
             if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
                 info!(
                     tx_id = %tx_id,
@@ -440,14 +453,7 @@ where
                 }
             }
 
-            // Reset the transaction to pending state
-            // Status check will handle resubmission when it detects a pending transaction without hash
-            info!(
-                tx_id = %tx_id,
-                relayer_id = %relayer_id,
-                "bad sequence error detected, resetting transaction to pending state"
-            );
-            match self.reset_transaction_for_retry(tx.clone()).await {
+            match reset_result {
                 Ok(reset_tx) => {
                     info!(
                         tx_id = %tx_id,
@@ -1029,6 +1035,255 @@ mod tests {
             } else {
                 panic!("Expected Stellar transaction data");
             }
+        }
+
+        #[tokio::test]
+        async fn test_submit_bad_sequence_rewinds_drifted_counter() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock provider to return bad sequence error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxBadSeq".to_string(),
+                        ))
+                    })
+                });
+
+            // Mock get_account for sync_sequence_from_chain: chain seq 100 → next usable 101
+            mocks.provider.expect_get_account().times(1).returning(|_| {
+                Box::pin(async {
+                    use soroban_rs::xdr::{
+                        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                        String32, Thresholds, Uint256,
+                    };
+                    use stellar_strkey::ed25519;
+
+                    let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                    Ok(AccountEntry {
+                        account_id,
+                        balance: 1000000,
+                        seq_num: SequenceNumber(100),
+                        num_sub_entries: 0,
+                        inflation_dest: None,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        thresholds: Thresholds([1, 1, 1, 1]),
+                        signers: Default::default(),
+                        ext: AccountEntryExt::V0,
+                    })
+                })
+            });
+
+            // Counter drifted above the chain floor: sync_floor reports 150
+            mocks
+                .counter
+                .expect_sync_floor()
+                .times(1)
+                .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+            // The reset must run BEFORE the occupancy scan: the reset clears this tx's
+            // burned sequence_number, so its record no longer bounds the rewind. The
+            // Sequence pins that ordering — reverting to sync-before-reset fails here.
+            let mut call_order = mockall::Sequence::new();
+
+            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    if let Some(network_data) = upd.network_data {
+                        tx.network_data = network_data;
+                    }
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // The scan then sees the reset tx (sequence_number cleared) — target is
+            // the chain floor
+            let mut reset_tx = create_test_transaction(&relayer.id);
+            reset_tx.status = TransactionStatus::Pending;
+            if let NetworkTransactionData::Stellar(ref mut data) = reset_tx.network_data {
+                data.sequence_number = None;
+            }
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(move |_, _| Ok(vec![reset_tx.clone()]));
+
+            // No Confirmed txs to bound the rewind
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .times(1)
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            // The drifted counter is rewound 150 → 101 via CAS
+            mocks
+                .counter
+                .expect_set_if_equals()
+                .withf(|relayer_id, addr, expected, value| {
+                    relayer_id == "relayer-1"
+                        && addr == TEST_PK
+                        && *expected == 150
+                        && *value == 101
+                })
+                .times(1)
+                .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // The tx is reset for retry and the counter rewind was applied
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Pending);
+        }
+
+        #[tokio::test]
+        async fn test_submit_bad_sequence_reset_failure_still_syncs_and_marks_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock provider to return bad sequence error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxBadSeq".to_string(),
+                        ))
+                    })
+                });
+
+            // Pin the flow: reset is attempted first, the chain sync still runs after
+            // the reset fails, and the tx then falls through to being marked Failed.
+            let mut call_order = mockall::Sequence::new();
+
+            // Reset attempt fails
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|_, _| Err(RepositoryError::Unknown("reset write failed".to_string())));
+
+            // Sync still runs (best effort): chain seq 100 → floor 101, no drift
+            mocks
+                .provider
+                .expect_get_account()
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|_| {
+                    Box::pin(async {
+                        use soroban_rs::xdr::{
+                            AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                            String32, Thresholds, Uint256,
+                        };
+                        use stellar_strkey::ed25519;
+
+                        let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                        let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                        Ok(AccountEntry {
+                            account_id,
+                            balance: 1000000,
+                            seq_num: SequenceNumber(100),
+                            num_sub_entries: 0,
+                            inflation_dest: None,
+                            flags: 0,
+                            home_domain: String32::default(),
+                            thresholds: Thresholds([1, 1, 1, 1]),
+                            signers: Default::default(),
+                            ext: AccountEntryExt::V0,
+                        })
+                    })
+                });
+
+            mocks
+                .counter
+                .expect_sync_floor()
+                .times(1)
+                .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
+
+            // Fall-through marks the tx Failed
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.status_reason = upd.status_reason;
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Notification for the failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // No pending transactions to enqueue after the failure
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // Marked as failed and returned Ok (no pointless queue retry)
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Failed);
         }
 
         #[tokio::test]

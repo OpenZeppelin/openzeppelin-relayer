@@ -530,6 +530,17 @@ impl RedisTransactionRepository {
         &self,
         ids: &[String],
     ) -> Result<BatchRetrievalResult<TransactionRepoModel>, RepositoryError> {
+        self.get_transactions_by_ids_on(self.connections.reader(), ids)
+            .await
+    }
+
+    /// Like [`Self::get_transactions_by_ids`], but reading through the given pool.
+    /// Recovery paths pass the primary pool for read-your-writes consistency.
+    async fn get_transactions_by_ids_on(
+        &self,
+        pool: &Arc<deadpool_redis::Pool>,
+        ids: &[String],
+    ) -> Result<BatchRetrievalResult<TransactionRepoModel>, RepositoryError> {
         if ids.is_empty() {
             debug!("no transaction IDs provided for batch fetch");
             return Ok(BatchRetrievalResult {
@@ -539,7 +550,7 @@ impl RedisTransactionRepository {
         }
 
         let mut conn = self
-            .get_connection(self.connections.reader(), "batch_fetch_transactions")
+            .get_connection(pool, "batch_fetch_transactions")
             .await?;
 
         let reverse_keys: Vec<String> = ids.iter().map(|id| self.tx_to_relayer_key(id)).collect();
@@ -1616,9 +1627,12 @@ impl TransactionRepository for RedisTransactionRepository {
             self.ensure_status_sorted_set(relayer_id, status).await?;
         }
 
-        // Now get a connection and collect all IDs
+        // Read through the primary: this feeds recovery paths (nonce/sequence counter
+        // rewinds) that must observe their own just-written resets and freshly persisted
+        // transactions — a lagging read replica could hide an active record and let the
+        // rewind reclaim a sequence that is still in flight.
         let mut conn = self
-            .get_connection(self.connections.reader(), "find_by_status")
+            .get_connection(self.connections.primary(), "find_by_status")
             .await?;
 
         let mut all_ids: Vec<String> = Vec::new();
@@ -1648,8 +1662,11 @@ impl TransactionRepository for RedisTransactionRepository {
         all_ids.sort();
         all_ids.dedup();
 
-        // Fetch all transactions and sort by created_at (newest first)
-        let mut transactions = self.get_transactions_by_ids(&all_ids).await?;
+        // Fetch all transactions and sort by created_at (newest first); bodies are read
+        // from the primary for the same consistency reason as the index scan above
+        let mut transactions = self
+            .get_transactions_by_ids_on(self.connections.primary(), &all_ids)
+            .await?;
 
         // Sort by created_at descending (newest first)
         transactions
