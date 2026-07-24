@@ -1124,6 +1124,20 @@ mod tests {
                 .in_sequence(&mut call_order)
                 .returning(move |_, _| Ok(vec![reset_tx.clone()]));
 
+            // No Confirmed txs to bound the rewind
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .times(1)
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
             // The drifted counter is rewound 150 → 101 via CAS
             mocks
                 .counter

@@ -25,7 +25,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use super::lane_gate;
 
@@ -288,11 +288,19 @@ where
 
     /// Trims the burned head of the sequence counter down to on-chain reality.
     ///
-    /// Rewinds the counter from `observed` to `target`, where `target` is one past the
-    /// highest `sequence_number` held by any active (Pending/Sent/Submitted) transaction
-    /// of this relayer, or `next_usable_from_chain` if no active transaction holds one.
+    /// Rewinds the counter from `observed` to `target`, where `target` is the highest of:
+    /// - `next_usable_from_chain`,
+    /// - one past the highest `sequence_number` held by an active (Pending/Sent/Submitted)
+    ///   transaction of this relayer,
+    /// - one past the newest Confirmed transaction's sequence — a Confirmed record proves
+    ///   consumption even when the chain read comes from a lagging node, so this guards
+    ///   the rewind against a stale `next_usable_from_chain`.
+    ///
     /// Transactions reset via `reset_to_pre_prepare_state` have their `sequence_number`
     /// cleared, so they never bound the rewind and their burned sequences are reclaimed.
+    /// Failed records never bound it either: on Stellar a rejected submission consumes
+    /// nothing, and a landed-but-failed transaction under a stale chain read self-heals
+    /// in one TxBadSeq cycle.
     ///
     /// The nonce occupancy index is EVM-only, so occupancy is derived by reading the
     /// Stellar `sequence_number` from the active transaction records directly.
@@ -332,7 +340,36 @@ where
             .filter_map(|seq| u64::try_from(seq).ok())
             .max();
 
-        let target = match highest_active_seq {
+        // One newest-first page is enough for the Confirmed bound: for a single account,
+        // sequences strictly increase in confirmation order, so the newest Confirmed tx
+        // carries the highest consumed sequence. A full Confirmed scan would walk the
+        // relayer's entire history.
+        let newest_confirmed_seq = self
+            .transaction_repository()
+            .find_by_status_paginated(
+                &self.relayer().id,
+                &[TransactionStatus::Confirmed],
+                PaginationQuery {
+                    page: 1,
+                    per_page: 1,
+                },
+                false, // newest first
+            )
+            .await
+            .map_err(TransactionError::from)?
+            .items
+            .first()
+            .and_then(|tx| match &tx.network_data {
+                NetworkTransactionData::Stellar(data) => data.sequence_number,
+                _ => None,
+            })
+            .and_then(|seq| u64::try_from(seq).ok());
+
+        let target = match highest_active_seq
+            .into_iter()
+            .chain(newest_confirmed_seq)
+            .max()
+        {
             Some(seq) => std::cmp::max(next_usable_from_chain, seq + 1),
             None => next_usable_from_chain,
         };
@@ -358,8 +395,12 @@ where
                 "rewound sequence counter over burned region"
             );
         } else {
-            debug!(
+            // warn, not debug: repeated misses are the only visible signal that the
+            // rewind is being starved by concurrent counter movement.
+            warn!(
                 relayer_id = %self.relayer().id,
+                observed = observed,
+                target = target,
                 "counter moved concurrently; skipping rewind, next TxBadSeq recovery will retry"
             );
         }
@@ -895,6 +936,20 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(vec![reset_tx.clone()]));
 
+        // No Confirmed txs to bound the rewind
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
         // Empty drift region → CAS lowers 150 → 101.
         mocks
             .counter
@@ -946,6 +1001,20 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(vec![active_tx.clone(), reset_tx.clone()]));
 
+        // No Confirmed txs to bound the rewind
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
         // Highest active sequence 120 → target 121; CAS lowers 150 → 121.
         mocks
             .counter
@@ -992,6 +1061,20 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(vec![active_tx.clone()]));
 
+        // No Confirmed txs to bound the rewind
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
         let handler = make_stellar_tx_handler(relayer.clone(), mocks);
 
         let result = handler.sync_sequence_from_chain(&relayer.address).await;
@@ -1029,11 +1112,92 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(vec![active_tx.clone()]));
 
+        // No Confirmed txs to bound the rewind
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
         // target = max(101, 42 + 1) = 101; CAS lowers 150 → 101.
         mocks
             .counter
             .expect_set_if_equals()
             .withf(|_, _, expected, value| *expected == 150 && *value == 101)
+            .times(1)
+            .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+        let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+
+        let result = handler.sync_sequence_from_chain(&relayer.address).await;
+        assert!(result.is_ok());
+    }
+
+    /// Rewind (f): the newest Confirmed tx bounds the rewind — a Confirmed record proves
+    /// consumption even when the chain read is stale, so the target never goes below it.
+    #[tokio::test]
+    async fn test_sync_sequence_rewind_bounded_by_newest_confirmed() {
+        let relayer = create_test_relayer();
+        let mut mocks = default_test_mocks();
+
+        // Stale chain read: seq 100 → next usable 101.
+        mocks
+            .provider
+            .expect_get_account()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(test_account_entry(100)) }));
+
+        mocks
+            .counter
+            .expect_sync_floor()
+            .times(1)
+            .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+        // No active tx holds a sequence.
+        mocks
+            .tx_repo
+            .expect_find_by_status()
+            .times(1)
+            .returning(|_, _| Ok(vec![]));
+
+        // The newest Confirmed tx consumed sequence 130 — one newest-first page.
+        let mut confirmed_tx = create_test_transaction(&relayer.id);
+        confirmed_tx.status = TransactionStatus::Confirmed;
+        if let NetworkTransactionData::Stellar(ref mut data) = confirmed_tx.network_data {
+            data.sequence_number = Some(130);
+        }
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .withf(|relayer_id, statuses, query, oldest_first| {
+                relayer_id == "relayer-1"
+                    && statuses == [TransactionStatus::Confirmed]
+                    && query.page == 1
+                    && query.per_page == 1
+                    && !*oldest_first
+            })
+            .times(1)
+            .returning(move |_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![confirmed_tx.clone()],
+                    total: 1,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
+
+        // target = max(101, 130 + 1) = 131; CAS lowers 150 → 131.
+        mocks
+            .counter
+            .expect_set_if_equals()
+            .withf(|_, _, expected, value| *expected == 150 && *value == 131)
             .times(1)
             .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
 
@@ -1066,6 +1230,20 @@ mod tests {
             .expect_find_by_status()
             .times(1)
             .returning(|_, _| Ok(vec![]));
+
+        // No Confirmed txs to bound the rewind
+        mocks
+            .tx_repo
+            .expect_find_by_status_paginated()
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(crate::repositories::PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: 1,
+                    per_page: 1,
+                })
+            });
 
         // Counter moved since observed; rewind is skipped without error.
         mocks
