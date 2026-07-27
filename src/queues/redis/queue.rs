@@ -227,8 +227,8 @@ impl Queue {
             .unwrap_or_default();
 
         // Queue configurations:
-        // - High-frequency: transaction_status (critical path)
-        // - Low-frequency: request, submission, notifications, health checks, swaps
+        // - High-frequency: transaction_submission, transaction_status (critical path)
+        // - Low-frequency: request, notifications, health checks, swaps
         let high_frequency = QueueConfig::high_frequency();
         let low_frequency = QueueConfig::low_frequency();
 
@@ -241,7 +241,9 @@ impl Queue {
             transaction_submission_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_submission_queue"),
                 conn_tx_submit,
-                low_frequency.clone(), // scheduling not used
+                // Stellar fast resubmit schedules 5s*attempt delayed submit jobs here.
+                // A 20s sweep quantizes those retries and lets the status checker double-fire.
+                high_frequency.clone(),
             ),
             transaction_status_queue: Self::storage(
                 &format!("{redis_key_prefix}transaction_status_queue"),

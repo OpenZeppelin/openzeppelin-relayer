@@ -96,6 +96,8 @@ services:
       - .env.integration
     environment:
       - RELAYER_BASE_URL=http://relayer:8080
+      # Direct Redis access for tests that manipulate relayer state (e.g. nonce drift)
+      - REDIS_URL=redis://redis:6379
       # Test logging configuration
       # Default to INFO level for clean output, can be overridden with RUST_LOG
       - RUST_LOG=${RUST_LOG:-info}

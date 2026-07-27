@@ -130,6 +130,18 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError>;
 
+    /// Repairs stale Redis status-index entries whose indexed status diverged from
+    /// the persisted transaction body.
+    ///
+    /// Backends where status indexes cannot diverge from transaction bodies should
+    /// use the default no-op implementation.
+    async fn reconcile_stale_status_indexes(
+        &self,
+        _relayer_id: &str,
+    ) -> Result<usize, RepositoryError> {
+        Ok(0)
+    }
+
     /// Update the network data of a transaction
     async fn update_network_data(
         &self,
@@ -246,6 +258,7 @@ mockall::mock! {
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn increment_status_check_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
@@ -448,6 +461,20 @@ impl TransactionRepository for TransactionRepositoryStorage {
                 repo.partial_update(tx_id, update).await
             }
             TransactionRepositoryStorage::Redis(repo) => repo.partial_update(tx_id, update).await,
+        }
+    }
+
+    async fn reconcile_stale_status_indexes(
+        &self,
+        relayer_id: &str,
+    ) -> Result<usize, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.reconcile_stale_status_indexes(relayer_id).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.reconcile_stale_status_indexes(relayer_id).await
+            }
         }
     }
 

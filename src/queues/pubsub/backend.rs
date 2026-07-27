@@ -17,7 +17,6 @@ use gcloud_googleapis::pubsub::v1::PubsubMessage;
 use gcloud_pubsub::client::{Client, ClientConfig};
 use gcloud_pubsub::publisher::Publisher;
 use parking_lot::RwLock;
-use rustls::crypto::{aws_lc_rs, CryptoProvider};
 use serde::Serialize;
 use token_source::TokenSource;
 use tokio::sync::watch;
@@ -242,16 +241,10 @@ impl PubSubBackend {
     pub async fn new(redis_connections: Arc<RedisConnections>) -> Result<Self, QueueBackendError> {
         info!("Initializing Pub/Sub queue backend");
 
-        // rustls 0.23 needs a process-default CryptoProvider when more than one
-        // provider is compiled in. Both are present here (aws-lc-rs via the gcloud
-        // and AWS SDK trees, ring via aws-config/Solana), so rustls can't select
-        // one automatically and gcloud-pubsub's TLS — which uses the process
-        // default — panics on the first real-GCP connection. The emulator path is
-        // plaintext, so this only surfaces against real GCP. Install once; ignore
-        // if a default is already set.
-        if CryptoProvider::get_default().is_none() {
-            let _ = aws_lc_rs::default_provider().install_default();
-        }
+        // Install the process-default rustls CryptoProvider (shared helper): the
+        // emulator path is plaintext, so this only surfaces against real GCP,
+        // where the install-if-unset guard prevents a first-connection panic.
+        crate::queues::ensure_crypto_provider();
 
         let project_id =
             ServerConfig::get_pubsub_project_id().map_err(QueueBackendError::ConfigError)?;

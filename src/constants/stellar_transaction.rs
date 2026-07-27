@@ -72,7 +72,16 @@ pub const STELLAR_MAX_STUCK_TRANSACTION_LIFETIME_MINUTES: i64 = 15;
 pub const STELLAR_RESUBMIT_BASE_INTERVAL_SECONDS: i64 = 10;
 
 /// Maximum number of times a Stellar submission may be retried after an insufficient-fee error.
-pub const STELLAR_INSUFFICIENT_FEE_MAX_RETRIES: u32 = 2;
+/// Raised to cover multiple fast resubmits across short-lived fee spikes.
+pub const STELLAR_INSUFFICIENT_FEE_MAX_RETRIES: u32 = 6;
+
+/// Base delay for fast Stellar resubmits, in seconds.
+/// Five seconds is approximately one Stellar ledger close time (`STELLAR_LEDGER_TIME_SECONDS`).
+pub const STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS: i64 = 5;
+
+/// Maximum TRY_AGAIN_LATER rejections that use the fast-resubmit window.
+/// After the first three fast attempts, the status-checker backoff ladder owns rescue.
+pub const STELLAR_TRY_AGAIN_LATER_FAST_RETRIES: u32 = 3;
 
 /// Maximum resubmit interval (seconds) to cap the resubmission backoff.
 /// Prevents excessively long gaps between resubmissions.

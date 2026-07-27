@@ -31,10 +31,11 @@ async fn test_authorization_middleware_success() {
         repository_storage_type: RepositoryStorageType::InMemory,
         reset_storage_on_start: false,
         storage_encryption_key: None,
-        transaction_expiration_hours: 4,
+        transaction_expiration_hours: 4.0,
         provider_failure_expiration_secs: 60,
         provider_failure_threshold: 3,
         provider_pause_duration_secs: 60,
+        ..ServerConfig::from_env()
     });
 
     let app = test::init_service(
@@ -92,10 +93,11 @@ async fn test_authorization_middleware_failure() {
         repository_storage_type: RepositoryStorageType::InMemory,
         reset_storage_on_start: false,
         storage_encryption_key: None,
-        transaction_expiration_hours: 4,
+        transaction_expiration_hours: 4.0,
         provider_failure_expiration_secs: 60,
         provider_failure_threshold: 3,
         provider_pause_duration_secs: 60,
+        ..ServerConfig::from_env()
     });
 
     let app = test::init_service(

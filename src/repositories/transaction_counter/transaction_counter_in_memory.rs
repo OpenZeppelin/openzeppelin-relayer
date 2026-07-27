@@ -85,6 +85,28 @@ impl TransactionCounterTrait for InMemoryTransactionCounter {
         Ok(*entry)
     }
 
+    async fn set_if_equals(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        expected: u64,
+        value: u64,
+    ) -> Result<bool, RepositoryError> {
+        // Hold the shard entry lock across read-compare-write so the compare-and-set is atomic
+        // with respect to concurrent `sync_floor`/`set`/`get_and_increment` on the same key.
+        // Never inserts: a missing key is a no-op that returns `false`.
+        match self
+            .store
+            .get_mut(&(relayer_id.to_string(), address.to_string()))
+        {
+            Some(mut entry) if *entry == expected && value < expected => {
+                *entry = value;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     async fn drop_all_entries(&self) -> Result<(), RepositoryError> {
         self.store.clear();
         Ok(())
@@ -157,6 +179,52 @@ mod tests {
         let effective = store.sync_floor("relayer_1", "0xabc", 7).await.unwrap();
         assert_eq!(effective, 7);
         assert_eq!(store.get("relayer_1", "0xabc").await.unwrap(), Some(7));
+    }
+
+    #[tokio::test]
+    async fn test_set_if_equals_applies_when_expected_matches_and_value_is_lower() {
+        let store = InMemoryTransactionCounter::new();
+        let (relayer, address) = ("relayer_1", "0xabc");
+
+        store.set(relayer, address, 15).await.unwrap();
+
+        let applied = store.set_if_equals(relayer, address, 15, 5).await.unwrap();
+        assert!(applied);
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn test_set_if_equals_returns_false_when_current_does_not_match_expected() {
+        let store = InMemoryTransactionCounter::new();
+        let (relayer, address) = ("relayer_1", "0xabc");
+
+        store.set(relayer, address, 20).await.unwrap();
+
+        let applied = store.set_if_equals(relayer, address, 15, 5).await.unwrap();
+        assert!(!applied);
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(20));
+    }
+
+    #[tokio::test]
+    async fn test_set_if_equals_returns_false_on_missing_key() {
+        let store = InMemoryTransactionCounter::new();
+        let (relayer, address) = ("relayer_1", "0xabc");
+
+        let applied = store.set_if_equals(relayer, address, 15, 5).await.unwrap();
+        assert!(!applied);
+        assert_eq!(store.get(relayer, address).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_set_if_equals_returns_false_when_value_not_lower() {
+        let store = InMemoryTransactionCounter::new();
+        let (relayer, address) = ("relayer_1", "0xabc");
+
+        store.set(relayer, address, 15).await.unwrap();
+
+        let applied = store.set_if_equals(relayer, address, 15, 15).await.unwrap();
+        assert!(!applied);
+        assert_eq!(store.get(relayer, address).await.unwrap(), Some(15));
     }
 
     #[tokio::test]

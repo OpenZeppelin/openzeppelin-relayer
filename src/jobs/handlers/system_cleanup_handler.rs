@@ -110,8 +110,10 @@ pub async fn system_cleanup_handler(
 /// one instance processes cleanup at a time. If the lock is already held by
 /// another instance, this returns early without doing any work.
 ///
-/// Note: Queue metadata cleanup only runs when using Redis queue backend.
-/// SQS backend and in-memory mode skip cleanup since they don't use Redis queues.
+/// Note: Queue metadata cleanup runs whenever the queue backend is Redis, using
+/// the queue backend's own connection pool. It is independent of
+/// `REPOSITORY_STORAGE_TYPE`, so it also runs with an in-memory repository. SQS
+/// and Pub/Sub backends skip cleanup since they do not use Redis queues.
 async fn handle_cleanup_request(
     _job: SystemCleanupCronReminder,
     data: &ThinData<DefaultAppState>,
@@ -126,21 +128,27 @@ async fn handle_cleanup_request(
         return Ok(());
     }
 
-    let transaction_repo = data.transaction_repository();
-    let (redis_connections, key_prefix) =
-        match crate::repositories::TransactionRepository::connection_info(transaction_repo.as_ref())
-        {
-            Some((connections, prefix)) => (connections, prefix),
-            None => {
-                debug!("in-memory repository detected, skipping system cleanup");
-                return Ok(());
-            }
-        };
+    // Obtain the Redis pool from the queue backend rather than the transaction
+    // repository, so cleanup runs whenever the queue lives in Redis regardless
+    // of REPOSITORY_STORAGE_TYPE. Previously an in-memory repository caused this
+    // to return early, letting Redis queue metadata grow unbounded (issue #815).
+    let redis_connections = match data
+        .job_producer()
+        .get_queue_backend()
+        .and_then(|backend| backend.redis_connections())
+    {
+        Some(connections) => connections,
+        None => {
+            warn!("queue backend reports Redis but no Redis connections available; skipping system cleanup");
+            return Ok(());
+        }
+    };
     let pool = redis_connections.primary().clone();
 
     // In distributed mode, acquire a lock to prevent multiple instances from
     // running cleanup simultaneously. In single-instance mode, skip locking.
     let _lock_guard = if ServerConfig::get_distributed_mode() {
+        let key_prefix = ServerConfig::get_redis_key_prefix();
         let lock_key = format!("{key_prefix}:lock:{SYSTEM_CLEANUP_LOCK_NAME}");
         let lock = DistributedLock::new(
             pool.clone(),

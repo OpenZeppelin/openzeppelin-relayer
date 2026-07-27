@@ -23,6 +23,19 @@ pub const PENDING_TRANSACTION_STATUSES: &[TransactionStatus] = &[
     TransactionStatus::Submitted,
 ];
 
+/// All transaction statuses, used when building status-index metadata that must
+/// cover every possible status key.
+pub const ALL_TRANSACTION_STATUSES: &[TransactionStatus] = &[
+    TransactionStatus::Canceled,
+    TransactionStatus::Pending,
+    TransactionStatus::Sent,
+    TransactionStatus::Submitted,
+    TransactionStatus::Mined,
+    TransactionStatus::Confirmed,
+    TransactionStatus::Failed,
+    TransactionStatus::Expired,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

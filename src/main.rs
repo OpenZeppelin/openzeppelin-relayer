@@ -66,6 +66,34 @@ fn load_config_file(config_file_path: &str) -> Result<Config> {
     config::load_config(config_file_path).wrap_err("Failed to load config file")
 }
 
+/// Owns the pipeline runtime and shuts it down via `shutdown_background()` on drop.
+///
+/// `drop`ping a multi-thread `tokio::runtime::Runtime` blocks the current thread
+/// until all runtime threads exit, which panics when called from within an async
+/// context (`main` runs under `#[actix_web::main]`). Without this guard, any `?`
+/// early-return between runtime construction and shutdown (queue workers, HTTP
+/// bind, metrics bind) would hit that panic and mask the real startup error.
+/// `shutdown_background()` is non-blocking and safe to call from async code.
+struct PipelineRuntimeGuard(Option<tokio::runtime::Runtime>);
+
+impl PipelineRuntimeGuard {
+    fn handle(&self) -> tokio::runtime::Handle {
+        self.0
+            .as_ref()
+            .expect("runtime is only taken in Drop")
+            .handle()
+            .clone()
+    }
+}
+
+impl Drop for PipelineRuntimeGuard {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -106,13 +134,15 @@ async fn main() -> Result<()> {
     metrics::set_worker_threads("pipeline", runtime_config.tokio_worker_threads);
     metrics::set_worker_threads("http", runtime_config.actix_workers);
 
-    let pipeline_runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(runtime_config.tokio_worker_threads)
-        .enable_all()
-        .thread_name("relayer-pipeline")
-        .build()
-        .wrap_err("Failed to build the pipeline runtime")?;
-    let pipeline_handle = pipeline_runtime.handle().clone();
+    let pipeline_runtime = PipelineRuntimeGuard(Some(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(runtime_config.tokio_worker_threads)
+            .enable_all()
+            .thread_name("relayer-pipeline")
+            .build()
+            .wrap_err("Failed to build the pipeline runtime")?,
+    ));
+    let pipeline_handle = pipeline_runtime.handle();
 
     // Re-home the plugin shared-socket service's background tasks onto the
     // pipeline runtime as well (the plugin-execution path behind the 504 storms).
@@ -275,12 +305,10 @@ async fn main() -> Result<()> {
     // warnings until the process is killed. No-op if no plugin ever started the socket.
     openzeppelin_relayer::services::plugins::shutdown_shared_socket_service().await;
 
-    // Shut down the pipeline runtime last. `shutdown_background()` (not `drop`) is
-    // required here: `drop`ping a multi-thread `tokio::runtime::Runtime` blocks the
-    // current thread until all runtime threads exit, which panics when called from
-    // within an async context (this function runs under `#[actix_web::main]`).
-    // `shutdown_background()` is non-blocking and safe to call from async code.
-    pipeline_runtime.shutdown_background();
+    // Shut down the pipeline runtime last. Dropping the guard calls
+    // `shutdown_background()` (see `PipelineRuntimeGuard`) — never the blocking
+    // `Runtime` drop, which would panic inside this async context.
+    drop(pipeline_runtime);
 
     Ok(())
 }

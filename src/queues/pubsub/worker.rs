@@ -8,50 +8,37 @@
 //! too-short lease), **re-enqueue-to-Redis** on retry (including panics and
 //! timeouts, so bounded queues honor max_retries), **drop** on bounded
 //! exhaustion, and **never ack incomplete work**.
+//!
+//! The transport-agnostic pieces (handler dispatch, the 600s-timeout +
+//! `catch_unwind` wrapper, retry-exhaustion + backoff selection, correlation-id
+//! extraction, concurrency resolution) live in `crate::queues::worker_shared`;
+//! the pull/lease/ack mechanics below stay Pub/Sub-specific.
 
-use std::future::Future;
-use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::web::ThinData;
 use deadpool_redis::Pool;
-use futures::FutureExt;
 use gcloud_pubsub::client::Client;
 use gcloud_pubsub::subscriber::ReceivedMessage;
-use serde::de::DeserializeOwned;
 use tokio::sync::{watch, Semaphore};
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
-use crate::config::ServerConfig;
 use crate::metrics::observe_queue_pickup_latency;
-use crate::queues::{backoff_config_for_queue, retry_delay_secs};
-use crate::{
-    jobs::{
-        notification_handler, relayer_health_check_handler, token_swap_request_handler,
-        transaction_request_handler, transaction_status_handler, transaction_submission_handler,
-        Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
-        TransactionSend, TransactionStatusCheck,
-    },
-    models::DefaultAppState,
+use crate::models::DefaultAppState;
+use crate::queues::worker_shared::{
+    get_concurrency_for_queue, is_retry_exhausted, job_correlation_id, retry_delay_for_queue,
+    run_handler_with_timeout, HandlerOutcome, DRAIN_TIMEOUT,
 };
 
 use super::backend::retry_attempt_from_attrs;
 use super::schedule::{zadd_scheduled, ScheduledJob};
-use super::{HandlerError, QueueType, WorkerContext, WorkerHandle};
+use super::{QueueType, WorkerHandle};
 
 /// Single 600s lease (Pub/Sub's max). Every handler is <= 60s, so this is a
 /// ~10x margin and needs no renewal loop (the crate doesn't auto-extend).
 const ACK_DEADLINE_SECS: i32 = 600;
-
-/// Handler is bounded to the lease: a handler exceeding this is cancelled and
-/// the message left un-acked for redelivery (a stuck handler is reprocessed,
-/// not double-run concurrently).
-const HANDLER_TIMEOUT: Duration = Duration::from_secs(600);
-
-/// Max in-flight handlers to await during graceful-shutdown drain.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many times to try extending a message's ack deadline before releasing it
 /// for redelivery instead of processing under a too-short lease.
@@ -60,12 +47,6 @@ const ACK_EXTEND_ATTEMPTS: usize = 3;
 /// Backoff between ack-deadline extension attempts (lets a transient gRPC blip
 /// clear; negligible against the subscription's default lease).
 const ACK_EXTEND_BACKOFF: Duration = Duration::from_millis(100);
-
-#[derive(Debug)]
-enum ProcessingError {
-    Retryable(String),
-    Permanent(String),
-}
 
 /// Bundles per-worker parameters threaded through the pull loop.
 #[derive(Clone)]
@@ -141,7 +122,11 @@ async fn run_pull_loop(
 
     loop {
         // Reap finished handlers so the JoinSet doesn't grow unbounded.
-        while inflight.try_join_next().is_some() {}
+        while let Some(res) = inflight.try_join_next() {
+            if let Err(e) = res {
+                warn!(queue_type = %queue_type, error = %e, "In-flight handler task failed");
+            }
+        }
 
         if *shutdown_rx.borrow() {
             break;
@@ -212,7 +197,13 @@ async fn run_pull_loop(
             count = inflight.len(),
             "Draining in-flight Pub/Sub handlers before shutdown"
         );
-        let drain = async { while inflight.join_next().await.is_some() {} };
+        let drain = async {
+            while let Some(res) = inflight.join_next().await {
+                if let Err(e) = res {
+                    warn!(queue_type = %queue_type, error = %e, "In-flight handler task failed during drain");
+                }
+            }
+        };
         if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
             warn!(
                 queue_type = %queue_type,
@@ -275,25 +266,20 @@ async fn process_received_message(
         "Processing Pub/Sub message"
     );
 
-    let outcome = tokio::time::timeout(
-        HANDLER_TIMEOUT,
-        AssertUnwindSafe(dispatch(
-            &message.message.data,
-            queue_type,
-            app_state,
-            retry_attempt,
-            correlation_id.clone(),
-        ))
-        .catch_unwind(),
+    match run_handler_with_timeout(
+        &message.message.data,
+        queue_type,
+        app_state,
+        retry_attempt,
+        correlation_id.clone(),
     )
-    .await;
-
-    match outcome {
-        Ok(Ok(Ok(()))) => {
+    .await
+    {
+        HandlerOutcome::Success => {
             debug!(queue_type = %queue_type, correlation_id = %correlation_id, "Handler succeeded; acking");
             ack(&message, queue_type, &correlation_id).await;
         }
-        Ok(Ok(Err(ProcessingError::Permanent(e)))) => {
+        HandlerOutcome::Permanent(e) => {
             // Terminal state already persisted by the handler; drop the message.
             error!(
                 queue_type = %queue_type,
@@ -303,7 +289,7 @@ async fn process_received_message(
             );
             ack(&message, queue_type, &correlation_id).await;
         }
-        Ok(Ok(Err(ProcessingError::Retryable(e)))) => {
+        HandlerOutcome::Retryable(e) => {
             settle_retry(
                 &message,
                 config,
@@ -311,46 +297,6 @@ async fn process_received_message(
                 retry_attempt,
                 &correlation_id,
                 &e,
-            )
-            .await;
-        }
-        Ok(Err(_panic)) => {
-            // Handler panicked: count it as a failed attempt and route through
-            // the bounded retry path (re-enqueue with backoff + ack the
-            // original), so a consistently-panicking handler on a bounded queue
-            // still hits max_retries instead of being redelivered forever.
-            error!(
-                queue_type = %queue_type,
-                correlation_id = %correlation_id,
-                "Handler panicked; routing through bounded retry"
-            );
-            settle_retry(
-                &message,
-                config,
-                redis_pool,
-                retry_attempt,
-                &correlation_id,
-                "handler panicked",
-            )
-            .await;
-        }
-        Err(_elapsed) => {
-            // >600s: cancelled. Count it as a failed attempt and route through
-            // the bounded retry path so a chronically-slow handler on a bounded
-            // queue hits max_retries instead of a flat 600s redelivery loop.
-            error!(
-                queue_type = %queue_type,
-                correlation_id = %correlation_id,
-                timeout_secs = HANDLER_TIMEOUT.as_secs(),
-                "Handler exceeded the 600s lease; routing through bounded retry"
-            );
-            settle_retry(
-                &message,
-                config,
-                redis_pool,
-                retry_attempt,
-                &correlation_id,
-                "handler exceeded lease",
             )
             .await;
         }
@@ -396,11 +342,7 @@ async fn settle_retry(
         return;
     }
 
-    let delay = if queue_type.is_status_check() {
-        compute_status_retry_delay(&message.message.data, retry_attempt)
-    } else {
-        retry_delay_secs(backoff_config_for_queue(queue_type), retry_attempt)
-    };
+    let delay = retry_delay_for_queue(queue_type, &message.message.data, retry_attempt);
 
     let body = match String::from_utf8(message.message.data.clone()) {
         Ok(b) => b,
@@ -502,282 +444,23 @@ async fn ack(message: &ReceivedMessage, queue_type: QueueType, correlation_id: &
     }
 }
 
-/// Routes a message body to the appropriate handler based on queue type.
-async fn dispatch(
-    body: &[u8],
-    queue_type: QueueType,
-    app_state: Arc<ThinData<DefaultAppState>>,
-    attempt: usize,
-    task_id: String,
-) -> Result<(), ProcessingError> {
-    match queue_type {
-        QueueType::TransactionRequest => {
-            process_job::<TransactionRequest, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "TransactionRequest",
-                transaction_request_handler,
-            )
-            .await
-        }
-        QueueType::TransactionSubmission => {
-            process_job::<TransactionSend, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "TransactionSend",
-                transaction_submission_handler,
-            )
-            .await
-        }
-        QueueType::StatusCheck | QueueType::StatusCheckEvm | QueueType::StatusCheckStellar => {
-            process_job::<TransactionStatusCheck, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "TransactionStatusCheck",
-                transaction_status_handler,
-            )
-            .await
-        }
-        QueueType::Notification => {
-            process_job::<NotificationSend, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "NotificationSend",
-                notification_handler,
-            )
-            .await
-        }
-        QueueType::TokenSwapRequest => {
-            process_job::<TokenSwapRequest, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "TokenSwapRequest",
-                token_swap_request_handler,
-            )
-            .await
-        }
-        QueueType::RelayerHealthCheck => {
-            process_job::<RelayerHealthCheck, _, _>(
-                body,
-                app_state,
-                attempt,
-                task_id,
-                "RelayerHealthCheck",
-                relayer_health_check_handler,
-            )
-            .await
-        }
-    }
-}
-
-/// Generic job processor — deserializes `Job<T>`, builds a `WorkerContext`, and
-/// delegates to the handler. A malformed payload is a permanent failure.
-async fn process_job<T, F, Fut>(
-    body: &[u8],
-    app_state: Arc<ThinData<DefaultAppState>>,
-    attempt: usize,
-    task_id: String,
-    type_name: &str,
-    handler: F,
-) -> Result<(), ProcessingError>
-where
-    T: DeserializeOwned,
-    F: FnOnce(Job<T>, ThinData<DefaultAppState>, WorkerContext) -> Fut,
-    Fut: Future<Output = Result<(), HandlerError>>,
-{
-    let job: Job<T> = serde_json::from_slice(body).map_err(|e| {
-        error!(error = %e, "Failed to deserialize {} job", type_name);
-        ProcessingError::Permanent(format!("Failed to deserialize {type_name} job: {e}"))
-    })?;
-
-    let ctx = WorkerContext::new(attempt, task_id);
-    handler(job, (*app_state).clone(), ctx)
-        .await
-        .map_err(map_handler_error)
-}
-
-fn map_handler_error(error: HandlerError) -> ProcessingError {
-    match error {
-        HandlerError::Abort(msg) => ProcessingError::Permanent(msg),
-        HandlerError::Retry(msg) => ProcessingError::Retryable(msg),
-    }
-}
-
-/// Whether a retryable failure has exhausted a bounded queue's retry budget.
-///
-/// Status-check queues are unbounded (`max_retries == usize::MAX`) and are never
-/// exhausted — they re-run until the transaction finalizes. A bounded
-/// queue is exhausted once the *next* attempt would exceed `max_retries`.
-fn is_retry_exhausted(max_retries: usize, retry_attempt: usize) -> bool {
-    max_retries != usize::MAX && retry_attempt.saturating_add(1) > max_retries
-}
-
-/// Partial view of a status-check job body to extract only `network_type`.
-#[derive(serde::Deserialize)]
-struct StatusCheckData {
-    network_type: Option<crate::models::NetworkType>,
-}
-
-#[derive(serde::Deserialize)]
-struct PartialStatusCheckJob {
-    data: StatusCheckData,
-}
-
-/// Network-aware retry delay for status checks (EVM 8→12s, Stellar 2→3s,
-/// Solana/default 5→8s), aligned with Redis/Apalis and the SQS backend.
-fn compute_status_retry_delay(body: &[u8], attempt: usize) -> i32 {
-    let network_type = serde_json::from_slice::<PartialStatusCheckJob>(body)
-        .ok()
-        .and_then(|j| j.data.network_type);
-    crate::queues::status_check_retry_delay_secs(network_type, attempt)
-}
-
-/// Partial view of any job body to extract the correlation id for log lines —
-/// never logs the body itself.
-#[derive(serde::Deserialize)]
-struct JobMeta {
-    message_id: String,
-}
-
-/// Extracts the job's stable correlation id (its `message_id`) for logging.
-fn job_correlation_id(body: &[u8]) -> String {
-    serde_json::from_slice::<JobMeta>(body)
-        .map(|m| m.message_id)
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
-/// Gets the concurrency limit for a queue type from env or default (reuses the
-/// existing `WORKER_*_CONCURRENCY` controls).
-fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
-    let configured = ServerConfig::get_worker_concurrency(
-        queue_type.concurrency_env_key(),
-        queue_type.default_concurrency(),
-    );
-    if configured == 0 {
-        warn!(queue_type = %queue_type, "Configured concurrency is 0; clamping to 1");
-        1
-    } else {
-        configured
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_map_handler_error() {
-        assert!(matches!(
-            map_handler_error(HandlerError::Abort("x".into())),
-            ProcessingError::Permanent(_)
-        ));
-        assert!(matches!(
-            map_handler_error(HandlerError::Retry("x".into())),
-            ProcessingError::Retryable(_)
-        ));
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_by_network() {
-        let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
-        assert_eq!(compute_status_retry_delay(evm, 0), 8);
-        assert_eq!(compute_status_retry_delay(evm, 1), 12);
-
-        let stellar = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"stellar"}}"#;
-        assert_eq!(compute_status_retry_delay(stellar, 0), 2);
-
-        // Missing network → generic (Solana/default) profile.
-        let none = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r"}}"#;
-        assert_eq!(compute_status_retry_delay(none, 0), 5);
-
-        // Invalid body → generic fallback.
-        assert_eq!(compute_status_retry_delay(b"not json", 0), 5);
-    }
-
-    #[test]
-    fn test_job_correlation_id_extraction() {
-        let body = br#"{"message_id":"job-123","version":"1","timestamp":"0","job_type":"NotificationSend","data":{}}"#;
-        assert_eq!(job_correlation_id(body), "job-123");
-        assert_eq!(job_correlation_id(b"garbage"), "unknown");
-    }
-
-    #[test]
-    fn test_get_concurrency_for_queue_positive() {
-        assert!(get_concurrency_for_queue(QueueType::TransactionRequest) > 0);
-        assert!(get_concurrency_for_queue(QueueType::StatusCheck) > 0);
-    }
-
-    #[test]
     fn test_lease_and_timeout_constants() {
         // 600s lease == handler bound (SQS capped model at a far looser cap).
         assert_eq!(ACK_DEADLINE_SECS, 600);
-        assert_eq!(HANDLER_TIMEOUT, Duration::from_secs(600));
+        assert_eq!(
+            crate::queues::worker_shared::HANDLER_TIMEOUT,
+            Duration::from_secs(600)
+        );
         // The lease must be secured with at least one retry before we fall back
         // to releasing the message, and the backoff must stay well under any
         // sane subscription default ack deadline.
         assert!(ACK_EXTEND_ATTEMPTS >= 1);
         assert!(ACK_EXTEND_BACKOFF < Duration::from_secs(1));
-    }
-
-    // ── bounded exhaustion vs unbounded status checks ───────
-
-    #[test]
-    fn test_is_retry_exhausted_bounded_queue() {
-        // A queue with max_retries = 5 exhausts once the next attempt (> 5).
-        // retry_attempt is the attempt that just failed; next = retry_attempt+1.
-        assert!(!is_retry_exhausted(5, 0)); // next=1 <= 5
-        assert!(!is_retry_exhausted(5, 4)); // next=5 <= 5
-        assert!(is_retry_exhausted(5, 5)); // next=6 > 5 → exhausted (drop)
-        assert!(is_retry_exhausted(5, 100));
-    }
-
-    #[test]
-    fn test_is_retry_exhausted_status_checks_never_exhaust() {
-        // Status-check queues are unbounded and must never be force-dropped.
-        assert!(!is_retry_exhausted(usize::MAX, 0));
-        assert!(!is_retry_exhausted(usize::MAX, 1_000_000));
-        assert!(!is_retry_exhausted(usize::MAX, usize::MAX - 1));
-    }
-
-    // ── retry backoff is observably increasing then capped ──
-
-    #[test]
-    fn test_status_retry_backoff_is_monotonic_and_capped() {
-        // EVM: 8s → 12s cap. Non-decreasing and never above the cap.
-        let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
-        let mut prev = 0;
-        for attempt in 0..10 {
-            let d = compute_status_retry_delay(evm, attempt);
-            assert!(d >= prev, "status backoff must be non-decreasing");
-            assert!(d <= 12, "status backoff must stay <= cap");
-            prev = d;
-        }
-        // It actually increases at least once before capping.
-        assert!(compute_status_retry_delay(evm, 1) > compute_status_retry_delay(evm, 0));
-    }
-
-    #[test]
-    fn test_bounded_queue_backoff_is_monotonic_and_capped() {
-        use crate::queues::{backoff_config_for_queue, retry_delay_secs};
-        let cfg = backoff_config_for_queue(QueueType::TransactionRequest);
-        let cap = (cfg.max_ms.div_ceil(1000)) as i32;
-        let mut prev = 0;
-        for attempt in 0..12 {
-            let d = retry_delay_secs(cfg, attempt);
-            assert!(d >= prev, "backoff must be non-decreasing");
-            assert!(d <= cap, "backoff must stay <= cap");
-            prev = d;
-        }
     }
 }
 
@@ -949,7 +632,7 @@ mod emulator_tests {
 
         // Cleanup the Redis key.
         let mut conn = pool.get().await.unwrap();
-        let key = crate::queues::pubsub::schedule::scheduled_set_key(&prefix, queue);
+        let key = crate::queues::schedule::scheduled_set_key(&prefix, "pubsub", queue);
         let _: () = redis::cmd("DEL")
             .arg(&key)
             .query_async(&mut conn)
