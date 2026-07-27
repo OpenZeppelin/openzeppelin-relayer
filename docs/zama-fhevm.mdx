@@ -9,21 +9,27 @@ The OpenZeppelin Relayer supports interacting with [Zama FHEVM](https://docs.zam
 - **Transaction submission** for encrypted contract calls (e.g. submitting an `increment()` with an encrypted input).
 - **EIP-712 typed-data signing** to authorize user decryption requests served by the Zama Relayer.
 
-Because FHEVM contracts live on standard EVM networks, your OpenZeppelin Relayer is configured exactly as a regular `evm` relayer — there is no FHEVM-specific relayer or network type in OpenZeppelin Relayer. All FHE-specific work (encryption, decryption, key handling) is done by the [Zama Relayer SDK](https://docs.zama.org/protocol/relayer-sdk-guides) running in your application, which in turn talks to the Zama Relayer. The OpenZeppelin Relayer only deals with on-chain transactions and EIP-712 typed-data signatures.
+Because FHEVM contracts live on standard EVM networks, your OpenZeppelin Relayer is configured exactly as a regular `evm` relayer — there is no FHEVM-specific relayer or network type in OpenZeppelin Relayer. All FHE-specific work (encryption, decryption, key handling) is done by the Zama SDK running in your application, which in turn talks to the Zama Relayer. The OpenZeppelin Relayer only deals with on-chain transactions and EIP-712 typed-data signatures.
+
+<Callout type="info">
+
+**Which Zama SDK.** New integrations should use Zama's officially released top-level SDK, [`@zama-fhe/sdk`](https://docs.zama.org/protocol/sdk) (v3.x). The OpenZeppelin Relayer plugs in as a Zama `GenericSigner`, so your application works against the high-level `ZamaSDK` API. The lower-level [`@zama-fhe/relayer-sdk`](https://www.npmjs.com/package/@zama-fhe/relayer-sdk) (v0.4.x) remains supported for direct, no-abstraction usage. Both are shown in the [example](#example) below.
+
+</Callout>
 
 <Callout type="info">
 
 **Terminology.** In this page:
 
 - **OpenZeppelin Relayer** (or "OZ Relayer") refers to this service. It holds an EVM signer, submits on-chain transactions, and signs EIP-712 payloads.
-- **Zama Relayer** refers to the Zama-operated service that the [`@zama-fhe/relayer-sdk`](https://www.npmjs.com/package/@zama-fhe/relayer-sdk) talks to under the hood. It serves FHE public keys and routes decryption requests to the Zama KMS / coprocessor. Applications interact with it only indirectly through the Zama Relayer SDK. It holds no OpenZeppelin key material and does not sign EIP-712.
+- **Zama Relayer** refers to the Zama-operated service that the Zama SDK talks to under the hood. It serves FHE public keys and routes decryption requests to the Zama KMS / coprocessor. Applications interact with it only indirectly through the Zama SDK. It holds no OpenZeppelin key material and does not sign EIP-712.
 
 The two are different systems and do different things. In this flow, only the OpenZeppelin Relayer holds any signer key material.
 
 </Callout>
 
 <Callout>
-The FHE encryption/decryption primitives run in your application using the Zama Relayer SDK. The OpenZeppelin Relayer is not aware of FHE cleartexts and never handles the decryption keypair.
+The FHE encryption/decryption primitives run in your application using the Zama SDK. The OpenZeppelin Relayer is not aware of FHE cleartexts and never handles the decryption keypair.
 </Callout>
 
 ## Features
@@ -77,10 +83,10 @@ Example OpenZeppelin Relayer configuration for a Zama FHEVM application running 
 
 Once the OpenZeppelin Relayer is running, you will typically:
 
-1. Create a Zama FHE instance in your application using the Zama Relayer SDK.
+1. Compose a `ZamaSDK` instance in your application, backing it with the OpenZeppelin Relayer as a `GenericSigner`.
 2. Read encrypted state from your FHEVM contract via an RPC call.
 3. Decrypt the state publicly, or fall back to user decryption authorized by an EIP-712 signature from the OpenZeppelin Relayer.
-4. Encrypt any inputs locally with the Zama Relayer SDK.
+4. Encrypt any inputs with the Zama SDK.
 5. Submit the encrypted transaction through the OpenZeppelin Relayer.
 
 For a full working walkthrough, see the [Zama FHEVM Counter Guide](/relayer/guides/zama-fhevm-counter-guide).
@@ -100,8 +106,8 @@ The OpenZeppelin Relayer never encrypts or decrypts FHE data and never sees plai
 
 Zama FHEVM contracts support two decryption paths:
 
-- **Public decryption** — used when an encrypted handle is flagged as publicly decryptable. The Zama Relayer SDK can decrypt it directly via the Zama Relayer service; the OpenZeppelin Relayer is not involved.
-- **User decryption** — used when decryption requires authorization. The Zama Relayer SDK builds an EIP-712 payload, and the **OpenZeppelin Relayer** signs it with `signTypedData`. The resulting signature is then passed to `userDecrypt` on the SDK, which is authorized by the Zama Relayer to return the cleartext.
+- **Public decryption** — used when an encrypted handle is flagged as publicly decryptable. The Zama SDK can decrypt it directly via the Zama Relayer service; the OpenZeppelin Relayer is not involved.
+- **User decryption** — used when decryption requires authorization. The Zama SDK builds an EIP-712 payload, and the **OpenZeppelin Relayer** signs it with `signTypedData`. The SDK uses that signature to authorize the Zama Relayer to return the cleartext.
 
 Applications typically try public decryption first and fall back to user decryption.
 
@@ -110,10 +116,10 @@ Applications typically try public decryption first and fall back to user decrypt
 Running on Ethereum mainnet requires:
 
 - A Zama Relayer API key for mainnet (see the [Zama mainnet API key guide](https://docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/mainnet-api-key)).
-- The Zama Relayer SDK configured with `MainnetConfig` and the API key.
+- The Zama SDK configured for the `mainnet` chain with the API key (`auth: { __type: 'ApiKeyHeader', value: … }`).
 - The OpenZeppelin Relayer pointed at an Ethereum mainnet RPC.
 
-The FHEVM flow itself does not change between testnet and mainnet; only the Zama Relayer SDK configuration and network selection differ.
+The FHEVM flow itself does not change between testnet and mainnet; only the Zama SDK configuration and network selection differ.
 
 ## API Reference
 
@@ -123,29 +129,31 @@ The OpenZeppelin Relayer endpoints most relevant to FHEVM flows are:
 | --- | --- |
 | [Send Transaction](/relayer/api/sendTransaction) | Submit an encrypted FHEVM contract call on-chain |
 | [Sign Typed Data](/relayer/api/signTypedData) | Sign the EIP-712 payload used for user decryption |
-| [Get Relayer](/relayer/api/getRelayer) | Retrieve the OpenZeppelin Relayer's EVM address (needed by the Zama SDK for input proofs and decryption requests) |
+| [Get Relayer](/relayer/api/getRelayer) | Retrieve the OpenZeppelin Relayer's EVM address (needed by the Zama SDK for input proofs and to seed the signer's wallet account) |
 | [Get Transaction by ID](/relayer/api/getTransactionById) | Poll for transaction status after submission |
 
 See the [API Reference](./api) for complete method documentation.
 
 ## Example
 
-The OpenZeppelin Relayer SDK ships with a working Zama FHEVM example:
+The OpenZeppelin Relayer SDK ships with two end-to-end Zama FHEVM counter examples on the Sepolia testnet, sharing a single `.env`:
 
-- [examples/relayers/zama](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama) — end-to-end counter example using the Sepolia testnet.
+- [examples/relayers/zama/zama-sdk](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/zama-sdk) — **recommended.** Uses `@zama-fhe/sdk` (v3.x) with an `OpenZeppelinRelayerSigner` adapter.
+- [examples/relayers/zama/relayer-sdk](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/relayer-sdk) — **lower-level.** Uses `@zama-fhe/relayer-sdk` (v0.4.x) directly.
 
-The example contract is deployed from [Zama's fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template).
+The example contract is deployed from [Zama's fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template). For a full walkthrough, see the [Zama FHEVM Counter Guide](/relayer/guides/zama-fhevm-counter-guide).
 
 ## Security
 
 - Do not expose the OpenZeppelin Relayer directly to the public internet.
 - Deploy behind a secure backend (reverse proxy, firewall).
 - Use hosted signers in production. The OpenZeppelin Relayer's signer is used both for on-chain submission and for EIP-712 signing consumed by the Zama Relayer, so key availability and audit trails matter for both.
-- Never hand a Zama decryption keypair's private key to the OpenZeppelin Relayer. The decryption keypair is an application-side secret — it is used only by the Zama Relayer SDK.
+- Never hand a Zama decryption keypair's private key to the OpenZeppelin Relayer. The decryption keypair is an application-side secret — it is managed by the Zama SDK.
 
 ## Additional Resources
 
-- [Zama Relayer SDK Guides](https://docs.zama.org/protocol/relayer-sdk-guides)
+- [Zama Protocol SDK docs](https://docs.zama.org/protocol/sdk) — `@zama-fhe/sdk`
+- [Zama Relayer SDK Guides](https://docs.zama.org/protocol/relayer-sdk-guides) — `@zama-fhe/relayer-sdk`
 - [Zama fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template)
 - [Zama FHEVM Counter Guide](/relayer/guides/zama-fhevm-counter-guide)
 - [OpenZeppelin Relayer SDK — Zama example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama)
