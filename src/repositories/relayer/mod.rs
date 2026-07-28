@@ -342,6 +342,7 @@ mod tests {
             paused: false,
             network_type: NetworkType::Evm,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 min_balance: Some(0),
                 gas_limit_estimation: Some(true),
                 gas_price_cap: None,
@@ -442,6 +443,7 @@ mod tests {
 
         // Test update_policy
         let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            include_revert_data: None,
             min_balance: Some(1000000000000000000),
             gas_limit_estimation: Some(true),
             gas_price_cap: Some(50_000_000_000),

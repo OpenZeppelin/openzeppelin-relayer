@@ -1107,6 +1107,7 @@ mod tests {
 
         // Add EVM policies
         request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+            include_revert_data: None,
             gas_price_cap: Some(50000000000),
             min_balance: Some(1000000000000000000),
             eip1559_pricing: Some(true),
@@ -1163,6 +1164,7 @@ mod tests {
 
         // Add partial EVM policies
         request.policies = Some(CreateRelayerPolicyRequest::Evm(RelayerEvmPolicy {
+            include_revert_data: None,
             gas_price_cap: Some(30000000000),
             eip1559_pricing: Some(false),
             min_balance: None,

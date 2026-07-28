@@ -18,8 +18,8 @@ use super::{
     SolanaFeePaymentStrategy, StellarAllowedTokensPolicy, StellarFeePaymentStrategy,
 };
 use crate::constants::{
-    DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_MIN_BALANCE, DEFAULT_SOLANA_MAX_TX_DATA_SIZE,
-    DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
+    DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_INCLUDE_REVERT_DATA, DEFAULT_EVM_MIN_BALANCE,
+    DEFAULT_SOLANA_MAX_TX_DATA_SIZE, DEFAULT_SOLANA_MIN_BALANCE, DEFAULT_STELLAR_MIN_BALANCE,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -337,6 +337,7 @@ fn is_empty_policy(policy: &RelayerNetworkPolicy) -> bool {
                 && evm_policy.whitelist_receivers.is_none()
                 && evm_policy.eip1559_pricing.is_none()
                 && evm_policy.private_transactions.is_none()
+                && evm_policy.include_revert_data.is_none()
         }
         RelayerNetworkPolicy::Solana(solana_policy) => {
             solana_policy.allowed_programs.is_none()
@@ -379,6 +380,10 @@ fn default_evm_min_balance() -> u128 {
 
 fn default_evm_gas_limit_estimation() -> bool {
     DEFAULT_EVM_GAS_LIMIT_ESTIMATION
+}
+
+fn default_evm_include_revert_data() -> bool {
+    DEFAULT_EVM_INCLUDE_REVERT_DATA
 }
 
 /// Default function for Solana min balance
@@ -426,6 +431,9 @@ pub struct EvmPolicyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub private_transactions: Option<bool>,
+    #[serde(default = "default_evm_include_revert_data")]
+    #[schema(nullable = false)]
+    pub include_revert_data: bool,
 }
 
 /// Solana policy response model for OpenAPI documentation
@@ -511,6 +519,9 @@ impl From<RelayerEvmPolicy> for EvmPolicyResponse {
             whitelist_receivers: policy.whitelist_receivers,
             eip1559_pricing: policy.eip1559_pricing,
             private_transactions: policy.private_transactions,
+            include_revert_data: policy
+                .include_revert_data
+                .unwrap_or(DEFAULT_EVM_INCLUDE_REVERT_DATA),
         }
     }
 }
@@ -572,6 +583,7 @@ mod tests {
             false,
             RelayerNetworkType::Evm,
             Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: Some(100_000_000_000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -595,6 +607,7 @@ mod tests {
             response.policies,
             Some(RelayerNetworkPolicyResponse::Evm(
                 RelayerEvmPolicy {
+                    include_revert_data: None,
                     gas_price_cap: Some(100_000_000_000),
                     whitelist_receivers: None,
                     eip1559_pricing: Some(true),
@@ -703,6 +716,7 @@ mod tests {
             network_type: RelayerNetworkType::Evm,
             paused: false,
             policies: Some(RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse {
+                include_revert_data: DEFAULT_EVM_INCLUDE_REVERT_DATA,
                 gas_price_cap: Some(50000000000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -833,6 +847,7 @@ mod tests {
             network_type: RelayerNetworkType::Evm,
             paused: false,
             policies: Some(RelayerNetworkPolicyResponse::Evm(EvmPolicyResponse {
+                include_revert_data: DEFAULT_EVM_INCLUDE_REVERT_DATA,
                 gas_price_cap: Some(100_000_000_000),
                 whitelist_receivers: None,
                 eip1559_pricing: Some(true),
@@ -1058,6 +1073,7 @@ mod tests {
             network_type: RelayerNetworkType::Evm,
             paused: false,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: Some(100_000_000_000),
                 eip1559_pricing: Some(true),
                 min_balance: None, // Some fields can still be None

@@ -363,6 +363,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: Some(false),
                 gas_price_cap: Some(100_000_000_000),
                 eip1559_pricing: Some(true),
                 min_balance: None,
@@ -392,6 +393,7 @@ mod tests {
 
         // Policies should be converted correctly
         if let RelayerNetworkPolicy::Evm(evm_policy) = repo_model.policies {
+            assert_eq!(evm_policy.include_revert_data, Some(false));
             assert_eq!(evm_policy.gas_price_cap, Some(100_000_000_000));
             assert_eq!(evm_policy.eip1559_pricing, Some(true));
         } else {
@@ -893,6 +895,7 @@ mod tests {
             paused: false,
             network_type: RelayerNetworkType::Evm,
             policies: Some(RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: Some(false),
                 gas_price_cap: Some(50_000_000_000),
                 eip1559_pricing: Some(true),
                 min_balance: None,
@@ -911,6 +914,11 @@ mod tests {
         assert_eq!(original_evm.id, recovered_evm.id);
         assert_eq!(original_evm.network_type, recovered_evm.network_type);
         assert_eq!(original_evm.notification_id, recovered_evm.notification_id);
+        if let Some(RelayerNetworkPolicy::Evm(policy)) = recovered_evm.policies {
+            assert_eq!(policy.include_revert_data, Some(false));
+        } else {
+            panic!("Expected EVM policy");
+        }
 
         // Solana
         let original_solana = Relayer {
