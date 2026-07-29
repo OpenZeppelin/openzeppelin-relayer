@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.7.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.6.0...v1.7.0) (2026-07-28)
+
+
+### 🚀 Features
+
+* add evm intristic gas_limit validation ([dd1b2d6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/dd1b2d6768d09f051791d0db68c912a38d273715))
+* Add RabbitMQ queue backend ([#798](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/798)) ([0bea6d8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/0bea6d85782525a1924d5fbde0e071d1a62af32d))
+* Enable zstd response compression for RPC providers ([#821](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/821)) ([48efd45](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/48efd459ecb247c5b01657520854029b5324acc6))
+* **evm:** Surface on-chain revert data in failed transaction status ([#802](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/802)) ([87d58a0](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/87d58a0d35961c797d1461a3567aefe8baa27282))
+* Fast delayed resubmit for Stellar insufficient-fee and TRY_AGAIN_LATER ([#822](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/822)) ([f4bc2f9](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f4bc2f945cfcf170ec0bf182f767273b91a827a9))
+* Pass arbitrary payloads to script exectution ([#312](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/312)) ([adecaf5](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/adecaf5d73c3df9083c6a3fcf62ed669bc90b25c))
+
+
+### 🐛 Bug Fixes
+
+* Limit transaction cleanup concurency ([#618](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/618)) ([5d3e267](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/5d3e26744eddf9c6865defc3fb016d629215e787))
+* plat-6480 allow transfering wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
+* Prevent transactions stranded in non-final Redis status indexes ([#823](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/823)) ([a300095](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/a3000956cb74f92ffbc597fd65665c97012ea760))
+* Rebuild dead plugin socket listener and guard pipeline runtime drop ([#834](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/834)) ([194b08e](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/194b08ef45177d0b6a0b59cdc74e5d08a3b23bbd))
+* Rewind drifted EVM nonce counter and skip resubmits blocked by nonce gaps ([#831](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/831)) ([5dc4bdf](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/5dc4bdf0f0aa24763f0d23ed17a0ab0bcee73a7d))
+* Rewind drifted Stellar sequence counter ([#832](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/832)) ([15135c1](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/15135c1bc99c2f4f24117a17a5d4e495b0041f9f))
+* run queue metadata cleanup regardless of repository storage type ([#816](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/816)) ([52e4fc8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/52e4fc8cfa6f2aab29f6ef6fd609cc82c022038f))
+* stellar tx data persistance ([#500](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/500)) ([d60a019](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d60a01958582aa5ab70b2dc369b1531d493db637))
+
 ## [Unreleased]
 
 ### 🚀 Features
@@ -12,7 +36,6 @@
 
 ### 🚀 Features
 
-* add evm intrinsic gas_limit validation ([dd1b2d6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/dd1b2d6768d09f051791d0db68c912a38d273715))
 * Add GCP Pub/Sub queue backend ([#791](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/791)) ([f1872a1](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f1872a1ebd1032566f4e8f9befed76601b80fa3e))
 * add Redis TLS support via optional feature flags ([#674](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/674)) ([aaf5eb8](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/aaf5eb86241fb7ae7b4cbae0579551269b08359b))
 * Adding logic to retry insufficient fee errors ([#688](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/688)) ([279efe4](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/279efe4d913e530a69e2ad6584978e12e912a985))
@@ -20,7 +43,6 @@
 * Azure Key Vault (evm-azure-key-vault-signer) ([#779](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/779)) ([ef5d08b](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/ef5d08b2d12a5bc7b5479d45d38c083514c20ee9))
 * Bounded Redis connection lifetime for endpoint/DNS-change recovery ([#813](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/813)) ([152cc8a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/152cc8ac20978a2a173c444139cc28c0bce20441))
 * Multi-threaded runtime for the transaction pipeline ([#810](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/810)) ([a2d53df](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/a2d53df2289ef988d23c413b4c17db9a3acf8b80))
-* Pass arbitrary payloads to script execution ([#312](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/312)) ([adecaf5](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/adecaf5d73c3df9083c6a3fcf62ed669bc90b25c))
 * Track queue latency ([#745](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/745)) ([52f2ecb](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/52f2ecbd8df04c21833dde5730eed792ac15e36e))
 * use gradual 1.5x backoff for Stellar resubmission ([#730](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/730)) ([0795504](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/079550467ecd3b387cac0a7abda6c729d9e188b8))
 
@@ -31,10 +53,7 @@
 * Extend non retriable rpc messages ([#696](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/696)) ([cf553ef](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/cf553efe92cb53bd97a0821e40d00e35b408de5f))
 * Hide cancelled txs and fix cancel tracking ([#809](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/809)) ([b035c5a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b035c5a0e247a821e8a0d00b18c29204830518e0))
 * Improve Evm and Solana transaction request flow ([#655](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/655)) ([818fbcb](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/818fbcbc216954cd96d07260e74dce06690cdeac))
-* Limit transaction cleanup concurrency ([#618](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/618)) ([5d3e267](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/5d3e26744eddf9c6865defc3fb016d629215e787))
-* plat-6480 allow transferring wrapped sol tokens ([#132](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/132)) ([f04e66a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/f04e66a568c877c2a4c5c5378fb6017c2e41d2c6))
 * Serialize fields as strings to avoid precision loss ([#789](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/789)) ([345b895](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/345b895cee511dead40f8421c445949aa114af5f))
-* stellar tx data persistence ([#500](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/500)) ([d60a019](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d60a01958582aa5ab70b2dc369b1531d493db637))
 * Use alloy's re-exported reqwest for EVM transport client ([#777](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/777)) ([fddc35c](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/fddc35ca88fc0aee924c3f9333d159d6b2ef43c0))
 
 ## [1.5.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.4.0...v1.5.0) (2026-05-07)
