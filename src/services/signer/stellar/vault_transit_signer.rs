@@ -111,7 +111,8 @@ impl<T: VaultServiceTrait> VaultTransitSigner<T> {
         debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         let base64_sig = vault_signature_str
-            .strip_prefix("vault:v1:")
+            .rsplit_once(':')
+            .map(|(_, sig)| sig)
             .unwrap_or(&vault_signature_str);
 
         let signature_bytes = base64_decode(base64_sig)
@@ -430,6 +431,37 @@ mod tests {
             TransactionEnvelope::TxV0(v0_env) => assert_eq!(v0_env.signatures.len(), 1),
             _ => panic!("Expected V0 envelope"),
         }
+    }
+
+    #[tokio::test]
+    /// Verifies that Vault v2 signature responses are accepted when signing XDR transactions.
+    async fn test_sign_xdr_transaction_with_v2_vault_response() {
+        let test_address = create_test_address();
+        let unsigned_xdr = create_unsigned_xdr(&test_address);
+
+        let mut mock_vault_service = MockVaultServiceTrait::new();
+        mock_vault_service
+            .expect_sign()
+            .times(1)
+            .with(eq("transit-key"), always())
+            .returning(|_, _| {
+                let signature = vec![1u8; 64];
+                let encoded = base64::engine::general_purpose::STANDARD.encode(signature);
+                Box::pin(async move { Ok(format!("vault:v2:{encoded}")) })
+            });
+
+        let signer = VaultTransitSigner::new_for_testing(
+            "transit-key".to_string(),
+            create_test_pubkey_base64(),
+            mock_vault_service,
+        );
+
+        let result = signer
+            .sign_xdr_transaction(&unsigned_xdr, "Test SDF Network ; September 2015")
+            .await
+            .unwrap();
+
+        assert_eq!(result.signature.signature.0.len(), 64);
     }
 
     #[tokio::test]
