@@ -393,6 +393,20 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(results)
     }
 
+    async fn get_nonce_occupancy_detailed(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError> {
+        let mut results = Vec::new();
+        for nonce in from_nonce..to_nonce {
+            let tx = self.find_by_nonce(relayer_id, nonce).await?;
+            results.push((nonce, tx.as_ref().map(NonceOccupancy::from)));
+        }
+        Ok(results)
+    }
+
     async fn update_status(
         &self,
         tx_id: String,

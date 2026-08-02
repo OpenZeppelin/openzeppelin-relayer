@@ -17,6 +17,7 @@ use crate::{
     constants::{
         EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, HEALTH_CHECK_ACTION_KEY,
         HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY, MAX_GAP_SCAN_RANGE,
+        MAX_NONCE_TOO_HIGH_RETRIES,
     },
     domain::{relayer::RelayerError, transaction::common::is_active_nonce_status},
     jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
@@ -24,7 +25,9 @@ use crate::{
         EvmNetwork, EvmTransactionData, NetworkRepoModel, NetworkType, RelayerRepoModel,
         TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
     },
-    repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
+    repositories::{
+        NetworkRepository, NonceOccupancy, RelayerRepository, Repository, TransactionRepository,
+    },
     services::{
         provider::EvmProviderTrait, signer::DataSignerTrait, TransactionCounterServiceTrait,
     },
@@ -46,6 +49,43 @@ const MAX_REWIND_SCAN_RANGE: u64 = 100_000;
 /// Chunk size for the occupancy scan over the drift region (one `get_nonce_occupancy`
 /// range query per chunk).
 const REWIND_SCAN_CHUNK: u64 = 1000;
+
+/// Marker written into `status_reason` when the rewind terminalizes a slot it is
+/// about to trim past. Recognising our own marker keeps the rewind idempotent: if
+/// the CAS loses, or the process dies between terminalizing and the CAS, the next
+/// health run still sees those records as non-bounding instead of being permanently
+/// wedged behind the `Failed` records it just created.
+pub(crate) const NONCE_REWIND_RECLAIM_REASON: &str =
+    "nonce reclaimed by rewind: rejected nonce-too-high and never broadcast";
+
+/// Whether an occupied nonce slot must bound the counter rewind.
+///
+/// A slot bounds the rewind unless we can show its nonce was never consumed
+/// on-chain. Two cases clear that bar:
+///
+/// 1. A record this rewind already terminalized (see [`NONCE_REWIND_RECLAIM_REASON`]).
+/// 2. A record that is still `Sent` with no `sent_at`, whose submissions have been
+///    rejected `nonce too high` at least [`MAX_NONCE_TOO_HIGH_RETRIES`] times.
+///
+/// `sent_at` is stamped only after `send_raw_transaction` returns success, so its
+/// absence means the node never accepted the transaction. The retry count is what
+/// separates a genuinely rejected slot from a transaction merely passing through the
+/// persist-then-broadcast window, which is `Sent` with no `sent_at` for a few
+/// milliseconds but has never been rejected.
+fn occupancy_bounds_rewind(occ: &NonceOccupancy) -> bool {
+    if occ
+        .status_reason
+        .as_deref()
+        .is_some_and(|r| r == NONCE_REWIND_RECLAIM_REASON)
+    {
+        return false;
+    }
+
+    let never_broadcast = occ.status == TransactionStatus::Sent && occ.sent_at.is_none();
+    let repeatedly_rejected = occ.nonce_too_high_retries >= MAX_NONCE_TOO_HIGH_RETRIES;
+
+    !(never_broadcast && repeatedly_rejected)
+}
 
 /// Per-relayer in-process locks serializing nonce-health runs when no distributed
 /// lock is available (non-distributed mode, or missing connection info).
@@ -175,13 +215,16 @@ where
             .await
             .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-        // Find the highest nonce that has any transaction (active or not).
-        // Only report gaps up to that point — empty slots beyond the highest
-        // known tx are not gaps, they're just unassigned nonces.
+        // Find the highest nonce holding an ACTIVE transaction. Gaps are only worth
+        // filling when they block something still in flight; a trailing run of
+        // terminal records has nothing waiting behind it, so filling below it would
+        // burn a NOOP per slot for no benefit. This matters after a counter rewind,
+        // which terminalizes the slots it trims past and would otherwise leave the
+        // whole reclaimed region looking like one gap per nonce.
         let highest_occupied = occupancy
             .iter()
             .rev()
-            .find(|(_, status)| status.is_some())
+            .find(|(_, status)| status.as_ref().is_some_and(is_active_nonce_status))
             .map(|(nonce, _)| *nonce);
 
         let upper_bound = match highest_occupied {
@@ -339,19 +382,41 @@ where
         Ok(filled)
     }
 
-    /// Trims the empty head of the nonce counter down to on-chain reality.
+    /// Trims the head of the nonce counter down to on-chain reality.
     ///
     /// Rewinds the counter from `observed` to `target`, where `target` is the highest
-    /// slot in `[on_chain_nonce, observed)` holding a tx record of ANY status (plus one),
-    /// or `on_chain_nonce` if the region is entirely empty. Records of any status bound
-    /// the rewind: a `Failed` record may be a reverted-on-chain tx whose nonce was still
-    /// consumed (a stale on-chain read), so it is never trimmed past.
+    /// slot in `[on_chain_nonce, observed)` holding a tx record that could have consumed
+    /// its nonce (plus one), or `on_chain_nonce` if no such record exists.
+    ///
+    /// Most records bound the rewind: a `Failed` record may be a reverted-on-chain tx
+    /// whose nonce was still consumed (a stale on-chain read), so it is never trimmed
+    /// past. The exception is a slot that provably never reached the node — see
+    /// [`occupancy_bounds_rewind`]. Without that exception a relayer jammed on
+    /// `nonce too high` can never recover: every slot in the drift region holds a `Sent`
+    /// record, so the region is fully occupied, `target` equals `observed`, and the
+    /// counter stays above the chain forever while the jam keeps widening it.
+    ///
+    /// Slots trimmed past are terminalized before the CAS, both so the status checker
+    /// stops resubmitting them against nonces that are about to be reallocated, and so
+    /// a lost CAS leaves a state the next run can still recover from.
     ///
     /// Invariants:
     /// - Never rewinds on a partial scan: a region wider than `MAX_REWIND_SCAN_RANGE` is
     ///   skipped entirely rather than verified in part.
     /// - The write is a CAS against `observed`; if the counter moved since we read it, the
     ///   write is a no-op and the next health run retries.
+    ///
+    /// # Residual race
+    ///
+    /// `submit_transaction` broadcasts before it persists, so a transaction whose
+    /// broadcast succeeded but whose follow-up write failed stays `Sent` with no
+    /// `sent_at` while its nonce is live on-chain. If it had already accumulated
+    /// `MAX_NONCE_TOO_HIGH_RETRIES` rejections, this rewind can trim past it and hand
+    /// its nonce out again. The outcome is two relayer-signed transactions competing
+    /// for one nonce — exactly one mines, and the loser collapses to the same
+    /// self-correcting collision class described in `resolve_nonce_gaps`. Verifying
+    /// each candidate hash against the node would close this at the cost of one RPC
+    /// call per candidate slot.
     async fn try_rewind_counter(
         &self,
         on_chain_nonce: u64,
@@ -372,21 +437,32 @@ where
         }
 
         // Scan chunks top-down from `observed` toward `on_chain_nonce`. The first chunk
-        // containing any tx record holds the region's highest-occupied slot, so scanning
-        // stops there; only a fully-empty region scans all the way to `on_chain_nonce`.
+        // containing a bounding record holds the region's highest such slot, so scanning
+        // stops there; only a region free of bounding records scans all the way down.
+        // Non-bounding slots are collected so they can be terminalized before the CAS.
         let mut highest_occupied: Option<u64> = None;
+        let mut reclaimable: Vec<u64> = Vec::new();
         let mut chunk_end = observed;
         while chunk_end > on_chain_nonce {
             let chunk_start =
                 std::cmp::max(on_chain_nonce, chunk_end.saturating_sub(REWIND_SCAN_CHUNK));
             let occupancy = self
                 .transaction_repository
-                .get_nonce_occupancy(&self.relayer.id, chunk_start, chunk_end)
+                .get_nonce_occupancy_detailed(&self.relayer.id, chunk_start, chunk_end)
                 .await
                 .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
-            if let Some((nonce, _)) = occupancy.iter().rev().find(|(_, status)| status.is_some()) {
-                highest_occupied = Some(*nonce);
+            for (nonce, slot) in occupancy.iter().rev() {
+                match slot {
+                    Some(occ) if occupancy_bounds_rewind(occ) => {
+                        highest_occupied = Some(*nonce);
+                        break;
+                    }
+                    Some(_) => reclaimable.push(*nonce),
+                    None => {}
+                }
+            }
+            if highest_occupied.is_some() {
                 break;
             }
             chunk_end = chunk_start;
@@ -398,8 +474,25 @@ where
         };
 
         if target >= observed {
+            warn!(
+                relayer_id = %self.relayer.id,
+                on_chain_nonce = on_chain_nonce,
+                observed = observed,
+                target = target,
+                blocking_nonce = ?highest_occupied,
+                "nonce drift region is occupied up to the counter; cannot rewind. The \
+                 relayer will keep rejecting transactions while the counter stays above \
+                 the chain nonce"
+            );
             return Ok(());
         }
+
+        // Terminalize before the CAS. Ordering matters: these records are still `Sent`,
+        // so `handle_sent_state` would otherwise keep resubmitting them against nonces
+        // this rewind is about to hand out again. Doing it first also means a lost CAS
+        // leaves recognisably-reclaimed records rather than a region that bounds every
+        // future rewind attempt.
+        self.reclaim_trimmed_slots(&reclaimable, target).await;
 
         let applied = self
             .transaction_counter_service
@@ -426,6 +519,71 @@ where
         }
 
         Ok(())
+    }
+
+    /// Marks slots the rewind is trimming past as `Failed`, tagged with
+    /// [`NONCE_REWIND_RECLAIM_REASON`].
+    ///
+    /// Only slots at or above `target` are reclaimed; anything below stays untouched
+    /// because the counter is not moving past it. Failures are logged and skipped
+    /// rather than propagated: a record we could not terminalize simply bounds the
+    /// next rewind, which is the conservative direction.
+    async fn reclaim_trimmed_slots(&self, reclaimable: &[u64], target: u64) {
+        let trimmed: Vec<u64> = reclaimable
+            .iter()
+            .copied()
+            .filter(|nonce| *nonce >= target)
+            .collect();
+
+        if trimmed.is_empty() {
+            return;
+        }
+
+        info!(
+            relayer_id = %self.relayer.id,
+            count = trimmed.len(),
+            "reclaiming nonce slots rejected as nonce-too-high and never broadcast"
+        );
+
+        for nonce in trimmed {
+            let tx = match self
+                .transaction_repository
+                .find_by_nonce(&self.relayer.id, nonce)
+                .await
+            {
+                Ok(Some(tx)) => tx,
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!(
+                        relayer_id = %self.relayer.id,
+                        nonce = nonce,
+                        error = %e,
+                        "failed to load transaction while reclaiming nonce slot, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            let update = TransactionUpdateRequest {
+                status: Some(TransactionStatus::Failed),
+                status_reason: Some(NONCE_REWIND_RECLAIM_REASON.to_string()),
+                ..Default::default()
+            };
+
+            if let Err(e) = self
+                .transaction_repository
+                .partial_update(tx.id.clone(), update)
+                .await
+            {
+                warn!(
+                    relayer_id = %self.relayer.id,
+                    nonce = nonce,
+                    tx_id = %tx.id,
+                    error = %e,
+                    "failed to reclaim nonce slot, skipping"
+                );
+            }
+        }
     }
 
     /// Creates a gap-filling NOOP transaction for a specific nonce.
@@ -778,6 +936,27 @@ mod tests {
         }
     }
 
+    /// An occupied slot that bounds the rewind (the ordinary case).
+    fn occ(status: TransactionStatus) -> NonceOccupancy {
+        NonceOccupancy {
+            status,
+            sent_at: Some("2024-01-01T00:00:00Z".to_string()),
+            status_reason: None,
+            nonce_too_high_retries: 0,
+        }
+    }
+
+    /// A slot rejected `nonce too high` past the retry threshold and never broadcast —
+    /// the shape that must NOT bound the rewind.
+    fn occ_rejected_never_broadcast() -> NonceOccupancy {
+        NonceOccupancy {
+            status: TransactionStatus::Sent,
+            sent_at: None,
+            status_reason: Some("Nonce too high (attempt 47)".to_string()),
+            nonce_too_high_retries: MAX_NONCE_TOO_HIGH_RETRIES,
+        }
+    }
+
     fn create_test_network_model() -> NetworkRepoModel {
         use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
         let config = EvmNetworkConfig {
@@ -1099,6 +1278,17 @@ mod tests {
                 (7, Some(TransactionStatus::Sent)),
             ])
         });
+        // try_rewind_counter scans the same region: all three records bound the
+        // rewind, so the counter is left alone and only the gap fill runs.
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, _, _| {
+                Ok(vec![
+                    (5, Some(occ(TransactionStatus::Submitted))),
+                    (6, Some(occ(TransactionStatus::Failed))),
+                    (7, Some(occ(TransactionStatus::Sent))),
+                ])
+            });
 
         // resolve_nonce_gaps double-check: nonce 6 → still gap (Failed)
         tx_repo
@@ -1284,7 +1474,7 @@ mod tests {
 
         // Region [100, 365) is entirely empty.
         tx_repo
-            .expect_get_nonce_occupancy()
+            .expect_get_nonce_occupancy_detailed()
             .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
 
         // Empty region → target == on_chain_nonce; CAS lowers 365 → 100.
@@ -1321,12 +1511,12 @@ mod tests {
 
         // A Failed record sits at nonce 150 within the region.
         tx_repo
-            .expect_get_nonce_occupancy()
+            .expect_get_nonce_occupancy_detailed()
             .returning(|_, from, to| {
                 Ok((from..to)
                     .map(|n| {
                         if n == 150 {
-                            (n, Some(TransactionStatus::Failed))
+                            (n, Some(occ(TransactionStatus::Failed)))
                         } else {
                             (n, None)
                         }
@@ -1428,6 +1618,19 @@ mod tests {
                     })
                     .collect())
             });
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 102 {
+                            (n, Some(occ(TransactionStatus::Submitted)))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
 
         // Highest record 102 → target 103; CAS lowers 105 → 103.
         counter
@@ -1505,6 +1708,19 @@ mod tests {
                     .map(|n| {
                         if n == 103 {
                             (n, Some(TransactionStatus::Submitted))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 103 {
+                            (n, Some(occ(TransactionStatus::Submitted)))
                         } else {
                             (n, None)
                         }
@@ -1900,5 +2116,326 @@ mod tests {
         metadata.insert(HEALTH_CHECK_ACTION_KEY.to_string(), "unknown".to_string());
         let result = relayer.handle_health_action(&metadata).await.unwrap();
         assert!(!result);
+    }
+
+    // ---- issue #843: a fully-occupied drift region must not wedge the rewind ----
+
+    /// The predicate is what decides whether a slot can be trimmed past. Pin every
+    /// arm of it directly — the integration-style tests below only cover the headline
+    /// case.
+    #[test]
+    fn issue843_occupancy_bounds_rewind_predicate() {
+        // The reported jam: rejected past the threshold, never broadcast.
+        assert!(!occupancy_bounds_rewind(&occ_rejected_never_broadcast()));
+
+        // Broadcast (sent_at present) — its nonce may be live on-chain.
+        let mut broadcast = occ_rejected_never_broadcast();
+        broadcast.sent_at = Some("2024-01-01T00:00:00Z".to_string());
+        assert!(occupancy_bounds_rewind(&broadcast));
+
+        // A transaction merely passing through the persist-then-broadcast window has
+        // never been rejected, so it must still bound the rewind.
+        let mut fresh = occ_rejected_never_broadcast();
+        fresh.nonce_too_high_retries = 0;
+        assert!(occupancy_bounds_rewind(&fresh));
+
+        // Just below the threshold still bounds.
+        let mut below = occ_rejected_never_broadcast();
+        below.nonce_too_high_retries = MAX_NONCE_TOO_HIGH_RETRIES - 1;
+        assert!(occupancy_bounds_rewind(&below));
+
+        // An ordinary Failed record keeps bounding: it may be a reverted-but-mined tx.
+        assert!(occupancy_bounds_rewind(&occ(TransactionStatus::Failed)));
+        assert!(occupancy_bounds_rewind(&occ(TransactionStatus::Confirmed)));
+
+        // A record this rewind already reclaimed must not bound it — otherwise a lost
+        // CAS would wedge every subsequent run behind the records it just created.
+        let reclaimed = NonceOccupancy {
+            status: TransactionStatus::Failed,
+            sent_at: None,
+            status_reason: Some(NONCE_REWIND_RECLAIM_REASON.to_string()),
+            nonce_too_high_retries: 0,
+        };
+        assert!(!occupancy_bounds_rewind(&reclaimed));
+    }
+
+    /// The reported bug: every slot in `[on_chain, observed)` holds a `Sent` record
+    /// rejected `nonce too high`. Before the fix `target == observed` and the rewind
+    /// silently no-opped; now the counter returns to the chain nonce and the reclaimed
+    /// slots are terminalized.
+    #[tokio::test]
+    async fn issue843_fully_occupied_rejected_region_rewinds_to_chain() {
+        use mockall::predicate::eq;
+
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Region [100, 130) is 100% occupied by rejected, never-broadcast records.
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| (n, Some(occ_rejected_never_broadcast())))
+                    .collect())
+            });
+
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Sent))));
+
+        // Every reclaimed slot is terminalized with the marker before the CAS.
+        tx_repo
+            .expect_partial_update()
+            .times(30)
+            .returning(|_, update| {
+                assert_eq!(update.status, Some(TransactionStatus::Failed));
+                assert_eq!(
+                    update.status_reason.as_deref(),
+                    Some(NONCE_REWIND_RECLAIM_REASON)
+                );
+                Ok(make_tx_with_status(TransactionStatus::Failed))
+            });
+
+        // Nothing bounds the rewind → counter goes all the way back to the chain nonce.
+        counter
+            .expect_set_if_equals()
+            .with(eq(130u64), eq(100u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.try_rewind_counter(100, 130).await.unwrap();
+    }
+
+    /// A broadcast record inside an otherwise-reclaimable region still bounds the
+    /// rewind, and only the slots above it are reclaimed.
+    #[tokio::test]
+    async fn issue843_broadcast_record_still_bounds_and_limits_reclaim() {
+        use mockall::predicate::eq;
+
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // Slot 110 was broadcast; everything else is rejected/never-broadcast.
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n == 110 {
+                            (n, Some(occ(TransactionStatus::Sent)))
+                        } else {
+                            (n, Some(occ_rejected_never_broadcast()))
+                        }
+                    })
+                    .collect())
+            });
+
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Sent))));
+
+        // Only slots 111..130 are trimmed past, so only those are reclaimed.
+        tx_repo
+            .expect_partial_update()
+            .times(19)
+            .returning(|_, _| Ok(make_tx_with_status(TransactionStatus::Failed)));
+
+        counter
+            .expect_set_if_equals()
+            .with(eq(130u64), eq(111u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.try_rewind_counter(100, 130).await.unwrap();
+    }
+
+    /// A trailing run of terminal records must not be reported as gaps. This is what
+    /// keeps the reclaimed region from being refilled with one NOOP per slot on the
+    /// very next step of `resolve_nonce_gaps`.
+    #[tokio::test]
+    async fn issue843_trailing_terminal_records_are_not_gaps() {
+        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100))));
+
+        // Everything above the chain nonce is terminal (as left by a reclaim).
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        if n < 130 {
+                            (n, Some(TransactionStatus::Failed))
+                        } else {
+                            (n, None)
+                        }
+                    })
+                    .collect())
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let gaps = relayer.detect_nonce_gaps(Some(100), None).await.unwrap();
+        assert!(
+            gaps.is_empty(),
+            "terminal-only region must not produce gaps, got {gaps:?}"
+        );
+    }
+
+    /// A gap below a still-active transaction is still filled — the active-only bound
+    /// must not disable ordinary gap detection.
+    #[tokio::test]
+    async fn issue843_gap_below_active_tx_still_detected() {
+        let (mut provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(100))));
+
+        // 100 empty, 101 Failed, 102 active → both 100 and 101 block 102.
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| match n {
+                        101 => (n, Some(TransactionStatus::Failed)),
+                        102 => (n, Some(TransactionStatus::Submitted)),
+                        _ => (n, None),
+                    })
+                    .collect())
+            });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let gaps = relayer.detect_nonce_gaps(Some(100), None).await.unwrap();
+        assert_eq!(gaps, vec![100, 101]);
+    }
+
+    /// A lost CAS must not wedge the relayer: the records reclaimed on the first run
+    /// carry the marker, so the next run still sees the region as trimmable.
+    #[tokio::test]
+    async fn issue843_reclaimed_records_do_not_wedge_next_run() {
+        use mockall::predicate::eq;
+
+        let (provider, relayer_repo, network_repo, mut tx_repo, job_producer, signer, mut counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+
+        // State left behind by a previous run whose CAS lost.
+        tx_repo
+            .expect_get_nonce_occupancy_detailed()
+            .returning(|_, from, to| {
+                Ok((from..to)
+                    .map(|n| {
+                        (
+                            n,
+                            Some(NonceOccupancy {
+                                status: TransactionStatus::Failed,
+                                sent_at: None,
+                                status_reason: Some(NONCE_REWIND_RECLAIM_REASON.to_string()),
+                                nonce_too_high_retries: MAX_NONCE_TOO_HIGH_RETRIES,
+                            }),
+                        )
+                    })
+                    .collect())
+            });
+
+        tx_repo
+            .expect_find_by_nonce()
+            .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Failed))));
+        tx_repo
+            .expect_partial_update()
+            .returning(|_, _| Ok(make_tx_with_status(TransactionStatus::Failed)));
+
+        counter
+            .expect_set_if_equals()
+            .with(eq(130u64), eq(100u64))
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(true))));
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.try_rewind_counter(100, 130).await.unwrap();
+    }
+
+    /// A record with no metadata at all reports zero retries and therefore bounds.
+    #[test]
+    fn issue843_missing_metadata_counts_as_zero_retries() {
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Sent,
+            sent_at: None,
+            metadata: None,
+            ..Default::default()
+        };
+        let occupancy = NonceOccupancy::from(&tx);
+        assert_eq!(occupancy.nonce_too_high_retries, 0);
+        assert!(occupancy_bounds_rewind(&occupancy));
     }
 }

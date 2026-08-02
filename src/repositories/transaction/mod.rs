@@ -35,6 +35,35 @@ use async_trait::async_trait;
 use eyre::Result;
 use std::sync::Arc;
 
+/// The subset of a transaction record the EVM nonce-counter rewind inspects for a
+/// single nonce slot.
+///
+/// `sent_at` is written only after `send_raw_transaction` succeeds, and
+/// `nonce_too_high_retries` only accrues while the node is actively rejecting the
+/// transaction, so together they identify a slot whose nonce was never consumed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonceOccupancy {
+    pub status: TransactionStatus,
+    pub sent_at: Option<String>,
+    pub status_reason: Option<String>,
+    pub nonce_too_high_retries: u32,
+}
+
+impl From<&TransactionRepoModel> for NonceOccupancy {
+    fn from(tx: &TransactionRepoModel) -> Self {
+        Self {
+            status: tx.status.clone(),
+            sent_at: tx.sent_at.clone(),
+            status_reason: tx.status_reason.clone(),
+            nonce_too_high_retries: tx
+                .metadata
+                .as_ref()
+                .map(|m| m.nonce_too_high_retries)
+                .unwrap_or(0),
+        }
+    }
+}
+
 /// A trait defining transaction repository operations
 #[async_trait]
 pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
@@ -115,6 +144,19 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         from_nonce: u64,
         to_nonce: u64,
     ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
+
+    /// Same scan as [`Self::get_nonce_occupancy`], but returns the extra fields the
+    /// EVM nonce-counter rewind needs to tell a rejected-and-never-broadcast slot
+    /// apart from one whose nonce may have been consumed on-chain.
+    ///
+    /// Kept separate from `get_nonce_occupancy` so the gap-detection callers, which
+    /// only need the status, are unaffected. Costs the same I/O as the plain scan.
+    async fn get_nonce_occupancy_detailed(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError>;
 
     /// Update the status of a transaction
     async fn update_status(
@@ -256,6 +298,7 @@ mockall::mock! {
       async fn find_by_status_paginated_filtered(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool, exclude_canceled: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
+      async fn get_nonce_occupancy_detailed(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
@@ -435,6 +478,24 @@ impl TransactionRepository for TransactionRepositoryStorage {
             }
             TransactionRepositoryStorage::Redis(repo) => {
                 repo.get_nonce_occupancy(relayer_id, from_nonce, to_nonce)
+                    .await
+            }
+        }
+    }
+
+    async fn get_nonce_occupancy_detailed(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.get_nonce_occupancy_detailed(relayer_id, from_nonce, to_nonce)
+                    .await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.get_nonce_occupancy_detailed(relayer_id, from_nonce, to_nonce)
                     .await
             }
         }
