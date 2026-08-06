@@ -144,8 +144,8 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
     ///
     /// Returns the stored transaction and whether the patch was applied.
     /// The update must not contain `status` or `hashes` (presign patches
-    /// never do; both are rejected as invalid). Callers must pass EVM
-    /// transactions — behavior on other networks is unspecified.
+    /// never do; both are rejected as invalid). Non-EVM records are never
+    /// patched: the claim returns the stored record with `applied == false`.
     async fn partial_update_if_evm_nonce_unset(
         &self,
         tx_id: String,

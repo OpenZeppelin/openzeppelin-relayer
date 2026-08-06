@@ -328,7 +328,7 @@ where
                     nonce,
                     context,
                     error = %e,
-                    "failed to schedule nonce health after Pending transaction failure"
+                    "failed to schedule nonce health job"
                 );
             }
         }

@@ -2339,8 +2339,14 @@ impl TransactionRepository for RedisTransactionRepository {
                 return {current, current, "0"}
             end
 
+            -- Only EVM records can be claimed. A non-EVM record has no
+            -- data.nonce, which would read as "unset" and let the patch
+            -- overwrite its payload; refuse instead (matches in-memory).
             local network_data = tx["network_data"]
-            local evm_data = network_data and network_data["data"]
+            if not network_data or network_data["network_data"] ~= "Evm" then
+                return {current, current, "0"}
+            end
+            local evm_data = network_data["data"]
             local nonce = evm_data and evm_data["nonce"]
             if nonce ~= nil and nonce ~= cjson.null then
                 return {current, current, "0"}
@@ -2399,15 +2405,17 @@ impl TransactionRepository for RedisTransactionRepository {
         }
 
         let applied = parts[2] == "1";
+        let original_tx =
+            self.deserialize_entity::<TransactionRepoModel>(&parts[0], &tx_id, "transaction")?;
         let updated_tx =
             self.deserialize_entity::<TransactionRepoModel>(&parts[1], &tx_id, "transaction")?;
 
-        if applied {
-            let original_tx =
-                self.deserialize_entity::<TransactionRepoModel>(&parts[0], &tx_id, "transaction")?;
-            self.update_indexes(&updated_tx, Some(&original_tx), false)
-                .await?;
-        }
+        // Refresh the auxiliary indexes on both outcomes: a retry after a
+        // lost reply reports applied=false for a claim that actually landed,
+        // and the nonce index must not stay unwritten (the occupancy scan
+        // would see a false gap). The index writes are idempotent.
+        self.update_indexes(&updated_tx, Some(&original_tx), false)
+            .await?;
 
         debug!(tx_id = %tx_id, applied, "completed conditional transaction nonce claim");
         Ok((updated_tx, applied))

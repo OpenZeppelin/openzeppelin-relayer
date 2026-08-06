@@ -715,12 +715,15 @@ where
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
                 nonce = ?tx.network_data.evm_nonce(),
-                reason = %reason.as_ref().unwrap_or(&"unknown".to_string()),
+                reason = %reason.as_deref().unwrap_or("unknown"),
                 "marking pending transaction as Failed"
             );
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
-                status_reason: reason,
+                // should_noop's reasons end with "Replacing with NOOP.", but
+                // this branch fails the transaction instead of NOPing it.
+                status_reason: reason
+                    .map(|r| r.replace("Replacing with NOOP.", "Marked as Failed.")),
                 ..Default::default()
             };
             let updated_tx = self
@@ -4095,6 +4098,56 @@ mod tests {
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
             assert!(result.status_reason.unwrap().contains("consecutive errors"));
+        }
+
+        #[tokio::test]
+        async fn test_circuit_breaker_pending_with_nonce_fails_and_schedules_health_job() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Pending);
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.nonce = Some(42);
+            }
+
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+
+            // The abandoned nonce must be handed to gap fill.
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, scheduled_on| {
+                    scheduled_on.is_none()
+                        && job.metadata.as_ref().is_some_and(|metadata| {
+                            metadata.get("health_check_action") == Some(&"nonce_health".to_string())
+                                && metadata.get("nonce_hint") == Some(&"42".to_string())
+                        })
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
