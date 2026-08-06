@@ -105,7 +105,9 @@ pub struct TransactionUpdateRequest {
     /// Timestamp when gas price was determined
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priced_at: Option<String>,
-    /// History of transaction hashes
+    /// History of transaction hashes. A non-empty patch is merged into the
+    /// stored list append-only (a stale snapshot cannot drop concurrent
+    /// writers' hashes); `Some(vec![])` is an explicit reset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hashes: Option<Vec<String>>,
     /// Number of no-ops in the transaction
@@ -203,7 +205,18 @@ impl TransactionRepoModel {
             self.priced_at = Some(priced_at);
         }
         if let Some(hashes) = update.hashes {
-            self.hashes = hashes;
+            // An empty patch is an explicit reset (Stellar retry). A non-empty
+            // patch is merged append-only so a writer holding a stale snapshot
+            // cannot drop hashes recorded by a concurrent writer.
+            if hashes.is_empty() {
+                self.hashes = hashes;
+            } else {
+                for hash in hashes {
+                    if !self.hashes.contains(&hash) {
+                        self.hashes.push(hash);
+                    }
+                }
+            }
         }
         if let Some(noop_count) = update.noop_count {
             self.noop_count = Some(noop_count);
@@ -247,6 +260,8 @@ impl TransactionRepoModel {
             confirmed_at: None,
             network_data,
             priced_at: None,
+            // Empty vec is the explicit reset signal: it clears the stored
+            // hash history instead of merging (see `hashes` field docs).
             hashes: Some(vec![]),
             noop_count: None,
             is_canceled: None,
@@ -266,6 +281,15 @@ pub enum NetworkTransactionData {
 }
 
 impl NetworkTransactionData {
+    /// Returns the EVM nonce without cloning the transaction data.
+    /// `None` for non-EVM networks or when no nonce is assigned.
+    pub fn evm_nonce(&self) -> Option<u64> {
+        match self {
+            NetworkTransactionData::Evm(data) => data.nonce,
+            _ => None,
+        }
+    }
+
     pub fn get_evm_transaction_data(&self) -> Result<EvmTransactionData, TransactionError> {
         match self {
             NetworkTransactionData::Evm(data) => Ok(data.clone()),
@@ -3384,6 +3408,44 @@ mod tests {
 
         // Verify that delete_at was set because status changed to final
         assert!(transaction.delete_at.is_some());
+    }
+
+    #[test]
+    fn test_apply_partial_update_merges_hashes_append_only() {
+        let mut transaction = create_test_transaction();
+        transaction.hashes = vec!["0xstored".to_string(), "0xshared".to_string()];
+
+        // A patch built from a stale snapshot (missing "0xstored") must not
+        // drop it from the record.
+        let update = TransactionUpdateRequest {
+            hashes: Some(vec!["0xshared".to_string(), "0xnew".to_string()]),
+            ..Default::default()
+        };
+        transaction.apply_partial_update(update);
+
+        assert_eq!(
+            transaction.hashes,
+            vec![
+                "0xstored".to_string(),
+                "0xshared".to_string(),
+                "0xnew".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_apply_partial_update_empty_hashes_clears() {
+        let mut transaction = create_test_transaction();
+        transaction.hashes = vec!["0xstored".to_string()];
+
+        // An explicit empty patch is a reset (Stellar retry path).
+        let update = TransactionUpdateRequest {
+            hashes: Some(vec![]),
+            ..Default::default()
+        };
+        transaction.apply_partial_update(update);
+
+        assert!(transaction.hashes.is_empty());
     }
 
     #[test]

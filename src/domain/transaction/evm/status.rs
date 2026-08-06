@@ -709,13 +709,14 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let (should_noop, reason) = self.should_noop(&tx).await?;
         if should_noop {
-            // For Pending state transactions, nonces are not yet assigned, so we mark as Failed
-            // instead of NOOP. This matches prepare_transaction behavior.
+            // A Pending transaction can hold a nonce after the presign update. Mark it as Failed,
+            // then schedule gap fill when a nonce was assigned.
             debug!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
+                nonce = ?tx.network_data.evm_nonce(),
                 reason = %reason.as_ref().unwrap_or(&"unknown".to_string()),
-                "marking pending transaction as Failed (nonce not assigned, no NOOP needed)"
+                "marking pending transaction as Failed"
             );
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
@@ -726,6 +727,9 @@ where
                 .transaction_repository()
                 .partial_update(tx.id.clone(), update)
                 .await?;
+
+            self.schedule_nonce_health_if_assigned(&updated_tx, "pending timeout")
+                .await;
 
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
@@ -981,13 +985,20 @@ where
 
         match tx.status {
             TransactionStatus::Pending => {
-                // Pending: no nonce assigned yet - safe to mark as Failed
+                // Pending can hold a presigned nonce. Mark it as Failed, then schedule gap fill
+                // when a nonce was assigned.
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
-                    "circuit breaker: Pending transaction (no nonce) - safe to mark as Failed"
+                    nonce = ?tx.network_data.evm_nonce(),
+                    "circuit breaker: marking Pending transaction as Failed"
                 );
-                self.mark_as_failed(tx, reason).await
+                let updated_tx = self.mark_as_failed(tx, reason).await?;
+
+                self.schedule_nonce_health_if_assigned(&updated_tx, "circuit breaker")
+                    .await;
+
+                Ok(updated_tx)
             }
             TransactionStatus::Sent => {
                 // Sent: nonce assigned but never broadcast to network.
@@ -3233,7 +3244,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_pending_state_with_noop() {
+        async fn test_pending_state_timeout_without_nonce_marks_failed_without_health_job() {
             // Create a pending transaction that is old (created 2 minutes ago)
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
@@ -3257,7 +3268,7 @@ mod tests {
             });
 
             // Expect partial_update to be called and simulate a Failed update
-            // (Pending state transactions are marked as Failed, not NOOP, since nonces aren't assigned)
+            // (Pending state transactions are marked as Failed, not NOOP.)
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
@@ -3278,6 +3289,10 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(0);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
@@ -3286,6 +3301,71 @@ mod tests {
                 .unwrap();
 
             // Since should_noop returns true for pending timeout, transaction should be marked as Failed
+            assert_eq!(result.status, TransactionStatus::Failed);
+            assert!(result.status_reason.is_some());
+            assert!(result.status_reason.unwrap().contains("Pending state"));
+        }
+
+        #[tokio::test]
+        async fn test_pending_state_timeout_with_nonce_marks_failed_and_schedules_health_job() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Pending);
+            tx.created_at = (Utc::now() - Duration::minutes(2)).to_rfc3339();
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.nonce = Some(42);
+            }
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|id, update| {
+                    id == "test-tx-id"
+                        && update.status == Some(TransactionStatus::Failed)
+                        && update.status_reason.is_some()
+                })
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    updated_tx.status_reason = update.status_reason.clone();
+                    Ok(updated_tx)
+                });
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, scheduled_on| {
+                    scheduled_on.is_none()
+                        && job.relayer_id == "test-relayer-id"
+                        && job.metadata.as_ref().is_some_and(|metadata| {
+                            metadata.get("health_check_action") == Some(&"nonce_health".to_string())
+                                && metadata.get("nonce_hint") == Some(&"42".to_string())
+                        })
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_pending_state(tx).await.unwrap();
+
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
             assert!(result.status_reason.unwrap().contains("Pending state"));

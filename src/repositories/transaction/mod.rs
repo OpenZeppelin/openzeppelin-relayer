@@ -45,6 +45,16 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         None
     }
 
+    /// Retrieves a transaction from the primary data source.
+    ///
+    /// Backends without read replicas use the standard repository read.
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        Repository::get_by_id(self, id).await
+    }
+
     /// Find transactions by relayer ID with pagination
     async fn find_by_relayer_id(
         &self,
@@ -129,6 +139,18 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Applies a presign patch only when the stored EVM nonce is unset.
+    ///
+    /// Returns the stored transaction and whether the patch was applied.
+    /// The update must not contain `status` or `hashes` (presign patches
+    /// never do; both are rejected as invalid). Callers must pass EVM
+    /// transactions — behavior on other networks is unspecified.
+    async fn partial_update_if_evm_nonce_unset(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError>;
 
     /// Repairs stale Redis status-index entries whose indexed status diverged from
     /// the persisted transaction body.
@@ -250,6 +272,7 @@ mockall::mock! {
   #[async_trait]
   impl TransactionRepository for TransactionRepository {
       fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)>;
+      async fn get_by_id_on_primary(&self, id: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
@@ -258,6 +281,7 @@ mockall::mock! {
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn partial_update_if_evm_nonce_unset(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<(TransactionRepoModel, bool), RepositoryError>;
       async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
@@ -324,6 +348,16 @@ impl TransactionRepository for TransactionRepositoryStorage {
     fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)> {
         TransactionRepositoryStorage::connection_info(self)
             .map(|(connections, key_prefix)| (connections, key_prefix.to_string()))
+    }
+
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => repo.get_by_id_on_primary(id).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.get_by_id_on_primary(id).await,
+        }
     }
 
     async fn find_by_relayer_id(
@@ -461,6 +495,21 @@ impl TransactionRepository for TransactionRepositoryStorage {
                 repo.partial_update(tx_id, update).await
             }
             TransactionRepositoryStorage::Redis(repo) => repo.partial_update(tx_id, update).await,
+        }
+    }
+
+    async fn partial_update_if_evm_nonce_unset(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.partial_update_if_evm_nonce_unset(tx_id, update).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.partial_update_if_evm_nonce_unset(tx_id, update).await
+            }
         }
     }
 
