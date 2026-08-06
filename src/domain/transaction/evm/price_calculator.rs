@@ -710,6 +710,7 @@ mod tests {
             tags: vec![],
             chain_id: 1337,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
             features: vec![],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -732,6 +733,7 @@ mod tests {
             tags: vec![NO_MEMPOOL_TAG.to_string()], // This makes lacks_mempool() return true
             chain_id: 42161,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
             features: vec!["eip1559".to_string()], // This makes it use EIP1559 pricing
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -2073,6 +2075,7 @@ mod tests {
             tags: vec![ARBITRUM_BASED_TAG.to_string()], // This makes is_arbitrum() return true
             chain_id: 42161,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,

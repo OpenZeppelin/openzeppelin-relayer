@@ -1674,6 +1674,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
+            status_check_initial_delay_seconds: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1706,6 +1707,7 @@ mod tests {
             },
             chain_id: Some(42161),
             required_confirmations: Some(12),
+            status_check_initial_delay_seconds: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -2222,6 +2224,7 @@ mod tests {
                 },
                 chain_id: None, // This will cause the conversion to fail
                 required_confirmations: Some(12),
+                status_check_initial_delay_seconds: None,
                 features: Some(vec!["eip1559".to_string()]),
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,

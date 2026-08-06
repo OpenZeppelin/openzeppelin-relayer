@@ -156,6 +156,7 @@ mod tests {
             },
             chain_id: None,                  // Will inherit from parent
             required_confirmations: Some(2), // Override parent value
+            status_check_initial_delay_seconds: None,
             features: None,
             symbol: None, // Will inherit from parent
             gas_price_cache: None,
@@ -202,6 +203,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: Some(3), // Override grandparent
+            status_check_initial_delay_seconds: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -227,6 +229,7 @@ mod tests {
             },
             chain_id: Some(42), // Override
             required_confirmations: None,
+            status_check_initial_delay_seconds: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -499,6 +502,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
+            status_check_initial_delay_seconds: None,
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: None,
             gas_price_cache: None,
@@ -520,6 +524,7 @@ mod tests {
             },
             chain_id: Some(100),
             required_confirmations: None,
+            status_check_initial_delay_seconds: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -543,6 +548,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: Some(5),
+            status_check_initial_delay_seconds: None,
             features: None,
             symbol: Some("CUSTOM".to_string()),
             gas_price_cache: None,
@@ -679,6 +685,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check_initial_delay_seconds: None,
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -701,8 +708,9 @@ mod tests {
                 is_testnet: Some(false),                   // Override
                 tags: Some(vec!["child-tag".to_string()]), // Override (merge behavior depends on implementation)
             },
-            chain_id: Some(42),                         // Override
-            required_confirmations: None,               // Inherit
+            chain_id: Some(42),           // Override
+            required_confirmations: None, // Inherit
+            status_check_initial_delay_seconds: None,
             features: Some(vec!["berlin".to_string()]), // Override (merge behavior depends on implementation)
             symbol: None,                               // Inherit
             gas_price_cache: None,
