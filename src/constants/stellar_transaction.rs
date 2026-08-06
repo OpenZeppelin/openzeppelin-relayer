@@ -12,7 +12,11 @@
 //! These addresses can be overridden via environment variables if needed.
 //! See `ServerConfig` for the corresponding env var names.
 
+use std::env;
+use std::sync::OnceLock;
+
 use chrono::Duration;
+use tracing::warn;
 
 // =============================================================================
 // Transaction Fees
@@ -34,6 +38,50 @@ pub const STELLAR_HORIZON_TESTNET_URL: &str = "https://horizon-testnet.stellar.o
 /// Set to 2s for faster detection of transaction state changes
 pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 
+/// Env var overriding the initial status-check delay in seconds.
+pub const ENV_STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: &str =
+    "STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS";
+
+static STELLAR_STATUS_CHECK_INITIAL_DELAY_RESOLVED: OnceLock<i64> = OnceLock::new();
+
+/// Returns the initial status-check delay in seconds, honoring the
+/// `STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS` env override.
+///
+/// The env var is read once (cached in a `OnceLock`). Values that are unset,
+/// unparsable, or out of range fall back to
+/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+pub fn stellar_status_check_initial_delay_seconds() -> i64 {
+    *STELLAR_STATUS_CHECK_INITIAL_DELAY_RESOLVED.get_or_init(|| {
+        parse_stellar_status_check_initial_delay_seconds(
+            env::var(ENV_STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
+/// Parses the initial status-check delay override in seconds.
+///
+/// Valid range is `0..=60`. Unset or invalid values fall back to
+/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+    let Some(raw) = raw else {
+        return STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+    };
+    match raw.trim().parse::<i64>() {
+        Ok(value) if (0..=60).contains(&value) => value,
+        _ => {
+            warn!(
+                env_var = ENV_STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                value = raw,
+                default = STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                "invalid Stellar status-check initial delay override; using default"
+            );
+            STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        }
+    }
+}
+
 /// Minimum age before triggering Pending status recovery (in seconds)
 /// Only schedule a recovery job if Pending transaction without hash exceeds this age
 /// This prevents scheduling a job on every status check
@@ -51,9 +99,9 @@ pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 2;
 /// Used for gas abstraction authorization validity so it aligns with the transaction submission window.
 pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_SECONDS: u64 = 120;
 
-/// Get status check initial delay duration
+/// Get status check initial delay duration (env-aware)
 pub fn get_stellar_status_check_initial_delay() -> Duration {
-    Duration::seconds(STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+    Duration::seconds(stellar_status_check_initial_delay_seconds())
 }
 
 /// Get sponsored transaction validity duration
@@ -142,3 +190,47 @@ pub const STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER: &str =
 /// FeeForwarder contract address on Stellar mainnet
 /// Set to empty string until mainnet deployment is available
 pub const STELLAR_FEE_FORWARDER_MAINNET: &str = "";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_stellar_status_check_initial_delay_unset_uses_default() {
+        assert_eq!(
+            parse_stellar_status_check_initial_delay_seconds(None),
+            STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        );
+    }
+
+    #[test]
+    fn test_parse_stellar_status_check_initial_delay_valid_override() {
+        assert_eq!(
+            parse_stellar_status_check_initial_delay_seconds(Some("5")),
+            5
+        );
+        assert_eq!(
+            parse_stellar_status_check_initial_delay_seconds(Some("0")),
+            0
+        );
+        assert_eq!(
+            parse_stellar_status_check_initial_delay_seconds(Some("60")),
+            60
+        );
+        assert_eq!(
+            parse_stellar_status_check_initial_delay_seconds(Some(" 3 ")),
+            3
+        );
+    }
+
+    #[test]
+    fn test_parse_stellar_status_check_initial_delay_invalid_uses_default() {
+        for raw in ["garbage", "", "-1", "61", "2.5"] {
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some(raw)),
+                STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                "raw {raw:?} should fall back to default"
+            );
+        }
+    }
+}
