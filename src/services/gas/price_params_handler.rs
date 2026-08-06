@@ -85,6 +85,7 @@ mod tests {
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             chain_id: 1,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,

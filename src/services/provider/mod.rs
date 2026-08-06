@@ -558,6 +558,7 @@ mod tests {
             tags: vec![],
             chain_id: 1337,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
             features: vec![],
             symbol: "ETH".to_string(),
             gas_price_cache: None,

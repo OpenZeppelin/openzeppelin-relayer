@@ -173,6 +173,7 @@ These tags help the relayer:
 | ------------------------ | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `chain_id`               | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited) |
 | `required_confirmations` | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)    |
+| `status_check_initial_delay_seconds` | number | No | Delay before the first transaction status check, in whole seconds. Defaults to `8`; valid range is `1`–`100`. Inherited when omitted. |
 | `symbol`                 | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                    |
 | `features`               | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                               |
 
@@ -186,6 +187,7 @@ Here’s an example showing an EVM network configuration:
   "network": "ethereum-mainnet",
   "chain_id": 1, // Ethereum mainnet chain ID
   "required_confirmations": 12, // High security: 12 confirmations
+  "status_check_initial_delay_seconds": 8, // Only affects the first status check
   "symbol": "ETH", // Native currency symbol
   "features": ["eip1559"], // Supports EIP-1559 fee market
   "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"],

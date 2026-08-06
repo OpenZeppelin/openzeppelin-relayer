@@ -190,6 +190,7 @@ where
             common: updated_common,
             chain_id: evm_config.chain_id,
             required_confirmations: evm_config.required_confirmations,
+            status_check_initial_delay_seconds: evm_config.status_check_initial_delay_seconds,
             features: evm_config.features,
             symbol: evm_config.symbol,
             gas_price_cache: evm_config.gas_price_cache,
