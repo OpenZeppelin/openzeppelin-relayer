@@ -14,6 +14,8 @@
 
 use chrono::Duration;
 
+use crate::config::ServerConfig;
+
 // =============================================================================
 // Transaction Fees
 // =============================================================================
@@ -32,6 +34,8 @@ pub const STELLAR_HORIZON_TESTNET_URL: &str = "https://horizon-testnet.stellar.o
 // Status check scheduling
 /// Initial delay before first status check (in seconds)
 /// Set to 2s for faster detection of transaction state changes
+/// Overridable via the `STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS` env var;
+/// see [`ServerConfig::get_stellar_status_check_initial_delay_seconds`].
 pub const STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 2;
 
 /// Minimum age before triggering Pending status recovery (in seconds)
@@ -51,9 +55,9 @@ pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_MINUTES: i64 = 2;
 /// Used for gas abstraction authorization validity so it aligns with the transaction submission window.
 pub const STELLAR_SPONSORED_TRANSACTION_VALIDITY_SECONDS: u64 = 120;
 
-/// Get status check initial delay duration
+/// Get status check initial delay duration (env-aware via `ServerConfig`)
 pub fn get_stellar_status_check_initial_delay() -> Duration {
-    Duration::seconds(STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+    Duration::seconds(ServerConfig::get_stellar_status_check_initial_delay_seconds())
 }
 
 /// Get sponsored transaction validity duration

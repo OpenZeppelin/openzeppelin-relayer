@@ -25,10 +25,8 @@ use crate::utils::{map_provider_error, sanitize_error_description};
 /// To use the `StellarRelayer`, create an instance using the `new` method, providing the necessary
 /// components. Then, call the appropriate methods to process transactions and manage the relayer's state.
 use crate::{
-    constants::{
-        transactions::PENDING_TRANSACTION_STATUSES, STELLAR_SMALLEST_UNIT_NAME,
-        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    },
+    config::ServerConfig,
+    constants::{transactions::PENDING_TRANSACTION_STATUSES, STELLAR_SMALLEST_UNIT_NAME},
     domain::{
         create_success_response, transaction::stellar::fetch_next_sequence_from_chain,
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -501,7 +499,7 @@ where
                     NetworkType::Stellar,
                 ),
                 Some(calculate_scheduled_timestamp(
-                    STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    ServerConfig::get_stellar_status_check_initial_delay_seconds(),
                 )),
             )
             .await

@@ -56,8 +56,9 @@ use openzeppelin_relayer::{
     constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
     logging::setup_logging,
     metrics,
+    models::NetworkType,
     observability::RequestIdMiddleware,
-    queues::QueueBackend,
+    queues::{retry_config::status_backoff_config, QueueBackend},
     utils::check_authorization_header,
 };
 use tracing_actix_web::TracingLogger;
@@ -131,6 +132,16 @@ async fn main() -> Result<()> {
     // instead of pinning to the actix System arbiter's single thread (D1/D2).
     let runtime_config = RuntimeConfig::from_env();
     runtime_config.log_startup();
+
+    // Resolve and log the Stellar status poll cadence (env-configurable).
+    let stellar_status_backoff = status_backoff_config(Some(NetworkType::Stellar));
+    info!(
+        initial_delay_seconds =
+            config::ServerConfig::get_stellar_status_check_initial_delay_seconds(),
+        retry_initial_ms = stellar_status_backoff.initial_ms,
+        retry_max_ms = stellar_status_backoff.max_ms,
+        "resolved Stellar status poll cadence"
+    );
     metrics::set_worker_threads("pipeline", runtime_config.tokio_worker_threads);
     metrics::set_worker_threads("http", runtime_config.actix_workers);
 
