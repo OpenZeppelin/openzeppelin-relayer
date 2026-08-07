@@ -156,6 +156,7 @@ impl EvmNetwork {
         self.required_confirmations
     }
 
+    /// Returns the delay before the first transaction status check, in seconds.
     pub fn status_check_initial_delay_seconds(&self) -> i64 {
         self.status_check_initial_delay_seconds
     }
