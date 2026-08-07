@@ -24,7 +24,7 @@ use chrono::Utc;
 use redis::{AsyncCommands, Script};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tracing::{debug, error, info, warn};
 
 const RELAYER_PREFIX: &str = "relayer";
@@ -1135,6 +1135,275 @@ impl RedisTransactionRepository {
             }
         }
     }
+
+    /// Atomically applies a JSON patch to the stored transaction, optionally
+    /// guarded on the record being an EVM transaction with no nonce assigned.
+    ///
+    /// Shared engine for `partial_update` (no guard) and
+    /// `partial_update_if_evm_nonce_unset` (guarded). Returns the updated
+    /// model and whether the patch was applied; a refused patch (status
+    /// change on a finalized record, or any guard failure) returns the
+    /// stored record unchanged with `applied == false`.
+    async fn partial_update_guarded(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+        require_evm_nonce_unset: bool,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        // Lua script: atomically applies a JSON patch to the stored
+        // transaction. Guards: rejects status changes on already-finalized
+        // transactions; with the ARGV[6] claim guard set, additionally
+        // refuses non-final non-EVM records and records that already carry
+        // a nonce. Returns a three-element array {old_json, new_json,
+        // applied} so Rust has the full pre-update state for index cleanup
+        // and metrics. Returns false if tx not found.
+        static PATCH_SCRIPT: LazyLock<Script> = LazyLock::new(|| {
+            Script::new(
+                r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local patch = cjson.decode(ARGV[3])
+
+            -- Guard: reject status changes on finalized transactions.
+            -- A stale worker must not resurrect a tx that another worker
+            -- already moved to a terminal state.
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] and patch["status"] then
+                return {current, current, "0"}
+            end
+
+            -- ARGV[6] ~= '': nonce-claim guard. Apply the patch only when
+            -- the stored record is a non-final EVM transaction with no
+            -- nonce assigned yet. A non-EVM record has no data.nonce, which
+            -- would read as "unset" and let the patch overwrite its
+            -- payload; refuse instead (matches in-memory).
+            if ARGV[6] ~= '' then
+                if final_states[tx["status"]] then
+                    return {current, current, "0"}
+                end
+                local network_data = tx["network_data"]
+                if not network_data or network_data["network_data"] ~= "Evm" then
+                    return {current, current, "0"}
+                end
+                local evm_data = network_data["data"]
+                local nonce = evm_data and evm_data["nonce"]
+                if nonce ~= nil and nonce ~= cjson.null then
+                    return {current, current, "0"}
+                end
+            end
+
+            local old_snapshot = current
+            local old_status = tx["status"]
+
+            -- An empty hashes patch is an explicit reset (Stellar retry). A
+            -- non-empty patch is merged append-only so a writer holding a
+            -- stale snapshot cannot drop hashes recorded by a concurrent
+            -- writer.
+            local patch_hashes = patch["hashes"]
+            if patch_hashes ~= nil and patch_hashes ~= cjson.null and #patch_hashes > 0 then
+                local merged = {}
+                local seen = {}
+                local stored = tx["hashes"]
+                if stored ~= nil and stored ~= cjson.null then
+                    for _, h in ipairs(stored) do
+                        merged[#merged + 1] = h
+                        seen[h] = true
+                    end
+                end
+                for _, h in ipairs(patch_hashes) do
+                    if not seen[h] then
+                        merged[#merged + 1] = h
+                        seen[h] = true
+                    end
+                end
+                patch["hashes"] = merged
+            end
+
+            -- lua-cjson cannot distinguish empty Lua tables from empty
+            -- arrays, so a decode/encode round-trip turns [] into {}.
+            -- Record which keys held [] in the stored doc and the patch
+            -- so we can restore them after cjson.encode.
+            -- NOTE: this relies on each array-typed field having a unique key
+            -- name across the entire JSON document (including nested objects).
+            -- If the model ever introduces duplicate key names at different
+            -- nesting levels (e.g. metadata.hashes), the gsub below could
+            -- restore the wrong occurrence.
+            local empty_arrs = {}
+            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+
+            for k, v in pairs(patch) do
+                tx[k] = v
+            end
+
+            -- Apply delete_at if transitioning to a final state and not already set
+            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
+                tx["delete_at"] = ARGV[4]
+            end
+
+            local updated = cjson.encode(tx)
+            local new_status = tx["status"]
+
+            -- Restore empty arrays that cjson.encode converted to {}
+            for k, _ in pairs(empty_arrs) do
+                updated = string.gsub(
+                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
+                )
+            end
+
+            local index_meta = nil
+            if patch["status"] and new_status ~= old_status then
+                index_meta = cjson.decode(ARGV[5])
+            end
+
+            redis.call('SET', tx_key, updated)
+
+            if index_meta then
+                local tx_id = index_meta["tx_id"]
+                local new_status_sorted_suffix = index_meta["sorted"][new_status]
+                local old_status_sorted_suffix = index_meta["sorted"][old_status]
+                local old_status_legacy_suffix = index_meta["legacy"][old_status]
+
+                if new_status_sorted_suffix then
+                    local score = nil
+                    if new_status == "confirmed" and index_meta["confirmed_score"] ~= "" then
+                        score = index_meta["confirmed_score"]
+                    else
+                        local created_key = ARGV[1] .. relayer_id .. index_meta["created_key_suffix"]
+                        score = redis.call('ZSCORE', created_key, tx_id)
+                        if not score then score = 0 end
+                    end
+
+                    redis.call('ZADD', ARGV[1] .. relayer_id .. new_status_sorted_suffix, score, tx_id)
+                end
+
+                if old_status_sorted_suffix then
+                    redis.call('ZREM', ARGV[1] .. relayer_id .. old_status_sorted_suffix, tx_id)
+                end
+                if old_status_legacy_suffix then
+                    redis.call('SREM', ARGV[1] .. relayer_id .. old_status_legacy_suffix, tx_id)
+                end
+
+                if final_states[new_status] then
+                    for _, status in ipairs(index_meta["nonfinal"]) do
+                        local sorted_suffix = index_meta["sorted"][status]
+                        local legacy_suffix = index_meta["legacy"][status]
+                        if sorted_suffix then
+                            redis.call('ZREM', ARGV[1] .. relayer_id .. sorted_suffix, tx_id)
+                        end
+                        if legacy_suffix then
+                            redis.call('SREM', ARGV[1] .. relayer_id .. legacy_suffix, tx_id)
+                        end
+                    end
+                end
+            end
+
+            return {old_snapshot, updated, "1"}
+            "#,
+            )
+        });
+
+        let op_name = if require_evm_nonce_unset {
+            "partial_update_if_evm_nonce_unset"
+        } else {
+            "partial_update"
+        };
+
+        // Serialize only the non-None fields as a JSON patch.
+        let patch_json = serde_json::to_string(&update).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
+        })?;
+
+        // If the update sets a final status, compute delete_at in Rust (depends on server config)
+        // and include it in the patch so the Lua script applies it atomically.
+        let delete_at_value = if let Some(ref status) = update.status {
+            if FINAL_TRANSACTION_STATUSES.contains(status) {
+                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
+                let seconds = (expiration_hours * 3600.0) as i64;
+                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
+                Some(delete_time.to_rfc3339())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
+        // The Lua script only decodes ARGV[5] on a status change, so skip
+        // building the metadata for non-status patches.
+        let index_metadata_json = if update.status.is_some() {
+            self.partial_update_index_metadata(&tx_id, &update)?
+        } else {
+            String::new()
+        };
+
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
+        let guard_arg = if require_evm_nonce_unset { "1" } else { "" };
+
+        let result: Option<Vec<String>> = self
+            .run_script_with_retry_vec(
+                &PATCH_SCRIPT,
+                &lookup_key,
+                &key_prefix,
+                &key_suffix,
+                &[&patch_json, delete_at_arg, &index_metadata_json, guard_arg],
+                op_name,
+            )
+            .await?;
+
+        let parts = result.ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        if parts.len() != 3 {
+            return Err(RepositoryError::UnexpectedError(format!(
+                "{op_name} script returned {} elements, expected 3",
+                parts.len()
+            )));
+        }
+
+        let applied = parts[2] == "1";
+        let original_tx =
+            self.deserialize_entity::<TransactionRepoModel>(&parts[0], &tx_id, "transaction")?;
+        let updated_tx =
+            self.deserialize_entity::<TransactionRepoModel>(&parts[1], &tx_id, "transaction")?;
+
+        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
+        // Status sorted sets are excluded: the Lua script above already moved
+        // them atomically with the body write. Refreshing on refused patches
+        // too is deliberate: a claim retry after a lost reply reports
+        // applied=false for a claim that actually landed, and the nonce index
+        // must not stay unwritten (the occupancy scan would see a false gap).
+        // The index writes are idempotent.
+        self.update_indexes(&updated_tx, Some(&original_tx), false)
+            .await?;
+
+        debug!(tx_id = %tx_id, applied, "successfully updated transaction via patch");
+
+        // Track metrics only when the persisted status actually changed.
+        // The Lua script may silently reject a status patch on already-final
+        // transactions, so we compare the deserialized before/after states.
+        if original_tx.status != updated_tx.status {
+            self.track_status_change_metrics(
+                &original_tx,
+                &updated_tx,
+                &original_tx.status,
+                &updated_tx.status,
+            );
+        }
+
+        Ok((updated_tx, applied))
+    }
 }
 
 impl fmt::Debug for RedisTransactionRepository {
@@ -2096,225 +2365,7 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // Serialize only the non-None fields as a JSON patch.
-        let patch_json = serde_json::to_string(&update).map_err(|e| {
-            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
-        })?;
-
-        // If the update sets a final status, compute delete_at in Rust (depends on server config)
-        // and include it in the patch so the Lua script applies it atomically.
-        let delete_at_value = if let Some(ref status) = update.status {
-            if FINAL_TRANSACTION_STATUSES.contains(status) {
-                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
-                let seconds = (expiration_hours * 3600.0) as i64;
-                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
-                Some(delete_time.to_rfc3339())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
-        // The Lua script only decodes ARGV[5] on a status change, so skip
-        // building the metadata for non-status patches.
-        let index_metadata_json = if update.status.is_some() {
-            self.partial_update_index_metadata(&tx_id, &update)?
-        } else {
-            String::new()
-        };
-
-        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
-
-        // Lua script: atomically applies a JSON patch to the stored transaction.
-        // Guards: rejects status changes on already-finalized transactions.
-        // Returns a two-element array {old_json, new_json} so Rust has the full
-        // pre-update state for index cleanup and metrics.
-        // Returns false if tx not found.
-        let patch_script = Script::new(
-            r#"
-            local relayer_id = redis.call('GET', KEYS[1])
-            if not relayer_id then return false end
-
-            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
-            local current = redis.call('GET', tx_key)
-            if not current then return false end
-
-            local tx = cjson.decode(current)
-            local patch = cjson.decode(ARGV[3])
-
-            -- Guard: reject status changes on finalized transactions.
-            -- A stale worker must not resurrect a tx that another worker
-            -- already moved to a terminal state.
-            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
-            if final_states[tx["status"]] and patch["status"] then
-                return {current, current}
-            end
-
-            local old_snapshot = current
-            local old_status = tx["status"]
-
-            -- An empty hashes patch is an explicit reset (Stellar retry). A
-            -- non-empty patch is merged append-only so a writer holding a
-            -- stale snapshot cannot drop hashes recorded by a concurrent
-            -- writer.
-            local patch_hashes = patch["hashes"]
-            if patch_hashes ~= nil and patch_hashes ~= cjson.null and #patch_hashes > 0 then
-                local merged = {}
-                local seen = {}
-                local stored = tx["hashes"]
-                if stored ~= nil and stored ~= cjson.null then
-                    for _, h in ipairs(stored) do
-                        merged[#merged + 1] = h
-                        seen[h] = true
-                    end
-                end
-                for _, h in ipairs(patch_hashes) do
-                    if not seen[h] then
-                        merged[#merged + 1] = h
-                        seen[h] = true
-                    end
-                end
-                patch["hashes"] = merged
-            end
-
-            -- lua-cjson cannot distinguish empty Lua tables from empty
-            -- arrays, so a decode/encode round-trip turns [] into {}.
-            -- Record which keys held [] in the stored doc and the patch
-            -- so we can restore them after cjson.encode.
-            -- NOTE: this relies on each array-typed field having a unique key
-            -- name across the entire JSON document (including nested objects).
-            -- If the model ever introduces duplicate key names at different
-            -- nesting levels (e.g. metadata.hashes), the gsub below could
-            -- restore the wrong occurrence.
-            local empty_arrs = {}
-            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-
-            for k, v in pairs(patch) do
-                tx[k] = v
-            end
-
-            -- Apply delete_at if transitioning to a final state and not already set
-            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
-                tx["delete_at"] = ARGV[4]
-            end
-
-            local updated = cjson.encode(tx)
-            local new_status = tx["status"]
-
-            -- Restore empty arrays that cjson.encode converted to {}
-            for k, _ in pairs(empty_arrs) do
-                updated = string.gsub(
-                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
-                )
-            end
-
-            local index_meta = nil
-            if patch["status"] and new_status ~= old_status then
-                index_meta = cjson.decode(ARGV[5])
-            end
-
-            redis.call('SET', tx_key, updated)
-
-            if index_meta then
-                local tx_id = index_meta["tx_id"]
-                local new_status_sorted_suffix = index_meta["sorted"][new_status]
-                local old_status_sorted_suffix = index_meta["sorted"][old_status]
-                local old_status_legacy_suffix = index_meta["legacy"][old_status]
-
-                if new_status_sorted_suffix then
-                    local score = nil
-                    if new_status == "confirmed" and index_meta["confirmed_score"] ~= "" then
-                        score = index_meta["confirmed_score"]
-                    else
-                        local created_key = ARGV[1] .. relayer_id .. index_meta["created_key_suffix"]
-                        score = redis.call('ZSCORE', created_key, tx_id)
-                        if not score then score = 0 end
-                    end
-
-                    redis.call('ZADD', ARGV[1] .. relayer_id .. new_status_sorted_suffix, score, tx_id)
-                end
-
-                if old_status_sorted_suffix then
-                    redis.call('ZREM', ARGV[1] .. relayer_id .. old_status_sorted_suffix, tx_id)
-                end
-                if old_status_legacy_suffix then
-                    redis.call('SREM', ARGV[1] .. relayer_id .. old_status_legacy_suffix, tx_id)
-                end
-
-                if final_states[new_status] then
-                    for _, status in ipairs(index_meta["nonfinal"]) do
-                        local sorted_suffix = index_meta["sorted"][status]
-                        local legacy_suffix = index_meta["legacy"][status]
-                        if sorted_suffix then
-                            redis.call('ZREM', ARGV[1] .. relayer_id .. sorted_suffix, tx_id)
-                        end
-                        if legacy_suffix then
-                            redis.call('SREM', ARGV[1] .. relayer_id .. legacy_suffix, tx_id)
-                        end
-                    end
-                end
-            end
-
-            return {old_snapshot, updated}
-            "#,
-        );
-
-        let result: Option<Vec<String>> = self
-            .run_script_with_retry_vec(
-                &patch_script,
-                &lookup_key,
-                &key_prefix,
-                &key_suffix,
-                &[&patch_json, delete_at_arg, &index_metadata_json],
-                "partial_update",
-            )
-            .await?;
-
-        let parts = result.ok_or_else(|| {
-            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
-        })?;
-
-        if parts.len() != 2 {
-            return Err(RepositoryError::UnexpectedError(format!(
-                "partial_update script returned {} elements, expected 2",
-                parts.len()
-            )));
-        }
-
-        let old_json = &parts[0];
-        let new_json = &parts[1];
-
-        let original_tx =
-            self.deserialize_entity::<TransactionRepoModel>(old_json, &tx_id, "transaction")?;
-        let updated_tx =
-            self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
-
-        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
-        // Status sorted sets are excluded: the Lua script above already moved
-        // them atomically with the body write.
-        self.update_indexes(&updated_tx, Some(&original_tx), false)
-            .await?;
-
-        debug!(tx_id = %tx_id, "successfully updated transaction via patch");
-
-        // Track metrics only when the persisted status actually changed.
-        // The Lua script may silently reject a status patch on already-final
-        // transactions, so we compare the deserialized before/after states.
-        if original_tx.status != updated_tx.status {
-            self.track_status_change_metrics(
-                &original_tx,
-                &updated_tx,
-                &original_tx.status,
-                &updated_tx.status,
-            );
-        }
-
+        let (updated_tx, _applied) = self.partial_update_guarded(tx_id, update, false).await?;
         Ok(updated_tx)
     }
 
@@ -2329,106 +2380,7 @@ impl TransactionRepository for RedisTransactionRepository {
             ));
         }
 
-        let patch_json = serde_json::to_string(&update).map_err(|e| {
-            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
-        })?;
-        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
-
-        let claim_script = Script::new(
-            r#"
-            local relayer_id = redis.call('GET', KEYS[1])
-            if not relayer_id then return false end
-
-            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
-            local current = redis.call('GET', tx_key)
-            if not current then return false end
-
-            local tx = cjson.decode(current)
-            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
-            if final_states[tx["status"]] then
-                return {current, current, "0"}
-            end
-
-            -- Only EVM records can be claimed. A non-EVM record has no
-            -- data.nonce, which would read as "unset" and let the patch
-            -- overwrite its payload; refuse instead (matches in-memory).
-            local network_data = tx["network_data"]
-            if not network_data or network_data["network_data"] ~= "Evm" then
-                return {current, current, "0"}
-            end
-            local evm_data = network_data["data"]
-            local nonce = evm_data and evm_data["nonce"]
-            if nonce ~= nil and nonce ~= cjson.null then
-                return {current, current, "0"}
-            end
-
-            local patch = cjson.decode(ARGV[3])
-
-            -- lua-cjson encodes empty Lua tables as objects. Preserve fields
-            -- that were empty arrays in either the stored JSON or the patch.
-            -- Copied from partial_update; see the NOTE there about the
-            -- unique-key-name assumption this gsub restore relies on.
-            local empty_arrs = {}
-            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-
-            for k, v in pairs(patch) do
-                tx[k] = v
-            end
-
-            local updated = cjson.encode(tx)
-            for k, _ in pairs(empty_arrs) do
-                updated = string.gsub(
-                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
-                )
-            end
-
-            redis.call('SET', tx_key, updated)
-            return {current, updated, "1"}
-            "#,
-        );
-
-        let result: Option<Vec<String>> = self
-            .run_script_with_retry_vec(
-                &claim_script,
-                &lookup_key,
-                &key_prefix,
-                &key_suffix,
-                &[&patch_json],
-                "partial_update_if_evm_nonce_unset",
-            )
-            .await?;
-
-        let parts = result.ok_or_else(|| {
-            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
-        })?;
-
-        if parts.len() != 3 {
-            return Err(RepositoryError::UnexpectedError(format!(
-                "partial_update_if_evm_nonce_unset script returned {} elements, expected 3",
-                parts.len()
-            )));
-        }
-
-        let applied = parts[2] == "1";
-        let original_tx =
-            self.deserialize_entity::<TransactionRepoModel>(&parts[0], &tx_id, "transaction")?;
-        let updated_tx =
-            self.deserialize_entity::<TransactionRepoModel>(&parts[1], &tx_id, "transaction")?;
-
-        // Refresh the auxiliary indexes on both outcomes: a retry after a
-        // lost reply reports applied=false for a claim that actually landed,
-        // and the nonce index must not stay unwritten (the occupancy scan
-        // would see a false gap). The index writes are idempotent.
-        self.update_indexes(&updated_tx, Some(&original_tx), false)
-            .await?;
-
-        debug!(tx_id = %tx_id, applied, "completed conditional transaction nonce claim");
-        Ok((updated_tx, applied))
+        self.partial_update_guarded(tx_id, update, true).await
     }
 
     async fn reconcile_stale_status_indexes(
@@ -4067,6 +4019,41 @@ mod tests {
             None
         );
         assert_eq!(stored.priced_at, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_partial_update_if_evm_nonce_unset_refuses_non_evm() {
+        let repo = setup_test_repo().await;
+        let tx_id = Uuid::new_v4().to_string();
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx = create_stellar_test_transaction(&tx_id, &relayer_id, 42, 100, 7);
+        repo.create(tx).await.unwrap();
+
+        // A Stellar record has no data.nonce, which would read as "unset";
+        // the claim must refuse instead of overwriting the payload.
+        let claim_evm_data = EvmTransactionData::default();
+        let (stored, applied) = repo
+            .partial_update_if_evm_nonce_unset(
+                tx_id.clone(),
+                nonce_claim_update(&claim_evm_data, 21),
+            )
+            .await
+            .unwrap();
+
+        assert!(!applied);
+        assert!(matches!(
+            stored.network_data,
+            NetworkTransactionData::Stellar(_)
+        ));
+        assert_eq!(
+            stored
+                .network_data
+                .get_stellar_transaction_data()
+                .unwrap()
+                .sequence_number,
+            Some(42)
+        );
     }
 
     #[tokio::test]
