@@ -22,6 +22,31 @@ use crate::{
 
 use super::{NetworkTransaction, RelayerTransactionFactory};
 
+/// Which data source a transaction read targets.
+enum TxReadSource {
+    /// Standard read; may hit a replica when `REDIS_READER_URL` is configured.
+    Replica,
+    /// Primary read; guarantees read-your-writes consistency.
+    Primary,
+}
+
+/// Shared impl for [`get_transaction_by_id`] and
+/// [`get_transaction_by_id_on_primary`].
+async fn get_transaction_from<TR>(
+    repository: &TR,
+    transaction_id: String,
+    source: TxReadSource,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+{
+    let result = match source {
+        TxReadSource::Replica => repository.get_by_id(transaction_id).await,
+        TxReadSource::Primary => repository.get_by_id_on_primary(transaction_id).await,
+    };
+    result.map_err(|e| e.into())
+}
+
 /// Retrieves a transaction by its ID.
 ///
 /// # Arguments
@@ -56,11 +81,12 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    state
-        .transaction_repository
-        .get_by_id(transaction_id)
-        .await
-        .map_err(|e| e.into())
+    get_transaction_from(
+        state.transaction_repository.as_ref(),
+        transaction_id,
+        TxReadSource::Replica,
+    )
+    .await
 }
 
 /// Retrieves a transaction by its ID from the primary data source.
@@ -92,11 +118,12 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    state
-        .transaction_repository
-        .get_by_id_on_primary(transaction_id)
-        .await
-        .map_err(|e| e.into())
+    get_transaction_from(
+        state.transaction_repository.as_ref(),
+        transaction_id,
+        TxReadSource::Primary,
+    )
+    .await
 }
 
 /// Creates a relayer network transaction instance based on the relayer ID.

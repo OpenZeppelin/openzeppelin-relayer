@@ -207,6 +207,14 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[async_trait]
 impl TransactionRepository for InMemoryTransactionRepository {
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        // No read replicas in memory; the standard read is the primary read.
+        Repository::get_by_id(self, id).await
+    }
+
     async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
@@ -822,7 +830,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_by_id_on_primary_uses_default_repository_read() {
+    async fn test_get_by_id_on_primary_delegates_to_repository_read() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-primary-read");
 

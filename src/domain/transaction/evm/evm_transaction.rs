@@ -73,6 +73,16 @@ pub(super) enum SubmissionErrorKind {
     Other(String),
 }
 
+/// Outcome of a nonce claim during transaction preparation.
+#[derive(Debug)]
+pub(super) enum NonceOutcome {
+    /// The transaction holds a nonce and preparation can continue.
+    Ready(TransactionRepoModel),
+    /// The claim was lost to a concurrent prepare and the stored transaction
+    /// already left Pending; preparation must stop.
+    Abandoned(TransactionRepoModel),
+}
+
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
@@ -335,30 +345,124 @@ where
             .await
     }
 
+    /// Best-effort variant of [`Self::schedule_nonce_health_job`]:
+    /// scheduling failures are logged, never propagated.
+    pub(super) async fn schedule_nonce_health_best_effort(
+        &self,
+        relayer_id: &str,
+        tx_id: &str,
+        nonce_hint: Option<u64>,
+        context: &str,
+    ) {
+        if let Err(e) = self.schedule_nonce_health_job(relayer_id, nonce_hint).await {
+            warn!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                nonce = ?nonce_hint,
+                context,
+                error = %e,
+                "failed to schedule nonce health job"
+            );
+        }
+    }
+
     /// Best-effort gap fill when a transaction that may hold a consumed nonce
     /// is marked Failed: if a nonce is assigned, schedule a nonce health job
-    /// so the abandoned slot is filled promptly; scheduling failures are
-    /// logged, never propagated.
+    /// so the abandoned slot is filled promptly.
     pub(super) async fn schedule_nonce_health_if_assigned(
         &self,
         tx: &TransactionRepoModel,
         context: &str,
     ) {
         if let Some(nonce) = tx.network_data.evm_nonce() {
-            if let Err(e) = self
-                .schedule_nonce_health_job(&tx.relayer_id, Some(nonce))
-                .await
-            {
+            self.schedule_nonce_health_best_effort(&tx.relayer_id, &tx.id, Some(nonce), context)
+                .await;
+        }
+    }
+
+    /// Assigns a nonce to `tx`, or reuses its existing one (recovery from a
+    /// failed signing attempt).
+    ///
+    /// New nonces are claimed with an atomic conditional write on the stored
+    /// record. When the claim is lost to a concurrent prepare, the winner's
+    /// nonce is adopted and the leaked counter value is handed to gap fill.
+    pub(super) async fn claim_nonce(
+        &self,
+        tx: TransactionRepoModel,
+        evm_data: EvmTransactionData,
+        price_params: &PriceParams,
+    ) -> Result<NonceOutcome, TransactionError> {
+        // Check if transaction already has a nonce (recovery from failed signing attempt)
+        if let Some(existing_nonce) = evm_data.nonce {
+            debug!(
+                nonce = existing_nonce,
+                "transaction already has nonce assigned, reusing for retry"
+            );
+            // Retry flow: When reusing an existing nonce from a failed attempt, we intentionally
+            // do NOT persist the fresh price_params (computed earlier) to the DB here. The DB may
+            // temporarily hold stale price_params from the failed attempt. However, fresh price_params
+            // are applied just before signing, ensuring the transaction uses
+            // current gas prices.
+            return Ok(NonceOutcome::Ready(tx));
+        }
+
+        // Balance validation passed, proceed to increment nonce
+        let new_nonce = self
+            .transaction_counter_service
+            .get_and_increment(&self.relayer.id, &self.relayer.address)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
+
+        debug!(nonce = new_nonce, "assigned new nonce to transaction");
+
+        let updated_evm_data = evm_data
+            .with_price_params(price_params.clone())
+            .with_nonce(new_nonce);
+
+        // Save transaction with nonce BEFORE signing
+        // This ensures we can recover if signing fails (timeout, KMS error, etc.)
+        let presign_update = TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Evm(updated_evm_data.clone())),
+            priced_at: Some(Utc::now().to_rfc3339()),
+            ..Default::default()
+        };
+
+        let (claimed_tx, applied) = self
+            .transaction_repository
+            .partial_update_if_evm_nonce_unset(tx.id.clone(), presign_update)
+            .await?;
+
+        if !applied {
+            warn!(
+                tx_id = %claimed_tx.id,
+                relayer_id = %claimed_tx.relayer_id,
+                allocated_nonce = new_nonce,
+                claimed_nonce = ?claimed_tx.network_data.evm_nonce(),
+                "transaction nonce claim lost to concurrent prepare"
+            );
+
+            // Hint with the leaked (allocated) nonce, not the claimed one:
+            // the gap sits at the allocated value, and the health scan's
+            // upper bound is exclusive at hint + 1.
+            self.schedule_nonce_health_best_effort(
+                &claimed_tx.relayer_id,
+                &claimed_tx.id,
+                Some(new_nonce),
+                "nonce claim race",
+            )
+            .await;
+
+            if claimed_tx.status != TransactionStatus::Pending {
                 warn!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    nonce,
-                    context,
-                    error = %e,
-                    "failed to schedule nonce health job"
+                    tx_id = %claimed_tx.id,
+                    status = ?claimed_tx.status,
+                    "transaction left Pending state during nonce claim, skipping signing"
                 );
+                return Ok(NonceOutcome::Abandoned(claimed_tx));
             }
         }
+
+        Ok(NonceOutcome::Ready(claimed_tx))
     }
 
     /// Handles a "nonce too high" error by incrementing the retry counter and
@@ -812,79 +916,11 @@ where
             }
         }
 
-        // Check if transaction already has a nonce (recovery from failed signing attempt)
-        let tx_with_nonce = if let Some(existing_nonce) = evm_data.nonce {
-            debug!(
-                nonce = existing_nonce,
-                "transaction already has nonce assigned, reusing for retry"
-            );
-            // Retry flow: When reusing an existing nonce from a failed attempt, we intentionally
-            // do NOT persist the fresh price_params (computed earlier) to the DB here. The DB may
-            // temporarily hold stale price_params from the failed attempt. However, fresh price_params
-            // are applied just before signing, ensuring the transaction uses
-            // current gas prices.
-            tx
-        } else {
-            // Balance validation passed, proceed to increment nonce
-            let new_nonce = self
-                .transaction_counter_service
-                .get_and_increment(&self.relayer.id, &self.relayer.address)
-                .await
-                .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
-
-            debug!(nonce = new_nonce, "assigned new nonce to transaction");
-
-            let updated_evm_data = evm_data
-                .with_price_params(price_params.clone())
-                .with_nonce(new_nonce);
-
-            // Save transaction with nonce BEFORE signing
-            // This ensures we can recover if signing fails (timeout, KMS error, etc.)
-            let presign_update = TransactionUpdateRequest {
-                network_data: Some(NetworkTransactionData::Evm(updated_evm_data.clone())),
-                priced_at: Some(Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-
-            let (claimed_tx, applied) = self
-                .transaction_repository
-                .partial_update_if_evm_nonce_unset(tx.id.clone(), presign_update)
-                .await?;
-
-            if !applied {
-                warn!(
-                    tx_id = %claimed_tx.id,
-                    relayer_id = %claimed_tx.relayer_id,
-                    allocated_nonce = new_nonce,
-                    claimed_nonce = ?claimed_tx.network_data.evm_nonce(),
-                    "transaction nonce claim lost to concurrent prepare"
-                );
-
-                // Hint with the leaked (allocated) nonce, not the claimed one:
-                // the gap sits at the allocated value, and the health scan's
-                // upper bound is exclusive at hint + 1.
-                if let Err(e) = self
-                    .schedule_nonce_health_job(&claimed_tx.relayer_id, Some(new_nonce))
-                    .await
-                {
-                    warn!(
-                        tx_id = %claimed_tx.id,
-                        error = %e,
-                        "failed to schedule nonce health after nonce claim race"
-                    );
-                }
-
-                if claimed_tx.status != TransactionStatus::Pending {
-                    warn!(
-                        tx_id = %claimed_tx.id,
-                        status = ?claimed_tx.status,
-                        "transaction left Pending state during nonce claim, skipping signing"
-                    );
-                    return Ok(claimed_tx);
-                }
-            }
-
-            claimed_tx
+        // Assign a new nonce or reuse an existing one; a lost claim can
+        // abandon preparation.
+        let tx_with_nonce = match self.claim_nonce(tx, evm_data, &price_params).await? {
+            NonceOutcome::Ready(tx) => tx,
+            NonceOutcome::Abandoned(tx) => return Ok(tx),
         };
 
         // Apply price params for signing (recalculated on every attempt)
@@ -902,17 +938,15 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Track the transaction hash
-        let mut hashes = tx_with_nonce.hashes.clone();
-        if let Some(hash) = updated_evm_data.hash.clone() {
-            hashes.push(hash);
-        }
+        // Track the transaction hash; the patch layer merges it append-only
+        // into the stored list (None leaves the stored list untouched).
+        let new_hash = updated_evm_data.hash.clone();
 
         // Update with signed data and mark as Sent
         let postsign_update = TransactionUpdateRequest {
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
-            hashes: Some(hashes),
+            hashes: new_hash.map(|hash| vec![hash]),
             ..Default::default()
         };
 
@@ -1282,15 +1316,14 @@ where
                 ..Default::default()
             }
         } else {
-            // Transaction resubmitted successfully - update with new hash and pricing
-            let mut hashes = tx.hashes.clone();
-            if let Some(hash) = final_evm_data.hash.clone() {
-                hashes.push(hash);
-            }
+            // Transaction resubmitted successfully - update with new hash and
+            // pricing. The patch layer merges the hash append-only into the
+            // stored list (None leaves the stored list untouched).
+            let new_hash = final_evm_data.hash.clone();
 
             TransactionUpdateRequest {
                 network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-                hashes: Some(hashes),
+                hashes: new_hash.map(|hash| vec![hash]),
                 status: Some(TransactionStatus::Submitted),
                 priced_at: Some(Utc::now().to_rfc3339()),
                 sent_at: Some(Utc::now().to_rfc3339()),
@@ -1909,8 +1942,19 @@ mod tests {
         assert!(!prepared_tx.hashes.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_prepare_transaction_uses_claimed_nonce_after_losing_claim() {
+    /// Drives `prepare_transaction` through the nonce-claim path.
+    ///
+    /// `preset_nonce` puts a nonce on the input transaction (reuse path:
+    /// no counter consumption, no claim attempt). `lost_claim_status`
+    /// makes the claim lose to a concurrent prepare: the stored record
+    /// comes back in the given status carrying nonce 42, while the counter
+    /// allocates 43 — so the scheduled health job must be hinted with the
+    /// leaked 43. A lost claim on a record that already left Pending
+    /// abandons preparation: no signing, no postsign write, no submit job.
+    async fn run_prepare_nonce_scenario(
+        preset_nonce: Option<u64>,
+        lost_claim_status: Option<TransactionStatus>,
+    ) -> TransactionRepoModel {
         let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
@@ -1919,12 +1963,14 @@ mod tests {
         let mut mock_price_calculator = MockPriceCalculator::new();
         let mut counter_service = MockTransactionCounterTrait::new();
         let relayer = create_test_relayer();
-        let test_tx = create_test_transaction();
+        let mut test_tx = create_test_transaction();
 
-        counter_service
-            .expect_get_and_increment()
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(43))));
+        if let Some(nonce) = preset_nonce {
+            let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data else {
+                panic!("Expected EVM transaction data");
+            };
+            evm_data.nonce = Some(nonce);
+        }
 
         let price_params = PriceParams {
             gas_price: Some(30_000_000_000),
@@ -1954,70 +2000,107 @@ mod tests {
                 })
             });
 
-        mock_signer
-            .expect_sign_transaction()
-            .withf(|network_data| {
-                network_data
-                    .get_evm_transaction_data()
-                    .is_ok_and(|data| data.nonce == Some(42))
-            })
-            .times(1)
-            .returning(|_| {
-                Box::pin(ready(Ok(
-                    crate::domain::relayer::SignTransactionResponse::Evm(
-                        crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xtx_hash".to_string(),
-                            signature: crate::models::EvmTransactionDataSignature {
-                                r: "r".to_string(),
-                                s: "s".to_string(),
-                                v: 1,
-                                sig: "0xsignature".to_string(),
+        // Nonce source: a preset nonce is reused (gap-filling NOOPs, signing
+        // retries) with no counter consumption and no claim attempt.
+        if preset_nonce.is_some() {
+            counter_service.expect_get_and_increment().never();
+            mock_transaction
+                .expect_partial_update_if_evm_nonce_unset()
+                .never();
+        } else {
+            counter_service
+                .expect_get_and_increment()
+                .times(1)
+                .returning(|_, _| Box::pin(ready(Ok(43))));
+        }
+
+        let abandoned =
+            matches!(lost_claim_status, Some(ref s) if *s != TransactionStatus::Pending);
+
+        if let Some(status) = lost_claim_status {
+            // The claim loses: the stored record already carries nonce 42.
+            let mut claimed_tx = test_tx.clone();
+            claimed_tx.status = status;
+            let NetworkTransactionData::Evm(ref mut evm_data) = claimed_tx.network_data else {
+                panic!("Expected EVM transaction data");
+            };
+            evm_data.nonce = Some(42);
+            mock_transaction
+                .expect_partial_update_if_evm_nonce_unset()
+                .times(1)
+                .return_once(move |_, _| Ok((claimed_tx, false)));
+
+            // The leaked (allocated) nonce 43 is handed to gap fill.
+            mock_job_producer
+                .expect_produce_relayer_health_check_job()
+                .withf(|job, scheduled_on| {
+                    scheduled_on.is_none()
+                        && job.relayer_id == "test-relayer-id"
+                        && job.metadata.as_ref().is_some_and(|metadata| {
+                            metadata.get("health_check_action") == Some(&"nonce_health".to_string())
+                                && metadata.get("nonce_hint") == Some(&"43".to_string())
+                        })
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+        } else {
+            mock_job_producer
+                .expect_produce_relayer_health_check_job()
+                .never();
+        }
+
+        if abandoned {
+            // No signing, no postsign write, no submit job.
+            mock_signer.expect_sign_transaction().never();
+            mock_transaction.expect_partial_update().never();
+            mock_job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+        } else {
+            let signing_nonce = preset_nonce.unwrap_or(42);
+            mock_signer
+                .expect_sign_transaction()
+                .withf(move |network_data| {
+                    network_data
+                        .get_evm_transaction_data()
+                        .is_ok_and(|data| data.nonce == Some(signing_nonce))
+                })
+                .times(1)
+                .returning(|_| {
+                    Box::pin(ready(Ok(
+                        crate::domain::relayer::SignTransactionResponse::Evm(
+                            crate::domain::relayer::SignTransactionResponseEvm {
+                                hash: "0xtx_hash".to_string(),
+                                signature: crate::models::EvmTransactionDataSignature {
+                                    r: "r".to_string(),
+                                    s: "s".to_string(),
+                                    v: 1,
+                                    sig: "0xsignature".to_string(),
+                                },
+                                raw: vec![1, 2, 3],
                             },
-                            raw: vec![1, 2, 3],
-                        },
-                    ),
-                )))
-            });
+                        ),
+                    )))
+                });
 
-        let mut claimed_tx = test_tx.clone();
-        let NetworkTransactionData::Evm(ref mut evm_data) = claimed_tx.network_data else {
-            panic!("Expected EVM transaction data");
-        };
-        evm_data.nonce = Some(42);
-        mock_transaction
-            .expect_partial_update_if_evm_nonce_unset()
-            .times(1)
-            .return_once(move |_, _| Ok((claimed_tx, false)));
+            let test_tx_clone = test_tx.clone();
+            mock_transaction
+                .expect_partial_update()
+                .times(1)
+                .returning(move |_, update| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.apply_partial_update(update);
+                    Ok(updated_tx)
+                });
 
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.apply_partial_update(update);
-                Ok(updated_tx)
-            });
-
-        mock_job_producer
-            .expect_produce_relayer_health_check_job()
-            .withf(|job, scheduled_on| {
-                scheduled_on.is_none()
-                    && job.relayer_id == "test-relayer-id"
-                    && job.metadata.as_ref().is_some_and(|metadata| {
-                        metadata.get("health_check_action") == Some(&"nonce_health".to_string())
-                            && metadata.get("nonce_hint") == Some(&"43".to_string())
-                    })
-            })
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-        mock_job_producer
-            .expect_produce_submit_transaction_job()
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-        mock_job_producer
-            .expect_produce_send_notification_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
+            mock_job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+            mock_job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+        }
 
         let evm_transaction = EvmRelayerTransaction {
             relayer,
@@ -2031,7 +2114,12 @@ mod tests {
             signer: mock_signer,
         };
 
-        let prepared_tx = evm_transaction.prepare_transaction(test_tx).await.unwrap();
+        evm_transaction.prepare_transaction(test_tx).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_uses_claimed_nonce_after_losing_claim() {
+        let prepared_tx = run_prepare_nonce_scenario(None, Some(TransactionStatus::Pending)).await;
 
         assert_eq!(
             prepared_tx
@@ -2045,114 +2133,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_preset_nonce_skips_counter_and_claim() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mut mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let relayer = create_test_relayer();
-        let mut test_tx = create_test_transaction();
-        let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data else {
-            panic!("Expected EVM transaction data");
-        };
-        evm_data.nonce = Some(7);
-
-        // Preset nonce (gap-filling NOOPs, signing retries) must be reused:
-        // no counter consumption, no claim attempt.
-        counter_service.expect_get_and_increment().never();
-        mock_transaction
-            .expect_partial_update_if_evm_nonce_unset()
-            .never();
-
-        let price_params = PriceParams {
-            gas_price: Some(30_000_000_000),
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-            is_min_bumped: None,
-            extra_fee: None,
-            total_cost: U256::from(630_000_000_000_000u64),
-        };
-        mock_price_calculator
-            .expect_get_transaction_price_params()
-            .returning(move |_, _| Ok(price_params.clone()));
-
-        mock_provider
-            .expect_get_balance()
-            .with(eq("0xSender"))
-            .returning(|_| Box::pin(ready(Ok(U256::from(1_000_000_000_000_000_000u64)))));
-        mock_provider
-            .expect_get_block_by_number()
-            .times(1)
-            .returning(|| {
-                Box::pin(async {
-                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
-                    let mut block: Block = Block::default();
-                    block.header.gas_limit = 30_000_000;
-                    Ok(AnyRpcBlock::from(block))
-                })
-            });
-
-        mock_signer
-            .expect_sign_transaction()
-            .withf(|network_data| {
-                network_data
-                    .get_evm_transaction_data()
-                    .is_ok_and(|data| data.nonce == Some(7))
-            })
-            .times(1)
-            .returning(|_| {
-                Box::pin(ready(Ok(
-                    crate::domain::relayer::SignTransactionResponse::Evm(
-                        crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xtx_hash".to_string(),
-                            signature: crate::models::EvmTransactionDataSignature {
-                                r: "r".to_string(),
-                                s: "s".to_string(),
-                                v: 1,
-                                sig: "0xsignature".to_string(),
-                            },
-                            raw: vec![1, 2, 3],
-                        },
-                    ),
-                )))
-            });
-
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.apply_partial_update(update);
-                Ok(updated_tx)
-            });
-
-        mock_job_producer
-            .expect_produce_relayer_health_check_job()
-            .never();
-        mock_job_producer
-            .expect_produce_submit_transaction_job()
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-        mock_job_producer
-            .expect_produce_send_notification_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer,
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(MockNetworkRepository::new()),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let prepared_tx = evm_transaction.prepare_transaction(test_tx).await.unwrap();
+        let prepared_tx = run_prepare_nonce_scenario(Some(7), None).await;
 
         assert_eq!(
             prepared_tx
@@ -2166,86 +2147,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_lost_claim_to_finalized_tx_skips_signing() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mut mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let relayer = create_test_relayer();
-        let test_tx = create_test_transaction();
-
-        counter_service
-            .expect_get_and_increment()
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(43))));
-
-        let price_params = PriceParams {
-            gas_price: Some(30_000_000_000),
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-            is_min_bumped: None,
-            extra_fee: None,
-            total_cost: U256::from(630_000_000_000_000u64),
-        };
-        mock_price_calculator
-            .expect_get_transaction_price_params()
-            .returning(move |_, _| Ok(price_params.clone()));
-
-        mock_provider
-            .expect_get_balance()
-            .with(eq("0xSender"))
-            .returning(|_| Box::pin(ready(Ok(U256::from(1_000_000_000_000_000_000u64)))));
-        mock_provider
-            .expect_get_block_by_number()
-            .times(1)
-            .returning(|| {
-                Box::pin(async {
-                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
-                    let mut block: Block = Block::default();
-                    block.header.gas_limit = 30_000_000;
-                    Ok(AnyRpcBlock::from(block))
-                })
-            });
-
         // The record finalized while this prepare was in flight: the claim is
         // rejected and the returned record is no longer Pending.
-        let mut claimed_tx = test_tx.clone();
-        claimed_tx.status = TransactionStatus::Confirmed;
-        let NetworkTransactionData::Evm(ref mut evm_data) = claimed_tx.network_data else {
-            panic!("Expected EVM transaction data");
-        };
-        evm_data.nonce = Some(42);
-        mock_transaction
-            .expect_partial_update_if_evm_nonce_unset()
-            .times(1)
-            .return_once(move |_, _| Ok((claimed_tx, false)));
+        let result = run_prepare_nonce_scenario(None, Some(TransactionStatus::Confirmed)).await;
 
-        // No signing, no postsign write, no submit job.
-        mock_signer.expect_sign_transaction().never();
-        mock_transaction.expect_partial_update().never();
-        mock_job_producer
-            .expect_produce_submit_transaction_job()
-            .never();
-        mock_job_producer
-            .expect_produce_relayer_health_check_job()
-            .times(1)
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer,
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(MockNetworkRepository::new()),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.prepare_transaction(test_tx).await.unwrap();
         assert_eq!(result.status, TransactionStatus::Confirmed);
     }
 

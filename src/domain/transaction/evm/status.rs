@@ -349,7 +349,9 @@ where
     ///
     /// Returns a tuple `(should_noop, reason)` where:
     /// - `should_noop`: `true` if transaction should be replaced with NOOP
-    /// - `reason`: Optional reason string explaining why NOOP is needed (only set when `should_noop` is `true`)
+    /// - `reason`: Optional cause string (only set when `should_noop` is `true`).
+    ///   The cause states why the transaction cannot proceed; each caller
+    ///   appends the action it takes (NOOP replacement or failure).
     ///
     /// # Arguments
     ///
@@ -384,8 +386,7 @@ where
         })?;
 
         if network.is_rollup() && too_many_attempts(tx) {
-            let reason =
-                "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
+            let reason = "Rollup transaction has too many attempts.".to_string();
             debug!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -396,7 +397,7 @@ where
         }
 
         if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
-            let reason = "Transaction is expired. Replacing with NOOP.".to_string();
+            let reason = "Transaction is expired.".to_string();
             debug!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -416,7 +417,7 @@ where
             let age = Utc::now().signed_duration_since(created_time);
             if age > get_evm_prepare_timeout() {
                 let reason = format!(
-                    "Transaction in Pending state for over {} minutes. Replacing with NOOP.",
+                    "Transaction in Pending state for over {} minutes.",
                     get_evm_prepare_timeout().num_minutes()
                 );
                 debug!(
@@ -435,8 +436,8 @@ where
             if let Some(gas_limit) = evm_data.gas_limit {
                 if gas_limit > block_gas_limit {
                     let reason = format!(
-                                "Transaction gas limit ({gas_limit}) exceeds block gas limit ({block_gas_limit}). Replacing with NOOP.",
-                            );
+                        "Transaction gas limit ({gas_limit}) exceeds block gas limit ({block_gas_limit})."
+                    );
                     warn!(
                         tx_id = %tx.id,
                         tx_gas_limit = %gas_limit,
@@ -662,6 +663,7 @@ where
         // Check if transaction gas limit exceeds block gas limit before resubmitting
         let (should_noop, reason) = self.should_noop(&tx).await?;
         let tx_to_process = if should_noop {
+            let reason = reason.map(|r| format!("{r} Replacing with NOOP."));
             self.process_noop_transaction(&tx, reason).await?
         } else {
             tx
@@ -720,10 +722,7 @@ where
             );
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
-                // should_noop's reasons end with "Replacing with NOOP.", but
-                // this branch fails the transaction instead of NOPing it.
-                status_reason: reason
-                    .map(|r| r.replace("Replacing with NOOP.", "Marked as Failed.")),
+                status_reason: reason.map(|r| format!("{r} Marked as Failed.")),
                 ..Default::default()
             };
             let updated_tx = self
@@ -1388,6 +1387,7 @@ where
                 relayer_id = %tx.relayer_id,
                 "preparing NOOP for sent transaction"
             );
+            let reason = reason.map(|r| format!("{r} Replacing with NOOP."));
             let update = self.prepare_noop_update_request(&tx, false, reason).await?;
             let updated_tx = self
                 .transaction_repository()

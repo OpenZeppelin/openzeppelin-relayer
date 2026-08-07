@@ -63,12 +63,13 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
     /// Retrieves a transaction from the primary data source.
     ///
     /// Backends without read replicas use the standard repository read.
+    /// Required (no default body) so every implementation — including
+    /// wrappers — must dispatch it explicitly and cannot silently fall
+    /// back to a replica read.
     async fn get_by_id_on_primary(
         &self,
         id: String,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        Repository::get_by_id(self, id).await
-    }
+    ) -> Result<TransactionRepoModel, RepositoryError>;
 
     /// Find transactions by relayer ID with pagination
     async fn find_by_relayer_id(
