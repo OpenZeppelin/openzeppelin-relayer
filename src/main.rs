@@ -53,10 +53,7 @@ use openzeppelin_relayer::{
         shutdown_plugin_pool, RuntimeConfig,
     },
     config,
-    constants::{
-        stellar_status_check_initial_delay_seconds, DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS,
-        PUBLIC_ENDPOINTS,
-    },
+    constants::{DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS, PUBLIC_ENDPOINTS},
     logging::setup_logging,
     metrics,
     models::NetworkType,
@@ -139,7 +136,8 @@ async fn main() -> Result<()> {
     // Resolve and log the Stellar status poll cadence (env-configurable).
     let stellar_status_backoff = status_backoff_config(Some(NetworkType::Stellar));
     info!(
-        initial_delay_seconds = stellar_status_check_initial_delay_seconds(),
+        initial_delay_seconds =
+            config::ServerConfig::get_stellar_status_check_initial_delay_seconds(),
         retry_initial_ms = stellar_status_backoff.initial_ms,
         retry_max_ms = stellar_status_backoff.max_ms,
         "resolved Stellar status poll cadence"

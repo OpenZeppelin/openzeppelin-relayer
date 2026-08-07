@@ -1,6 +1,7 @@
 /// Configuration for the server, including network and rate limiting settings.
-use std::{env, str::FromStr};
+use std::{env, str::FromStr, sync::OnceLock};
 use strum::Display;
+use tracing::warn;
 
 use crate::{
     constants::{
@@ -8,8 +9,10 @@ use crate::{
         DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
         STELLAR_FEE_FORWARDER_MAINNET, STELLAR_SOROSWAP_MAINNET_FACTORY,
         STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_MAINNET_ROUTER,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
     },
     models::SecretString,
+    queues::retry_config::STATUS_STELLAR_BACKOFF,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
@@ -755,6 +758,55 @@ impl ServerConfig {
         }
     }
 
+    // =========================================================================
+    // Stellar Status Poll Cadence Getters
+    // =========================================================================
+    // Each value is read from the environment once (cached in a `OnceLock`) and
+    // falls back to the compiled-in default when unset or invalid.
+
+    /// Gets the initial delay in seconds before the first Stellar status check.
+    ///
+    /// Reads `STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS` (valid `0..=60`);
+    /// defaults to [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+    pub fn get_stellar_status_check_initial_delay_seconds() -> i64 {
+        static RESOLVED: OnceLock<i64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_check_initial_delay_seconds(
+                env::var("STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS")
+                    .ok()
+                    .as_deref(),
+            )
+        })
+    }
+
+    /// Gets the initial Stellar status-check retry delay in milliseconds.
+    ///
+    /// Reads `STELLAR_STATUS_RETRY_INITIAL_MS` (valid `500..=60000`);
+    /// defaults to `STATUS_STELLAR_BACKOFF.initial_ms`.
+    pub fn get_stellar_status_retry_initial_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_retry_initial_ms(
+                env::var("STELLAR_STATUS_RETRY_INITIAL_MS").ok().as_deref(),
+            )
+        })
+    }
+
+    /// Gets the maximum Stellar status-check retry delay in milliseconds.
+    ///
+    /// Reads `STELLAR_STATUS_RETRY_MAX_MS` (valid `500..=60000`); defaults to
+    /// `STATUS_STELLAR_BACKOFF.max_ms`. The result is clamped up to the
+    /// resolved initial retry delay so the cap is never below it.
+    pub fn get_stellar_status_retry_max_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_retry_max_ms(
+                env::var("STELLAR_STATUS_RETRY_MAX_MS").ok().as_deref(),
+                Self::get_stellar_status_retry_initial_ms(),
+            )
+        })
+    }
+
     /// Get worker concurrency from environment variable or use default
     ///
     /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`
@@ -800,6 +852,80 @@ impl ServerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
             .max(1)
+    }
+}
+
+/// Parses the initial status-check delay override in seconds.
+///
+/// Valid range is `0..=60`. Unset or invalid values fall back to
+/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+    let Some(raw) = raw else {
+        return STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+    };
+    match raw.trim().parse::<i64>() {
+        Ok(value) if (0..=60).contains(&value) => value,
+        _ => {
+            warn!(
+                env_var = "STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS",
+                value = raw,
+                default = STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                "invalid Stellar status-check initial delay override; using default"
+            );
+            STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        }
+    }
+}
+
+/// Parses the Stellar status-check initial retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_STELLAR_BACKOFF.initial_ms`.
+fn parse_stellar_status_retry_initial_ms(raw: Option<&str>) -> u64 {
+    parse_stellar_status_retry_ms(
+        "STELLAR_STATUS_RETRY_INITIAL_MS",
+        raw,
+        STATUS_STELLAR_BACKOFF.initial_ms,
+    )
+}
+
+/// Parses the Stellar status-check maximum retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_STELLAR_BACKOFF.max_ms`. The result is clamped up to `initial_ms`
+/// so the cap is never below the initial delay; the clamp is logged so an
+/// explicit-but-overridden value leaves a trace.
+fn parse_stellar_status_retry_max_ms(raw: Option<&str>, initial_ms: u64) -> u64 {
+    let max_ms = parse_stellar_status_retry_ms(
+        "STELLAR_STATUS_RETRY_MAX_MS",
+        raw,
+        STATUS_STELLAR_BACKOFF.max_ms,
+    );
+    if max_ms < initial_ms {
+        warn!(
+            max_ms,
+            initial_ms,
+            "STELLAR_STATUS_RETRY_MAX_MS is below the resolved initial retry delay; clamping up to the initial delay"
+        );
+    }
+    max_ms.max(initial_ms)
+}
+
+fn parse_stellar_status_retry_ms(name: &str, raw: Option<&str>, default: u64) -> u64 {
+    let Some(raw) = raw else {
+        return default;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(value) if (500..=60_000).contains(&value) => value,
+        _ => {
+            warn!(
+                env_var = name,
+                value = raw,
+                default,
+                "invalid Stellar status retry override; using default"
+            );
+            default
+        }
     }
 }
 
@@ -2380,6 +2506,112 @@ mod tests {
                 result, 1,
                 "Default of 0 should also be clamped to minimum of 1"
             );
+        }
+    }
+
+    mod stellar_status_poll_cadence_tests {
+        use super::super::*;
+
+        #[test]
+        fn test_parse_initial_delay_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(None),
+                STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+            );
+        }
+
+        #[test]
+        fn test_parse_initial_delay_valid_override() {
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("5")),
+                5
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("0")),
+                0
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("60")),
+                60
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some(" 3 ")),
+                3
+            );
+        }
+
+        #[test]
+        fn test_parse_initial_delay_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "61", "2.5"] {
+                assert_eq!(
+                    parse_stellar_status_check_initial_delay_seconds(Some(raw)),
+                    STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_retry_initial_ms(None),
+                STATUS_STELLAR_BACKOFF.initial_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_valid_override() {
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some("5000")), 5000);
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some(" 500 ")), 500);
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some("60000")), 60000);
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "2.5", "499", "60001"] {
+                assert_eq!(
+                    parse_stellar_status_retry_initial_ms(Some(raw)),
+                    STATUS_STELLAR_BACKOFF.initial_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_retry_max_ms(None, STATUS_STELLAR_BACKOFF.initial_ms),
+                STATUS_STELLAR_BACKOFF.max_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_valid_override() {
+            assert_eq!(parse_stellar_status_retry_max_ms(Some("8000"), 2000), 8000);
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_invalid_uses_default() {
+            for raw in ["garbage", "-1", "499", "60001"] {
+                assert_eq!(
+                    parse_stellar_status_retry_max_ms(Some(raw), 2000),
+                    STATUS_STELLAR_BACKOFF.max_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_clamped_up_to_initial() {
+            // Valid but below initial: clamp up to initial.
+            assert_eq!(parse_stellar_status_retry_max_ms(Some("3000"), 5000), 5000);
+            // Invalid with default below initial: default then clamp up.
+            assert_eq!(
+                parse_stellar_status_retry_max_ms(Some("garbage"), 5000),
+                5000
+            );
+            // Unset with default below initial: default then clamp up.
+            assert_eq!(parse_stellar_status_retry_max_ms(None, 5000), 5000);
         }
     }
 }

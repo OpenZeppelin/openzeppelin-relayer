@@ -1,8 +1,4 @@
-use std::env;
-use std::sync::OnceLock;
-
-use tracing::warn;
-
+use crate::config::ServerConfig;
 use crate::models::NetworkType;
 
 use super::QueueType;
@@ -48,78 +44,16 @@ pub const STATUS_STELLAR_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     max_ms: 3000,
     jitter: 0.99,
 };
-/// Env var overriding the Stellar status-check initial retry delay in milliseconds.
-pub const ENV_STELLAR_STATUS_RETRY_INITIAL_MS: &str = "STELLAR_STATUS_RETRY_INITIAL_MS";
-/// Env var overriding the Stellar status-check maximum retry delay in milliseconds.
-pub const ENV_STELLAR_STATUS_RETRY_MAX_MS: &str = "STELLAR_STATUS_RETRY_MAX_MS";
-
-static STELLAR_STATUS_BACKOFF_RESOLVED: OnceLock<RetryBackoffConfig> = OnceLock::new();
-
 /// Returns the Stellar status-check backoff profile, honoring env overrides.
 ///
-/// Reads `STELLAR_STATUS_RETRY_INITIAL_MS` and `STELLAR_STATUS_RETRY_MAX_MS` once
-/// (cached in a `OnceLock`). Values that are unset, unparsable, or out of range
-/// fall back to [`STATUS_STELLAR_BACKOFF`].
+/// Values come from [`ServerConfig`] (`STELLAR_STATUS_RETRY_INITIAL_MS` /
+/// `STELLAR_STATUS_RETRY_MAX_MS`, each read once and cached). Unset or invalid
+/// values fall back to [`STATUS_STELLAR_BACKOFF`].
 pub fn stellar_status_backoff_config() -> RetryBackoffConfig {
-    *STELLAR_STATUS_BACKOFF_RESOLVED.get_or_init(|| {
-        let initial_ms = parse_stellar_status_retry_initial_ms(
-            env::var(ENV_STELLAR_STATUS_RETRY_INITIAL_MS)
-                .ok()
-                .as_deref(),
-        );
-        let max_ms = parse_stellar_status_retry_max_ms(
-            env::var(ENV_STELLAR_STATUS_RETRY_MAX_MS).ok().as_deref(),
-            initial_ms,
-        );
-        RetryBackoffConfig {
-            initial_ms,
-            max_ms,
-            jitter: STATUS_STELLAR_BACKOFF.jitter,
-        }
-    })
-}
-
-/// Parses the Stellar status-check initial retry delay override in milliseconds.
-///
-/// Valid range is `500..=60000`. Unset or invalid values fall back to
-/// `STATUS_STELLAR_BACKOFF.initial_ms`.
-fn parse_stellar_status_retry_initial_ms(raw: Option<&str>) -> u64 {
-    parse_stellar_status_retry_ms(
-        ENV_STELLAR_STATUS_RETRY_INITIAL_MS,
-        raw,
-        STATUS_STELLAR_BACKOFF.initial_ms,
-    )
-}
-
-/// Parses the Stellar status-check maximum retry delay override in milliseconds.
-///
-/// Valid range is `500..=60000`. Unset or invalid values fall back to
-/// `STATUS_STELLAR_BACKOFF.max_ms`. The result is clamped up to `initial_ms`
-/// so the cap is never below the initial delay.
-fn parse_stellar_status_retry_max_ms(raw: Option<&str>, initial_ms: u64) -> u64 {
-    parse_stellar_status_retry_ms(
-        ENV_STELLAR_STATUS_RETRY_MAX_MS,
-        raw,
-        STATUS_STELLAR_BACKOFF.max_ms,
-    )
-    .max(initial_ms)
-}
-
-fn parse_stellar_status_retry_ms(name: &str, raw: Option<&str>, default: u64) -> u64 {
-    let Some(raw) = raw else {
-        return default;
-    };
-    match raw.trim().parse::<u64>() {
-        Ok(value) if (500..=60_000).contains(&value) => value,
-        _ => {
-            warn!(
-                env_var = name,
-                value = raw,
-                default,
-                "invalid Stellar status retry override; using default"
-            );
-            default
-        }
+    RetryBackoffConfig {
+        initial_ms: ServerConfig::get_stellar_status_retry_initial_ms(),
+        max_ms: ServerConfig::get_stellar_status_retry_max_ms(),
+        jitter: STATUS_STELLAR_BACKOFF.jitter,
     }
 }
 
@@ -350,66 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_stellar_status_retry_initial_ms_unset_uses_default() {
-        assert_eq!(
-            parse_stellar_status_retry_initial_ms(None),
-            STATUS_STELLAR_BACKOFF.initial_ms
-        );
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_initial_ms_valid_override() {
-        assert_eq!(parse_stellar_status_retry_initial_ms(Some("5000")), 5000);
-        assert_eq!(parse_stellar_status_retry_initial_ms(Some(" 500 ")), 500);
-        assert_eq!(parse_stellar_status_retry_initial_ms(Some("60000")), 60000);
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_initial_ms_invalid_uses_default() {
-        for raw in ["garbage", "", "-1", "2.5", "499", "60001"] {
-            assert_eq!(
-                parse_stellar_status_retry_initial_ms(Some(raw)),
-                STATUS_STELLAR_BACKOFF.initial_ms,
-                "raw {raw:?} should fall back to default"
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_max_ms_unset_uses_default() {
-        assert_eq!(
-            parse_stellar_status_retry_max_ms(None, STATUS_STELLAR_BACKOFF.initial_ms),
-            STATUS_STELLAR_BACKOFF.max_ms
-        );
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_max_ms_valid_override() {
-        assert_eq!(parse_stellar_status_retry_max_ms(Some("8000"), 2000), 8000);
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_max_ms_invalid_uses_default() {
-        for raw in ["garbage", "-1", "499", "60001"] {
-            assert_eq!(
-                parse_stellar_status_retry_max_ms(Some(raw), 2000),
-                STATUS_STELLAR_BACKOFF.max_ms,
-                "raw {raw:?} should fall back to default"
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_stellar_status_retry_max_ms_clamped_up_to_initial() {
-        // Valid but below initial: clamp up to initial.
-        assert_eq!(parse_stellar_status_retry_max_ms(Some("3000"), 5000), 5000);
-        // Invalid with default below initial: default then clamp up.
-        assert_eq!(
-            parse_stellar_status_retry_max_ms(Some("garbage"), 5000),
-            5000
-        );
-        // Unset with default below initial: default then clamp up.
-        assert_eq!(parse_stellar_status_retry_max_ms(None, 5000), 5000);
+    fn test_stellar_status_backoff_config_defaults_match_constant() {
+        // With the env vars unset, the env-aware profile must equal the
+        // compiled-in fallback.
+        let cfg = stellar_status_backoff_config();
+        assert_eq!(cfg.initial_ms, STATUS_STELLAR_BACKOFF.initial_ms);
+        assert_eq!(cfg.max_ms, STATUS_STELLAR_BACKOFF.max_ms);
+        assert_eq!(cfg.jitter, STATUS_STELLAR_BACKOFF.jitter);
     }
 
     #[test]
