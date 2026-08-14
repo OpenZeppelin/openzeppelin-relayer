@@ -48,7 +48,7 @@ COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
 USER nonroot
 WORKDIR /app/plugins
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --prod
 
 # Return to app root
 WORKDIR /app
