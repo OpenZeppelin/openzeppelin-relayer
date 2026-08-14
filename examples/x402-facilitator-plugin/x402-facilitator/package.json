@@ -25,7 +25,7 @@
     "typescript": "^5.3.3"
   },
   "overrides": {
-    "axios": ">=1.16.0",
+    "axios": ">=1.18.0",
     "follow-redirects": ">=1.16.0"
   }
 }
