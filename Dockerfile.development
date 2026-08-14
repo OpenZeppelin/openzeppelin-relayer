@@ -58,7 +58,12 @@ COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
 USER nonroot
 WORKDIR /app/plugins
-RUN pnpm install --frozen-lockfile --prod
+# Full install so postinstall can compile pool-executor.js with the
+# lockfile's ts-node/typescript. prune --prod then drops the dev
+# tree; --ignore-scripts is required because prune re-runs
+# postinstall after ts-node is already gone.
+RUN pnpm install --frozen-lockfile \
+ && pnpm prune --prod --ignore-scripts
 
 # Return to app root
 WORKDIR /app
