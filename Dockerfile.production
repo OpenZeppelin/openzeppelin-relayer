@@ -41,17 +41,23 @@ USER root
 RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
 ENV PATH="/usr/local/bin:$PATH"
 
-RUN npm install -g pnpm ts-node typescript
+RUN npm install -g pnpm
 
 # Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
 USER nonroot
 WORKDIR /app/plugins
-RUN pnpm install --frozen-lockfile
+# Full install so postinstall can compile pool-executor.js with the
+# lockfile's ts-node/typescript. prune --prod then drops the dev
+# tree; --ignore-scripts is required because prune re-runs
+# postinstall after ts-node is already gone.
+RUN pnpm install --frozen-lockfile \
+ && pnpm prune --prod --ignore-scripts
 
 # Return to app root
 WORKDIR /app
+ENV PATH="/app/plugins/node_modules/.bin:/usr/local/bin:$PATH"
 
 ENV APP_PORT=8080
 ENV METRICS_PORT=8081
