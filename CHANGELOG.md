@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-14)
+
+
+### 🚀 Features
+
+* **stellar:** Env-configurable status poll cadence ([#846](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/846)) ([97e43c3](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/97e43c3badaeec2b5753b93ce29d74cb2c30ab43))
+
+
+### 🐛 Bug Fixes
+
+
 ## [1.7.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.6.0...v1.7.0) (2026-07-28)
 
 
