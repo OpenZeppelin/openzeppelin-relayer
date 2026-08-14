@@ -269,25 +269,19 @@ where
         self.schedule_status_check(tx, None, Some(metadata)).await
     }
 
-    /// Schedules a targeted nonce health job for this transaction's relayer.
-    ///
-    /// Called when "nonce too high" retries are exhausted, indicating a persistent
-    /// counter drift rather than transient burst ordering. The health job will
-    /// detect and fill nonce gaps with NOOPs.
-    pub(super) async fn schedule_relayer_nonce_health_job(
+    /// Schedules a nonce health job for `relayer_id`. The optional nonce hint
+    /// lets resolve_nonce_gaps extend its scan range even if the counter was
+    /// reset below that nonce.
+    pub(super) async fn schedule_nonce_health_job(
         &self,
-        tx: &TransactionRepoModel,
+        relayer_id: &str,
+        nonce_hint: Option<u64>,
     ) -> Result<(), TransactionError> {
-        // Include the tx nonce as a hint so resolve_nonce_gaps can extend
-        // its scan range even if the counter was reset below this nonce.
-        let nonce_hint = tx
-            .network_data
-            .get_evm_transaction_data()
-            .ok()
-            .and_then(|d| d.nonce);
         let job = match nonce_hint {
-            Some(nonce) => RelayerHealthCheck::nonce_health_with_hint(tx.relayer_id.clone(), nonce),
-            None => RelayerHealthCheck::nonce_health(tx.relayer_id.clone()),
+            Some(nonce) => {
+                RelayerHealthCheck::nonce_health_with_hint(relayer_id.to_string(), nonce)
+            }
+            None => RelayerHealthCheck::nonce_health(relayer_id.to_string()),
         };
 
         self.job_producer()
@@ -298,6 +292,46 @@ where
                     "Failed to schedule nonce health check: {e}"
                 ))
             })
+    }
+
+    /// Schedules a targeted nonce health job for this transaction's relayer,
+    /// hinting with the transaction's own nonce.
+    ///
+    /// Called when "nonce too high" retries are exhausted, indicating a persistent
+    /// counter drift rather than transient burst ordering. The health job will
+    /// detect and fill nonce gaps with NOOPs.
+    pub(super) async fn schedule_relayer_nonce_health_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        self.schedule_nonce_health_job(&tx.relayer_id, tx.network_data.evm_nonce())
+            .await
+    }
+
+    /// Best-effort gap fill when a transaction that may hold a consumed nonce
+    /// is marked Failed: if a nonce is assigned, schedule a nonce health job
+    /// so the abandoned slot is filled promptly; scheduling failures are
+    /// logged, never propagated.
+    pub(super) async fn schedule_nonce_health_if_assigned(
+        &self,
+        tx: &TransactionRepoModel,
+        context: &str,
+    ) {
+        if let Some(nonce) = tx.network_data.evm_nonce() {
+            if let Err(e) = self
+                .schedule_nonce_health_job(&tx.relayer_id, Some(nonce))
+                .await
+            {
+                warn!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    nonce,
+                    context,
+                    error = %e,
+                    "failed to schedule nonce health job"
+                );
+            }
+        }
     }
 
     /// Handles a "nonce too high" error by incrementing the retry counter and
@@ -785,9 +819,45 @@ where
                 ..Default::default()
             };
 
-            self.transaction_repository
-                .partial_update(tx.id.clone(), presign_update)
-                .await?
+            let (claimed_tx, applied) = self
+                .transaction_repository
+                .partial_update_if_evm_nonce_unset(tx.id.clone(), presign_update)
+                .await?;
+
+            if !applied {
+                warn!(
+                    tx_id = %claimed_tx.id,
+                    relayer_id = %claimed_tx.relayer_id,
+                    allocated_nonce = new_nonce,
+                    claimed_nonce = ?claimed_tx.network_data.evm_nonce(),
+                    "transaction nonce claim lost to concurrent prepare"
+                );
+
+                // Hint with the leaked (allocated) nonce, not the claimed one:
+                // the gap sits at the allocated value, and the health scan's
+                // upper bound is exclusive at hint + 1.
+                if let Err(e) = self
+                    .schedule_nonce_health_job(&claimed_tx.relayer_id, Some(new_nonce))
+                    .await
+                {
+                    warn!(
+                        tx_id = %claimed_tx.id,
+                        error = %e,
+                        "failed to schedule nonce health after nonce claim race"
+                    );
+                }
+
+                if claimed_tx.status != TransactionStatus::Pending {
+                    warn!(
+                        tx_id = %claimed_tx.id,
+                        status = ?claimed_tx.status,
+                        "transaction left Pending state during nonce claim, skipping signing"
+                    );
+                    return Ok(claimed_tx);
+                }
+            }
+
+            claimed_tx
         };
 
         // Apply price params for signing (recalculated on every attempt)
@@ -1569,6 +1639,31 @@ mod tests {
         }
     }
 
+    /// Wires the presign (claim) and postsign partial-update mocks for the
+    /// happy path: both apply the patch to a clone of `tx` and succeed.
+    fn expect_presign_and_postsign_updates(
+        mock: &mut MockTransactionRepository,
+        tx: &TransactionRepoModel,
+    ) {
+        let tx_clone = tx.clone();
+        mock.expect_partial_update_if_evm_nonce_unset()
+            .times(1)
+            .returning(move |_, update| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.apply_partial_update(update);
+                Ok((updated_tx, true))
+            });
+
+        let tx_clone = tx.clone();
+        mock.expect_partial_update()
+            .times(1)
+            .returning(move |_, update| {
+                let mut updated_tx = tx_clone.clone();
+                updated_tx.apply_partial_update(update);
+                Ok(updated_tx)
+            });
+    }
+
     #[tokio::test]
     async fn test_prepare_transaction_with_sufficient_balance() {
         let mut mock_transaction = MockTransactionRepository::new();
@@ -1598,22 +1693,29 @@ mod tests {
             .expect_get_transaction_price_params()
             .returning(move |_, _| Ok(price_params.clone()));
 
-        mock_signer.expect_sign_transaction().returning(|_| {
-            Box::pin(ready(Ok(
-                crate::domain::relayer::SignTransactionResponse::Evm(
-                    crate::domain::relayer::SignTransactionResponseEvm {
-                        hash: "0xtx_hash".to_string(),
-                        signature: crate::models::EvmTransactionDataSignature {
-                            r: "r".to_string(),
-                            s: "s".to_string(),
-                            v: 1,
-                            sig: "0xsignature".to_string(),
+        mock_signer
+            .expect_sign_transaction()
+            .withf(|network_data| {
+                network_data
+                    .get_evm_transaction_data()
+                    .is_ok_and(|data| data.nonce == Some(42))
+            })
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xtx_hash".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![1, 2, 3],
                         },
-                        raw: vec![1, 2, 3],
-                    },
-                ),
-            )))
-        });
+                    ),
+                )))
+            });
 
         mock_provider
             .expect_get_balance()
@@ -1634,22 +1736,7 @@ mod tests {
                 })
             });
 
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                if let Some(status) = &update.status {
-                    updated_tx.status = status.clone();
-                }
-                if let Some(network_data) = &update.network_data {
-                    updated_tx.network_data = network_data.clone();
-                }
-                if let Some(hashes) = &update.hashes {
-                    updated_tx.hashes = hashes.clone();
-                }
-                Ok(updated_tx)
-            });
+        expect_presign_and_postsign_updates(&mut mock_transaction, &test_tx);
 
         mock_job_producer
             .expect_produce_submit_transaction_job()
@@ -1657,6 +1744,9 @@ mod tests {
         mock_job_producer
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_relayer_health_check_job()
+            .never();
 
         let mock_network = MockNetworkRepository::new();
 
@@ -1677,6 +1767,346 @@ mod tests {
         let prepared_tx = result.unwrap();
         assert_eq!(prepared_tx.status, TransactionStatus::Sent);
         assert!(!prepared_tx.hashes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_uses_claimed_nonce_after_losing_claim() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        counter_service
+            .expect_get_and_increment()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(43))));
+
+        let price_params = PriceParams {
+            gas_price: Some(30_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630_000_000_000_000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(1_000_000_000_000_000_000u64)))));
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+        mock_signer
+            .expect_sign_transaction()
+            .withf(|network_data| {
+                network_data
+                    .get_evm_transaction_data()
+                    .is_ok_and(|data| data.nonce == Some(42))
+            })
+            .times(1)
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xtx_hash".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![1, 2, 3],
+                        },
+                    ),
+                )))
+            });
+
+        let mut claimed_tx = test_tx.clone();
+        let NetworkTransactionData::Evm(ref mut evm_data) = claimed_tx.network_data else {
+            panic!("Expected EVM transaction data");
+        };
+        evm_data.nonce = Some(42);
+        mock_transaction
+            .expect_partial_update_if_evm_nonce_unset()
+            .times(1)
+            .return_once(move |_, _| Ok((claimed_tx, false)));
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.apply_partial_update(update);
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_relayer_health_check_job()
+            .withf(|job, scheduled_on| {
+                scheduled_on.is_none()
+                    && job.relayer_id == "test-relayer-id"
+                    && job.metadata.as_ref().is_some_and(|metadata| {
+                        metadata.get("health_check_action") == Some(&"nonce_health".to_string())
+                            && metadata.get("nonce_hint") == Some(&"43".to_string())
+                    })
+            })
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer,
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let prepared_tx = evm_transaction.prepare_transaction(test_tx).await.unwrap();
+
+        assert_eq!(
+            prepared_tx
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .nonce,
+            Some(42)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_preset_nonce_skips_counter_and_claim() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data else {
+            panic!("Expected EVM transaction data");
+        };
+        evm_data.nonce = Some(7);
+
+        // Preset nonce (gap-filling NOOPs, signing retries) must be reused:
+        // no counter consumption, no claim attempt.
+        counter_service.expect_get_and_increment().never();
+        mock_transaction
+            .expect_partial_update_if_evm_nonce_unset()
+            .never();
+
+        let price_params = PriceParams {
+            gas_price: Some(30_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630_000_000_000_000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(1_000_000_000_000_000_000u64)))));
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+        mock_signer
+            .expect_sign_transaction()
+            .withf(|network_data| {
+                network_data
+                    .get_evm_transaction_data()
+                    .is_ok_and(|data| data.nonce == Some(7))
+            })
+            .times(1)
+            .returning(|_| {
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xtx_hash".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![1, 2, 3],
+                        },
+                    ),
+                )))
+            });
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.apply_partial_update(update);
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_relayer_health_check_job()
+            .never();
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer,
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let prepared_tx = evm_transaction.prepare_transaction(test_tx).await.unwrap();
+
+        assert_eq!(
+            prepared_tx
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .nonce,
+            Some(7)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_transaction_lost_claim_to_finalized_tx_skips_signing() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let relayer = create_test_relayer();
+        let test_tx = create_test_transaction();
+
+        counter_service
+            .expect_get_and_increment()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(43))));
+
+        let price_params = PriceParams {
+            gas_price: Some(30_000_000_000),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            is_min_bumped: None,
+            extra_fee: None,
+            total_cost: U256::from(630_000_000_000_000u64),
+        };
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .returning(move |_, _| Ok(price_params.clone()));
+
+        mock_provider
+            .expect_get_balance()
+            .with(eq("0xSender"))
+            .returning(|_| Box::pin(ready(Ok(U256::from(1_000_000_000_000_000_000u64)))));
+        mock_provider
+            .expect_get_block_by_number()
+            .times(1)
+            .returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+        // The record finalized while this prepare was in flight: the claim is
+        // rejected and the returned record is no longer Pending.
+        let mut claimed_tx = test_tx.clone();
+        claimed_tx.status = TransactionStatus::Confirmed;
+        let NetworkTransactionData::Evm(ref mut evm_data) = claimed_tx.network_data else {
+            panic!("Expected EVM transaction data");
+        };
+        evm_data.nonce = Some(42);
+        mock_transaction
+            .expect_partial_update_if_evm_nonce_unset()
+            .times(1)
+            .return_once(move |_, _| Ok((claimed_tx, false)));
+
+        // No signing, no postsign write, no submit job.
+        mock_signer.expect_sign_transaction().never();
+        mock_transaction.expect_partial_update().never();
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .never();
+        mock_job_producer
+            .expect_produce_relayer_health_check_job()
+            .times(1)
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer,
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.prepare_transaction(test_tx).await.unwrap();
+        assert_eq!(result.status, TransactionStatus::Confirmed);
     }
 
     #[tokio::test]
@@ -1999,22 +2429,7 @@ mod tests {
                 })
             });
 
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                if let Some(status) = &update.status {
-                    updated_tx.status = status.clone();
-                }
-                if let Some(network_data) = &update.network_data {
-                    updated_tx.network_data = network_data.clone();
-                }
-                if let Some(hashes) = &update.hashes {
-                    updated_tx.hashes = hashes.clone();
-                }
-                Ok(updated_tx)
-            });
+        expect_presign_and_postsign_updates(&mut mock_transaction, &test_tx);
 
         mock_job_producer
             .expect_produce_submit_transaction_job()
@@ -2851,39 +3266,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        // Mock transaction repository partial_update calls
-        // Note: prepare_transaction calls partial_update twice:
-        // 1. Presign update (saves nonce before signing)
-        // 2. Postsign update (saves signed data and marks as Sent)
-        let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
-
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(2)
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-
-                // Apply the updates from the request
-                if let Some(status) = &update.status {
-                    updated_tx.status = status.clone();
-                }
-                if let Some(network_data) = &update.network_data {
-                    updated_tx.network_data = network_data.clone();
-                } else {
-                    // If network_data is not being updated, ensure gas_limit is set
-                    if let NetworkTransactionData::Evm(ref mut evm_data) = updated_tx.network_data {
-                        if evm_data.gas_limit.is_none() {
-                            evm_data.gas_limit = Some(expected_gas_limit);
-                        }
-                    }
-                }
-                if let Some(hashes) = &update.hashes {
-                    updated_tx.hashes = hashes.clone();
-                }
-
-                Ok(updated_tx)
-            });
+        expect_presign_and_postsign_updates(&mut mock_transaction, &test_tx);
 
         let transaction = EvmRelayerTransaction::new(
             relayer.clone(),
@@ -2995,32 +3378,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(2)
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-
-                if let Some(status) = &update.status {
-                    updated_tx.status = status.clone();
-                }
-                if let Some(network_data) = &update.network_data {
-                    updated_tx.network_data = network_data.clone();
-                } else if let NetworkTransactionData::Evm(ref mut evm_data) =
-                    updated_tx.network_data
-                {
-                    if evm_data.gas_limit.is_none() {
-                        evm_data.gas_limit = Some(expected_gas_limit);
-                    }
-                }
-                if let Some(hashes) = &update.hashes {
-                    updated_tx.hashes = hashes.clone();
-                }
-
-                Ok(updated_tx)
-            });
+        expect_presign_and_postsign_updates(&mut mock_transaction, &test_tx);
 
         let transaction = EvmRelayerTransaction::new(
             relayer,
