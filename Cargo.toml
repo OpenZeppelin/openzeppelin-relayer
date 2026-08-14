@@ -2,7 +2,7 @@
 name = "openzeppelin-relayer"
 version = "1.7.0"
 edition = "2021"
-rust-version = "1.91"         #MSRV
+rust-version = "1.94"         #MSRV
 
 [features]
 default = []
@@ -54,20 +54,36 @@ chrono = "0.4"
 cron = "0.13"
 eyre = "0.6"
 color-eyre = "0.6"
-apalis = { version = "0.7", features = ["limit", "retry", "catch-panic", "timeout"] }
+apalis = { version = "0.7", features = [
+  "limit",
+  "retry",
+  "catch-panic",
+  "timeout",
+] }
 apalis-redis = { version = "0.7" }
 apalis-cron = { version = "0.7" }
-redis = { version = "0.32", features = ["aio", "connection-manager", "tokio-comp"] }
+redis = { version = "0.32", features = [
+  "aio",
+  "connection-manager",
+  "tokio-comp",
+] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
-tokio = { version = "1.43", features = ["sync", "io-util", "time", "rt-multi-thread", "signal", "net"] }
+tokio = { version = "1.43", features = [
+  "sync",
+  "io-util",
+  "time",
+  "rt-multi-thread",
+  "signal",
+  "net",
+] }
 rand = "0.9"
 parking_lot = "0.12"
 tower = "0.5"
-oz-keystore = { version = "0.1.4"}
-hex = { version = "0.4"}
+oz-keystore = { version = "0.1.4" }
+hex = { version = "0.4" }
 bytes = { version = "1.9" }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "zstd"] }
-base64 = { version =  "0.22" }
+base64 = { version = "0.22" }
 hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
 sha3 = { version = "0.10" }
@@ -91,7 +107,7 @@ itertools = "0.14.0"
 validator = { version = "0.20", features = ["derive"] }
 vaultrs = { version = "0.7.4" }
 utoipa = { version = "5.3", features = ["actix_extras"] }
-secrets = { version = "1.2"}
+secrets = { version = "1.2" }
 libsodium-sys = "0.2.7"
 zeroize = "1.8"
 subtle = "2.6"
@@ -129,14 +145,20 @@ rustls = { version = "=0.23.36", features = ["aws_lc_rs"] }
 # backend installs (never enable `rustls--ring` — one provider only). No pooling
 # crate: the backend holds one connection with built-in auto-recovery and
 # multiplexes channels over it.
-lapin = { version = "=4.10.0", default-features = false, features = ["tokio", "rustls", "rustls--aws_lc_rs"] }
+lapin = { version = "=4.10.0", default-features = false, features = [
+  "tokio",
+  "rustls",
+  "rustls--aws_lc_rs",
+] }
 http = { version = "1.3.1" }
 pem = { version = "3" }
 simple_asn1 = { version = "0.6" }
-k256 = { version = "0.13", features = ["ecdsa-core"]}
+k256 = { version = "0.13", features = ["ecdsa-core"] }
 solana-system-interface = { version = "2.0.0", features = ["bincode"] }
 cdp-sdk = "0.1.0"
-reqwest-middleware = { version = "0.4.2", default-features = false, features = ["json"] }
+reqwest-middleware = { version = "0.4.2", default-features = false, features = [
+  "json",
+] }
 url = "2"
 lru = "0.16"
 

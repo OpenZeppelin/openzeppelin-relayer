@@ -12,7 +12,6 @@ use solana_sdk::{
     account::Account as SolanaAccount, instruction::Instruction, program_pack::Pack, pubkey::Pubkey,
 };
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
-use tracing::error;
 
 use spl_associated_token_account_interface::instruction::create_associated_token_account;
 
