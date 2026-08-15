@@ -3,10 +3,6 @@ id = "RUSTSEC-2021-0141"
 reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
 
 [[IgnoredVulns]]
-id = "RUSTSEC-2024-0375"
-reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
-
-[[IgnoredVulns]]
 id = "RUSTSEC-2024-0388"
 reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
 
@@ -17,3 +13,23 @@ reason = "The crate is unmaintained, but it works. If there is any new vulnerabi
 [[IgnoredVulns]]
 id = "RUSTSEC-2025-0134"
 reason = "The crate is unmaintained, but it works. If there is any new vulnerability, there will be another ID."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0141"
+reason = "bincode 1.x is unmaintained, but it works; pinned transitively by the Solana ecosystem. If there is any new vulnerability, there will be another ID."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0161"
+reason = "libsecp256k1 has no fixed release; pulled transitively via solana-secp256k1-recover. Revisit when the Solana crates move off it."
+
+[[IgnoredVulns]]
+id = "GHSA-cq8v-f236-94qc"
+reason = "rand 0.7 advisory (alias RUSTSEC-2026-0097): rand 0.7 is pinned by libsecp256k1 0.6 (no fixed release) via solana-secp256k1-recover; not upgradable until the Solana chain moves."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0173"
+reason = "proc-macro-error2 has no fixed release; build-time proc-macro dependency only, not part of the runtime attack surface."
+
+[[IgnoredVulns]]
+id = "GHSA-fjx5-qpf4-xjf2"
+reason = "borsh 0.10 is pinned by the Solana ecosystem; the only 'fix' is a 1.0 alpha that upstream does not depend on."

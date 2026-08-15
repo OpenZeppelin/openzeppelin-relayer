@@ -23,8 +23,17 @@ panic = "unwind"
 
 [dependencies]
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
-aws-sdk-kms = "1.91.0"
-aws-sdk-sqs = "1.56.0"
+# default-features off: the SDKs' default `rustls` feature pulls the legacy
+# rustls 0.21 stack (vulnerable rustls-webpki 0.101, RUSTSEC-2026-0098/0099/0104);
+# `default-https-client` uses rustls 0.23, keeping one TLS provider.
+aws-sdk-kms = { version = "1.91.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
+aws-sdk-sqs = { version = "1.56.0", default-features = false, features = [
+  "default-https-client",
+  "rt-tokio",
+] }
 aws-smithy-types = "1"
 aws-smithy-runtime-api = "1"
 actix-web = "4"
@@ -163,7 +172,6 @@ url = "2"
 lru = "0.16"
 
 [dev-dependencies]
-cargo-llvm-cov = "0.6"
 ctor = "0.2"
 mockall = { version = "0.13" }
 mockito = "1.7.1"
