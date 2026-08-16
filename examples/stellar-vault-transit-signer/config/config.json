@@ -1,20 +1,16 @@
 {
   "relayers": [
     {
-      "id": "solana-example",
-      "name": "Solana Example",
-      "network": "devnet",
+      "id": "stellar-example",
+      "name": "Stellar Testnet Example",
+      "network": "testnet",
       "paused": false,
-      "signer_id": "local_vault_transit",
-      "network_type": "solana",
+      "notification_id": "notification-example",
+      "signer_id": "stellar-vault-transit-signer",
+      "network_type": "stellar",
       "policies": {
-        "fee_payment_strategy": "user",
         "min_balance": 0,
-        "allowed_tokens": [
-          {
-            "mint": "So11111111111111111111111111111111111111112"
-          }
-        ]
+        "fee_payment_strategy": "relayer"
       }
     }
   ],
@@ -31,7 +27,7 @@
   ],
   "signers": [
     {
-      "id": "local_vault_transit",
+      "id": "stellar-vault-transit-signer",
       "type": "vault_transit",
       "config": {
         "address": "http://vault:8200",
