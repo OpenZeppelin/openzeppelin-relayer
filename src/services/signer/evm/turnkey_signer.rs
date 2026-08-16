@@ -33,7 +33,9 @@ use crate::{
     },
     services::{
         signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            evm::{
+                construct_eip712_message_hash, resolve_message_bytes, validate_and_format_signature,
+            },
             Signer,
         },
         TurnkeyService, TurnkeyServiceTrait,
@@ -141,8 +143,8 @@ impl<T: TurnkeyServiceTrait> Signer for TurnkeySigner<T> {
 #[async_trait]
 impl<T: TurnkeyServiceTrait> DataSignerTrait for TurnkeySigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        let message_bytes = request.message.as_bytes();
-        let message_hash = eip191_hash_message(message_bytes);
+        let message_bytes = resolve_message_bytes(&request)?;
+        let message_hash = eip191_hash_message(&message_bytes);
         let signature_bytes = self.turnkey_service.sign_evm(message_hash.as_ref()).await?;
 
         if signature_bytes.len() != 65 {
@@ -266,6 +268,7 @@ mod tests {
         let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await.unwrap();
@@ -350,6 +353,7 @@ mod tests {
         let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;
@@ -376,6 +380,7 @@ mod tests {
         let signer = TurnkeySigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         // Verify that we get the expected error about signature length
