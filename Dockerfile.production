@@ -53,8 +53,10 @@ RUN npm install -g pnpm
 
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 WORKDIR /app/plugins
+ARG TARGETARCH
 RUN pnpm install --frozen-lockfile --ignore-scripts \
- && node /app/plugins/node_modules/esbuild/install.js \
+ && ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") \
+ && pnpm add "@esbuild/linux-${ARCH}@0.28.2" --ignore-scripts \
  && pnpm prune --prod --ignore-scripts
 COPY --from=plugin-builder /app/plugins/lib/pool-executor.js /app/plugins/lib/pool-executor.js
 COPY --from=plugin-builder /app/plugins/lib/pool-executor.js.sha256 /app/plugins/lib/pool-executor.js.sha256
