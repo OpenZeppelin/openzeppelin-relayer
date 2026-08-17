@@ -40,13 +40,19 @@ ENV PATH="/usr/local/bin:$PATH"
 
 RUN npm install -g pnpm
 
+# Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 
 USER nonroot
 WORKDIR /app/plugins
+# Full install so postinstall can compile pool-executor.js with the
+# lockfile's ts-node/typescript. prune --prod then drops the dev
+# tree; --ignore-scripts is required because prune re-runs
+# postinstall after ts-node is already gone.
 RUN pnpm install --frozen-lockfile \
  && pnpm prune --prod --ignore-scripts
 
+# Return to app root
 WORKDIR /app
 ENV PATH="/app/plugins/node_modules/.bin:/usr/local/bin:$PATH"
 
