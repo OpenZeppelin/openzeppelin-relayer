@@ -24,18 +24,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       cargo install --root /usr/app --path . --locked; \
     fi
 
-# Precompile pool-executor.js on the build host (no QEMU)
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe AS plugin-builder
-
-ARG NODE_VERSION=20.19
-USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
-RUN npm install -g pnpm
-
-COPY ./plugins /app/plugins
-WORKDIR /app/plugins
-RUN pnpm install --frozen-lockfile
-
 # Setting up build directories
 FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
 
@@ -44,6 +32,7 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
+ARG TARGETARCH
 ARG NODE_VERSION=20.19
 USER root
 RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
@@ -52,16 +41,12 @@ ENV PATH="/usr/local/bin:$PATH"
 RUN npm install -g pnpm
 
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
-WORKDIR /app/plugins
-ARG TARGETARCH
-RUN pnpm install --frozen-lockfile --ignore-scripts \
- && ARCH=$([ "$TARGETARCH" = "amd64" ] && echo "x64" || echo "$TARGETARCH") \
- && pnpm add "@esbuild/linux-${ARCH}@0.28.2" --ignore-scripts \
- && pnpm prune --prod --ignore-scripts
-COPY --from=plugin-builder /app/plugins/lib/pool-executor.js /app/plugins/lib/pool-executor.js
-COPY --from=plugin-builder /app/plugins/lib/pool-executor.js.sha256 /app/plugins/lib/pool-executor.js.sha256
 
 USER nonroot
+WORKDIR /app/plugins
+RUN pnpm install --frozen-lockfile \
+ && pnpm prune --prod --ignore-scripts
+
 WORKDIR /app
 ENV PATH="/app/plugins/node_modules/.bin:/usr/local/bin:$PATH"
 
