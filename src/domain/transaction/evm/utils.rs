@@ -543,6 +543,12 @@ mod tests {
         // Test with too many attempts
         tx.hashes = vec!["hash".to_string(); MAXIMUM_TX_ATTEMPTS + 1];
         assert!(too_many_attempts(&tx));
+
+        // Rollup threshold: fires above ROLLUP_MAX_DELIVERY_ATTEMPTS, not at it.
+        tx.hashes = vec!["hash".to_string(); ROLLUP_MAX_DELIVERY_ATTEMPTS];
+        assert!(!too_many_rollup_attempts(&tx));
+        tx.hashes = vec!["hash".to_string(); ROLLUP_MAX_DELIVERY_ATTEMPTS + 1];
+        assert!(too_many_rollup_attempts(&tx));
     }
 
     #[test]
