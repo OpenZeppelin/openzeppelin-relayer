@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # Precompile pool-executor.js on the build host (no QEMU)
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base AS plugin-builder
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe AS plugin-builder
 
 ARG NODE_VERSION=20.19
 USER root
@@ -37,7 +37,7 @@ WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile
 
 # Setting up build directories
-FROM cgr.dev/chainguard/wolfi-base
+FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
@@ -54,6 +54,7 @@ RUN npm install -g pnpm
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
 WORKDIR /app/plugins
 RUN pnpm install --frozen-lockfile --ignore-scripts \
+ && node /app/plugins/node_modules/esbuild/install.js \
  && pnpm prune --prod --ignore-scripts
 COPY --from=plugin-builder /app/plugins/lib/pool-executor.js /app/plugins/lib/pool-executor.js
 COPY --from=plugin-builder /app/plugins/lib/pool-executor.js.sha256 /app/plugins/lib/pool-executor.js.sha256
