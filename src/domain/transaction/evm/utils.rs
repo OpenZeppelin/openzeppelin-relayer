@@ -1,6 +1,7 @@
 use crate::constants::{
     ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, DEFAULT_TX_VALID_TIMESPAN,
     EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    ROLLUP_MAX_DELIVERY_ATTEMPTS,
 };
 use crate::domain::get_age_since_created;
 use crate::models::EvmNetwork;
@@ -66,6 +67,13 @@ pub fn is_noop(evm_data: &EvmTransactionData) -> bool {
 /// Checks if a transaction has too many attempts
 pub fn too_many_attempts(tx: &TransactionRepoModel) -> bool {
     tx.hashes.len() > MAXIMUM_TX_ATTEMPTS
+}
+
+/// Checks if a rollup transaction has too many delivery attempts.
+/// Rollups persist every broadcast attempt before broadcast, so `hashes.len()` counts
+/// real delivery attempts and a much lower give-up threshold applies.
+pub fn too_many_rollup_attempts(tx: &TransactionRepoModel) -> bool {
+    tx.hashes.len() > ROLLUP_MAX_DELIVERY_ATTEMPTS
 }
 
 /// Checks if a transaction has too many NOOP attempts
