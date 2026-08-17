@@ -18,7 +18,7 @@ use super::EvmRelayerTransaction;
 use super::{
     ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
     has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    too_many_noop_attempts, too_many_rollup_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
@@ -383,7 +383,7 @@ where
             ))
         })?;
 
-        if network.is_rollup() && too_many_attempts(tx) {
+        if network.is_rollup() && too_many_rollup_attempts(tx) {
             let reason =
                 "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
             debug!(
@@ -1407,6 +1407,22 @@ where
                     .await;
             }
 
+            // Arbitrum head gate (issue #843): the sequencer holds a nonce-above-head tx
+            // ~1s then rejects it, so resubmitting anything but the head is a guaranteed
+            // rejection. Only the tx at the on-chain nonce is broadcast; successors are
+            // delivered by the broadcast-success chain link, or by this gate once they
+            // become the head.
+            if self.is_behind_arbitrum_head(&tx).await {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    "stuck Sent tx is queued behind the chain head on Arbitrum; skipping resubmit"
+                );
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
+                    .await;
+            }
+
             warn!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -1420,6 +1436,47 @@ where
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
             .await
+    }
+
+    /// Arbitrum only: returns `true` when the tx nonce is above the on-chain account
+    /// nonce (queued behind other txs, guaranteed rejection if broadcast). Non-Arbitrum
+    /// networks and lookup failures return `false` so resubmit behavior is preserved.
+    async fn is_behind_arbitrum_head(&self, tx: &TransactionRepoModel) -> bool {
+        let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
+            return false;
+        };
+        let Some(tx_nonce) = evm_data.nonce else {
+            return false;
+        };
+
+        match self.get_evm_network(evm_data.chain_id).await {
+            Ok(network) if network.is_arbitrum() => {}
+            Ok(_) => return false,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "head gate: failed to load network; allowing resubmit"
+                );
+                return false;
+            }
+        }
+
+        match self
+            .provider()
+            .get_transaction_count(&self.relayer().address)
+            .await
+        {
+            Ok(chain_nonce) => tx_nonce > chain_nonce,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "head gate: failed to fetch on-chain nonce; allowing resubmit"
+                );
+                false
+            }
+        }
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
