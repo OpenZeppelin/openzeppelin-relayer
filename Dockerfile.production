@@ -24,6 +24,18 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       cargo install --root /usr/app --path . --locked; \
     fi
 
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/wolfi-base AS plugin-builder
+
+ARG NODE_VERSION=20.19
+USER root
+RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+RUN npm install -g pnpm
+
+COPY ./plugins /app/plugins
+WORKDIR /app/plugins
+RUN pnpm install --frozen-lockfile \
+ && pnpm prune --prod --ignore-scripts
+
 # Setting up build directories
 FROM cgr.dev/chainguard/wolfi-base
 
@@ -32,30 +44,14 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-# Install plugin dependencies
-ARG TARGETARCH
 ARG NODE_VERSION=20.19
-
-# Install Node.js
 USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+RUN apk add --no-cache nodejs=~${NODE_VERSION}
 ENV PATH="/usr/local/bin:$PATH"
 
-RUN npm install -g pnpm
-
-# Copy plugins folder and install dependencies
-COPY --chown=nonroot:nonroot ./plugins /app/plugins
+COPY --from=plugin-builder --chown=nonroot:nonroot /app/plugins /app/plugins
 
 USER nonroot
-WORKDIR /app/plugins
-# Full install so postinstall can compile pool-executor.js with the
-# lockfile's ts-node/typescript. prune --prod then drops the dev
-# tree; --ignore-scripts is required because prune re-runs
-# postinstall after ts-node is already gone.
-RUN pnpm install --frozen-lockfile \
- && pnpm prune --prod --ignore-scripts
-
-# Return to app root
 WORKDIR /app
 ENV PATH="/app/plugins/node_modules/.bin:/usr/local/bin:$PATH"
 
