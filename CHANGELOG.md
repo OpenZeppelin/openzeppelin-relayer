@@ -10,6 +10,8 @@
 
 ### 🐛 Bug Fixes
 
+* avoid QEMU emulation failures in Docker arm64 build ([#861](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/861)) ([7fedf6a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/7fedf6adb055535df58d126fb1387e488903dfe4))
+
 
 ## [1.7.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.6.0...v1.7.0) (2026-07-28)
 
