@@ -1276,7 +1276,9 @@ where
         // reach the chain are recorded first, and `hashes.len()` becomes a true
         // delivery-attempt counter (drives the rollup NOOP give-up threshold).
         let mut pre_persisted = false;
+        let mut prior_network_data = None;
         let tx = if is_arbitrum {
+            prior_network_data = Some(tx.network_data.clone());
             let mut hashes = tx.hashes.clone();
             if let Some(hash) = final_evm_data.hash.clone() {
                 hashes.push(hash);
@@ -1296,6 +1298,7 @@ where
         };
 
         // Send resubmitted transaction to blockchain - this is the critical operation
+        let mut restore_prior_network_data = false;
         let was_already_submitted = match self
             .send_raw_transaction_with_nonce_retry(&tx.id, raw_tx, is_arbitrum)
             .await
@@ -1317,6 +1320,12 @@ where
                             error_kind = ?error_kind,
                             "resubmission indicates transaction already in mempool/mined - keeping original hash"
                         );
+                        // ReplacementUnderpriced means the node rejected the
+                        // candidate bytes, so a pre-persisted network_data
+                        // points at a dead hash and must be rolled back.
+                        // AlreadyKnown keeps it: the node has the candidate.
+                        restore_prior_network_data = pre_persisted
+                            && matches!(error_kind, SubmissionErrorKind::ReplacementUnderpriced);
                         true
                     }
                     // NonceTooLow: nonce was consumed (possibly externally).
@@ -1362,10 +1371,18 @@ where
 
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
-            // Keep original hash and data - just ensure status is Submitted
+            // Keep original hash and data - just ensure status is Submitted.
+            // When the pre-persisted candidate was rejected, put the prior
+            // network_data back; the candidate hash stays in `hashes` as an
+            // attempt record.
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
                 metadata: metadata_reset,
+                network_data: if restore_prior_network_data {
+                    prior_network_data
+                } else {
+                    None
+                },
                 ..Default::default()
             }
         } else if pre_persisted {
@@ -5006,6 +5023,109 @@ mod tests {
         let result = evm_transaction.resubmit_transaction(test_tx).await;
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
         assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
+    }
+
+    /// ① Arbitrum: when the node rejects the pre-persisted candidate with
+    /// "replacement transaction underpriced", the final update restores the prior
+    /// network_data (the old bytes keep the slot) while the candidate hash stays
+    /// recorded in `hashes`.
+    #[tokio::test]
+    async fn test_resubmit_arbitrum_replacement_underpriced_restores_network_data() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let mock_network = arbitrum_mock_network();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_arbitrum_resubmit_tx();
+
+        setup_arbitrum_resubmit_mocks(
+            &mut mock_price_calculator,
+            &mut mock_provider,
+            &mut mock_signer,
+        );
+
+        let mut seq = mockall::Sequence::new();
+
+        // Pre-broadcast persistence stores the candidate.
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|_, update| {
+                update.status.is_none()
+                    && update
+                        .hashes
+                        .as_ref()
+                        .is_some_and(|h| h.contains(&"0xarb_new_hash".to_string()))
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.hashes = update.hashes.clone().unwrap();
+                updated_tx.network_data = update.network_data.clone().unwrap();
+                Ok(updated_tx)
+            });
+
+        // The node keeps the old bytes and rejects the candidate.
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(ProviderError::Other(
+                        "replacement transaction underpriced".to_string(),
+                    ))
+                })
+            });
+
+        // Final update: prior network_data restored, hashes not re-sent (the
+        // candidate stays in the history from the pre-persist).
+        let test_tx_clone2 = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|_, update| {
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.hashes.is_none()
+                    && update.network_data.as_ref().is_some_and(|data| {
+                        data.get_evm_transaction_data()
+                            .is_ok_and(|d| d.hash == Some("0xoriginal_hash".to_string()))
+                    })
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone2.clone();
+                updated_tx.status = update.status.clone().unwrap();
+                updated_tx.network_data = update.network_data.clone().unwrap();
+                Ok(updated_tx)
+            });
+
+        // Chain link: no successor allocated.
+        counter_service
+            .expect_get()
+            .returning(|_, _| Box::pin(ready(Ok(Some(43)))));
+        mock_transaction.expect_find_by_nonce().never();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
     /// ③ Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
