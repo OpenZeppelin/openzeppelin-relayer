@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.8.0...v1.8.1) (2026-08-18)
+
+
+### 🐛 Bug Fixes
+
+* avoid QEMU emulation failures in Docker arm64 build ([#861](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/861)) ([7fedf6a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/7fedf6adb055535df58d126fb1387e488903dfe4))
+
 ## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-14)
 
 
