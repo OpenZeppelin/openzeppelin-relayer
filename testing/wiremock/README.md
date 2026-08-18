@@ -81,8 +81,88 @@ All scenarios fire **exactly once**, then revert to proxying real traffic.
 |--------|-------------|
 | `trigger-try-again-later.sh` | Arm the TRY_AGAIN_LATER scenario |
 | `trigger-insufficient-fee.sh` | Arm the insufficient fee scenario |
+| `e2e-fast-resubmit.sh` | Run the Stellar fast-resubmit E2E matrix |
 | `check-scenarios.sh` | Show scenario states and recent requests |
 | `reset-all.sh` | Reset all scenarios and clear request log |
+
+## E2E fast-resubmit verification
+
+Run the Stellar fast-resubmit matrix from the repo root:
+
+```bash
+./testing/wiremock/scripts/e2e-fast-resubmit.sh all
+./testing/wiremock/scripts/e2e-fast-resubmit.sh -o /tmp/fast-resubmit-artifacts all
+```
+
+Run one scenario by name:
+
+```bash
+./testing/wiremock/scripts/e2e-fast-resubmit.sh if-once
+./testing/wiremock/scripts/e2e-fast-resubmit.sh if-escalation
+./testing/wiremock/scripts/e2e-fast-resubmit.sh if-overcap
+./testing/wiremock/scripts/e2e-fast-resubmit.sh tal-window
+./testing/wiremock/scripts/e2e-fast-resubmit.sh tal-window-closes
+```
+
+The harness verifies the durable regression cases for Stellar fast resubmit on testnet:
+
+| Scenario | Injected responses | Expected behavior |
+|----------|--------------------|-------------------|
+| `if-once` | 1 insufficient-fee response | One fast retry after about 5s, then submission proceeds |
+| `if-escalation` | 3 insufficient-fee responses | Fast retries after about 5s, 10s, and 15s |
+| `if-overcap` | 7 insufficient-fee responses | Six fast retries, then failure at the retry cap |
+| `tal-window` | 3 TRY_AGAIN_LATER responses | Fast retries after about 5s, 10s, and 15s |
+| `tal-window-closes` | 4 TRY_AGAIN_LATER responses | Three fast retries, then status-checker handoff |
+
+The one-shot WireMock mappings remain static. Multi-response chains are registered dynamically by
+the runner at scenario arm time through `POST /__admin/mappings`, then deleted before the next
+scenario. This keeps the fixture set small while preserving the same Stellar RPC response bodies.
+
+Prerequisites:
+
+- Docker with Compose support.
+- Rust/Cargo for `cargo build --bin openzeppelin-relayer`.
+- `curl` and `jq`.
+- Network access to Stellar testnet, Horizon testnet, and friendbot.
+- The local signer keystore is generated automatically at
+  `testing/wiremock/e2e/local-signer.keystore` if missing, using
+  `KEYSTORE_PASSPHRASE`, and the generated testnet account is funded through friendbot before
+  the relayer starts.
+
+The runner starts WireMock, starts a disposable Redis container for the Redis queue backend, builds
+and starts `target/debug/openzeppelin-relayer`, funds the configured Stellar testnet account if
+needed, runs the selected scenario set, writes artifacts, and tears the stack down.
+
+`if-overcap` runs last in the full matrix because it intentionally never lands on-chain and can
+leave the relayer-side local sequence cache ahead of chain state. `tal-window-closes` sends an
+explicit 10-minute `valid_until` because it waits for status-checker handoff after the fast retry
+window closes.
+
+Artifacts default to `/tmp/oz-relayer-fast-resubmit` and can be overridden with `-o` or
+`ARTIFACT_DIR`. The runner writes:
+
+- `verdicts.json`: JSON Lines, one verdict per scenario.
+- `relayer.log`: relayer stdout/stderr.
+- `harness.log`: stack setup and harness diagnostics.
+- `report.md`: line-count summary, deleted/kept scope, and matrix verdicts.
+
+Each verdict line has this schema:
+
+```json
+{
+  "scenario": "if-once",
+  "send_calls": 2,
+  "gaps_s": [5],
+  "final_status": "confirmed",
+  "fast_log_seen": true,
+  "checker_log_seen": false,
+  "pass": true,
+  "notes": ""
+}
+```
+
+Gap checks use a tolerance of expected minus 1 second through expected plus 8 seconds.
+`tal-window-closes` treats its final checker-rescue gap as `>= 10s`.
 
 ## How It Works
 

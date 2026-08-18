@@ -84,6 +84,7 @@ mod tests {
 
     fn create_test_policy(min_balance: u128) -> RelayerEvmPolicy {
         RelayerEvmPolicy {
+            include_revert_data: None,
             min_balance: Some(min_balance),
             gas_limit_estimation: Some(true),
             gas_price_cap: None,

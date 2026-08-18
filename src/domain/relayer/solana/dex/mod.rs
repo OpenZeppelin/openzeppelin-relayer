@@ -166,8 +166,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_network_dex_jupiter_swap_explicit() {
+    #[tokio::test]
+    async fn test_create_network_dex_jupiter_swap_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             swap_config: Some(RelayerSolanaSwapConfig {
@@ -184,7 +184,9 @@ mod tests {
         let provider = Arc::new(MockSolanaProviderTrait::new());
 
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(create_test_signer_model().into())
+                .await
+                .unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -198,8 +200,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_network_dex_jupiter_ultra_explicit() {
+    #[tokio::test]
+    async fn test_create_network_dex_jupiter_ultra_explicit() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             swap_config: Some(RelayerSolanaSwapConfig {
@@ -216,7 +218,9 @@ mod tests {
         let provider = Arc::new(MockSolanaProviderTrait::new());
 
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(create_test_signer_model().into())
+                .await
+                .unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -230,8 +234,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_network_dex_default_when_no_strategy() {
+    #[tokio::test]
+    async fn test_create_network_dex_default_when_no_strategy() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             swap_config: Some(RelayerSolanaSwapConfig {
@@ -248,7 +252,9 @@ mod tests {
         let provider = Arc::new(MockSolanaProviderTrait::new());
 
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(create_test_signer_model().into())
+                .await
+                .unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 
@@ -262,8 +268,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_network_dex_default_when_no_swap_config() {
+    #[tokio::test]
+    async fn test_create_network_dex_default_when_no_swap_config() {
         let mut relayer = RelayerRepoModel::default();
         let policy = crate::models::RelayerNetworkPolicy::Solana(RelayerSolanaPolicy {
             swap_config: None,
@@ -275,7 +281,9 @@ mod tests {
         let provider = Arc::new(MockSolanaProviderTrait::new());
 
         let signer_service = Arc::new(
-            SolanaSignerFactory::create_solana_signer(&create_test_signer_model().into()).unwrap(),
+            SolanaSignerFactory::create_solana_signer(create_test_signer_model().into())
+                .await
+                .unwrap(),
         );
         let jupiter_service = Arc::new(JupiterService::new_from_network(relayer.network.as_str()));
 

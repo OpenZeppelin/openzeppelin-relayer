@@ -1,0 +1,4 @@
+e2e/env.*
+e2e/*.keystore
+e2e/**/*.keystore
+e2e/generated-relayers/

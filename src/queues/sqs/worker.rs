@@ -84,6 +84,7 @@ pub async fn spawn_worker_for_queue(
     queue_url: String,
     app_state: Arc<ThinData<crate::models::DefaultAppState>>,
     shutdown_rx: watch::Receiver<bool>,
+    runtime_handle: tokio::runtime::Handle,
 ) -> Result<WorkerHandle, QueueBackendError> {
     let concurrency = get_concurrency_for_queue(queue_type);
     let max_retries = queue_type.max_retries();
@@ -108,7 +109,9 @@ pub async fn spawn_worker_for_queue(
     // All pollers share the same semaphore so total concurrency is bounded.
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    // Re-home the poll loop onto the pipeline runtime; the inner JoinSet pollers
+    // inherit this runtime, so all SQS polling distributes across worker threads.
+    let handle: JoinHandle<()> = runtime_handle.spawn(async move {
         let mut poller_handles: JoinSet<()> = JoinSet::new();
 
         for poller_id in 0..poller_count {

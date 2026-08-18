@@ -77,6 +77,37 @@ docker rmi openzeppelin/openzeppelin-relayer:latest
 
 We welcome contributions to the OpenZeppelin Relayer. Please read our [contributing section](https://github.com/OpenZeppelin/openzeppelin-relayer/?tab=readme-ov-file#contributing) for more information.
 
+## Runtime worker sizing (CPU)
+
+The relayer runs its HTTP server on actix workers and its background transaction
+pipeline on a separate multi-thread tokio runtime. Size both to the container's
+**vCPU quota** with these env vars:
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `TOKIO_WORKER_THREADS` | Pipeline runtime worker threads | `max(1, vCPU − ACTIX_WORKERS)` |
+| `ACTIX_WORKERS` | HTTP server workers | `max(1, vCPU / 2)` |
+
+`ACTIX_WORKERS + TOKIO_WORKER_THREADS` should be **≤ the allocated vCPU**. At startup
+the relayer logs the resolved `vcpu`, `actix_workers`, and `tokio_worker_threads`, and
+WARNs if the budget exceeds the quota.
+
+Auto-detection (`available_parallelism`) returns **host cores**, not the cgroup quota,
+on AWS Fargate (`cpu.shares`) — so on Fargate you **must** pin these explicitly.
+
+Per-platform:
+
+- **AWS Fargate**: set `TOKIO_WORKER_THREADS`/`ACTIX_WORKERS` in the task definition to
+  match the task vCPU; watch CloudWatch CPU throttling.
+- **GCP Cloud Run**: use the gen2 execution environment with `--no-cpu-throttling`
+  (`run.googleapis.com/cpu-throttling: false`) **and** `min-instances >= 1`, otherwise the
+  background pipeline is starved of CPU between HTTP requests. Set the worker counts to the
+  configured CPU.
+- **GKE**: pin to the CPU **request** and alert on `container_cpu_cfs_throttled_seconds_total`.
+
+When using AWS KMS signers, set an explicit `region` in the signer config so region
+resolution never falls back to the IMDS metadata endpoint.
+
 ## Observability
 
 See the [observability section](https://github.com/OpenZeppelin/openzeppelin-relayer/?tab=readme-ov-file#observability) for more information on how to set up observability for the relayer.

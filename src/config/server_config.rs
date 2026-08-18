@@ -1,6 +1,7 @@
 /// Configuration for the server, including network and rate limiting settings.
-use std::{env, str::FromStr};
+use std::{env, str::FromStr, sync::OnceLock};
 use strum::Display;
+use tracing::warn;
 
 use crate::{
     constants::{
@@ -8,8 +9,10 @@ use crate::{
         DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
         STELLAR_FEE_FORWARDER_MAINNET, STELLAR_SOROSWAP_MAINNET_FACTORY,
         STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_MAINNET_ROUTER,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
     },
     models::SecretString,
+    queues::retry_config::STATUS_STELLAR_BACKOFF,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
@@ -74,6 +77,13 @@ pub struct ServerConfig {
     pub redis_reader_pool_max_size: usize,
     /// Timeout in milliseconds waiting to get a connection from the pool.
     pub redis_pool_timeout_ms: u64,
+    /// Maximum lifetime in milliseconds for a Redis connection before it is
+    /// proactively dropped and reopened. Reopening re-resolves the endpoint's
+    /// DNS, which lets connections follow endpoint changes such as failover,
+    /// scaling, node replacement, or maintenance (e.g. after an ElastiCache
+    /// failover repoints the endpoint to a new node). A value of `0` disables
+    /// age-based recycling.
+    pub redis_connection_max_age_ms: u64,
     /// The number of milliseconds to wait for an RPC response.
     pub rpc_timeout_ms: u64,
     /// Maximum number of retry attempts for provider operations.
@@ -174,6 +184,7 @@ impl ServerConfig {
             redis_key_prefix: Self::get_redis_key_prefix(),
             redis_pool_max_size: Self::get_redis_pool_max_size(),
             redis_pool_timeout_ms: Self::get_redis_pool_timeout_ms(),
+            redis_connection_max_age_ms: Self::get_redis_connection_max_age_ms(),
             rpc_timeout_ms: Self::get_rpc_timeout_ms(),
             provider_max_retries: Self::get_provider_max_retries(),
             provider_retry_base_delay_ms: Self::get_provider_retry_base_delay_ms(),
@@ -335,6 +346,48 @@ impl ServerConfig {
             .filter(|v| !v.is_empty())
     }
 
+    /// Gets the RabbitMQ connection URL for the RabbitMQ queue backend.
+    ///
+    /// Full AMQP 0-9-1 URI: `amqp://user:pass@host:5672/vhost` or `amqps://…`
+    /// for TLS. Standard URI query parameters (e.g. `?heartbeat=20`) pass through
+    /// to the client. Required when the RabbitMQ backend is selected.
+    ///
+    /// The URL embeds credentials, so it MUST be redacted before logging — it is
+    /// parsed up front and only its endpoint is ever logged, see
+    /// [`crate::queues::rabbitmq::backend::redact_amqp_uri`].
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `RABBITMQ_URL` is not set.
+    pub fn get_rabbitmq_url() -> Result<String, String> {
+        env::var("RABBITMQ_URL").map_err(|_| {
+            "RABBITMQ_URL not set. Required for the RabbitMQ backend. Expected an AMQP URI like \
+             amqp://user:pass@host:5672/vhost (or amqps://… for TLS)."
+                .to_string()
+        })
+    }
+
+    /// Gets the prefix applied to all RabbitMQ queue names.
+    ///
+    /// The separator is inserted by the name builder, so the prefix needs no
+    /// trailing `-` (queues are `{prefix}-{queue}`). Defaults to `relayer` when
+    /// not set (same rule as `PUBSUB_TOPIC_PREFIX`).
+    pub fn get_rabbitmq_queue_prefix() -> String {
+        env::var("RABBITMQ_QUEUE_PREFIX").unwrap_or_else(|_| "relayer".to_string())
+    }
+
+    /// Whether the RabbitMQ backend runs in passive (verify-only) mode.
+    ///
+    /// `false` (default): declare all queues idempotently at startup. `true`:
+    /// passive declares only — never creates; a missing queue fails fast. For
+    /// locked-down brokers (app user without `configure` permission) or
+    /// pre-provisioned quorum queues.
+    pub fn get_rabbitmq_passive_queues() -> bool {
+        env::var("RABBITMQ_PASSIVE_QUEUES")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false)
+    }
+
     /// Gets the API key from environment variable (panics if not set or too short)
     pub fn get_api_key() -> SecretString {
         let api_key = SecretString::new(&env::var("API_KEY").expect("API_KEY must be set"));
@@ -430,6 +483,21 @@ impl ServerConfig {
             .ok()
             .filter(|&v| v > 0)
             .unwrap_or(10000)
+    }
+
+    /// Gets the Redis connection max age from environment variable or default.
+    ///
+    /// See the `redis_connection_max_age_ms` field docs. Defaults to 60000ms
+    /// (also on parse failure); `0` disables age-based recycling.
+    ///
+    /// Note: the pool recycler sweeps at half this value clamped to
+    /// `[1s, 30s]`, so values under ~2000ms are effectively bounded by the 1s
+    /// sweep floor rather than the configured age.
+    pub fn get_redis_connection_max_age_ms() -> u64 {
+        env::var("REDIS_CONNECTION_MAX_AGE_MS")
+            .unwrap_or_else(|_| "60000".to_string())
+            .parse()
+            .unwrap_or(60000)
     }
 
     /// Gets the RPC timeout from environment variable or default
@@ -690,6 +758,55 @@ impl ServerConfig {
         }
     }
 
+    // =========================================================================
+    // Stellar Status Poll Cadence Getters
+    // =========================================================================
+    // Each value is read from the environment once (cached in a `OnceLock`) and
+    // falls back to the compiled-in default when unset or invalid.
+
+    /// Gets the initial delay in seconds before the first Stellar status check.
+    ///
+    /// Reads `STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS` (valid `0..=60`);
+    /// defaults to [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+    pub fn get_stellar_status_check_initial_delay_seconds() -> i64 {
+        static RESOLVED: OnceLock<i64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_check_initial_delay_seconds(
+                env::var("STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS")
+                    .ok()
+                    .as_deref(),
+            )
+        })
+    }
+
+    /// Gets the initial Stellar status-check retry delay in milliseconds.
+    ///
+    /// Reads `STELLAR_STATUS_RETRY_INITIAL_MS` (valid `500..=60000`);
+    /// defaults to `STATUS_STELLAR_BACKOFF.initial_ms`.
+    pub fn get_stellar_status_retry_initial_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_retry_initial_ms(
+                env::var("STELLAR_STATUS_RETRY_INITIAL_MS").ok().as_deref(),
+            )
+        })
+    }
+
+    /// Gets the maximum Stellar status-check retry delay in milliseconds.
+    ///
+    /// Reads `STELLAR_STATUS_RETRY_MAX_MS` (valid `500..=60000`); defaults to
+    /// `STATUS_STELLAR_BACKOFF.max_ms`. The result is clamped up to the
+    /// resolved initial retry delay so the cap is never below it.
+    pub fn get_stellar_status_retry_max_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_stellar_status_retry_max_ms(
+                env::var("STELLAR_STATUS_RETRY_MAX_MS").ok().as_deref(),
+                Self::get_stellar_status_retry_initial_ms(),
+            )
+        })
+    }
+
     /// Get worker concurrency from environment variable or use default
     ///
     /// Environment variable format: `BACKGROUND_WORKER_{WORKER_NAME}_CONCURRENCY`
@@ -735,6 +852,80 @@ impl ServerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
             .max(1)
+    }
+}
+
+/// Parses the initial status-check delay override in seconds.
+///
+/// Valid range is `0..=60`. Unset or invalid values fall back to
+/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+    let Some(raw) = raw else {
+        return STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+    };
+    match raw.trim().parse::<i64>() {
+        Ok(value) if (0..=60).contains(&value) => value,
+        _ => {
+            warn!(
+                env_var = "STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS",
+                value = raw,
+                default = STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                "invalid Stellar status-check initial delay override; using default"
+            );
+            STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        }
+    }
+}
+
+/// Parses the Stellar status-check initial retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_STELLAR_BACKOFF.initial_ms`.
+fn parse_stellar_status_retry_initial_ms(raw: Option<&str>) -> u64 {
+    parse_stellar_status_retry_ms(
+        "STELLAR_STATUS_RETRY_INITIAL_MS",
+        raw,
+        STATUS_STELLAR_BACKOFF.initial_ms,
+    )
+}
+
+/// Parses the Stellar status-check maximum retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_STELLAR_BACKOFF.max_ms`. The result is clamped up to `initial_ms`
+/// so the cap is never below the initial delay; the clamp is logged so an
+/// explicit-but-overridden value leaves a trace.
+fn parse_stellar_status_retry_max_ms(raw: Option<&str>, initial_ms: u64) -> u64 {
+    let max_ms = parse_stellar_status_retry_ms(
+        "STELLAR_STATUS_RETRY_MAX_MS",
+        raw,
+        STATUS_STELLAR_BACKOFF.max_ms,
+    );
+    if max_ms < initial_ms {
+        warn!(
+            max_ms,
+            initial_ms,
+            "STELLAR_STATUS_RETRY_MAX_MS is below the resolved initial retry delay; clamping up to the initial delay"
+        );
+    }
+    max_ms.max(initial_ms)
+}
+
+fn parse_stellar_status_retry_ms(name: &str, raw: Option<&str>, default: u64) -> u64 {
+    let Some(raw) = raw else {
+        return default;
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(value) if (500..=60_000).contains(&value) => value,
+        _ => {
+            warn!(
+                env_var = name,
+                value = raw,
+                default,
+                "invalid Stellar status retry override; using default"
+            );
+            default
+        }
     }
 }
 
@@ -788,6 +979,49 @@ mod tests {
         env::remove_var("PUBSUB_PROJECT_ID");
         env::remove_var("PUBSUB_TOPIC_PREFIX");
         env::remove_var("PUBSUB_EMULATOR_HOST");
+    }
+
+    #[test]
+    fn test_rabbitmq_config_getters() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::remove_var("RABBITMQ_URL");
+        env::remove_var("RABBITMQ_QUEUE_PREFIX");
+        env::remove_var("RABBITMQ_PASSIVE_QUEUES");
+
+        // Defaults / required behavior when unset.
+        let err =
+            ServerConfig::get_rabbitmq_url().expect_err("URL must be required (error) when unset");
+        assert!(err.contains("RABBITMQ_URL"), "error must name the variable");
+        assert!(
+            err.contains("amqp://"),
+            "error must describe the expected URI shape"
+        );
+        assert_eq!(ServerConfig::get_rabbitmq_queue_prefix(), "relayer");
+        assert!(!ServerConfig::get_rabbitmq_passive_queues());
+
+        // Custom values.
+        env::set_var("RABBITMQ_URL", "amqps://u:p@broker:5671/vh");
+        env::set_var("RABBITMQ_QUEUE_PREFIX", "test");
+        env::set_var("RABBITMQ_PASSIVE_QUEUES", "TRUE"); // case-insensitive
+
+        assert_eq!(
+            ServerConfig::get_rabbitmq_url().unwrap(),
+            "amqps://u:p@broker:5671/vh"
+        );
+        assert_eq!(ServerConfig::get_rabbitmq_queue_prefix(), "test");
+        assert!(ServerConfig::get_rabbitmq_passive_queues());
+
+        // Any non-"true" value is false.
+        env::set_var("RABBITMQ_PASSIVE_QUEUES", "yes");
+        assert!(!ServerConfig::get_rabbitmq_passive_queues());
+
+        env::remove_var("RABBITMQ_URL");
+        env::remove_var("RABBITMQ_QUEUE_PREFIX");
+        env::remove_var("RABBITMQ_PASSIVE_QUEUES");
     }
 
     fn setup() {
@@ -2135,6 +2369,46 @@ mod tests {
         }
     }
 
+    mod get_redis_connection_max_age_ms_tests {
+        use super::*;
+        use serial_test::serial;
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_not_set() {
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value of 60000");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_env_value_when_set() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "120000");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 120000, "Should return env var value");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_returns_default_when_env_invalid() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "not_a_number");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 60000, "Should return default value when invalid");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+
+        #[test]
+        #[serial]
+        fn test_zero_disables_recycling() {
+            env::set_var("REDIS_CONNECTION_MAX_AGE_MS", "0");
+            let result = ServerConfig::get_redis_connection_max_age_ms();
+            assert_eq!(result, 0, "Should accept zero to disable recycling");
+            env::remove_var("REDIS_CONNECTION_MAX_AGE_MS");
+        }
+    }
+
     mod get_sqs_wait_time_tests {
         use super::*;
         use serial_test::serial;
@@ -2232,6 +2506,112 @@ mod tests {
                 result, 1,
                 "Default of 0 should also be clamped to minimum of 1"
             );
+        }
+    }
+
+    mod stellar_status_poll_cadence_tests {
+        use super::super::*;
+
+        #[test]
+        fn test_parse_initial_delay_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(None),
+                STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+            );
+        }
+
+        #[test]
+        fn test_parse_initial_delay_valid_override() {
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("5")),
+                5
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("0")),
+                0
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some("60")),
+                60
+            );
+            assert_eq!(
+                parse_stellar_status_check_initial_delay_seconds(Some(" 3 ")),
+                3
+            );
+        }
+
+        #[test]
+        fn test_parse_initial_delay_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "61", "2.5"] {
+                assert_eq!(
+                    parse_stellar_status_check_initial_delay_seconds(Some(raw)),
+                    STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_retry_initial_ms(None),
+                STATUS_STELLAR_BACKOFF.initial_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_valid_override() {
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some("5000")), 5000);
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some(" 500 ")), 500);
+            assert_eq!(parse_stellar_status_retry_initial_ms(Some("60000")), 60000);
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "2.5", "499", "60001"] {
+                assert_eq!(
+                    parse_stellar_status_retry_initial_ms(Some(raw)),
+                    STATUS_STELLAR_BACKOFF.initial_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_unset_uses_default() {
+            assert_eq!(
+                parse_stellar_status_retry_max_ms(None, STATUS_STELLAR_BACKOFF.initial_ms),
+                STATUS_STELLAR_BACKOFF.max_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_valid_override() {
+            assert_eq!(parse_stellar_status_retry_max_ms(Some("8000"), 2000), 8000);
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_invalid_uses_default() {
+            for raw in ["garbage", "-1", "499", "60001"] {
+                assert_eq!(
+                    parse_stellar_status_retry_max_ms(Some(raw), 2000),
+                    STATUS_STELLAR_BACKOFF.max_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_clamped_up_to_initial() {
+            // Valid but below initial: clamp up to initial.
+            assert_eq!(parse_stellar_status_retry_max_ms(Some("3000"), 5000), 5000);
+            // Invalid with default below initial: default then clamp up.
+            assert_eq!(
+                parse_stellar_status_retry_max_ms(Some("garbage"), 5000),
+                5000
+            );
+            // Unset with default below initial: default then clamp up.
+            assert_eq!(parse_stellar_status_retry_max_ms(None, 5000), 5000);
         }
     }
 }

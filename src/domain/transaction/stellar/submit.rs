@@ -11,7 +11,11 @@ use super::{
     StellarRelayerTransaction,
 };
 use crate::{
-    constants::STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
+    constants::{
+        STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS, STELLAR_INSUFFICIENT_FEE_MAX_RETRIES,
+        STELLAR_TRY_AGAIN_LATER_FAST_RETRIES,
+    },
+    domain::transaction::stellar::prepare::common::send_submit_transaction_job,
     jobs::JobProducerTrait,
     metrics::{STELLAR_SUBMISSION_FAILURES, TRANSACTIONS_INSUFFICIENT_FEE},
     models::{
@@ -88,10 +92,14 @@ where
     /// Handles status codes:
     /// - PENDING: Transaction accepted for processing
     /// - DUPLICATE: Transaction already submitted (treat as success)
-    /// - TRY_AGAIN_LATER: Network congested but tx is valid — update sent_at and return Ok
-    ///   (status checker will retry with exponential backoff)
-    /// - ERROR: Transaction validation failed, mark as failed, except for insufficient fee errors
-    ///   (insufficient fee errors are treated as TRY_AGAIN_LATER)
+    /// - TRY_AGAIN_LATER: Network congested but tx is valid; update sent_at and schedule a
+    ///   fast delayed resubmit (5s × attempt) for the first 3 rejections
+    /// - ERROR: Transaction validation failed, except insufficient fee schedules the same fast
+    ///   delayed resubmit through the insufficient-fee retry cap (6)
+    ///
+    /// The status checker remains the fallback rescue. Each fast attempt refreshes sent_at before
+    /// enqueueing, so the ladder's ≥10s time-since-last-submit gate stays closed while the
+    /// 5s-spaced fast attempts are active.
     async fn submit_core(
         &self,
         tx: TransactionRepoModel,
@@ -162,14 +170,26 @@ where
                 // Network is temporarily congested — the transaction is valid but the
                 // node's queue is full. Atomically update sent_at and increment
                 // try_again_later_retries so the status checker's backoff gate measures
-                // time since this attempt. Return Ok to keep the transaction alive.
-                // The status checker will handle retries:
-                // - Submitted txs: resubmitted with exponential backoff
-                // - Sent txs: re-enqueued via handle_sent_state
+                // time since this attempt. Return Ok to keep the transaction alive;
+                // the fast path handles the bounded early retries, and the status
+                // checker remains the fallback rescue.
                 let updated_tx = self
                     .transaction_repository()
                     .record_stellar_try_again_later_retry(tx.id.clone(), Utc::now().to_rfc3339())
                     .await?;
+
+                // The repo returns the transaction unchanged if it reached a final state
+                // between this submission and the record call (e.g. a racing job finalized
+                // it). Nothing left to rescue — skip metrics and scheduling.
+                if is_final_state(&updated_tx.status) {
+                    debug!(
+                        tx_id = %updated_tx.id,
+                        relayer_id = %updated_tx.relayer_id,
+                        status = ?updated_tx.status,
+                        "transaction reached final state during retry recording; skipping fast resubmit"
+                    );
+                    return Ok(updated_tx);
+                }
 
                 let retries = updated_tx
                     .metadata
@@ -183,13 +203,44 @@ where
                         .inc();
                 }
 
-                debug!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    status = ?tx.status,
-                    try_again_later_retries = retries,
-                    "TRY_AGAIN_LATER — status checker will retry"
-                );
+                if retries <= STELLAR_TRY_AGAIN_LATER_FAST_RETRIES {
+                    let delay_seconds =
+                        STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS * i64::from(retries);
+
+                    info!(
+                        tx_id = %updated_tx.id,
+                        relayer_id = %updated_tx.relayer_id,
+                        status = ?updated_tx.status,
+                        try_again_later_retries = retries,
+                        delay_seconds,
+                        "enqueueing fast resubmit after TRY_AGAIN_LATER"
+                    );
+
+                    if let Err(error) = send_submit_transaction_job(
+                        self.job_producer(),
+                        &updated_tx,
+                        Some(delay_seconds),
+                    )
+                    .await
+                    {
+                        warn!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            error = %error,
+                            try_again_later_retries = retries,
+                            delay_seconds,
+                            "failed to enqueue fast resubmit after TRY_AGAIN_LATER"
+                        );
+                    }
+                } else {
+                    debug!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        status = ?tx.status,
+                        try_again_later_retries = retries,
+                        "TRY_AGAIN_LATER — status checker will retry"
+                    );
+                }
                 Ok(updated_tx)
             }
             "ERROR" => {
@@ -225,14 +276,6 @@ where
                         )));
                     }
 
-                    debug!(
-                        tx_id = %tx.id,
-                        relayer_id = %tx.relayer_id,
-                        status = ?tx.status,
-                        insufficient_fee_retries = meta.insufficient_fee_retries,
-                        result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
-                        "ERROR with insufficient fee — status checker will retry"
-                    );
                     // Atomically sets `sent_at` and increments Stellar insufficient-fee retries.
                     let updated_tx = self
                         .transaction_repository()
@@ -241,6 +284,67 @@ where
                             Utc::now().to_rfc3339(),
                         )
                         .await?;
+
+                    // The repo returns the transaction unchanged if it reached a final state
+                    // between this submission and the record call (e.g. a racing job finalized
+                    // it). Nothing left to rescue — skip metrics and scheduling.
+                    if is_final_state(&updated_tx.status) {
+                        debug!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            status = ?updated_tx.status,
+                            "transaction reached final state during retry recording; skipping fast resubmit"
+                        );
+                        return Ok(updated_tx);
+                    }
+
+                    let retries = updated_tx
+                        .metadata
+                        .as_ref()
+                        .map_or(0, |metadata| metadata.insufficient_fee_retries);
+
+                    // This can only happen when a concurrent submission increments the counter
+                    // between our read and record. That winner already scheduled the retry; skip
+                    // this enqueue so the next rejection terminates normally at the pre-record cap.
+                    if retries > STELLAR_INSUFFICIENT_FEE_MAX_RETRIES {
+                        warn!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            insufficient_fee_retries = retries,
+                            "post-record retry count exceeds cap; skipping fast resubmit - concurrent submission detected"
+                        );
+                        return Ok(updated_tx);
+                    }
+
+                    let delay_seconds =
+                        STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS * i64::from(retries);
+
+                    info!(
+                        tx_id = %updated_tx.id,
+                        relayer_id = %updated_tx.relayer_id,
+                        status = ?updated_tx.status,
+                        insufficient_fee_retries = retries,
+                        delay_seconds,
+                        result_code = decoded_result_code.as_deref().unwrap_or("Unknown"),
+                        "enqueueing fast resubmit after insufficient fee"
+                    );
+
+                    if let Err(error) = send_submit_transaction_job(
+                        self.job_producer(),
+                        &updated_tx,
+                        Some(delay_seconds),
+                    )
+                    .await
+                    {
+                        warn!(
+                            tx_id = %updated_tx.id,
+                            relayer_id = %updated_tx.relayer_id,
+                            error = %error,
+                            insufficient_fee_retries = retries,
+                            delay_seconds,
+                            "failed to enqueue fast resubmit after insufficient fee"
+                        );
+                    }
                     return Ok(updated_tx);
                 }
                 STELLAR_SUBMISSION_FAILURES
@@ -307,7 +411,20 @@ where
         }
 
         if is_bad_sequence_error(&error_reason) {
-            // For bad sequence errors, sync sequence from chain first
+            // Reset the transaction to pending state BEFORE syncing the counter: the
+            // reset clears this tx's (bad) sequence_number, so the drift rewind inside
+            // sync_sequence_from_chain is not bounded by the failing tx's own record —
+            // otherwise the tx would pin the counter one past its burned sequence and
+            // the drift would never heal.
+            // Status check will handle resubmission when it detects a pending transaction without hash
+            info!(
+                tx_id = %tx_id,
+                relayer_id = %relayer_id,
+                "bad sequence error detected, resetting transaction to pending state"
+            );
+            let reset_result = self.reset_transaction_for_retry(tx.clone()).await;
+
+            // Sync sequence from chain (best effort)
             if let Ok(stellar_data) = tx.network_data.get_stellar_transaction_data() {
                 info!(
                     tx_id = %tx_id,
@@ -336,14 +453,7 @@ where
                 }
             }
 
-            // Reset the transaction to pending state
-            // Status check will handle resubmission when it detects a pending transaction without hash
-            info!(
-                tx_id = %tx_id,
-                relayer_id = %relayer_id,
-                "bad sequence error detected, resetting transaction to pending state"
-            );
-            match self.reset_transaction_for_retry(tx.clone()).await {
+            match reset_result {
                 Ok(reset_tx) => {
                     info!(
                         tx_id = %tx_id,
@@ -873,12 +983,12 @@ mod tests {
                 })
             });
 
-            // Mock counter set for sync_sequence_from_chain
+            // Mock counter sync_floor for sync_sequence_from_chain
             mocks
                 .counter
-                .expect_set()
+                .expect_sync_floor()
                 .times(1)
-                .returning(|_, _, _| Box::pin(async { Ok(()) }));
+                .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
 
             // Mock partial_update for reset_transaction_for_retry - should reset to Pending
             mocks
@@ -925,6 +1035,255 @@ mod tests {
             } else {
                 panic!("Expected Stellar transaction data");
             }
+        }
+
+        #[tokio::test]
+        async fn test_submit_bad_sequence_rewinds_drifted_counter() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock provider to return bad sequence error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxBadSeq".to_string(),
+                        ))
+                    })
+                });
+
+            // Mock get_account for sync_sequence_from_chain: chain seq 100 → next usable 101
+            mocks.provider.expect_get_account().times(1).returning(|_| {
+                Box::pin(async {
+                    use soroban_rs::xdr::{
+                        AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                        String32, Thresholds, Uint256,
+                    };
+                    use stellar_strkey::ed25519;
+
+                    let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                    let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                    Ok(AccountEntry {
+                        account_id,
+                        balance: 1000000,
+                        seq_num: SequenceNumber(100),
+                        num_sub_entries: 0,
+                        inflation_dest: None,
+                        flags: 0,
+                        home_domain: String32::default(),
+                        thresholds: Thresholds([1, 1, 1, 1]),
+                        signers: Default::default(),
+                        ext: AccountEntryExt::V0,
+                    })
+                })
+            });
+
+            // Counter drifted above the chain floor: sync_floor reports 150
+            mocks
+                .counter
+                .expect_sync_floor()
+                .times(1)
+                .returning(|_, _, _| Box::pin(async { Ok(150) }));
+
+            // The reset must run BEFORE the occupancy scan: the reset clears this tx's
+            // burned sequence_number, so its record no longer bounds the rewind. The
+            // Sequence pins that ordering — reverting to sync-before-reset fails here.
+            let mut call_order = mockall::Sequence::new();
+
+            // Mock partial_update for reset_transaction_for_retry - should reset to Pending
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    if let Some(network_data) = upd.network_data {
+                        tx.network_data = network_data;
+                    }
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // The scan then sees the reset tx (sequence_number cleared) — target is
+            // the chain floor
+            let mut reset_tx = create_test_transaction(&relayer.id);
+            reset_tx.status = TransactionStatus::Pending;
+            if let NetworkTransactionData::Stellar(ref mut data) = reset_tx.network_data {
+                data.sequence_number = None;
+            }
+            mocks
+                .tx_repo
+                .expect_find_by_status()
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(move |_, _| Ok(vec![reset_tx.clone()]));
+
+            // No Confirmed txs to bound the rewind
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .times(1)
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            // The drifted counter is rewound 150 → 101 via CAS
+            mocks
+                .counter
+                .expect_set_if_equals()
+                .withf(|relayer_id, addr, expected, value| {
+                    relayer_id == "relayer-1"
+                        && addr == TEST_PK
+                        && *expected == 150
+                        && *value == 101
+                })
+                .times(1)
+                .returning(|_, _, _, _| Box::pin(async { Ok(true) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // The tx is reset for retry and the counter rewind was applied
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Pending);
+        }
+
+        #[tokio::test]
+        async fn test_submit_bad_sequence_reset_failure_still_syncs_and_marks_failed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            // Mock provider to return bad sequence error
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(|_| {
+                    Box::pin(async {
+                        Err(ProviderError::Other(
+                            "transaction submission failed: TxBadSeq".to_string(),
+                        ))
+                    })
+                });
+
+            // Pin the flow: reset is attempted first, the chain sync still runs after
+            // the reset fails, and the tx then falls through to being marked Failed.
+            let mut call_order = mockall::Sequence::new();
+
+            // Reset attempt fails
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Pending))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|_, _| Err(RepositoryError::Unknown("reset write failed".to_string())));
+
+            // Sync still runs (best effort): chain seq 100 → floor 101, no drift
+            mocks
+                .provider
+                .expect_get_account()
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|_| {
+                    Box::pin(async {
+                        use soroban_rs::xdr::{
+                            AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
+                            String32, Thresholds, Uint256,
+                        };
+                        use stellar_strkey::ed25519;
+
+                        let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
+                        let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
+
+                        Ok(AccountEntry {
+                            account_id,
+                            balance: 1000000,
+                            seq_num: SequenceNumber(100),
+                            num_sub_entries: 0,
+                            inflation_dest: None,
+                            flags: 0,
+                            home_domain: String32::default(),
+                            thresholds: Thresholds([1, 1, 1, 1]),
+                            signers: Default::default(),
+                            ext: AccountEntryExt::V0,
+                        })
+                    })
+                });
+
+            mocks
+                .counter
+                .expect_sync_floor()
+                .times(1)
+                .returning(|_, _, floor| Box::pin(async move { Ok(floor) }));
+
+            // Fall-through marks the tx Failed
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, upd| upd.status == Some(TransactionStatus::Failed))
+                .times(1)
+                .in_sequence(&mut call_order)
+                .returning(|id, upd| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = upd.status.unwrap();
+                    tx.status_reason = upd.status_reason;
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            // Notification for the failed transaction
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            // No pending transactions to enqueue after the failure
+            mocks
+                .tx_repo
+                .expect_find_by_status_paginated()
+                .returning(|_, _, _, _| {
+                    Ok(PaginatedResult {
+                        items: vec![],
+                        total: 0,
+                        page: 1,
+                        per_page: 1,
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent; // Must be Sent for idempotent submit
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.sequence_number = Some(42);
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let result = handler.submit_transaction_impl(tx).await;
+
+            // Marked as failed and returned Ok (no pointless queue retry)
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().status, TransactionStatus::Failed);
         }
 
         #[tokio::test]
@@ -1006,6 +1365,13 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
             tx.status = TransactionStatus::Sent;
@@ -1016,7 +1382,7 @@ mod tests {
 
             let res = handler.submit_transaction_impl(tx).await;
 
-            // Transaction stays in Sent — status checker will re-enqueue submission
+            // Transaction stays in Sent and gets a delayed fast resubmit.
             let returned_tx = res.unwrap();
             assert_eq!(returned_tx.status, TransactionStatus::Sent);
         }
@@ -1058,6 +1424,13 @@ mod tests {
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
+
+            submit_mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let submit_handler = make_stellar_tx_handler(relayer.clone(), submit_mocks);
             let mut sent_tx = create_test_transaction(&relayer.id);
@@ -1140,6 +1513,13 @@ mod tests {
                     Ok::<_, RepositoryError>(tx)
                 });
 
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
             tx.status = TransactionStatus::Submitted; // Already submitted (resubmission path)
@@ -1150,9 +1530,123 @@ mod tests {
 
             let res = handler.submit_transaction_impl(tx).await;
 
-            // Should succeed without marking as failed — status checker will retry
+            // Should succeed without marking as failed and get a delayed fast resubmit.
             let returned_tx = res.unwrap();
             assert_eq!(returned_tx.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_try_again_later_fast_window_closes() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 4,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.try_again_later_retries),
+                Some(4)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_try_again_later_final_state_skips_enqueue() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Confirmed;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                consecutive_failures: 0,
+                total_failures: 0,
+                insufficient_fee_retries: 0,
+                try_again_later_retries: 0,
+                nonce_too_high_retries: 0,
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            assert!(res.is_ok());
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Confirmed);
         }
 
         #[tokio::test]
@@ -1260,6 +1754,13 @@ mod tests {
                 })
                 .times(1);
 
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
             let handler = make_stellar_tx_handler(relayer.clone(), mocks);
             let mut tx = create_test_transaction(&relayer.id);
             tx.status = TransactionStatus::Sent;
@@ -1283,7 +1784,84 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn submit_transaction_insufficient_fee_exceeding_retry_limit_fails() {
+        async fn submit_transaction_insufficient_fee_escalates_delay() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+            let before_submit = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+            let before_submit_for_mock = before_submit.clone();
+            let expected_delay = STELLAR_FAST_RESUBMIT_BASE_DELAY_SECONDS * 3;
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 3,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(move |_, scheduled_on| {
+                    let before_submit =
+                        before_submit_for_mock.load(std::sync::atomic::Ordering::SeqCst);
+                    let now = Utc::now().timestamp();
+                    scheduled_on.is_some_and(|scheduled_on| {
+                        scheduled_on >= before_submit + expected_delay - 1
+                            && scheduled_on <= now + expected_delay + 1
+                    })
+                })
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            before_submit.store(Utc::now().timestamp(), std::sync::atomic::Ordering::SeqCst);
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(3)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_post_record_over_cap_skips_enqueue() {
             let relayer = create_test_relayer();
             let mut mocks = default_test_mocks();
 
@@ -1302,12 +1880,275 @@ mod tests {
 
             mocks
                 .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_final_state_skips_enqueue() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Confirmed;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            tx.metadata = Some(TransactionMetadata {
+                consecutive_failures: 0,
+                total_failures: 0,
+                insufficient_fee_retries: 0,
+                try_again_later_retries: 0,
+                nonce_too_high_retries: 0,
+            });
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_core(tx).await;
+
+            assert!(res.is_ok());
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Confirmed);
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_fast_resubmit_enqueue_failure_is_swallowed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_insufficient_fee_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 1,
+                        try_again_later_retries: 0,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "queue unavailable".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.insufficient_fee_retries),
+                Some(1)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_try_again_later_enqueue_failure_is_swallowed() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+
+            let response = create_send_tx_response(
+                "TRY_AGAIN_LATER",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
+                .expect_record_stellar_try_again_later_retry()
+                .withf(|id, sent_at| id == "tx-1" && !sent_at.is_empty())
+                .returning(|id, _| {
+                    let mut tx = create_test_transaction("relayer-1");
+                    tx.id = id;
+                    tx.status = TransactionStatus::Sent;
+                    tx.metadata = Some(TransactionMetadata {
+                        consecutive_failures: 0,
+                        total_failures: 0,
+                        insufficient_fee_retries: 0,
+                        try_again_later_retries: 1,
+                        nonce_too_high_retries: 0,
+                    });
+                    Ok::<_, RepositoryError>(tx)
+                })
+                .times(1);
+
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .withf(|_, scheduled_on| scheduled_on.is_some())
+                .times(1)
+                .returning(|_, _| {
+                    Box::pin(async {
+                        Err(crate::jobs::JobProducerError::QueueError(
+                            "queue unavailable".to_string(),
+                        ))
+                    })
+                });
+
+            let handler = make_stellar_tx_handler(relayer.clone(), mocks);
+            let mut tx = create_test_transaction(&relayer.id);
+            tx.status = TransactionStatus::Sent;
+            if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
+                data.signatures.push(dummy_signature());
+                data.signed_envelope_xdr = Some(create_signed_xdr(TEST_PK, TEST_PK_2));
+            }
+
+            let res = handler.submit_transaction_impl(tx).await;
+
+            let returned_tx = res.unwrap();
+            assert_eq!(returned_tx.status, TransactionStatus::Sent);
+            assert_eq!(
+                returned_tx
+                    .metadata
+                    .as_ref()
+                    .map(|metadata| metadata.try_again_later_retries),
+                Some(1)
+            );
+        }
+
+        #[tokio::test]
+        async fn submit_transaction_insufficient_fee_exceeding_retry_limit_fails() {
+            let relayer = create_test_relayer();
+            let mut mocks = default_test_mocks();
+            let retry_limit_reason = format!(
+                "insufficient fee retry limit exceeded ({STELLAR_INSUFFICIENT_FEE_MAX_RETRIES})"
+            );
+            let retry_limit_reason_for_mock = retry_limit_reason.clone();
+
+            let mut response = create_send_tx_response(
+                "ERROR",
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            );
+            response.error_result_xdr = Some("AAAAAAAAY/n////3AAAAAA==".to_string());
+            mocks
+                .provider
+                .expect_send_transaction_with_status()
+                .returning(move |_| {
+                    let r = response.clone();
+                    Box::pin(async move { Ok(r) })
+                });
+
+            mocks
+                .tx_repo
                 .expect_partial_update()
-                .withf(|_, upd| {
+                .withf(move |_, upd| {
                     upd.status == Some(TransactionStatus::Failed)
-                        && upd.status_reason.as_ref().is_some_and(|reason| {
-                            reason.contains("insufficient fee retry limit exceeded (2)")
-                        })
+                        && upd
+                            .status_reason
+                            .as_ref()
+                            .is_some_and(|reason| reason.contains(&retry_limit_reason_for_mock))
                 })
                 .returning(|id, upd| {
                     let mut tx = create_test_transaction("relayer-1");
@@ -1351,11 +2192,10 @@ mod tests {
 
             let failed_tx = res.unwrap();
             assert_eq!(failed_tx.status, TransactionStatus::Failed);
-            assert!(
-                failed_tx.status_reason.as_ref().is_some_and(
-                    |reason| reason.contains("insufficient fee retry limit exceeded (2)")
-                )
-            );
+            assert!(failed_tx
+                .status_reason
+                .as_ref()
+                .is_some_and(|reason| reason.contains(&retry_limit_reason)));
         }
 
         #[tokio::test]

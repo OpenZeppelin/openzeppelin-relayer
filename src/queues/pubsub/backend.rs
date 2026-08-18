@@ -17,7 +17,6 @@ use gcloud_googleapis::pubsub::v1::PubsubMessage;
 use gcloud_pubsub::client::{Client, ClientConfig};
 use gcloud_pubsub::publisher::Publisher;
 use parking_lot::RwLock;
-use rustls::crypto::{aws_lc_rs, CryptoProvider};
 use serde::Serialize;
 use token_source::TokenSource;
 use tokio::sync::watch;
@@ -242,16 +241,10 @@ impl PubSubBackend {
     pub async fn new(redis_connections: Arc<RedisConnections>) -> Result<Self, QueueBackendError> {
         info!("Initializing Pub/Sub queue backend");
 
-        // rustls 0.23 needs a process-default CryptoProvider when more than one
-        // provider is compiled in. Both are present here (aws-lc-rs via the gcloud
-        // and AWS SDK trees, ring via aws-config/Solana), so rustls can't select
-        // one automatically and gcloud-pubsub's TLS — which uses the process
-        // default — panics on the first real-GCP connection. The emulator path is
-        // plaintext, so this only surfaces against real GCP. Install once; ignore
-        // if a default is already set.
-        if CryptoProvider::get_default().is_none() {
-            let _ = aws_lc_rs::default_provider().install_default();
-        }
+        // Install the process-default rustls CryptoProvider (shared helper): the
+        // emulator path is plaintext, so this only surfaces against real GCP,
+        // where the install-if-unset guard prevents a first-connection panic.
+        crate::queues::ensure_crypto_provider();
 
         let project_id =
             ServerConfig::get_pubsub_project_id().map_err(QueueBackendError::ConfigError)?;
@@ -526,6 +519,7 @@ impl QueueBackend for PubSubBackend {
     async fn initialize_workers(
         &self,
         app_state: Arc<ThinData<DefaultAppState>>,
+        handle: tokio::runtime::Handle,
     ) -> Result<Vec<WorkerHandle>, QueueBackendError> {
         info!(
             queue_count = self.topic_names.len(),
@@ -547,6 +541,7 @@ impl QueueBackend for PubSubBackend {
                 pool.clone(),
                 self.key_prefix.clone(),
                 self.shutdown_tx.subscribe(),
+                handle.clone(),
             ));
 
             // One due-sweep per queue (publishes deferred/retrying jobs when due).
@@ -556,6 +551,7 @@ impl QueueBackend for PubSubBackend {
                 pool.clone(),
                 self.key_prefix.clone(),
                 self.shutdown_tx.subscribe(),
+                handle.clone(),
             ));
         }
 
@@ -565,6 +561,7 @@ impl QueueBackend for PubSubBackend {
         let cron_scheduler = crate::queues::cron::CronScheduler::new(
             app_state.clone(),
             self.shutdown_tx.subscribe(),
+            handle.clone(),
         );
         handles.extend(cron_scheduler.start().await?);
 
@@ -574,7 +571,7 @@ impl QueueBackend for PubSubBackend {
             let snapshot = self.depth_snapshot.clone();
             let project_id = self.project_id.clone();
             let mut shutdown_rx = self.shutdown_tx.subscribe();
-            let handle = tokio::spawn(async move {
+            let depth_handle = handle.spawn(async move {
                 let interval = Duration::from_secs(DEPTH_REFRESH_INTERVAL_SECS);
                 loop {
                     match monitoring::read_backlog_depths(
@@ -610,13 +607,18 @@ impl QueueBackend for PubSubBackend {
                     }
                 }
             });
-            handles.push(WorkerHandle::Tokio(handle));
+            handles.push(WorkerHandle::Tokio(depth_handle));
         }
 
         // SIGINT/SIGTERM → broadcast shutdown to all workers and due-sweeps.
+        //
+        // NOT pushed into `handles`: this task only resolves on an OS signal, so on a
+        // programmatic/server-driven shutdown (no signal sent) it would never complete
+        // and `drain_worker_handles` would block for the full drain timeout waiting on
+        // it instead of the real worker/due-sweep tasks.
         {
             let shutdown_tx = self.shutdown_tx.clone();
-            let handle = tokio::spawn(async move {
+            handle.spawn(async move {
                 let mut sigint =
                     tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
                         .expect("Failed to create SIGINT handler");
@@ -629,7 +631,6 @@ impl QueueBackend for PubSubBackend {
                 }
                 let _ = shutdown_tx.send(true);
             });
-            handles.push(WorkerHandle::Tokio(handle));
         }
 
         info!(

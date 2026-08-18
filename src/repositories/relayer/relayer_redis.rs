@@ -897,6 +897,7 @@ mod tests {
         repo.create(relayer.clone()).await.unwrap();
 
         let new_policy = RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+            include_revert_data: None,
             gas_price_cap: Some(50_000_000_000),
             whitelist_receivers: Some(vec!["0x123".to_string()]),
             eip1559_pricing: Some(true),

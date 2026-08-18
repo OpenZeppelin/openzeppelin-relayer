@@ -24,15 +24,20 @@ use crate::{
 ///
 /// # Arguments
 /// * `app_state` - Application state containing the job producer and configuration
+/// * `handle` - Handle to the multi-thread pipeline runtime; workers are spawned
+///   onto it so pipeline work is distributed across its worker threads.
 ///
 /// # Returns
 /// Vector of worker handles for all spawned workers
 pub async fn initialize_queue_workers(
     app_state: ThinData<DefaultAppState>,
+    handle: tokio::runtime::Handle,
 ) -> color_eyre::Result<Vec<WorkerHandle>> {
     let backend = app_state.job_producer.queue_backend();
 
-    let handles = backend.initialize_workers(Arc::new(app_state)).await?;
+    let handles = backend
+        .initialize_workers(Arc::new(app_state), handle)
+        .await?;
 
     info!(
         backend = %backend.backend_type(),

@@ -56,6 +56,7 @@ pub mod mockutils {
             paused,
             network_type: NetworkType::Evm,
             policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy {
+                include_revert_data: None,
                 gas_price_cap: None,
                 whitelist_receivers: None,
                 eip1559_pricing: Some(false),
@@ -328,6 +329,7 @@ pub mod mockutils {
             redis_connection_timeout_ms: 5000,
             redis_pool_max_size: 10,
             redis_pool_timeout_ms: 5000,
+            redis_connection_max_age_ms: 60000,
             redis_key_prefix: "test-oz-relayer".to_string(),
             rpc_timeout_ms: 10000,
             provider_max_retries: 3,

@@ -6332,6 +6332,9 @@
             "type": "integer",
             "minimum": 0
           },
+          "include_revert_data": {
+            "type": "boolean"
+          },
           "min_balance": {
             "type": "integer",
             "minimum": 0
@@ -7725,6 +7728,12 @@
               "null"
             ],
             "minimum": 0
+          },
+          "include_revert_data": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "min_balance": {
             "type": [

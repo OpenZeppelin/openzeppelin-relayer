@@ -1,0 +1,86 @@
+---
+services:
+  relayer:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.development
+    ports:
+      - 8080:8080/tcp
+    environment:
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: rabbitmq
+      # The vhost "/" is URL-encoded as %2f. guest:guest works container-to-
+      # container because rabbitmq.conf lifts the loopback-only restriction
+      # (local-dev only — see the README).
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/%2f
+      RABBITMQ_QUEUE_PREFIX: relayer
+      DISTRIBUTED_MODE: 'false'
+      RATE_LIMIT_REQUESTS_PER_SECOND: 10
+      RATE_LIMIT_BURST: 50
+      WEBHOOK_SIGNING_KEY: ${WEBHOOK_SIGNING_KEY}
+      API_KEY: ${API_KEY}
+      KEYSTORE_PASSPHRASE: ${KEYSTORE_PASSPHRASE}
+    security_opt:
+      - no-new-privileges
+    networks:
+      - relayer-network
+      - metrics-network
+    volumes:
+      - ./config:/app/config/
+      - ../../config/networks:/app/config/networks
+    depends_on:
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure:5
+  redis:
+    image: redis:bookworm
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --save
+      - '60'
+      - '1'
+    networks:
+      - relayer-network
+      - metrics-network
+    restart: on-failure:5
+  rabbitmq:
+    image: rabbitmq:4-management
+    # No init/provisioning service: the relayer declares its own 8 durable
+    # queues at startup (RABBITMQ_PASSIVE_QUEUES defaults to false).
+    ports:
+      - 5672:5672/tcp  # AMQP
+      - 15672:15672/tcp  # management UI (guest/guest)
+    volumes:
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test:
+        - CMD
+        - rabbitmq-diagnostics
+        - -q
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - relayer-network
+    restart: on-failure:5
+networks:
+  metrics-network:
+    internal: true
+  relayer-network:
+    driver: bridge
+volumes:
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local

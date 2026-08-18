@@ -39,6 +39,17 @@ pub fn set_queue_depth(backend: &str, queue_type: &str, depth: f64) {
         .with_label_values(&[backend, queue_type])
         .set(depth);
 }
+
+/// Record the effective worker-thread count for a runtime at startup.
+///
+/// Labeled by `runtime`: "pipeline" (the multi-thread tokio runtime hosting the
+/// transaction pipeline) and "http" (the actix HTTP worker count). Backs the
+/// container-sizing observability contract (SC-003/SC-004).
+pub fn set_worker_threads(runtime: &str, count: usize) {
+    WORKER_THREADS
+        .with_label_values(&[runtime])
+        .set(count as f64);
+}
 use sysinfo::{Disks, System};
 
 lazy_static! {
@@ -151,6 +162,16 @@ lazy_static! {
         let gauge = Gauge::new("file_descriptors_count", "Current file descriptor count").unwrap();
         REGISTRY.register(Box::new(gauge.clone())).unwrap();
         gauge
+    };
+
+    // Gauge for effective runtime worker-thread counts (labeled by runtime: "pipeline"/"http").
+    pub static ref WORKER_THREADS: GaugeVec = {
+        let gauge_vec = GaugeVec::new(
+            Opts::new("worker_threads", "Effective worker-thread count per runtime"),
+            &["runtime"]
+        ).unwrap();
+        REGISTRY.register(Box::new(gauge_vec.clone())).unwrap();
+        gauge_vec
     };
 
     // Gauge for CLOSE_WAIT socket count.

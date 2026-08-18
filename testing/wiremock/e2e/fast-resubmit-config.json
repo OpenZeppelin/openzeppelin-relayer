@@ -1,0 +1,47 @@
+{
+  "relayers": [
+    {
+      "id": "stellar-fast-resubmit",
+      "name": "Stellar Fast Resubmit E2E",
+      "network": "testnet",
+      "paused": false,
+      "network_type": "stellar",
+      "signer_id": "local-signer",
+      "policies": {
+        "fee_payment_strategy": "relayer",
+        "min_balance": 0
+      }
+    }
+  ],
+  "notifications": [],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "testing/wiremock/e2e/local-signer.keystore",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ],
+  "networks": [
+    {
+      "type": "stellar",
+      "network": "testnet",
+      "rpc_urls": [
+        "http://localhost:9090"
+      ],
+      "explorer_urls": [
+        "https://stellar.expert/explorer/testnet"
+      ],
+      "average_blocktime_ms": 5000,
+      "is_testnet": true,
+      "passphrase": "Test SDF Network ; September 2015",
+      "horizon_url": "https://horizon-testnet.stellar.org"
+    }
+  ],
+  "plugins": []
+}

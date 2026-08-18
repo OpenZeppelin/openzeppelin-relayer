@@ -122,6 +122,7 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
+                is_canceled: None,
             },
         )));
 
@@ -163,6 +164,7 @@ mod tests {
                 max_priority_fee_per_gas: None,
                 signature: None,
                 speed: None,
+                is_canceled: None,
             },
         )));
 
@@ -180,6 +182,7 @@ mod tests {
                 paused: false,
                 policies: Some(RelayerNetworkPolicyResponse::Evm(
                     RelayerEvmPolicy {
+                        include_revert_data: None,
                         gas_price_cap: None,
                         whitelist_receivers: None,
                         eip1559_pricing: None,

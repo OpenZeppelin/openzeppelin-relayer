@@ -24,7 +24,8 @@ use crate::{
         },
         ApiResponse, CreateRelayerRequest, DeletePendingTransactionsResponse, JsonRpcRequest,
         JsonRpcResponse, NetworkRpcRequest, NetworkRpcResult, NetworkTransactionRequest,
-        RelayerResponse, RelayerStatus, TransactionResponse, UpdateRelayerRequest,
+        RelayerResponse, RelayerStatus, TransactionResponse, TransactionStatus,
+        UpdateRelayerRequest,
     },
 };
 
@@ -723,7 +724,8 @@ fn doc_get_transaction_by_nonce() {}
     params(
         ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
         ("page" = Option<usize>, Query, description = "Page number for pagination (starts at 1)"),
-        ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)")
+        ("per_page" = Option<usize>, Query, description = "Number of items per page (default: 10)"),
+        ("status" = Option<TransactionStatus>, Query, description = "Optional status filter, accepted case-insensitively (e.g. pending, submitted, confirmed, canceled). Cancelled-in-progress transactions are excluded from active-status results until their replacement mines.")
     ),
     responses(
         (status = 200, description = "Relayer transactions retrieved successfully", body = ApiResponse<Vec<TransactionResponse>>),

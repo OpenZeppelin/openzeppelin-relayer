@@ -202,7 +202,7 @@ async fn handle_request(
 /// * `Vec<RelayerCleanupResult>` - Results from processing each relayer
 async fn process_relayers_in_batches(
     relayers: Vec<RelayerRepoModel>,
-    transaction_repo: Arc<impl TransactionRepository>,
+    transaction_repo: Arc<impl TransactionRepository + Sync>,
     now: DateTime<Utc>,
 ) -> Vec<RelayerCleanupResult> {
     use futures::stream::{self, StreamExt};
@@ -242,7 +242,7 @@ struct RelayerCleanupResult {
 /// * `RelayerCleanupResult` - Result of processing this relayer
 async fn process_single_relayer(
     relayer: RelayerRepoModel,
-    transaction_repo: Arc<impl TransactionRepository>,
+    transaction_repo: Arc<impl TransactionRepository + Sync>,
     now: DateTime<Utc>,
 ) -> RelayerCleanupResult {
     debug!(
@@ -251,6 +251,34 @@ async fn process_single_relayer(
     );
 
     let mut total_cleaned = 0usize;
+
+    // Reconcile before deleting so ghosts repaired into a final index are
+    // reaped in this run instead of waiting for the next cron cycle.
+    // A reconcile failure must not block deletion, so the error is only
+    // recorded and surfaced after the cleanup loop.
+    let reconcile_error = match transaction_repo
+        .reconcile_stale_status_indexes(&relayer.id)
+        .await
+    {
+        Ok(repaired_count) => {
+            if repaired_count > 0 {
+                info!(
+                    repaired_count,
+                    relayer_id = %relayer.id,
+                    "repaired stale transaction status indexes"
+                );
+            }
+            None
+        }
+        Err(e) => {
+            error!(
+                error = %e,
+                relayer_id = %relayer.id,
+                "failed to reconcile stale transaction status indexes"
+            );
+            Some(e.to_string())
+        }
+    };
 
     for status in FINAL_TRANSACTION_STATUSES {
         match process_status_cleanup(&relayer.id, status, &transaction_repo, now).await {
@@ -262,10 +290,17 @@ async fn process_single_relayer(
                     status = ?status,
                     "failed to cleanup transactions for status"
                 );
+                // Preserve a reconcile failure alongside the cleanup failure so
+                // neither error is lost in the combined-failure path.
                 return RelayerCleanupResult {
                     relayer_id: relayer.id,
                     cleaned_count: total_cleaned,
-                    error: Some(e.to_string()),
+                    error: Some(match &reconcile_error {
+                        Some(reconcile_error) => {
+                            format!("{reconcile_error}; status cleanup failed: {e}")
+                        }
+                        None => e.to_string(),
+                    }),
                 };
             }
         }
@@ -282,7 +317,7 @@ async fn process_single_relayer(
     RelayerCleanupResult {
         relayer_id: relayer.id,
         cleaned_count: total_cleaned,
-        error: None,
+        error: reconcile_error,
     }
 }
 
@@ -303,7 +338,7 @@ async fn process_single_relayer(
 async fn process_status_cleanup(
     relayer_id: &str,
     status: &TransactionStatus,
-    transaction_repo: &Arc<impl TransactionRepository>,
+    transaction_repo: &Arc<impl TransactionRepository + Sync>,
     now: DateTime<Utc>,
 ) -> Result<usize> {
     let mut current_page = 1u32;
@@ -386,7 +421,7 @@ async fn process_status_cleanup(
 #[cfg(test)]
 async fn fetch_final_transactions_paginated(
     relayer_id: &str,
-    transaction_repo: &Arc<impl TransactionRepository>,
+    transaction_repo: &Arc<impl TransactionRepository + Sync>,
     query: PaginationQuery,
 ) -> Result<crate::repositories::PaginatedResult<TransactionRepoModel>> {
     transaction_repo
@@ -618,15 +653,18 @@ async fn report_cleanup_results(cleanup_results: Vec<RelayerCleanupResult>) -> R
 mod tests {
 
     use super::*;
+    use chrono::{Duration, Utc};
+
     use crate::{
         models::{
-            NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel,
+            NetworkType, RelayerEvmPolicy, RelayerNetworkPolicy, RelayerRepoModel, RepositoryError,
             TransactionRepoModel, TransactionStatus,
         },
-        repositories::{InMemoryTransactionRepository, Repository},
+        repositories::{
+            InMemoryTransactionRepository, MockTransactionRepository, PaginatedResult, Repository,
+        },
         utils::mocks::mockutils::create_mock_transaction,
     };
-    use chrono::{Duration, Utc};
 
     fn create_test_transaction(
         id: &str,
@@ -1007,6 +1045,51 @@ mod tests {
         assert_eq!(result.relayer_id, relayer.id);
         assert_eq!(result.cleaned_count, 0);
         assert!(result.error.is_none()); // No error, just no transactions found
+    }
+
+    #[tokio::test]
+    async fn test_process_single_relayer_surfaces_reconcile_error() {
+        let mut transaction_repo = MockTransactionRepository::new();
+        transaction_repo
+            .expect_find_by_status_paginated()
+            .times(FINAL_TRANSACTION_STATUSES.len())
+            .returning(|_, _, query, _| {
+                Ok(PaginatedResult {
+                    items: vec![],
+                    total: 0,
+                    page: query.page,
+                    per_page: query.per_page,
+                })
+            });
+        transaction_repo
+            .expect_reconcile_stale_status_indexes()
+            .times(1)
+            .returning(|_| Err(RepositoryError::Other("reconcile failed".to_string())));
+
+        let relayer = RelayerRepoModel {
+            id: "test-relayer".to_string(),
+            name: "Test Relayer".to_string(),
+            network: "ethereum".to_string(),
+            paused: false,
+            network_type: NetworkType::Evm,
+            signer_id: "test-signer".to_string(),
+            policies: RelayerNetworkPolicy::Evm(RelayerEvmPolicy::default()),
+            address: "0x1234567890123456789012345678901234567890".to_string(),
+            notification_id: None,
+            system_disabled: false,
+            custom_rpc_urls: None,
+            ..Default::default()
+        };
+
+        let result =
+            process_single_relayer(relayer.clone(), Arc::new(transaction_repo), Utc::now()).await;
+
+        assert_eq!(result.relayer_id, relayer.id);
+        assert_eq!(result.cleaned_count, 0);
+        assert_eq!(
+            result.error,
+            Some("Other error: reconcile failed".to_string())
+        );
     }
 
     #[tokio::test]

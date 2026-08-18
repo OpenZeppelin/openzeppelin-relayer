@@ -255,6 +255,33 @@ pub struct SharedSocketService {
     connection_semaphore: Arc<Semaphore>,
 }
 
+/// Handle to the multi-thread pipeline runtime. Set once at startup
+/// ([`set_pipeline_handle`]) so the shared socket service's background tasks
+/// (cleanup, listener, per-connection handlers) are spawned onto the pipeline
+/// runtime's worker threads instead of the actix System arbiter's single thread
+/// — the same single-thread saturation that caused the plugin-endpoint 504 storms.
+/// Falls back to `tokio::spawn` (the current runtime) when unset, e.g. in tests.
+static PIPELINE_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+
+/// Register the pipeline runtime handle used to re-home socket service tasks.
+/// Idempotent: the first call wins (later calls are ignored).
+pub fn set_pipeline_handle(handle: tokio::runtime::Handle) {
+    let _ = PIPELINE_HANDLE.set(handle);
+}
+
+/// Spawn a future onto the pipeline runtime when its handle has been registered,
+/// otherwise onto the current runtime (`tokio::spawn`).
+fn spawn_on_pipeline<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match PIPELINE_HANDLE.get() {
+        Some(handle) => handle.spawn(fut),
+        None => tokio::spawn(fut),
+    }
+}
+
 impl SharedSocketService {
     /// Create a new shared socket service
     pub fn new(socket_path: &str) -> Result<Self, PluginError> {
@@ -274,7 +301,7 @@ impl SharedSocketService {
         let executions_clone = executions.clone();
         let active_count_clone = active_count.clone();
         let mut cleanup_shutdown_rx = shutdown_tx.subscribe();
-        tokio::spawn(async move {
+        spawn_on_pipeline(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
             loop {
                 tokio::select! {
@@ -404,7 +431,8 @@ impl SharedSocketService {
 
     /// Start the shared socket service
     /// This spawns a background task that listens for connections
-    /// Safe to call multiple times - will only start once per instance
+    /// Safe to call multiple times - idempotent while the listener is running;
+    /// a failed bind or abnormal listener exit resets state so a later call retries
     #[allow(clippy::type_complexity)]
     pub async fn start<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
         self: Arc<Self>,
@@ -431,8 +459,17 @@ impl SharedSocketService {
         }
 
         // Create the listener and move it into the task
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| PluginError::SocketError(format!("Failed to bind listener: {e}")))?;
+        let listener = match UnixListener::bind(&self.socket_path) {
+            Ok(listener) => listener,
+            Err(e) => {
+                // Undo the `started` swap above, otherwise every future start()
+                // becomes a no-op and plugin executions are bricked until restart.
+                self.started.store(false, Ordering::Release);
+                return Err(PluginError::SocketError(format!(
+                    "Failed to bind listener: {e}"
+                )));
+            }
+        };
         let executions = self.executions.clone();
         let relayer_api = Arc::new(RelayerApi);
         let socket_path = self.socket_path.clone();
@@ -444,9 +481,15 @@ impl SharedSocketService {
             socket_path
         );
 
-        // Spawn the listener task
-        tokio::spawn(async move {
+        // Spawn the listener task onto the pipeline runtime. Weak so the task
+        // doesn't keep the service alive (its Drop sends the shutdown signal).
+        let service = Arc::downgrade(&self);
+        spawn_on_pipeline(async move {
             debug!("Shared socket service: listener task started");
+            // Bound consecutive accept() failures so a shutting-down runtime can never
+            // spin this loop (see the Err arm below).
+            const MAX_CONSECUTIVE_ACCEPT_ERRORS: u32 = 10;
+            let mut consecutive_accept_errors: u32 = 0;
             loop {
                 tokio::select! {
                     // Check for shutdown signal
@@ -460,6 +503,7 @@ impl SharedSocketService {
                     accept_result = listener.accept() => {
                         match accept_result {
                             Ok((stream, _)) => {
+                                consecutive_accept_errors = 0;
                                 // Try to acquire semaphore permit (no race condition!)
                                 match connection_semaphore.clone().try_acquire_owned() {
                                     Ok(permit) => {
@@ -469,7 +513,7 @@ impl SharedSocketService {
                                         let state_clone = Arc::clone(&state);
                                         let executions_clone = executions.clone();
 
-                                        tokio::spawn(async move {
+                                        spawn_on_pipeline(async move {
                                             // Permit held until task completes (auto-released on drop)
                                             let _permit = permit;
 
@@ -496,7 +540,30 @@ impl SharedSocketService {
                                 }
                             }
                             Err(e) => {
-                                warn!("Error accepting connection: {}", e);
+                                // If shutdown was requested, exit cleanly rather than
+                                // treating it as an accept failure.
+                                if *shutdown_rx.borrow() {
+                                    info!("Shared socket service: shutting down listener (accept interrupted)");
+                                    break;
+                                }
+                                consecutive_accept_errors += 1;
+                                warn!(
+                                    "Error accepting connection (attempt {}): {}",
+                                    consecutive_accept_errors, e
+                                );
+                                // Guard against a hot spin when accept() fails
+                                // persistently (e.g. the pipeline runtime is being torn
+                                // down out from under this loop): stop after a bounded
+                                // number of consecutive failures instead of logging
+                                // unboundedly.
+                                if consecutive_accept_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+                                    warn!(
+                                        "Shared socket service: {} consecutive accept errors; stopping listener",
+                                        consecutive_accept_errors
+                                    );
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(20)).await;
                             }
                         }
                     }
@@ -505,6 +572,20 @@ impl SharedSocketService {
 
             // Cleanup on shutdown
             let _ = std::fs::remove_file(&socket_path);
+            // On a non-shutdown exit (e.g. persistent accept errors), reset the
+            // started flag — after the socket file is removed, so a concurrent
+            // start() can't race the bind against the stale file — allowing the
+            // listener to be rebuilt. Graceful shutdown leaves `started == true`
+            // so ensure_shared_socket_started() stays a no-op during teardown.
+            if !*shutdown_rx.borrow() {
+                if let Some(service) = service.upgrade() {
+                    service.started.store(false, Ordering::Release);
+                    warn!(
+                        "Shared socket service: listener stopped without shutdown signal; \
+                        it will be rebuilt on the next plugin execution"
+                    );
+                }
+            }
             info!("Shared socket service: listener stopped");
         });
 
@@ -824,6 +905,19 @@ pub fn get_shared_socket_service() -> Result<Arc<SharedSocketService>, PluginErr
         Err(e) => Err(PluginError::SocketError(format!(
             "Failed to create shared socket service: {e}"
         ))),
+    }
+}
+
+/// Signal the global shared socket listener to stop, if it was ever started.
+///
+/// Must be called during graceful shutdown BEFORE the pipeline runtime (which hosts
+/// the accept loop) is torn down, so the loop breaks on its `watch` signal instead of
+/// spinning on `accept()` errors from a shutting-down tokio context. Uses
+/// `SHARED_SOCKET.get()` (not `get_or_init`) so it is a true no-op when the service was
+/// never initialized (i.e. no plugin ever executed).
+pub async fn shutdown_shared_socket_service() {
+    if let Some(Ok(service)) = SHARED_SOCKET.get() {
+        service.shutdown().await;
     }
 }
 
@@ -1720,6 +1814,36 @@ mod tests {
 
         // Second start should also succeed (early return)
         service.clone().start(thin).await.unwrap();
+
+        service.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bind_failure_resets_started_flag() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_bind_fail.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(None, None, None, None, None, None).await;
+        let thin = Arc::new(web::ThinData(state));
+
+        // Occupy the socket path with a plain file so UnixListener::bind fails.
+        std::fs::write(&socket_path, b"occupied").unwrap();
+
+        let result = service.clone().start(thin.clone()).await;
+        assert!(result.is_err(), "start() should fail when bind fails");
+
+        // The failed start must have reset the started flag: after clearing the
+        // path, a second start() should bind successfully instead of no-op'ing
+        // on a stale flag (which would leave the service permanently dead).
+        std::fs::remove_file(&socket_path).unwrap();
+        service.clone().start(thin).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            std::path::Path::new(socket_path.to_str().unwrap()).exists(),
+            "Listener should be bound after retry"
+        );
 
         service.shutdown().await;
     }

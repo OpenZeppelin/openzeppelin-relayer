@@ -61,7 +61,8 @@ pub async fn create_stellar_relayer<
         .map_err(|e| RelayerError::NetworkConfiguration(e.to_string()))?;
 
     // Create signer once and wrap in Arc for shared use
-    let stellar_signer = Arc::new(StellarSignerFactory::create_stellar_signer(&signer.into())?);
+    let stellar_signer =
+        Arc::new(StellarSignerFactory::create_stellar_signer(signer.into()).await?);
 
     let transaction_counter_service = Arc::new(TransactionCounterService::new(
         relayer.id.clone(),

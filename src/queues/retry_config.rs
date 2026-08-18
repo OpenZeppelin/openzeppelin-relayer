@@ -1,3 +1,4 @@
+use crate::config::ServerConfig;
 use crate::models::NetworkType;
 
 use super::QueueType;
@@ -43,6 +44,19 @@ pub const STATUS_STELLAR_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     max_ms: 3000,
     jitter: 0.99,
 };
+/// Returns the Stellar status-check backoff profile, honoring env overrides.
+///
+/// Values come from [`ServerConfig`] (`STELLAR_STATUS_RETRY_INITIAL_MS` /
+/// `STELLAR_STATUS_RETRY_MAX_MS`, each read once and cached). Unset or invalid
+/// values fall back to [`STATUS_STELLAR_BACKOFF`].
+pub fn stellar_status_backoff_config() -> RetryBackoffConfig {
+    RetryBackoffConfig {
+        initial_ms: ServerConfig::get_stellar_status_retry_initial_ms(),
+        max_ms: ServerConfig::get_stellar_status_retry_max_ms(),
+        jitter: STATUS_STELLAR_BACKOFF.jitter,
+    }
+}
+
 /// Backoff profile for notification delivery retries.
 pub const NOTIFICATION_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     initial_ms: 2000,
@@ -83,12 +97,13 @@ pub const TOKEN_SWAP_CRON_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
 /// Returns status-check backoff config for a network type.
 ///
 /// `network_type` selects network-specific status timing:
-/// EVM -> `STATUS_EVM_BACKOFF`, Stellar -> `STATUS_STELLAR_BACKOFF`,
+/// EVM -> `STATUS_EVM_BACKOFF`, Stellar -> env-configurable
+/// [`stellar_status_backoff_config`] (defaults to `STATUS_STELLAR_BACKOFF`),
 /// Solana/`None` -> `STATUS_GENERIC_BACKOFF`.
 pub fn status_backoff_config(network_type: Option<NetworkType>) -> RetryBackoffConfig {
     match network_type {
         Some(NetworkType::Evm) => STATUS_EVM_BACKOFF,
-        Some(NetworkType::Stellar) => STATUS_STELLAR_BACKOFF,
+        Some(NetworkType::Stellar) => stellar_status_backoff_config(),
         Some(NetworkType::Solana) | None => STATUS_GENERIC_BACKOFF,
     }
 }
@@ -266,6 +281,16 @@ mod tests {
             backoff_config_for_queue(QueueType::StatusCheckStellar).initial_ms,
             STATUS_GENERIC_BACKOFF.initial_ms
         );
+    }
+
+    #[test]
+    fn test_stellar_status_backoff_config_defaults_match_constant() {
+        // With the env vars unset, the env-aware profile must equal the
+        // compiled-in fallback.
+        let cfg = stellar_status_backoff_config();
+        assert_eq!(cfg.initial_ms, STATUS_STELLAR_BACKOFF.initial_ms);
+        assert_eq!(cfg.max_ms, STATUS_STELLAR_BACKOFF.max_ms);
+        assert_eq!(cfg.jitter, STATUS_STELLAR_BACKOFF.jitter);
     }
 
     #[test]
