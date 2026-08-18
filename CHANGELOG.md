@@ -1,25 +1,21 @@
 # Changelog
 
-## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-18)
-
-
-### 🚀 Features
-
-* **stellar:** Env-configurable status poll cadence ([#846](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/846)) ([97e43c3](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/97e43c3badaeec2b5753b93ce29d74cb2c30ab43))
+## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-14)
 
 
 ### 🐛 Bug Fixes
 
 * avoid QEMU emulation failures in Docker arm64 build ([#861](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/861)) ([7fedf6a](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/7fedf6adb055535df58d126fb1387e488903dfe4))
 
-## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-14)
-
-
 ### 🚀 Features
 
+* feat(stellar): Env-configurable status poll cadence by @dylankilkenny in https://github.com/OpenZeppelin/openzeppelin-relayer/pull/846
+* chore(deps): bump the actions-deps group across 1 directory with 20 updates by @dependabot[bot] in https://github.com/OpenZeppelin/openzeppelin-relayer/pull/842
+* chore: Bump plugins dependencies by @zeljkoX in https://github.com/OpenZeppelin/openzeppelin-relayer/pull/853
+* chore(deps): Raise axios override to >=1.18.0 in examples by @zeljkoX in https://github.com/OpenZeppelin/openzeppelin-relayer/pull/854
 
 
-### 🐛 Bug Fixes
+**Full Changelog**: https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0
 
 
 
