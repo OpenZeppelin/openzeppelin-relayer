@@ -36,7 +36,7 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-22.04-oz-8core
+            runner: ubuntu-22.04-oz-4core
           - platform: linux/arm64
             runner: ubuntu-oz-arm-4core
     runs-on: ${{ matrix.runner }}
