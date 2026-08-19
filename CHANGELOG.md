@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.9.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.8.0...v1.9.0) (2026-08-19)
+## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-19)
 
 
 ### 🚀 Features
