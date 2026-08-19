@@ -44,7 +44,6 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-ARG TARGETARCH
 ARG NODE_VERSION=20.19
 USER root
 RUN apk add --no-cache nodejs=~${NODE_VERSION}
