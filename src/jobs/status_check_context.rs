@@ -49,8 +49,8 @@ pub struct StatusCheckContext {
     /// Never resets - serves as safety net for flaky RPC connections.
     pub total_failures: u32,
 
-    /// Total number of retries (from Apalis attempt counter).
-    /// Includes both successful and failed attempts.
+    /// Normalized zero-based EVM status-handler attempt across all four queue backends.
+    /// The first attempt is 0 so one-shot recovery hints run exactly once.
     pub total_retries: u32,
 
     /// Maximum consecutive failures allowed before forcing finalization.
@@ -65,8 +65,7 @@ pub struct StatusCheckContext {
     pub network_type: NetworkType,
 
     /// Optional metadata from the job that triggered this status check.
-    /// Used as a one-shot signal for special handling (e.g., nonce recovery hints).
-    /// Subsequent retries won't carry this metadata — they follow normal flow.
+    /// Attempt zero may use it as a one-shot signal for special handling.
     pub job_metadata: Option<HashMap<String, String>>,
 }
 
@@ -91,7 +90,7 @@ impl StatusCheckContext {
     ///
     /// * `consecutive_failures` - Current count of consecutive failures
     /// * `total_failures` - Total count of all failures
-    /// * `total_retries` - Total Apalis retry attempts (includes successes)
+    /// * `total_retries` - Normalized zero-based EVM handler attempt (0 on first delivery)
     /// * `max_consecutive_failures` - Network-specific consecutive max before force-finalization
     /// * `max_total_failures` - Network-specific total max (safety net)
     /// * `network_type` - The blockchain network type

@@ -520,7 +520,10 @@ where
         let status_result = self
             .job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm)
+                    .with_status_retry_delay_seconds(
+                        evm_network.status_check_retry_delay_seconds(),
+                    ),
                 Some(calculate_scheduled_timestamp(initial_delay_seconds)),
             )
             .await;
@@ -732,6 +735,7 @@ mod tests {
             chain_id: 1,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             explorer_urls: None,
@@ -1612,6 +1616,7 @@ mod tests {
         if let crate::models::NetworkConfigData::Evm(config) = &mut network_model.config {
             config.status_check = Some(crate::config::StatusCheckConfig {
                 initial_delay_seconds: Some(2),
+                retry_delay_seconds: Some(2),
             });
         }
         network_repo
@@ -1631,10 +1636,13 @@ mod tests {
         // Status-check job succeeds — one enqueue is enough to progress.
         let scheduled_at = Arc::new(std::sync::Mutex::new(None));
         let captured_scheduled_at = Arc::clone(&scheduled_at);
+        let retry_delay = Arc::new(std::sync::Mutex::new(None));
+        let captured_retry_delay = Arc::clone(&retry_delay);
         job_producer
             .expect_produce_check_transaction_status_job()
-            .returning(move |_, value| {
+            .returning(move |job, value| {
                 *captured_scheduled_at.lock().unwrap() = value;
+                *captured_retry_delay.lock().unwrap() = job.status_retry_delay_seconds;
                 Box::pin(ready(Ok(())))
             });
 
@@ -1660,6 +1668,7 @@ mod tests {
         let scheduled_at = scheduled_at.lock().unwrap().unwrap();
         assert!(scheduled_at >= before + 2);
         assert!(scheduled_at <= after + 2);
+        assert_eq!(*retry_delay.lock().unwrap(), Some(2));
     }
 
     /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.

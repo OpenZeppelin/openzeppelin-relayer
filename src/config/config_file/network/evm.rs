@@ -11,9 +11,7 @@
 
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
-use crate::constants::{
-    MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-};
+use crate::constants::{MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_DELAY_SECONDS};
 use serde::{Deserialize, Serialize};
 
 /// Default value for gas price cache enabled flag
@@ -95,19 +93,23 @@ impl GasPriceCacheConfig {
 pub struct StatusCheckConfig {
     /// Delay before the first transaction status check, in seconds.
     pub initial_delay_seconds: Option<u64>,
+    /// Delay between successful checks while the transaction is not final, in seconds.
+    pub retry_delay_seconds: Option<u64>,
 }
 
 impl StatusCheckConfig {
     fn validate(&self) -> Result<(), ConfigFileError> {
-        if let Some(delay) = self.initial_delay_seconds {
-            if !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
-                ..=MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
-                .contains(&delay)
-            {
+        for (field, delay) in [
+            ("initial_delay_seconds", self.initial_delay_seconds),
+            ("retry_delay_seconds", self.retry_delay_seconds),
+        ] {
+            if delay.is_some_and(|delay| {
+                !(MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                    .contains(&delay)
+            }) {
                 return Err(ConfigFileError::InvalidFormat(format!(
-                    "status_check.initial_delay_seconds must be between {} and {} seconds",
-                    MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                    MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                    "status_check.{field} must be between {} and {} seconds",
+                    MIN_EVM_STATUS_CHECK_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS
                 )));
             }
         }
@@ -115,9 +117,10 @@ impl StatusCheckConfig {
         Ok(())
     }
 
-    fn merge_with_parent(&self, parent: &Self) -> Self {
+    pub(super) fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             initial_delay_seconds: self.initial_delay_seconds.or(parent.initial_delay_seconds),
+            retry_delay_seconds: self.retry_delay_seconds.or(parent.retry_delay_seconds),
         }
     }
 }
@@ -135,6 +138,7 @@ pub struct EvmNetworkConfig {
     /// Number of block confirmations required before a transaction is considered final.
     pub required_confirmations: Option<u64>,
     /// Transaction status-check configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_check: Option<StatusCheckConfig>,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Option<Vec<String>>,
@@ -236,6 +240,7 @@ mod tests {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
                 initial_delay_seconds: Some(delay),
+                retry_delay_seconds: None,
             });
             assert!(config.validate().is_ok());
         }
@@ -247,6 +252,7 @@ mod tests {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
                 initial_delay_seconds: Some(delay),
+                retry_delay_seconds: None,
             });
 
             let error = config.validate().unwrap_err();
@@ -254,6 +260,36 @@ mod tests {
                 error,
                 ConfigFileError::InvalidFormat(message)
                     if message.contains("status_check.initial_delay_seconds")
+            ));
+        }
+    }
+
+    #[test]
+    fn test_validate_status_check_retry_delay_boundaries() {
+        for delay in [1, 100] {
+            let mut config = create_evm_network("ethereum-mainnet");
+            config.status_check = Some(StatusCheckConfig {
+                initial_delay_seconds: None,
+                retry_delay_seconds: Some(delay),
+            });
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_status_check_retry_delay() {
+        for delay in [0, 101] {
+            let mut config = create_evm_network("ethereum-mainnet");
+            config.status_check = Some(StatusCheckConfig {
+                initial_delay_seconds: None,
+                retry_delay_seconds: Some(delay),
+            });
+
+            let error = config.validate().unwrap_err();
+            assert!(matches!(
+                error,
+                ConfigFileError::InvalidFormat(message)
+                    if message.contains("status_check.retry_delay_seconds")
             ));
         }
     }
@@ -270,7 +306,10 @@ mod tests {
             "tags": null,
             "chain_id": 1,
             "required_confirmations": 1,
-            "status_check": { "initial_delay_seconds": 2 },
+            "status_check": {
+                "initial_delay_seconds": 2,
+                "retry_delay_seconds": 1
+            },
             "symbol": "ETH",
             "features": null,
             "gas_price_cache": null
@@ -280,9 +319,20 @@ mod tests {
         assert_eq!(
             config.status_check,
             Some(StatusCheckConfig {
-                initial_delay_seconds: Some(2)
+                initial_delay_seconds: Some(2),
+                retry_delay_seconds: Some(1),
             })
         );
+    }
+
+    #[test]
+    fn test_serialize_omits_unset_status_check() {
+        let config = create_evm_network("ethereum-mainnet");
+        let value = serde_json::to_value(config).unwrap();
+
+        assert!(value.get("status_check").is_none());
+        let decoded: EvmNetworkConfig = serde_json::from_value(value).unwrap();
+        assert!(decoded.status_check.is_none());
     }
 
     #[test]
@@ -413,6 +463,7 @@ mod tests {
             required_confirmations: Some(6),
             status_check: Some(StatusCheckConfig {
                 initial_delay_seconds: Some(8),
+                retry_delay_seconds: None,
             }),
             features: Some(vec!["legacy".to_string()]),
             symbol: Some("PETH".to_string()),
@@ -439,6 +490,7 @@ mod tests {
             required_confirmations: Some(1),
             status_check: Some(StatusCheckConfig {
                 initial_delay_seconds: Some(1),
+                retry_delay_seconds: None,
             }),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("CETH".to_string()),
@@ -475,7 +527,8 @@ mod tests {
         assert_eq!(
             result.status_check,
             Some(StatusCheckConfig {
-                initial_delay_seconds: Some(1)
+                initial_delay_seconds: Some(1),
+                retry_delay_seconds: None,
             })
         );
         assert_eq!(
@@ -511,6 +564,7 @@ mod tests {
             required_confirmations: Some(6),
             status_check: Some(StatusCheckConfig {
                 initial_delay_seconds: Some(2),
+                retry_delay_seconds: None,
             }),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
@@ -546,7 +600,8 @@ mod tests {
         assert_eq!(
             result.status_check,
             Some(StatusCheckConfig {
-                initial_delay_seconds: Some(2)
+                initial_delay_seconds: Some(2),
+                retry_delay_seconds: None,
             })
         );
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));

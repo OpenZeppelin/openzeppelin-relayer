@@ -20,7 +20,6 @@ use tokio::task::{JoinHandle, JoinSet};
 use tracing::{debug, error, info, warn};
 
 use crate::metrics::observe_queue_pickup_latency;
-use crate::queues::{backoff_config_for_queue, retry_delay_secs};
 use crate::{
     config::ServerConfig,
     jobs::{
@@ -32,14 +31,11 @@ use crate::{
     utils::{aws_error::DisplayErrorContext, classify_sdk_error},
 };
 
-use super::{HandlerError, WorkerContext};
 use super::{QueueBackendError, QueueType, WorkerHandle};
-
-#[derive(Debug)]
-enum ProcessingError {
-    Retryable(String),
-    Permanent(String),
-}
+use crate::queues::{
+    worker_shared::{map_handler_error, retry_delay_for_queue, ProcessingError},
+    HandlerError, WorkerContext,
+};
 
 /// Outcome of processing a single SQS message, used to decide whether the
 /// message should be batch-deleted or left in the queue.
@@ -632,7 +628,7 @@ async fn process_message(
                 receipt_handle: receipt_handle.to_string(),
             })
         }
-        Err(ProcessingError::Retryable(e)) => {
+        Err(ProcessingError::Retryable { message, kind }) => {
             // Check max retries for non-infinite queues (status checks use usize::MAX)
             if max_retries != usize::MAX && receive_count > max_retries {
                 error!(
@@ -640,20 +636,14 @@ async fn process_message(
                     attempt = attempt_number,
                     receive_count = receive_count,
                     max_retries = max_retries,
-                    error = %e,
+                    error = %message,
                     "Max retries exceeded; message will be automatically moved to DLQ by SQS redrive policy"
                 );
                 return Ok(MessageOutcome::Retain);
             }
 
-            // Compute retry delay based on queue type:
-            // - Status checks use network-type-aware backoff from the message body
-            // - All other queues use their configured backoff profile from retry_config
-            let delay = if queue_type.is_status_check() {
-                compute_status_retry_delay(body, logical_retry_attempt)
-            } else {
-                retry_delay_secs(backoff_config_for_queue(queue_type), logical_retry_attempt)
-            };
+            let delay =
+                retry_delay_for_queue(queue_type, body.as_bytes(), logical_retry_attempt, kind);
 
             // FIFO queues do not support per-message DelaySeconds. Use visibility
             // timeout on the in-flight message to schedule the retry.
@@ -678,7 +668,7 @@ async fn process_message(
                     queue_type = ?queue_type,
                     attempt = logical_retry_attempt,
                     delay_seconds = delay,
-                    error = %e,
+                    error = %message,
                     "Retry scheduled via visibility timeout"
                 );
 
@@ -724,7 +714,7 @@ async fn process_message(
                 queue_type = ?queue_type,
                 attempt = logical_retry_attempt,
                 delay_seconds = delay,
-                error = %e,
+                error = %message,
                 "Message re-enqueued with backoff delay"
             );
 
@@ -761,13 +751,6 @@ where
     handler(job, (*app_state).clone(), ctx)
         .await
         .map_err(map_handler_error)
-}
-
-fn map_handler_error(error: HandlerError) -> ProcessingError {
-    match error {
-        HandlerError::Abort(msg) => ProcessingError::Permanent(msg),
-        HandlerError::Retry(msg) => ProcessingError::Retryable(msg),
-    }
 }
 
 fn parse_target_scheduled_on(message: &Message) -> Option<i64> {
@@ -943,38 +926,6 @@ async fn defer_message(
     })?;
 
     Ok(true)
-}
-
-/// Partial struct for deserializing only the `network_type` field from a status check job.
-///
-/// Used to avoid deserializing the entire `Job<TransactionStatusCheck>` when we only
-/// need the network type to determine retry delay.
-#[derive(serde::Deserialize)]
-struct StatusCheckData {
-    network_type: Option<crate::models::NetworkType>,
-}
-
-/// Partial struct matching `Job<TransactionStatusCheck>` structure.
-///
-/// Used for efficient partial deserialization to extract only the `network_type`
-/// field without parsing the entire job payload.
-#[derive(serde::Deserialize)]
-struct PartialStatusCheckJob {
-    data: StatusCheckData,
-}
-
-/// Extracts `network_type` from a status check payload and computes retry delay.
-///
-/// This uses hardcoded network-specific backoff windows aligned with Redis/Apalis:
-/// - EVM: 8s -> 12s cap
-/// - Stellar: 2s -> 3s cap
-/// - Solana/default: 5s -> 8s cap
-fn compute_status_retry_delay(body: &str, attempt: usize) -> i32 {
-    let network_type = serde_json::from_str::<PartialStatusCheckJob>(body)
-        .ok()
-        .and_then(|j| j.data.network_type);
-
-    crate::queues::retry_config::status_check_retry_delay_secs(network_type, attempt)
 }
 
 /// Gets the SQS long-poll wait time for a queue type from environment or default.
@@ -1201,19 +1152,6 @@ mod tests {
     }
 
     #[test]
-    fn test_map_handler_error() {
-        // Test Abort maps to Permanent
-        let error = HandlerError::Abort("Validation failed".to_string());
-        let result = map_handler_error(error);
-        assert!(matches!(result, ProcessingError::Permanent(_)));
-
-        // Test Retry maps to Retryable
-        let error = HandlerError::Retry("Network timeout".to_string());
-        let result = map_handler_error(error);
-        assert!(matches!(result, ProcessingError::Retryable(_)));
-    }
-
-    #[test]
     fn test_is_fifo_queue_url() {
         assert!(is_fifo_queue_url(
             "https://sqs.us-east-1.amazonaws.com/123/queue.fifo"
@@ -1221,46 +1159,6 @@ mod tests {
         assert!(!is_fifo_queue_url(
             "https://sqs.us-east-1.amazonaws.com/123/queue"
         ));
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_evm() {
-        // NetworkType uses #[serde(rename_all = "lowercase")]
-        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"evm"}}"#;
-        assert_eq!(compute_status_retry_delay(body, 0), 8);
-        assert_eq!(compute_status_retry_delay(body, 1), 12);
-        assert_eq!(compute_status_retry_delay(body, 8), 12);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_stellar() {
-        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"stellar"}}"#;
-        assert_eq!(compute_status_retry_delay(body, 0), 2);
-        assert_eq!(compute_status_retry_delay(body, 1), 3);
-        assert_eq!(compute_status_retry_delay(body, 8), 3);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_solana() {
-        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"solana"}}"#;
-        assert_eq!(compute_status_retry_delay(body, 0), 5);
-        assert_eq!(compute_status_retry_delay(body, 1), 8);
-        assert_eq!(compute_status_retry_delay(body, 8), 8);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_missing_network() {
-        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1"}}"#;
-        assert_eq!(compute_status_retry_delay(body, 0), 5);
-        assert_eq!(compute_status_retry_delay(body, 1), 8);
-        assert_eq!(compute_status_retry_delay(body, 8), 8);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_invalid_body() {
-        assert_eq!(compute_status_retry_delay("not json", 0), 5);
-        assert_eq!(compute_status_retry_delay("not json", 1), 8);
-        assert_eq!(compute_status_retry_delay("not json", 8), 8);
     }
 
     #[tokio::test]
@@ -1784,37 +1682,6 @@ mod tests {
         ));
     }
 
-    // ── map_handler_error: message preservation ───────────────────────
-
-    #[test]
-    fn test_map_handler_error_preserves_abort_message() {
-        let msg = "Validation failed: invalid nonce";
-        let error = HandlerError::Abort(msg.to_string());
-        match map_handler_error(error) {
-            ProcessingError::Permanent(s) => assert_eq!(s, msg),
-            ProcessingError::Retryable(_) => panic!("Expected Permanent"),
-        }
-    }
-
-    #[test]
-    fn test_map_handler_error_preserves_retry_message() {
-        let msg = "RPC timeout after 30s";
-        let error = HandlerError::Retry(msg.to_string());
-        match map_handler_error(error) {
-            ProcessingError::Retryable(s) => assert_eq!(s, msg),
-            ProcessingError::Permanent(_) => panic!("Expected Retryable"),
-        }
-    }
-
-    #[test]
-    fn test_map_handler_error_empty_message() {
-        let error = HandlerError::Abort(String::new());
-        match map_handler_error(error) {
-            ProcessingError::Permanent(s) => assert!(s.is_empty()),
-            ProcessingError::Retryable(_) => panic!("Expected Permanent"),
-        }
-    }
-
     // ── handler_timeout_secs: all queue types ─────────────────────────
 
     #[test]
@@ -1928,59 +1795,6 @@ mod tests {
             RECOVERY_PROBE_EVERY <= 10,
             "Recovery probe interval should not be too large or recovery detection is slow"
         );
-    }
-
-    // ── compute_status_retry_delay: edge cases ────────────────────────
-
-    #[test]
-    fn test_compute_status_retry_delay_very_high_attempt() {
-        let body = r#"{"message_id":"m1","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"tx1","relayer_id":"r1","network_type":"evm"}}"#;
-        // Very high attempts should stay capped at the max (12s for EVM)
-        assert_eq!(compute_status_retry_delay(body, 1000), 12);
-        assert_eq!(compute_status_retry_delay(body, usize::MAX), 12);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_empty_body() {
-        // Empty JSON body should fall back to generic/Solana defaults
-        assert_eq!(compute_status_retry_delay("", 0), 5);
-        assert_eq!(compute_status_retry_delay("{}", 0), 5);
-    }
-
-    #[test]
-    fn test_compute_status_retry_delay_partial_json() {
-        // JSON with missing inner structure
-        assert_eq!(compute_status_retry_delay(r#"{"data":{}}"#, 0), 5);
-        assert_eq!(
-            compute_status_retry_delay(r#"{"data":{"network_type":"evm"}}"#, 0),
-            8
-        );
-    }
-
-    // ── PartialStatusCheckJob deserialization ──────────────────────────
-
-    #[test]
-    fn test_partial_status_check_job_deserializes_network_type() {
-        let body = r#"{"data":{"network_type":"evm","extra_field":"ignored"}}"#;
-        let parsed: PartialStatusCheckJob = serde_json::from_str(body).unwrap();
-        assert_eq!(
-            parsed.data.network_type,
-            Some(crate::models::NetworkType::Evm)
-        );
-    }
-
-    #[test]
-    fn test_partial_status_check_job_handles_missing_network_type() {
-        let body = r#"{"data":{"transaction_id":"tx1"}}"#;
-        let parsed: PartialStatusCheckJob = serde_json::from_str(body).unwrap();
-        assert_eq!(parsed.data.network_type, None);
-    }
-
-    #[test]
-    fn test_partial_status_check_job_rejects_missing_data() {
-        let body = r#"{"not_data":{}}"#;
-        let result = serde_json::from_str::<PartialStatusCheckJob>(body);
-        assert!(result.is_err());
     }
 
     // ── is_fifo_queue_url used consistently ───────────────────────────

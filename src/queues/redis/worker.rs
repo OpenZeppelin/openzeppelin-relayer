@@ -47,6 +47,7 @@ use tracing::{debug, error, info};
 
 use crate::metrics::observe_queue_pickup_latency;
 
+use super::status_retry_policy::EvmStatusRetryPolicy;
 use super::{filter_relayers_for_swap, QueueType, WorkerContext};
 use crate::queues::retry_config::{
     stellar_status_backoff_config, RetryBackoffConfig, NOTIFICATION_BACKOFF,
@@ -184,10 +185,18 @@ async fn apalis_transaction_status_evm_handler(
         &job.timestamp,
         QueueType::StatusCheckEvm.queue_name(),
     );
-    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
+    let ctx = WorkerContext::new(
+        evm_status_handler_attempt(attempt.current()),
+        task_id.to_string(),
+    );
     transaction_status_handler(job, (*state).clone(), ctx)
         .await
         .map_err(Into::into)
+}
+
+/// Apalis attempts are 1-based because TrackerLayer is outermost; handler attempts are 0-based.
+fn evm_status_handler_attempt(apalis_attempt: usize) -> usize {
+    apalis_attempt.saturating_sub(1)
 }
 
 async fn apalis_transaction_status_stellar_handler(
@@ -429,10 +438,10 @@ where
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
-        .retry(
-            RetryPolicy::retries(QueueType::StatusCheck.max_retries())
-                .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
-        )
+        .retry(EvmStatusRetryPolicy::new(
+            QueueType::StatusCheck.max_retries(),
+            create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff(),
+        ))
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::StatusCheckEvm.concurrency_env_key(),
             QueueType::StatusCheckEvm.default_concurrency(),
@@ -1099,6 +1108,12 @@ mod tests {
         observe_redis_pickup_latency(1, None, &ts, queue);
 
         assert_eq!(pickup_sample_count(queue), before + 1);
+    }
+
+    #[test]
+    fn test_evm_status_handler_attempt_is_zero_based() {
+        assert_eq!(evm_status_handler_attempt(1), 0);
+        assert_eq!(evm_status_handler_attempt(2), 1);
     }
 
     #[test]

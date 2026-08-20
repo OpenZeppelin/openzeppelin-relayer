@@ -17,6 +17,10 @@ pub struct StatusCheckResponse {
     /// Delay before the first transaction status check, in seconds.
     #[schema(minimum = 1, maximum = 100)]
     pub initial_delay_seconds: u64,
+    /// Optional delay between successful checks while the transaction is not final, in seconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, minimum = 1, maximum = 100)]
+    pub retry_delay_seconds: Option<u64>,
 }
 
 /// Network response model for API endpoints.
@@ -116,6 +120,10 @@ impl From<NetworkRepoModel> for NetworkResponse {
                         .as_ref()
                         .and_then(|config| config.initial_delay_seconds)
                         .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS),
+                    retry_delay_seconds: evm_config
+                        .status_check
+                        .as_ref()
+                        .and_then(|config| config.retry_delay_seconds),
                 });
                 response.features = evm_config.features.clone();
                 response.symbol = evm_config.symbol.clone();
@@ -173,7 +181,8 @@ mod tests {
         assert_eq!(
             response.status_check,
             Some(StatusCheckResponse {
-                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                retry_delay_seconds: None,
             })
         );
         assert_eq!(response.symbol, Some("ETH".to_string()));
@@ -190,5 +199,24 @@ mod tests {
         assert_eq!(response.average_blocktime_ms, Some(12000));
         assert_eq!(response.is_testnet, Some(false));
         assert!(response.tags.is_some());
+    }
+
+    #[test]
+    fn test_from_network_repo_model_exposes_optional_retry_delay() {
+        let mut model = create_test_evm_network();
+        if let NetworkConfigData::Evm(config) = &mut model.config {
+            config.status_check = Some(crate::config::StatusCheckConfig {
+                initial_delay_seconds: None,
+                retry_delay_seconds: Some(2),
+            });
+        }
+
+        assert_eq!(
+            NetworkResponse::from(model).status_check,
+            Some(StatusCheckResponse {
+                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                retry_delay_seconds: Some(2),
+            })
+        );
     }
 }

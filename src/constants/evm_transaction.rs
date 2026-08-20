@@ -43,11 +43,11 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 /// Default initial delay before the first status check (in seconds).
 pub const DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 8;
 
-/// Minimum configurable initial status-check delay (in seconds).
-pub const MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 1;
+/// Minimum configurable status-check delay (in seconds).
+pub const MIN_EVM_STATUS_CHECK_DELAY_SECONDS: u64 = 1;
 
-/// Maximum configurable initial status-check delay (in seconds).
-pub const MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 100;
+/// Maximum configurable status-check delay (in seconds).
+pub const MAX_EVM_STATUS_CHECK_DELAY_SECONDS: u64 = 100;
 
 /// Minimum age of transaction before allowing resubmission and timeout checks (in seconds)
 /// Transactions younger than this will still get status updates from blockchain,
@@ -91,11 +91,6 @@ pub fn get_evm_resend_timeout() -> Duration {
 /// Get pending recovery trigger duration
 pub fn get_evm_pending_recovery_trigger_timeout() -> Duration {
     Duration::seconds(EVM_PENDING_RECOVERY_TRIGGER_SECONDS)
-}
-
-/// Get status check initial delay duration
-pub fn get_evm_status_check_initial_delay() -> Duration {
-    Duration::seconds(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS as i64)
 }
 
 /// Get minimum age for hash recovery duration

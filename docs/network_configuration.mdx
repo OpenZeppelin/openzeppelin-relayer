@@ -173,7 +173,7 @@ These tags help the relayer:
 | ------------------------ | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `chain_id`               | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited) |
 | `required_confirmations` | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)    |
-| `status_check`            | object        | No       | Transaction status-check settings. `initial_delay_seconds` defaults to `8`, accepts `1`–`100`, and is inherited when omitted. Larger values also postpone the first resubmission and timeout evaluation. |
+| `status_check`            | object        | No       | Transaction status-check settings. `initial_delay_seconds` defaults to `8`; optional `retry_delay_seconds` sets the interval after a healthy, non-final check. Both accept `1`–`100` and inherit independently. Without a retry delay, the existing EVM backoff is preserved. |
 | `symbol`                 | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                    |
 | `features`               | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                               |
 
@@ -187,13 +187,42 @@ Here’s an example showing an EVM network configuration:
   "network": "ethereum-mainnet",
   "chain_id": 1, // Ethereum mainnet chain ID
   "required_confirmations": 12, // High security: 12 confirmations
-  "status_check": { "initial_delay_seconds": 8 }, // Also delays the first resubmission and timeout evaluation
+  "status_check": {
+    "initial_delay_seconds": 8, // Delays the first status check
+    "retry_delay_seconds": 2 // Faster follow-up checks on fast-finality chains
+  },
   "symbol": "ETH", // Native currency symbol
   "features": ["eip1559"], // Supports EIP-1559 fee market
   "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"],
   "is_testnet": false
 }
 ```
+
+<Callout type="warning">
+  On SQS FIFO, each retry changes the visibility timeout of the same in-flight
+  message, so every non-final check increments `ApproximateReceiveCount`. Size
+  the queue's `maxReceiveCount` for the configured cadence and expected
+  confirmation time: for confirmation time `T`, initial delay `I`, and retry
+  delay `R`, budget at least `1 + ceil(max(0, T - I) / R)` receives, plus margin
+  for outages and duplicate deliveries. For example, `T=120s`, `I=8s`, and
+  `R=2s` require at least 57 receives before adding that margin. Otherwise SQS
+  can dead-letter the status check and stop monitoring the transaction.
+</Callout>
+
+<Callout type="warning">
+  Redis-backed deployments do not reseed network configuration after the
+  bootstrap-completion marker exists. A changed `status_check` setting takes
+  effect only after storage is cleared and reloaded, using
+  `RESET_STORAGE_ON_START` or an explicit Redis wipe. The network update API
+  cannot set these fields; it only updates `rpc_urls`.
+</Callout>
+
+The circuit-breaker budgets remain count-based: failed checks always use the
+ordinary `STATUS_EVM_BACKOFF`, regardless of `retry_delay_seconds`, so the 25/75
+failure budgets are deliberately not scaled with the healthy-check cadence. A
+flaky RPC that alternates failures with successful non-final checks can compress
+the 75-failure wall-clock window by up to about 2× because only the successful
+checks become faster; a time-based breaker is a separate follow-up.
 
 ### Solana-Specific Fields
 
