@@ -376,18 +376,23 @@ where
         })
     }
 
-    /// Returns whether the tx's network is Arbitrum-based. Lookup failures return
-    /// `false` so the default (non-Arbitrum) submission behavior is preserved.
-    async fn is_arbitrum_network(&self, tx: &TransactionRepoModel, chain_id: u64) -> bool {
+    /// Loads the network for delivery-behavior gating (`is_arbitrum`,
+    /// `lacks_mempool`). Lookup failures return `None` (logged) so the default
+    /// submission behavior is preserved.
+    async fn delivery_network(
+        &self,
+        tx: &TransactionRepoModel,
+        chain_id: u64,
+    ) -> Option<EvmNetwork> {
         match self.get_evm_network(chain_id).await {
-            Ok(network) => network.is_arbitrum(),
+            Ok(network) => Some(network),
             Err(e) => {
                 warn!(
                     tx_id = %tx.id,
                     error = %e,
-                    "failed to load network; assuming non-Arbitrum submission behavior"
+                    "failed to load network; assuming default submission behavior"
                 );
-                false
+                None
             }
         }
     }
@@ -1034,9 +1039,12 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Arbitrum-based networks have no mempool: broadcast needs in-process
-        // nonce-too-high retries and success-chained delivery (issue #843).
-        let is_arbitrum = self.is_arbitrum_network(&tx, evm_tx_data.chain_id).await;
+        // Nitro-specific (issue #843): in-process nonce-too-high retries ride the
+        // sequencer's ~1s revive window, and success-chained delivery drains jams.
+        let is_arbitrum = self
+            .delivery_network(&tx, evm_tx_data.chain_id)
+            .await
+            .is_some_and(|n| n.is_arbitrum());
 
         // Send transaction to blockchain - this is the critical operation
         // If this fails, retry is safe due to nonce idempotency
@@ -1231,10 +1239,13 @@ where
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
-        // Arbitrum-based networks have no mempool: resubmission needs pre-broadcast
-        // persistence, in-process nonce-too-high retries and success-chained delivery
-        // (issue #843).
-        let is_arbitrum = self.is_arbitrum_network(&tx, evm_data.chain_id).await;
+        // Issue #843 delivery gates. `lacks_mempool` (any network without a public
+        // mempool) gates pre-broadcast persistence; `is_arbitrum` gates the
+        // Nitro-specific behaviors (in-process nonce-too-high retries riding the
+        // ~1s revive window, success-chained delivery).
+        let network = self.delivery_network(&tx, evm_data.chain_id).await;
+        let is_arbitrum = network.as_ref().is_some_and(|n| n.is_arbitrum());
+        let pre_persist = network.as_ref().is_some_and(|n| n.lacks_mempool());
 
         // Calculate bumped gas price
         // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
@@ -1272,12 +1283,12 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Persist the new attempt BEFORE broadcast (Arbitrum): any bytes that might
-        // reach the chain are recorded first, and `hashes.len()` becomes a true
-        // delivery-attempt counter (drives the rollup NOOP give-up threshold).
+        // Persist the new attempt BEFORE broadcast (no-mempool networks): any bytes
+        // that might reach the chain are recorded first, and `hashes.len()` becomes a
+        // true delivery-attempt counter (drives the rollup NOOP give-up threshold).
         let mut pre_persisted = false;
         let mut prior_network_data = None;
-        let tx = if is_arbitrum {
+        let tx = if pre_persist {
             prior_network_data = Some(tx.network_data.clone());
             let mut hashes = tx.hashes.clone();
             if let Some(hash) = final_evm_data.hash.clone() {
@@ -1760,6 +1771,18 @@ mod tests {
             Ok(Some(create_test_network_model_with_tags(vec![
                 "rollup".to_string(),
                 "arbitrum-based".to_string(),
+            ])))
+        });
+        mock_network
+    }
+
+    /// A network that lacks a mempool but is NOT Arbitrum: pre-broadcast
+    /// persistence applies, the Nitro-specific behaviors do not.
+    fn no_mempool_mock_network() -> MockNetworkRepository {
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(create_test_network_model_with_tags(vec![
+                "no-mempool".to_string(),
             ])))
         });
         mock_network
@@ -5110,6 +5133,94 @@ mod tests {
         counter_service
             .expect_get()
             .returning(|_, _| Box::pin(ready(Ok(Some(43)))));
+        mock_transaction.expect_find_by_nonce().never();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+    }
+
+    /// ① Predicate split: a no-mempool network that is NOT Arbitrum still gets the
+    /// pre-broadcast persistence (gated on `lacks_mempool`), but none of the
+    /// Nitro-specific behaviors — no success-chained delivery.
+    #[tokio::test]
+    async fn test_resubmit_no_mempool_pre_persists_without_chain_link() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mut mock_signer = MockSigner::new();
+        let mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let mock_network = no_mempool_mock_network();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_arbitrum_resubmit_tx();
+
+        setup_arbitrum_resubmit_mocks(
+            &mut mock_price_calculator,
+            &mut mock_provider,
+            &mut mock_signer,
+        );
+
+        let mut seq = mockall::Sequence::new();
+
+        // Pre-broadcast persistence fires on lacks_mempool alone.
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|_, update| {
+                update.status.is_none()
+                    && update
+                        .hashes
+                        .as_ref()
+                        .is_some_and(|h| h.contains(&"0xarb_new_hash".to_string()))
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.hashes = update.hashes.clone().unwrap();
+                updated_tx.network_data = update.network_data.clone().unwrap();
+                Ok(updated_tx)
+            });
+
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Box::pin(async { Ok("0xarb_new_hash".to_string()) }));
+
+        // Final update: bookkeeping only.
+        let test_tx_clone2 = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|_, update| {
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.hashes.is_none()
+                    && update.network_data.is_none()
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone2.clone();
+                updated_tx.status = update.status.clone().unwrap();
+                Ok(updated_tx)
+            });
+
+        // Not Arbitrum: no chain link.
+        counter_service.expect_get().never();
         mock_transaction.expect_find_by_nonce().never();
 
         let evm_transaction = EvmRelayerTransaction {
