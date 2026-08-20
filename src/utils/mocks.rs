@@ -109,7 +109,7 @@ pub mod mockutils {
                     tags: None,
                 },
                 required_confirmations: Some(1),
-                status_check_initial_delay_seconds: None,
+                status_check: None,
                 features: None,
                 symbol: Some("testETH".to_string()),
                 chain_id: Some(1),

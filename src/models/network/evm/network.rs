@@ -1,6 +1,7 @@
 use crate::config::GasPriceCacheConfig;
 use crate::constants::{
     ARBITRUM_BASED_TAG, DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, LACKS_MEMPOOL_TAGS,
+    MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
     OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG, ROLLUP_TAG,
 };
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcConfig};
@@ -79,17 +80,27 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     ))
                 })?;
 
-                let status_check_initial_delay_seconds = i64::try_from(
-                    evm_config
-                        .status_check_initial_delay_seconds
-                        .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS),
-                )
-                .map_err(|_| {
-                    RepositoryError::InvalidData(format!(
-                        "EVM network '{}' has an invalid status_check_initial_delay_seconds",
+                let configured_delay = evm_config
+                    .status_check
+                    .as_ref()
+                    .and_then(|config| config.initial_delay_seconds)
+                    .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS);
+                if !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                    ..=MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+                    .contains(&configured_delay)
+                {
+                    return Err(RepositoryError::InvalidData(format!(
+                        "EVM network '{}' has an invalid status_check.initial_delay_seconds",
                         network_repo.name
-                    ))
-                })?;
+                    )));
+                }
+                let status_check_initial_delay_seconds =
+                    i64::try_from(configured_delay).map_err(|_| {
+                        RepositoryError::InvalidData(format!(
+                            "EVM network '{}' has an invalid status_check.initial_delay_seconds",
+                            network_repo.name
+                        ))
+                    })?;
 
                 Ok(EvmNetwork {
                     network: common.network.clone(),
@@ -189,12 +200,11 @@ impl EvmNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+    use crate::config::{EvmNetworkConfig, NetworkConfigCommon, StatusCheckConfig};
     use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
-    use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+    use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
-        use crate::models::RpcConfig;
         EvmNetwork {
             network: "test-network".to_string(),
             rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
@@ -208,6 +218,35 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+        }
+    }
+
+    fn create_test_evm_config() -> EvmNetworkConfig {
+        EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "test-network".to_string(),
+                from: None,
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec![ROLLUP_TAG.to_string(), OPTIMISM_BASED_TAG.to_string()]),
+            },
+            chain_id: Some(10),
+            required_confirmations: Some(1),
+            status_check: None,
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+        }
+    }
+
+    fn repo_model(config: EvmNetworkConfig) -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "evm:test-network".to_string(),
+            name: "test-network".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(config),
         }
     }
 
@@ -303,49 +342,43 @@ mod tests {
     }
 
     #[test]
-    fn test_try_from_resolves_status_check_initial_delay() {
-        use crate::models::RpcConfig;
-        let mut config = EvmNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "test-network".to_string(),
-                from: None,
-                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
-                explorer_urls: None,
-                average_blocktime_ms: Some(12000),
-                is_testnet: Some(false),
-                tags: Some(vec![ROLLUP_TAG.to_string(), OPTIMISM_BASED_TAG.to_string()]),
-            },
-            chain_id: Some(10),
-            required_confirmations: Some(1),
-            status_check_initial_delay_seconds: None,
-            features: Some(vec!["eip1559".to_string()]),
-            symbol: Some("ETH".to_string()),
-            gas_price_cache: None,
-        };
+    fn test_try_from_with_tags() {
+        let network = EvmNetwork::try_from(repo_model(create_test_evm_config())).unwrap();
+        assert!(network.is_optimism());
+        assert!(network.is_rollup());
+        assert!(network.lacks_mempool());
+    }
 
-        let default_network = EvmNetwork::try_from(NetworkRepoModel {
-            id: "evm:test-network".to_string(),
-            name: "test-network".to_string(),
-            network_type: NetworkType::Evm,
-            config: NetworkConfigData::Evm(config.clone()),
-        })
-        .unwrap();
+    #[test]
+    fn test_try_from_resolves_status_check_initial_delay() {
+        let mut config = create_test_evm_config();
+        let default_network = EvmNetwork::try_from(repo_model(config.clone())).unwrap();
         assert_eq!(
             default_network.status_check_initial_delay_seconds(),
             DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS as i64
         );
 
-        config.status_check_initial_delay_seconds = Some(3);
-        let network = EvmNetwork::try_from(NetworkRepoModel {
-            id: "evm:test-network".to_string(),
-            name: "test-network".to_string(),
-            network_type: NetworkType::Evm,
-            config: NetworkConfigData::Evm(config),
-        })
-        .unwrap();
+        config.status_check = Some(StatusCheckConfig {
+            initial_delay_seconds: Some(3),
+        });
+        let network = EvmNetwork::try_from(repo_model(config)).unwrap();
         assert_eq!(network.status_check_initial_delay_seconds(), 3);
-        assert!(network.is_optimism());
-        assert!(network.is_rollup());
-        assert!(network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_try_from_rejects_invalid_status_check_initial_delay() {
+        for delay in [0, 101] {
+            let mut config = create_test_evm_config();
+            config.status_check = Some(StatusCheckConfig {
+                initial_delay_seconds: Some(delay),
+            });
+
+            let error = EvmNetwork::try_from(repo_model(config)).unwrap_err();
+            assert!(matches!(
+                error,
+                RepositoryError::InvalidData(message)
+                    if message.contains("status_check.initial_delay_seconds")
+            ));
+        }
     }
 }

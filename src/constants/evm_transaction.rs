@@ -43,9 +43,11 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 /// Default initial delay before the first status check (in seconds).
 pub const DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 8;
 
-/// Legacy alias for the default initial EVM status-check delay.
-pub const EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 =
-    DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS as i64;
+/// Minimum configurable initial status-check delay (in seconds).
+pub const MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 1;
+
+/// Maximum configurable initial status-check delay (in seconds).
+pub const MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 100;
 
 /// Minimum age of transaction before allowing resubmission and timeout checks (in seconds)
 /// Transactions younger than this will still get status updates from blockchain,

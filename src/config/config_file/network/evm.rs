@@ -11,6 +11,9 @@
 
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
+use crate::constants::{
+    MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+};
 use serde::{Deserialize, Serialize};
 
 /// Default value for gas price cache enabled flag
@@ -86,6 +89,39 @@ impl GasPriceCacheConfig {
     }
 }
 
+/// Configuration for EVM transaction status checks.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct StatusCheckConfig {
+    /// Delay before the first transaction status check, in seconds.
+    pub initial_delay_seconds: Option<u64>,
+}
+
+impl StatusCheckConfig {
+    fn validate(&self) -> Result<(), ConfigFileError> {
+        if let Some(delay) = self.initial_delay_seconds {
+            if !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                ..=MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+                .contains(&delay)
+            {
+                return Err(ConfigFileError::InvalidFormat(format!(
+                    "status_check.initial_delay_seconds must be between {} and {} seconds",
+                    MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    MAX_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn merge_with_parent(&self, parent: &Self) -> Self {
+        Self {
+            initial_delay_seconds: self.initial_delay_seconds.or(parent.initial_delay_seconds),
+        }
+    }
+}
+
 /// Configuration specific to EVM-compatible networks.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -98,8 +134,8 @@ pub struct EvmNetworkConfig {
     pub chain_id: Option<u64>,
     /// Number of block confirmations required before a transaction is considered final.
     pub required_confirmations: Option<u64>,
-    /// Delay before the first transaction status check, in seconds.
-    pub status_check_initial_delay_seconds: Option<u64>,
+    /// Transaction status-check configuration.
+    pub status_check: Option<StatusCheckConfig>,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Option<Vec<String>>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
@@ -128,12 +164,8 @@ impl EvmNetworkConfig {
             ));
         }
 
-        if let Some(delay) = self.status_check_initial_delay_seconds {
-            if !(1..=100).contains(&delay) {
-                return Err(ConfigFileError::InvalidFormat(
-                    "status_check_initial_delay_seconds must be between 1 and 100 seconds".into(),
-                ));
-            }
+        if let Some(status_check) = &self.status_check {
+            status_check.validate()?;
         }
 
         if self.symbol.is_none() || self.symbol.as_ref().unwrap_or(&String::new()).is_empty() {
@@ -162,9 +194,12 @@ impl EvmNetworkConfig {
             required_confirmations: self
                 .required_confirmations
                 .or(parent.required_confirmations),
-            status_check_initial_delay_seconds: self
-                .status_check_initial_delay_seconds
-                .or(parent.status_check_initial_delay_seconds),
+            status_check: match (&self.status_check, &parent.status_check) {
+                (Some(child), Some(parent)) => Some(child.merge_with_parent(parent)),
+                (Some(child), None) => Some(child.clone()),
+                (None, Some(parent)) => Some(parent.clone()),
+                (None, None) => None,
+            },
             features: merge_optional_string_vecs(&self.features, &parent.features),
             symbol: self.symbol.clone().or_else(|| parent.symbol.clone()),
             gas_price_cache: self
@@ -199,7 +234,9 @@ mod tests {
     fn test_validate_status_check_initial_delay_boundaries() {
         for delay in [1, 100] {
             let mut config = create_evm_network("ethereum-mainnet");
-            config.status_check_initial_delay_seconds = Some(delay);
+            config.status_check = Some(StatusCheckConfig {
+                initial_delay_seconds: Some(delay),
+            });
             assert!(config.validate().is_ok());
         }
     }
@@ -208,15 +245,44 @@ mod tests {
     fn test_validate_rejects_invalid_status_check_initial_delay() {
         for delay in [0, 101] {
             let mut config = create_evm_network("ethereum-mainnet");
-            config.status_check_initial_delay_seconds = Some(delay);
+            config.status_check = Some(StatusCheckConfig {
+                initial_delay_seconds: Some(delay),
+            });
 
             let error = config.validate().unwrap_err();
             assert!(matches!(
                 error,
                 ConfigFileError::InvalidFormat(message)
-                    if message.contains("status_check_initial_delay_seconds")
+                    if message.contains("status_check.initial_delay_seconds")
             ));
         }
+    }
+
+    #[test]
+    fn test_deserialize_nested_status_check_config() {
+        let config: EvmNetworkConfig = serde_json::from_value(serde_json::json!({
+            "network": "ethereum-mainnet",
+            "from": null,
+            "rpc_urls": ["https://rpc.example.com"],
+            "explorer_urls": null,
+            "average_blocktime_ms": 12000,
+            "is_testnet": false,
+            "tags": null,
+            "chain_id": 1,
+            "required_confirmations": 1,
+            "status_check": { "initial_delay_seconds": 2 },
+            "symbol": "ETH",
+            "features": null,
+            "gas_price_cache": null
+        }))
+        .unwrap();
+
+        assert_eq!(
+            config.status_check,
+            Some(StatusCheckConfig {
+                initial_delay_seconds: Some(2)
+            })
+        );
     }
 
     #[test]
@@ -345,7 +411,9 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(6),
-            status_check_initial_delay_seconds: Some(8),
+            status_check: Some(StatusCheckConfig {
+                initial_delay_seconds: Some(8),
+            }),
             features: Some(vec!["legacy".to_string()]),
             symbol: Some("PETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -369,7 +437,9 @@ mod tests {
             },
             chain_id: Some(31337),
             required_confirmations: Some(1),
-            status_check_initial_delay_seconds: Some(1),
+            status_check: Some(StatusCheckConfig {
+                initial_delay_seconds: Some(1),
+            }),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("CETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -402,7 +472,12 @@ mod tests {
         );
         assert_eq!(result.chain_id, Some(31337));
         assert_eq!(result.required_confirmations, Some(1));
-        assert_eq!(result.status_check_initial_delay_seconds, Some(1));
+        assert_eq!(
+            result.status_check,
+            Some(StatusCheckConfig {
+                initial_delay_seconds: Some(1)
+            })
+        );
         assert_eq!(
             result.features,
             Some(vec!["legacy".to_string(), "eip1559".to_string()])
@@ -434,7 +509,9 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(6),
-            status_check_initial_delay_seconds: Some(2),
+            status_check: Some(StatusCheckConfig {
+                initial_delay_seconds: Some(2),
+            }),
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -466,7 +543,12 @@ mod tests {
         assert_eq!(result.common.tags, Some(vec!["parent-tag".to_string()]));
         assert_eq!(result.chain_id, Some(1));
         assert_eq!(result.required_confirmations, Some(6));
-        assert_eq!(result.status_check_initial_delay_seconds, Some(2));
+        assert_eq!(
+            result.status_check,
+            Some(StatusCheckConfig {
+                initial_delay_seconds: Some(2)
+            })
+        );
         assert_eq!(result.features, Some(vec!["eip1559".to_string()]));
         assert_eq!(result.symbol, Some("ETH".to_string()));
         assert_eq!(
@@ -495,7 +577,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(6),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip155".to_string(), "eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -519,7 +601,7 @@ mod tests {
             },
             chain_id: Some(31337),        // Override
             required_confirmations: None, // Inherit
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip2930".to_string()]), // Merge
             symbol: None,                                // Inherit
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -587,7 +669,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -605,7 +687,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -640,7 +722,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec![
                 "eip155".to_string(),
                 "eip1559".to_string(),
@@ -666,7 +748,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec![
                 "shared".to_string(),
                 "eip2930".to_string(),
@@ -726,7 +808,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(6),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -748,7 +830,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -800,7 +882,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec![]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: Some(GasPriceCacheConfig {
@@ -822,7 +904,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: None,
             gas_price_cache: None,

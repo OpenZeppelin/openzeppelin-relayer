@@ -4774,6 +4774,10 @@
                 },
                 "description": "List of RPC endpoint configurations"
               },
+              "status_check": {
+                "$ref": "#/components/schemas/StatusCheckResponse",
+                "description": "EVM-specific: Transaction status-check configuration"
+              },
               "symbol": {
                 "type": "string",
                 "description": "EVM-specific: Native token symbol"
@@ -5611,6 +5615,10 @@
                     "$ref": "#/components/schemas/RpcConfig"
                   },
                   "description": "List of RPC endpoint configurations"
+                },
+                "status_check": {
+                  "$ref": "#/components/schemas/StatusCheckResponse",
+                  "description": "EVM-specific: Transaction status-check configuration"
                 },
                 "symbol": {
                   "type": "string",
@@ -7129,6 +7137,10 @@
               "$ref": "#/components/schemas/RpcConfig"
             },
             "description": "List of RPC endpoint configurations"
+          },
+          "status_check": {
+            "$ref": "#/components/schemas/StatusCheckResponse",
+            "description": "EVM-specific: Transaction status-check configuration"
           },
           "symbol": {
             "type": "string",
@@ -9463,6 +9475,22 @@
           }
         ],
         "description": "Network-agnostic fee estimate response for gasless transactions.\nContains network-specific fee estimate results."
+      },
+      "StatusCheckResponse": {
+        "type": "object",
+        "description": "Effective EVM transaction status-check settings.",
+        "required": [
+          "initial_delay_seconds"
+        ],
+        "properties": {
+          "initial_delay_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Delay before the first transaction status check, in seconds.",
+            "maximum": 100,
+            "minimum": 1
+          }
+        }
       },
       "StellarAllowedTokensPolicy": {
         "type": "object",

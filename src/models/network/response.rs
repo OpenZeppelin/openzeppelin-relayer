@@ -3,12 +3,21 @@
 //! This module provides response structures for network operations, converting
 //! internal repository models to API-friendly formats.
 
+use crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS;
 use crate::models::{
     network::{NetworkConfigData, NetworkRepoModel},
     NetworkType, RpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+/// Effective EVM transaction status-check settings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct StatusCheckResponse {
+    /// Delay before the first transaction status check, in seconds.
+    #[schema(minimum = 1, maximum = 100)]
+    pub initial_delay_seconds: u64,
+}
 
 /// Network response model for API endpoints.
 ///
@@ -50,6 +59,10 @@ pub struct NetworkResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub required_confirmations: Option<u64>,
+    /// EVM-specific: Transaction status-check configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub status_check: Option<StatusCheckResponse>,
     /// EVM-specific: Network features (e.g., "eip1559")
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
@@ -85,6 +98,7 @@ impl From<NetworkRepoModel> for NetworkResponse {
             tags: common.tags.clone(),
             chain_id: None,
             required_confirmations: None,
+            status_check: None,
             features: None,
             symbol: None,
             passphrase: None,
@@ -96,6 +110,13 @@ impl From<NetworkRepoModel> for NetworkResponse {
             NetworkConfigData::Evm(evm_config) => {
                 response.chain_id = evm_config.chain_id;
                 response.required_confirmations = evm_config.required_confirmations;
+                response.status_check = Some(StatusCheckResponse {
+                    initial_delay_seconds: evm_config
+                        .status_check
+                        .as_ref()
+                        .and_then(|config| config.initial_delay_seconds)
+                        .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS),
+                });
                 response.features = evm_config.features.clone();
                 response.symbol = evm_config.symbol.clone();
             }
@@ -132,7 +153,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -149,6 +170,12 @@ mod tests {
         assert_eq!(response.network_type, NetworkType::Evm);
         assert_eq!(response.chain_id, Some(1));
         assert_eq!(response.required_confirmations, Some(12));
+        assert_eq!(
+            response.status_check,
+            Some(StatusCheckResponse {
+                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+            })
+        );
         assert_eq!(response.symbol, Some("ETH".to_string()));
         assert_eq!(response.features, Some(vec!["eip1559".to_string()]));
     }

@@ -802,7 +802,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1132,7 +1132,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1242,7 +1242,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1610,7 +1610,9 @@ mod tests {
 
         let mut network_model = create_test_network_model();
         if let crate::models::NetworkConfigData::Evm(config) = &mut network_model.config {
-            config.status_check_initial_delay_seconds = Some(2);
+            config.status_check = Some(crate::config::StatusCheckConfig {
+                initial_delay_seconds: Some(2),
+            });
         }
         network_repo
             .expect_get_by_name()
