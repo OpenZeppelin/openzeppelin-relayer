@@ -25,6 +25,11 @@ pub const MAXIMUM_TX_ATTEMPTS: usize = 50;
 // Maximum number of NOOP transactions to attempt
 pub const MAXIMUM_NOOP_RETRY_ATTEMPTS: u32 = 50;
 
+/// Maximum delivery attempts (recorded hashes) for a rollup transaction before it is
+/// NOOP-replaced. Each broadcast is persisted first, so `hashes.len()` counts real
+/// attempts. The NOOP frees the nonces queued behind an undeliverable head.
+pub const ROLLUP_MAX_DELIVERY_ATTEMPTS: usize = 10;
+
 /// Time to resubmit for Arbitrum networks
 pub const ARBITRUM_TIME_TO_RESUBMIT: i64 = 20_000;
 
@@ -128,6 +133,16 @@ pub const NONCE_TOO_HIGH_PATTERNS: &[&str] = &[
 /// With ~25s between retries (driven by status checker resend timeout), this means
 /// escalation happens within ~75s — enough time for transient burst ordering to resolve.
 pub const MAX_NONCE_TOO_HIGH_RETRIES: u32 = 3;
+
+/// Maximum in-process broadcast retries on "nonce too high" for Arbitrum-based
+/// networks. The Nitro sequencer holds such a transaction ~1s and revives it if the
+/// predecessor lands. These retries do not consume the `MAX_NONCE_TOO_HIGH_RETRIES`
+/// escalation budget.
+pub const ARBITRUM_NONCE_TOO_HIGH_INPROCESS_RETRIES: u32 = 3;
+
+/// Delay between in-process "nonce too high" broadcast retries. Matches the ~1s
+/// Nitro nonce-failure cache window.
+pub const ARBITRUM_NONCE_TOO_HIGH_RETRY_DELAY_MS: u64 = 1000;
 
 /// Maximum number of nonces to scan when detecting gaps between on-chain and local counter.
 /// Gaps beyond this range are logged for operator investigation rather than automated recovery.
