@@ -1380,10 +1380,9 @@ where
                 .partial_update(tx.id.clone(), update)
                 .await?;
 
-            // Resubmit, not submit: the NOOP rewrote the logical fields but the
-            // stored raw/signature still hold the ORIGINAL payload. The resubmit
-            // path re-prices and re-signs so the NOOP is what gets broadcast
-            // (same as the Submitted-state and cancellation NOOP paths).
+            // Resubmit, not submit: the NOOP rewrote the logical fields, but the
+            // stored raw/signature still hold the original payload. The resubmit
+            // path re-prices and re-signs, so the NOOP is what gets broadcast.
             self.send_transaction_resubmit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
@@ -1411,11 +1410,11 @@ where
                     .await;
             }
 
-            // Arbitrum head gate (issue #843): the sequencer holds a nonce-above-head tx
-            // ~1s then rejects it, so resubmitting anything but the head is a guaranteed
-            // rejection. Only the tx at the on-chain nonce is broadcast; successors are
-            // delivered by the broadcast-success chain link, or by this gate once they
-            // become the head.
+            // Arbitrum head gate: the sequencer holds a nonce-above-head tx ~1s and
+            // then rejects it, so a resubmit of anything but the head always fails.
+            // Only the tx at the on-chain nonce is broadcast. Successors are delivered
+            // by the broadcast-success chain link, or by this gate once they become
+            // the head.
             if self.is_behind_arbitrum_head(&tx).await {
                 debug!(
                     tx_id = %tx.id,
@@ -2472,7 +2471,7 @@ mod tests {
             );
         }
 
-        /// ④ Rollup give-up valve: with attempts persisted pre-broadcast, a rollup tx
+        /// Rollup give-up valve: with attempts persisted pre-broadcast, a rollup tx
         /// is NOOP-replaced after ROLLUP_MAX_DELIVERY_ATTEMPTS (10) recorded hashes —
         /// long before the generic 50-attempt cap.
         #[tokio::test]
@@ -2501,7 +2500,7 @@ mod tests {
             );
         }
 
-        /// ④ At exactly the threshold (10 hashes) the rollup NOOP does not fire yet.
+        /// At exactly the threshold (10 hashes) the rollup NOOP does not fire yet.
         #[tokio::test]
         async fn test_rollup_noop_does_not_fire_at_threshold_boundary() {
             let mut mocks = default_test_mocks();
@@ -2531,7 +2530,7 @@ mod tests {
             assert!(reason.is_none());
         }
 
-        /// ④ Non-rollup networks keep the generic 50-attempt cap: 11 hashes must not
+        /// Non-rollup networks keep the generic 50-attempt cap: 11 hashes must not
         /// trigger a NOOP on mainnet.
         #[tokio::test]
         async fn test_non_rollup_unaffected_by_rollup_delivery_threshold() {
@@ -3062,7 +3061,7 @@ mod tests {
             assert_eq!(result.status, TransactionStatus::Sent);
         }
 
-        /// ⑤ Arbitrum head gate: a stale Sent tx whose nonce is above the on-chain
+        /// Arbitrum head gate: a stale Sent tx whose nonce is above the on-chain
         /// nonce gets NO resubmit job — broadcasting it is a guaranteed rejection.
         #[tokio::test]
         async fn arbitrum_sent_state_behind_head_skips_resubmit() {
@@ -3120,7 +3119,7 @@ mod tests {
             assert_eq!(result.status, TransactionStatus::Sent);
         }
 
-        /// ⑤ Arbitrum head gate: the stale Sent tx AT the on-chain nonce (the head)
+        /// Arbitrum head gate: the stale Sent tx AT the on-chain nonce (the head)
         /// does get its resubmit job — it is the only deliverable transaction.
         #[tokio::test]
         async fn arbitrum_sent_state_at_head_proceeds_to_resubmit() {

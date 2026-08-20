@@ -397,12 +397,10 @@ where
         }
     }
 
-    /// Broadcasts raw transaction bytes, retrying the SAME bytes in-process on
-    /// "nonce too high" when the network is Arbitrum-based. The Nitro sequencer holds a
-    /// nonce-too-high tx ~1s and revives it if the predecessor lands, so short retries
-    /// absorb burst-ordering races and ride the revive window during chained drains.
-    /// These retries do not touch `nonce_too_high_retries` — escalation only happens
-    /// after they exhaust, via the caller's existing `handle_nonce_too_high` path.
+    /// Broadcasts raw transaction bytes. On Arbitrum-based networks, "nonce too high"
+    /// is retried in-process with the same bytes: the Nitro sequencer holds such a tx
+    /// ~1s and revives it if the predecessor lands. These retries do not touch
+    /// `nonce_too_high_retries`; the caller escalates after they exhaust.
     async fn send_raw_transaction_with_nonce_retry(
         &self,
         tx_id: &str,
@@ -440,12 +438,11 @@ where
         }
     }
 
-    /// Arbitrum chained delivery (issue #843): after a successful broadcast at nonce N,
-    /// immediately enqueue the submit job for a never-broadcast `Sent` tx at N+1, so a
-    /// jammed region drains at job+RPC latency instead of one tx per resubmit cycle.
-    /// Best-effort: failures only log — the status checker remains the fallback driver.
-    /// Duplicate links are safe: re-submitting already-broadcast bytes yields
-    /// `AlreadyKnown`, which is treated as success.
+    /// Arbitrum chained delivery: after a successful broadcast at nonce N, enqueue the
+    /// submit job for a never-broadcast `Sent` tx at N+1. A jammed region then drains
+    /// at job+RPC latency instead of one tx per resubmit cycle. Best-effort: failures
+    /// only log, and the status checker remains the fallback driver. Duplicate links
+    /// are safe because re-submitting already-broadcast bytes yields `AlreadyKnown`.
     pub(super) async fn enqueue_next_nonce_submit(&self, tx: &TransactionRepoModel) {
         let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
             return;
@@ -1039,8 +1036,8 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Nitro-specific (issue #843): in-process nonce-too-high retries ride the
-        // sequencer's ~1s revive window, and success-chained delivery drains jams.
+        // Nitro-specific: in-process nonce-too-high retries ride the sequencer's
+        // ~1s revive window, and success-chained delivery drains jams.
         let is_arbitrum = self
             .delivery_network(&tx, evm_tx_data.chain_id)
             .await
@@ -1239,10 +1236,9 @@ where
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
-        // Issue #843 delivery gates. `lacks_mempool` (any network without a public
-        // mempool) gates pre-broadcast persistence; `is_arbitrum` gates the
-        // Nitro-specific behaviors (in-process nonce-too-high retries riding the
-        // ~1s revive window, success-chained delivery).
+        // `lacks_mempool` gates pre-broadcast persistence. `is_arbitrum` gates the
+        // Nitro-specific behaviors: in-process nonce-too-high retries and
+        // success-chained delivery.
         let network = self.delivery_network(&tx, evm_data.chain_id).await;
         let is_arbitrum = network.as_ref().is_some_and(|n| n.is_arbitrum());
         let pre_persist = network.as_ref().is_some_and(|n| n.lacks_mempool());
@@ -1283,9 +1279,9 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Persist the new attempt BEFORE broadcast (no-mempool networks): any bytes
-        // that might reach the chain are recorded first, and `hashes.len()` becomes a
-        // true delivery-attempt counter (drives the rollup NOOP give-up threshold).
+        // Persist the new attempt BEFORE broadcast: any bytes that might reach the
+        // chain are recorded first, and `hashes.len()` stays a true delivery-attempt
+        // counter for the rollup NOOP threshold.
         let mut pre_persisted = false;
         let mut prior_network_data = None;
         let tx = if pre_persist {
@@ -1331,10 +1327,10 @@ where
                             error_kind = ?error_kind,
                             "resubmission indicates transaction already in mempool/mined - keeping original hash"
                         );
-                        // ReplacementUnderpriced means the node rejected the
-                        // candidate bytes, so a pre-persisted network_data
-                        // points at a dead hash and must be rolled back.
-                        // AlreadyKnown keeps it: the node has the candidate.
+                        // ReplacementUnderpriced: the node rejected the candidate,
+                        // so pre-persisted network_data points at a dead hash and
+                        // must be rolled back. AlreadyKnown keeps it because the
+                        // node has the candidate.
                         restore_prior_network_data = pre_persisted
                             && matches!(error_kind, SubmissionErrorKind::ReplacementUnderpriced);
                         true
@@ -1383,9 +1379,9 @@ where
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
             // Keep original hash and data - just ensure status is Submitted.
-            // When the pre-persisted candidate was rejected, put the prior
-            // network_data back; the candidate hash stays in `hashes` as an
-            // attempt record.
+            // If the pre-persisted candidate was rejected, restore the prior
+            // network_data. The candidate hash stays in `hashes` as an attempt
+            // record.
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
                 metadata: metadata_reset,
@@ -4690,7 +4686,7 @@ mod tests {
         test_tx
     }
 
-    /// ② Arbitrum: "nonce too high" at broadcast is retried in-process with the same
+    /// Arbitrum: "nonce too high" at broadcast is retried in-process with the same
     /// bytes and succeeds when the sequencer revives the tx; the escalation budget
     /// (nonce_too_high_retries) is never touched.
     #[tokio::test(start_paused = true)]
@@ -4761,7 +4757,7 @@ mod tests {
         assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
     }
 
-    /// ② Arbitrum: when all in-process retries exhaust, the existing escalation runs
+    /// Arbitrum: when all in-process retries exhaust, the existing escalation runs
     /// exactly once (single nonce_too_high_retries increment for 4 broadcast attempts).
     #[tokio::test(start_paused = true)]
     async fn test_submit_arbitrum_nonce_too_high_exhausts_then_escalates_once() {
@@ -4888,7 +4884,7 @@ mod tests {
             });
     }
 
-    /// ① Arbitrum: the resubmission attempt is persisted BEFORE broadcast, so when the
+    /// Arbitrum: the resubmission attempt is persisted BEFORE broadcast, so when the
     /// broadcast then fails the new hash stays recorded (true attempt counter, no
     /// phantom broadcasts).
     #[tokio::test]
@@ -4962,7 +4958,7 @@ mod tests {
         assert!(result.is_err(), "Expected broadcast error, got: {result:?}");
     }
 
-    /// ① Arbitrum: on broadcast success after pre-persistence, the final update only
+    /// Arbitrum: on broadcast success after pre-persistence, the final update only
     /// carries status/sent_at bookkeeping — the hash is not appended twice.
     #[tokio::test]
     async fn test_resubmit_arbitrum_success_does_not_append_hash_twice() {
@@ -5048,7 +5044,7 @@ mod tests {
         assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
     }
 
-    /// ① Arbitrum: when the node rejects the pre-persisted candidate with
+    /// Arbitrum: when the node rejects the pre-persisted candidate with
     /// "replacement transaction underpriced", the final update restores the prior
     /// network_data (the old bytes keep the slot) while the candidate hash stays
     /// recorded in `hashes`.
@@ -5151,7 +5147,7 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
-    /// ① Predicate split: a no-mempool network that is NOT Arbitrum still gets the
+    /// Predicate split: a no-mempool network that is NOT Arbitrum still gets the
     /// pre-broadcast persistence (gated on `lacks_mempool`), but none of the
     /// Nitro-specific behaviors — no success-chained delivery.
     #[tokio::test]
@@ -5239,7 +5235,7 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
-    /// ③ Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
+    /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
     /// the never-broadcast Sent transaction at N+1.
     #[tokio::test]
     async fn test_submit_arbitrum_chain_link_enqueues_next_nonce() {
@@ -5317,7 +5313,7 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
-    /// ③ Arbitrum chain link: no job when the successor was already broadcast
+    /// Arbitrum chain link: no job when the successor was already broadcast
     /// (sent_at set) or when no record exists at N+1.
     #[tokio::test]
     async fn test_submit_arbitrum_chain_link_skips_broadcast_or_missing_next() {
