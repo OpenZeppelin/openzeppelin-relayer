@@ -116,6 +116,7 @@ mod tests {
     use super::*;
     use crate::config::config_file::network::common::NetworkConfigCommon;
     use crate::config::config_file::network::test_utils::*;
+    use crate::config::StatusCheckConfig;
     use std::collections::HashMap;
 
     #[test]
@@ -134,7 +135,10 @@ mod tests {
         let mut networks = HashMap::new();
 
         // Create parent network
-        let parent_config = create_evm_network("parent");
+        let mut parent_config = create_evm_network("parent");
+        parent_config.status_check = Some(StatusCheckConfig {
+            initial_delay_seconds: Some(2),
+        });
         networks.insert(
             "parent".to_string(),
             NetworkFileConfig::Evm(parent_config.clone()),
@@ -156,7 +160,7 @@ mod tests {
             },
             chain_id: None,                  // Will inherit from parent
             required_confirmations: Some(2), // Override parent value
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None, // Will inherit from parent
             gas_price_cache: None,
@@ -176,6 +180,7 @@ mod tests {
         assert_eq!(resolved.common.is_testnet, Some(false)); // Overridden
         assert_eq!(resolved.chain_id, parent_config.chain_id); // Inherited
         assert_eq!(resolved.required_confirmations, Some(2)); // Overridden
+        assert_eq!(resolved.status_check, parent_config.status_check); // Inherited
         assert_eq!(resolved.symbol, parent_config.symbol); // Inherited
     }
 
@@ -203,7 +208,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: Some(3), // Override grandparent
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -229,7 +234,7 @@ mod tests {
             },
             chain_id: Some(42), // Override
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -502,7 +507,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: None,
             gas_price_cache: None,
@@ -524,7 +529,7 @@ mod tests {
             },
             chain_id: Some(100),
             required_confirmations: None,
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: None,
             gas_price_cache: None,
@@ -548,7 +553,7 @@ mod tests {
             },
             chain_id: None,
             required_confirmations: Some(5),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: None,
             symbol: Some("CUSTOM".to_string()),
             gas_price_cache: None,
@@ -685,7 +690,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -710,7 +715,7 @@ mod tests {
             },
             chain_id: Some(42),           // Override
             required_confirmations: None, // Inherit
-            status_check_initial_delay_seconds: None,
+            status_check: None,
             features: Some(vec!["berlin".to_string()]), // Override (merge behavior depends on implementation)
             symbol: None,                               // Inherit
             gas_price_cache: None,

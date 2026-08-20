@@ -46,7 +46,7 @@ pub fn create_evm_network(network: &str) -> EvmNetworkConfig {
         common: create_network_common(network),
         chain_id: Some(31337),
         required_confirmations: Some(1),
-        status_check_initial_delay_seconds: None,
+        status_check: None,
         features: Some(vec!["eip1559".to_string()]),
         symbol: Some("ETH".to_string()),
         gas_price_cache: None,
@@ -59,7 +59,7 @@ pub fn create_evm_network_with_parent(network: &str, parent: &str) -> EvmNetwork
         common: create_network_common_with_parent(network, parent),
         chain_id: Some(31338), // Override parent's chain_id to show inheritance working
         required_confirmations: Some(1), // Required field, but could be different from parent
-        status_check_initial_delay_seconds: None,
+        status_check: None,
         features: None,                  // Will inherit from parent
         symbol: Some("ETH".to_string()), // Required field
         gas_price_cache: None,
@@ -72,7 +72,7 @@ pub fn create_evm_network_for_inheritance_test(network: &str, parent: &str) -> E
         common: create_network_common_with_parent(network, parent),
         chain_id: None,               // Will inherit from parent
         required_confirmations: None, // Will inherit from parent
-        status_check_initial_delay_seconds: None,
+        status_check: None,
         features: None, // Will inherit from parent
         symbol: None,   // Will inherit from parent
         gas_price_cache: None,
@@ -93,7 +93,7 @@ pub fn create_invalid_evm_network(network: &str) -> EvmNetworkConfig {
         },
         chain_id: None, // Missing required field
         required_confirmations: None,
-        status_check_initial_delay_seconds: None,
+        status_check: None,
         features: None,
         symbol: None,
         gas_price_cache: None,
