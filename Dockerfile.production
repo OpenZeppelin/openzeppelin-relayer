@@ -25,18 +25,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # Setting up build directories
-FROM cgr.dev/chainguard/wolfi-base
+FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-# Install plugin dependencies
-ARG TARGETARCH
 ARG NODE_VERSION=20.19
-
-# Install Node.js
 USER root
 RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
 ENV PATH="/usr/local/bin:$PATH"
