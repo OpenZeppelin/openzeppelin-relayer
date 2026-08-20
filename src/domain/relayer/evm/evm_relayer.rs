@@ -257,7 +257,8 @@ where
                     transaction.id.clone(),
                     transaction.relayer_id.clone(),
                     crate::models::NetworkType::Evm,
-                ),
+                )
+                .with_status_retry_delay_seconds(self.network.status_check_retry_delay_seconds()),
                 Some(calculate_scheduled_timestamp(initial_delay_seconds)),
             )
             .await
@@ -798,6 +799,7 @@ mod tests {
             chain_id: 1,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -938,15 +940,19 @@ mod tests {
             .returning(|_, _| Box::pin(ready(Ok(()))));
         let scheduled_at = Arc::new(std::sync::Mutex::new(None));
         let captured_scheduled_at = Arc::clone(&scheduled_at);
+        let retry_delay = Arc::new(std::sync::Mutex::new(None));
+        let captured_retry_delay = Arc::clone(&retry_delay);
         job_producer
             .expect_produce_check_transaction_status_job()
-            .returning(move |_, value| {
+            .returning(move |job, value| {
                 *captured_scheduled_at.lock().unwrap() = value;
+                *captured_retry_delay.lock().unwrap() = job.status_retry_delay_seconds;
                 Box::pin(ready(Ok(())))
             });
 
         let mut network = create_test_evm_network();
         network.status_check_initial_delay_seconds = 1;
+        network.status_check_retry_delay_seconds = Some(2);
         let relayer = EvmRelayer::new(
             relayer_model,
             signer,
@@ -967,6 +973,7 @@ mod tests {
         let scheduled_at = scheduled_at.lock().unwrap().unwrap();
         assert!(scheduled_at > before);
         assert!(scheduled_at <= after + 1);
+        assert_eq!(*retry_delay.lock().unwrap(), Some(2));
     }
 
     #[tokio::test]

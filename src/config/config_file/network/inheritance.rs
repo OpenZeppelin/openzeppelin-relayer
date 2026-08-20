@@ -138,6 +138,7 @@ mod tests {
         let mut parent_config = create_evm_network("parent");
         parent_config.status_check = Some(StatusCheckConfig {
             initial_delay_seconds: Some(2),
+            retry_delay_seconds: Some(9),
         });
         networks.insert(
             "parent".to_string(),
@@ -182,6 +183,38 @@ mod tests {
         assert_eq!(resolved.required_confirmations, Some(2)); // Overridden
         assert_eq!(resolved.status_check, parent_config.status_check); // Inherited
         assert_eq!(resolved.symbol, parent_config.symbol); // Inherited
+    }
+
+    #[test]
+    fn test_status_check_fields_inherit_independently() {
+        let parent = StatusCheckConfig {
+            initial_delay_seconds: Some(8),
+            retry_delay_seconds: Some(9),
+        };
+        let child = StatusCheckConfig {
+            initial_delay_seconds: Some(2),
+            retry_delay_seconds: None,
+        };
+
+        assert_eq!(
+            child.merge_with_parent(&parent),
+            StatusCheckConfig {
+                initial_delay_seconds: Some(2),
+                retry_delay_seconds: Some(9),
+            }
+        );
+
+        let child = StatusCheckConfig {
+            initial_delay_seconds: None,
+            retry_delay_seconds: Some(1),
+        };
+        assert_eq!(
+            child.merge_with_parent(&parent),
+            StatusCheckConfig {
+                initial_delay_seconds: Some(8),
+                retry_delay_seconds: Some(1),
+            }
+        );
     }
 
     #[test]

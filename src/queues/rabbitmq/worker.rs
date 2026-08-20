@@ -35,6 +35,7 @@ use crate::queues::worker_shared::{
     get_concurrency_for_queue, is_retry_exhausted, job_correlation_id, retry_delay_for_queue,
     run_handler_with_timeout, HandlerOutcome, DRAIN_TIMEOUT,
 };
+use crate::queues::worker_types::RetryKind;
 
 use super::backend::{retry_attempt_from_headers, RABBITMQ_SEGMENT};
 use super::{QueueType, WorkerHandle};
@@ -369,14 +370,15 @@ async fn process_delivery(
             );
             ack(&delivery, queue_type, &correlation_id).await;
         }
-        HandlerOutcome::Retryable(e) => {
+        HandlerOutcome::Retryable { message, kind } => {
             settle_retry(
                 &delivery,
                 config,
                 redis_pool,
                 retry_attempt,
                 &correlation_id,
-                &e,
+                &message,
+                kind,
             )
             .await;
         }
@@ -400,6 +402,7 @@ async fn settle_retry(
     retry_attempt: usize,
     correlation_id: &str,
     err: &str,
+    retry_kind: RetryKind,
 ) {
     let queue_type = config.queue_type;
     let next_attempt = retry_attempt.saturating_add(1);
@@ -418,7 +421,7 @@ async fn settle_retry(
         return;
     }
 
-    let delay = retry_delay_for_queue(queue_type, &delivery.data, retry_attempt);
+    let delay = retry_delay_for_queue(queue_type, &delivery.data, retry_attempt, retry_kind);
 
     let body = match String::from_utf8(delivery.data.clone()) {
         Ok(b) => b,
@@ -470,7 +473,10 @@ async fn settle_retry(
             // persists, makes the broker redeliver instantly → a zero-backoff hot
             // loop. Pause for the computed retry delay (capped) first so redelivery
             // is paced, then nack.
-            let pause = Duration::from_secs(delay.max(0) as u64).min(NACK_BACKOFF_MAX);
+            // A Redis scheduling outage must use ordinary backoff, never the healthy-poll override.
+            let persistence_delay =
+                retry_delay_for_queue(queue_type, &delivery.data, retry_attempt, RetryKind::Other);
+            let pause = Duration::from_secs(persistence_delay.max(0) as u64).min(NACK_BACKOFF_MAX);
             error!(
                 queue_type = %queue_type,
                 correlation_id = %correlation_id,
@@ -605,6 +611,7 @@ mod tests {
             config.max_retries,
             "m1",
             "boom",
+            RetryKind::Other,
         )
         .await;
     }
@@ -616,7 +623,16 @@ mod tests {
         // under the budget, so it passes the exhaustion check first.
         let config = test_config(QueueType::TransactionRequest);
         let delivery = mock_delivery(&config.queue_name, vec![0xff, 0xfe, 0x00]);
-        settle_retry(&delivery, &config, &unconnected_pool(), 0, "m1", "boom").await;
+        settle_retry(
+            &delivery,
+            &config,
+            &unconnected_pool(),
+            0,
+            "m1",
+            "boom",
+            RetryKind::Other,
+        )
+        .await;
     }
 }
 
@@ -649,6 +665,7 @@ mod gated_tests {
         publish_confirmed, retry_attempt_from_headers, RABBITMQ_SEGMENT,
     };
     use crate::queues::schedule::{claim_due, scheduled_set_key, zadd_scheduled, ScheduledJob};
+    use crate::queues::worker_types::RetryKind;
     use crate::queues::QueueType;
 
     fn test_pool() -> Option<Arc<Pool>> {
@@ -710,7 +727,7 @@ mod gated_tests {
         );
 
         // Attempt 2 (well below max) → re-enqueue as attempt 3.
-        settle_retry(&delivery, &config, &pool, 2, "m1", "boom").await;
+        settle_retry(&delivery, &config, &pool, 2, "m1", "boom", RetryKind::Other).await;
 
         let far = chrono::Utc::now().timestamp() + 1_000_000;
         let claimed = claim_due(&pool, &prefix, RABBITMQ_SEGMENT, queue_type, far, 256)
@@ -743,7 +760,16 @@ mod gated_tests {
         );
 
         // retry_attempt == max_retries → next attempt would exceed budget → drop.
-        settle_retry(&delivery, &config, &pool, config.max_retries, "m1", "boom").await;
+        settle_retry(
+            &delivery,
+            &config,
+            &pool,
+            config.max_retries,
+            "m1",
+            "boom",
+            RetryKind::Other,
+        )
+        .await;
 
         let far = chrono::Utc::now().timestamp() + 1_000_000;
         let claimed = claim_due(&pool, &prefix, RABBITMQ_SEGMENT, queue_type, far, 256)
@@ -780,7 +806,16 @@ mod gated_tests {
 
         // A huge attempt count would exhaust any bounded queue; status checks
         // must still re-enqueue.
-        settle_retry(&delivery, &config, &pool, 1_000_000, "m1", "still pending").await;
+        settle_retry(
+            &delivery,
+            &config,
+            &pool,
+            1_000_000,
+            "m1",
+            "still pending",
+            RetryKind::Other,
+        )
+        .await;
 
         let far = chrono::Utc::now().timestamp() + 1_000_000;
         let claimed = claim_due(&pool, &prefix, RABBITMQ_SEGMENT, queue_type, far, 256)

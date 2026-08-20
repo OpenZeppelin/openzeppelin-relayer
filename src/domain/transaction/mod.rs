@@ -54,6 +54,14 @@ pub use evm::{ensure_status, ensure_status_one_of, DefaultEvmTransaction, EvmRel
 pub use solana::{DefaultSolanaTransaction, SolanaRelayerTransaction};
 pub use stellar::{DefaultStellarTransaction, StellarRelayerTransaction};
 
+/// Status-check result plus whether the EVM circuit-breaker path actually ran.
+pub struct TransactionStatusCheckOutcome {
+    /// The network-specific status-check result.
+    pub result: std::result::Result<TransactionRepoModel, TransactionError>,
+    /// True only when the EVM handler entered its breaker path; threshold-only NOOPs stay false.
+    pub breaker_executed: bool,
+}
+
 /// A trait that defines the operations for handling transactions across different networks.
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -185,6 +193,41 @@ pub enum NetworkTransaction {
     Evm(Box<DefaultEvmTransaction>),
     Solana(DefaultSolanaTransaction),
     Stellar(DefaultStellarTransaction),
+}
+
+impl NetworkTransaction {
+    /// Runs a status check while preserving the actual EVM breaker outcome for counter handling.
+    pub async fn handle_transaction_status_with_outcome(
+        &self,
+        tx: TransactionRepoModel,
+        context: Option<StatusCheckContext>,
+    ) -> TransactionStatusCheckOutcome {
+        match self {
+            NetworkTransaction::Evm(relayer) => relayer.handle_status_impl(tx, context).await,
+            NetworkTransaction::Solana(relayer) => {
+                // Solana has no NOOP carve-out: a reached threshold executes the breaker path.
+                let breaker_executed = !is_final_state(&tx.status)
+                    && context
+                        .as_ref()
+                        .is_some_and(StatusCheckContext::should_force_finalize);
+                TransactionStatusCheckOutcome {
+                    result: relayer.handle_transaction_status(tx, context).await,
+                    breaker_executed,
+                }
+            }
+            NetworkTransaction::Stellar(relayer) => {
+                // Stellar also executes its breaker unconditionally for non-final transactions.
+                let breaker_executed = !is_final_state(&tx.status)
+                    && context
+                        .as_ref()
+                        .is_some_and(StatusCheckContext::should_force_finalize);
+                TransactionStatusCheckOutcome {
+                    result: relayer.handle_transaction_status(tx, context).await,
+                    breaker_executed,
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]

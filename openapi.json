@@ -9489,6 +9489,13 @@
             "description": "Delay before the first transaction status check, in seconds.",
             "maximum": 100,
             "minimum": 1
+          },
+          "retry_delay_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optional delay between successful checks while the transaction is not final, in seconds.",
+            "maximum": 100,
+            "minimum": 1
           }
         }
       },

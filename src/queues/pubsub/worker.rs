@@ -289,14 +289,18 @@ async fn process_received_message(
             );
             ack(&message, queue_type, &correlation_id).await;
         }
-        HandlerOutcome::Retryable(e) => {
+        HandlerOutcome::Retryable {
+            message: error_message,
+            kind,
+        } => {
             settle_retry(
                 &message,
                 config,
                 redis_pool,
                 retry_attempt,
                 &correlation_id,
-                &e,
+                &error_message,
+                kind,
             )
             .await;
         }
@@ -324,6 +328,7 @@ async fn settle_retry(
     retry_attempt: usize,
     correlation_id: &str,
     err: &str,
+    retry_kind: crate::queues::worker_types::RetryKind,
 ) {
     let queue_type = config.queue_type;
     let next_attempt = retry_attempt.saturating_add(1);
@@ -342,7 +347,7 @@ async fn settle_retry(
         return;
     }
 
-    let delay = retry_delay_for_queue(queue_type, &message.message.data, retry_attempt);
+    let delay = retry_delay_for_queue(queue_type, &message.message.data, retry_attempt, retry_kind);
 
     let body = match String::from_utf8(message.message.data.clone()) {
         Ok(b) => b,

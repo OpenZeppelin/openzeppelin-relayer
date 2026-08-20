@@ -711,6 +711,7 @@ mod tests {
             chain_id: 1337,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec![],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -734,6 +735,7 @@ mod tests {
             chain_id: 42161,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()], // This makes it use EIP1559 pricing
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -2076,6 +2078,7 @@ mod tests {
             chain_id: 42161,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,

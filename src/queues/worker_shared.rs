@@ -17,21 +17,23 @@ use std::time::Duration;
 
 use actix_web::web::ThinData;
 use futures::FutureExt;
+use rand::Rng;
 use serde::de::DeserializeOwned;
 use tracing::{error, warn};
 
 use crate::config::ServerConfig;
 use crate::{
+    constants::{MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_DELAY_SECONDS},
     jobs::{
         notification_handler, relayer_health_check_handler, token_swap_request_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
         Job, NotificationSend, RelayerHealthCheck, TokenSwapRequest, TransactionRequest,
         TransactionSend, TransactionStatusCheck,
     },
-    models::DefaultAppState,
+    models::{DefaultAppState, NetworkType},
 };
 
-use super::{HandlerError, QueueType, WorkerContext};
+use super::{worker_types::RetryKind, HandlerError, QueueType, WorkerContext};
 
 /// Handler timeout bound. Every handler is well under this; it cancels a stuck
 /// handler so a hung job is reprocessed (via the bounded-retry path), never run
@@ -42,10 +44,12 @@ pub(crate) const HANDLER_TIMEOUT: Duration = Duration::from_secs(600);
 /// Max time to await in-flight handlers during a graceful-shutdown drain.
 pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+const MAX_FIXED_JITTER_MILLIS: u64 = 1_000;
+
 /// Internal classification of a handler error.
 #[derive(Debug)]
 pub(crate) enum ProcessingError {
-    Retryable(String),
+    Retryable { message: String, kind: RetryKind },
     Permanent(String),
 }
 
@@ -58,7 +62,7 @@ pub(crate) enum ProcessingError {
 pub(crate) enum HandlerOutcome {
     Success,
     Permanent(String),
-    Retryable(String),
+    Retryable { message: String, kind: RetryKind },
 }
 
 /// Runs the queue's handler for `body` under the 600s timeout + `catch_unwind`
@@ -79,12 +83,20 @@ pub(crate) async fn run_handler_with_timeout(
     match outcome {
         Ok(Ok(Ok(()))) => HandlerOutcome::Success,
         Ok(Ok(Err(ProcessingError::Permanent(e)))) => HandlerOutcome::Permanent(e),
-        Ok(Ok(Err(ProcessingError::Retryable(e)))) => HandlerOutcome::Retryable(e),
-        Ok(Err(_panic)) => HandlerOutcome::Retryable("handler panicked".to_string()),
-        Err(_elapsed) => HandlerOutcome::Retryable(format!(
-            "handler exceeded the {}s timeout",
-            HANDLER_TIMEOUT.as_secs()
-        )),
+        Ok(Ok(Err(ProcessingError::Retryable { message, kind }))) => {
+            HandlerOutcome::Retryable { message, kind }
+        }
+        Ok(Err(_panic)) => HandlerOutcome::Retryable {
+            message: "handler panicked".to_string(),
+            kind: RetryKind::Other,
+        },
+        Err(_elapsed) => HandlerOutcome::Retryable {
+            message: format!(
+                "handler exceeded the {}s timeout",
+                HANDLER_TIMEOUT.as_secs()
+            ),
+            kind: RetryKind::Other,
+        },
     }
 }
 
@@ -195,7 +207,14 @@ where
 pub(crate) fn map_handler_error(error: HandlerError) -> ProcessingError {
     match error {
         HandlerError::Abort(msg) => ProcessingError::Permanent(msg),
-        HandlerError::Retry(msg) => ProcessingError::Retryable(msg),
+        HandlerError::Retry(message) => ProcessingError::Retryable {
+            message,
+            kind: RetryKind::Other,
+        },
+        HandlerError::NotYetFinal => ProcessingError::Retryable {
+            message: crate::queues::NotYetFinal.to_string(),
+            kind: RetryKind::NotYetFinal,
+        },
     }
 }
 
@@ -208,15 +227,36 @@ pub(crate) fn is_retry_exhausted(max_retries: usize, retry_attempt: usize) -> bo
     max_retries != usize::MAX && retry_attempt.saturating_add(1) > max_retries
 }
 
-/// Partial view of a status-check job body to extract only `network_type`.
+/// Partial view of the status-check fields needed for retry delay selection.
 #[derive(serde::Deserialize)]
 struct StatusCheckData {
     network_type: Option<crate::models::NetworkType>,
+    status_retry_delay_seconds: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
 struct PartialStatusCheckJob {
     data: StatusCheckData,
+}
+
+pub(crate) fn configured_status_retry_delay(
+    delay_seconds: Option<u32>,
+    network_type: Option<NetworkType>,
+) -> Option<Duration> {
+    if network_type != Some(NetworkType::Evm) {
+        return None;
+    }
+
+    delay_seconds
+        .map(u64::from)
+        .filter(|delay| {
+            (MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                .contains(delay)
+        })
+        .map(|delay| {
+            Duration::from_secs(delay)
+                + Duration::from_millis(rand::rng().random_range(1..MAX_FIXED_JITTER_MILLIS))
+        })
 }
 
 /// Network-aware retry delay for status checks (EVM 8→12s, Stellar 2→3s,
@@ -234,7 +274,20 @@ pub(crate) fn retry_delay_for_queue(
     queue_type: QueueType,
     body: &[u8],
     retry_attempt: usize,
+    retry_kind: RetryKind,
 ) -> i32 {
+    if queue_type == QueueType::StatusCheckEvm && retry_kind == RetryKind::NotYetFinal {
+        if let Ok(job) = serde_json::from_slice::<PartialStatusCheckJob>(body) {
+            if let Some(delay) = configured_status_retry_delay(
+                job.data.status_retry_delay_seconds,
+                job.data.network_type,
+            ) {
+                return (delay.as_secs() as i32 + i32::from(delay.subsec_millis() >= 500))
+                    .min(MAX_EVM_STATUS_CHECK_DELAY_SECONDS as i32);
+            }
+        }
+    }
+
     if queue_type.is_status_check() {
         compute_status_retry_delay(body, retry_attempt)
     } else {
@@ -286,7 +339,14 @@ mod tests {
         ));
         assert!(matches!(
             map_handler_error(HandlerError::Retry("x".into())),
-            ProcessingError::Retryable(_)
+            ProcessingError::Retryable { .. }
+        ));
+        assert!(matches!(
+            map_handler_error(HandlerError::NotYetFinal),
+            ProcessingError::Retryable {
+                kind: RetryKind::NotYetFinal,
+                ..
+            }
         ));
     }
 
@@ -312,16 +372,90 @@ mod tests {
         // Status-check queue uses the network-aware status delay.
         let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
         assert_eq!(
-            retry_delay_for_queue(QueueType::StatusCheckEvm, evm, 0),
+            retry_delay_for_queue(QueueType::StatusCheckEvm, evm, 0, RetryKind::Other),
             compute_status_retry_delay(evm, 0)
         );
         // Bounded queue uses its configured backoff (body ignored).
         assert_eq!(
-            retry_delay_for_queue(QueueType::TransactionRequest, b"{}", 0),
+            retry_delay_for_queue(QueueType::TransactionRequest, b"{}", 0, RetryKind::Other),
             crate::queues::retry_delay_secs(
                 crate::queues::backoff_config_for_queue(QueueType::TransactionRequest),
                 0
             )
+        );
+    }
+
+    #[test]
+    fn test_configured_retry_delay_requires_typed_evm_status_check() {
+        let fast_evm = br#"{"data":{"network_type":"evm","status_retry_delay_seconds":2}}"#;
+        let configured = retry_delay_for_queue(
+            QueueType::StatusCheckEvm,
+            fast_evm,
+            0,
+            RetryKind::NotYetFinal,
+        );
+        assert!((2..=3).contains(&configured));
+
+        assert_eq!(
+            retry_delay_for_queue(QueueType::StatusCheckEvm, fast_evm, 0, RetryKind::Other),
+            8
+        );
+        assert_eq!(
+            retry_delay_for_queue(QueueType::StatusCheck, fast_evm, 0, RetryKind::NotYetFinal),
+            8
+        );
+
+        let wrong_network =
+            br#"{"data":{"network_type":"stellar","status_retry_delay_seconds":1}}"#;
+        assert_eq!(
+            retry_delay_for_queue(
+                QueueType::StatusCheckEvm,
+                wrong_network,
+                0,
+                RetryKind::NotYetFinal
+            ),
+            2
+        );
+
+        for body in [
+            br#"{"data":{"network_type":"evm"}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_retry_delay_seconds":0}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_retry_delay_seconds":101}}"#.as_slice(),
+        ] {
+            assert_eq!(
+                retry_delay_for_queue(QueueType::StatusCheckEvm, body, 0, RetryKind::NotYetFinal),
+                8
+            );
+        }
+
+        let max_delay = br#"{"data":{"network_type":"evm","status_retry_delay_seconds":100}}"#;
+        for _ in 0..50 {
+            assert!(
+                retry_delay_for_queue(
+                    QueueType::StatusCheckEvm,
+                    max_delay,
+                    0,
+                    RetryKind::NotYetFinal,
+                ) <= 100
+            );
+        }
+    }
+
+    #[test]
+    fn test_configured_status_retry_delay_validates_and_jitters() {
+        let delay = configured_status_retry_delay(Some(2), Some(NetworkType::Evm)).unwrap();
+        assert!(delay >= Duration::from_secs(2));
+        assert!(delay < Duration::from_secs(3));
+
+        for delay in [None, Some(0), Some(101)] {
+            assert_eq!(
+                configured_status_retry_delay(delay, Some(NetworkType::Evm)),
+                None
+            );
+        }
+        assert_eq!(
+            configured_status_retry_delay(Some(2), Some(NetworkType::Stellar)),
+            None
         );
     }
 
