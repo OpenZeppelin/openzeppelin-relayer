@@ -48,14 +48,11 @@ pub fn get_resubmit_timeout_with_backoff(timeout: i64, attempts: usize) -> i64 {
 /// # Returns
 /// The default gas limit for the transaction
 pub fn get_evm_default_gas_limit_for_tx(tx: &EvmTransactionData) -> u64 {
-    if tx.data.is_none() {
-        DEFAULT_GAS_LIMIT
-    } else if tx.data.as_ref().unwrap().starts_with("0xa9059cbb") {
-        ERC20_TRANSFER_GAS_LIMIT
-    } else if tx.data.as_ref().unwrap().starts_with("0x23b872dd") {
-        ERC721_TRANSFER_GAS_LIMIT
-    } else {
-        COMPLEX_GAS_LIMIT
+    match &tx.data {
+        None => DEFAULT_GAS_LIMIT,
+        Some(data) if data.starts_with("0xa9059cbb") => ERC20_TRANSFER_GAS_LIMIT,
+        Some(data) if data.starts_with("0x23b872dd") => ERC721_TRANSFER_GAS_LIMIT,
+        Some(_) => COMPLEX_GAS_LIMIT,
     }
 }
 

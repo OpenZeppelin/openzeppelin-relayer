@@ -967,6 +967,24 @@ pub mod tests {
 
     #[tokio::test]
     async fn test_kms_client_returns_config_error_when_region_missing() {
+        // The default region provider chain also reads ~/.aws/config and IMDS,
+        // so point every source at nothing for the duration of the test.
+        let saved: Vec<(&str, Option<String>)> = [
+            "AWS_REGION",
+            "AWS_DEFAULT_REGION",
+            "AWS_PROFILE",
+            "AWS_CONFIG_FILE",
+            "AWS_EC2_METADATA_DISABLED",
+        ]
+        .into_iter()
+        .map(|k| (k, std::env::var(k).ok()))
+        .collect();
+        std::env::remove_var("AWS_REGION");
+        std::env::remove_var("AWS_DEFAULT_REGION");
+        std::env::remove_var("AWS_PROFILE");
+        std::env::set_var("AWS_CONFIG_FILE", "/nonexistent-aws-config");
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
+
         let config = AwsKmsSignerConfig {
             region: None,
             key_id: "test-key".to_string(),
@@ -975,11 +993,17 @@ pub mod tests {
         // Covers the missing-region branch in resolve_aws_region().
         // Does not exercise Client::new() panic handling (that requires TLS root absence).
         let result = get_or_create_kms_client(&config).await;
+
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+
         match result {
             Err(AwsKmsError::ConfigError(_)) => {}
-            Ok(_) => panic!(
-                "Expected missing-region error; AWS_REGION/AWS_DEFAULT_REGION may be set in env"
-            ),
+            Ok(_) => panic!("Expected missing-region error; a region was resolved from the environment or an AWS profile"),
             Err(e) => panic!("Expected ConfigError, got: {e:?}"),
         }
     }

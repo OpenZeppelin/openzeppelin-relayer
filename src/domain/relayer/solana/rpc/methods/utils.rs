@@ -3102,9 +3102,11 @@ mod tests {
         );
 
         // Account ordering: fee_payer first, then other writable signers sorted by pubkey, then readonly signers, then writable non-signers, then program IDs
-        // Collect the expected writable signers (excluding fee_payer) and sort by pubkey
+        // Message compilation orders keys within each class by Pubkey byte order
+        // (BTreeMap), not by base58 string — the two disagree when encodings
+        // differ in length, so sort with Pubkey's own Ord.
         let mut other_writable_signers = [fee_payer.pubkey(), signer1.pubkey()];
-        other_writable_signers.sort_by_key(|a| a.to_string());
+        other_writable_signers.sort();
 
         // Expected order: new_fee_payer, then sorted other writable signers, then readonly signers, then non-signers, then program IDs
         assert_eq!(
