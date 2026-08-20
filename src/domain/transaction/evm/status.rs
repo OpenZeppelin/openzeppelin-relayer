@@ -1380,7 +1380,11 @@ where
                 .partial_update(tx.id.clone(), update)
                 .await?;
 
-            self.send_transaction_submit_job(&updated_tx).await?;
+            // Resubmit, not submit: the NOOP rewrote the logical fields but the
+            // stored raw/signature still hold the ORIGINAL payload. The resubmit
+            // path re-prices and re-signs so the NOOP is what gets broadcast
+            // (same as the Submitted-state and cancellation NOOP paths).
+            self.send_transaction_resubmit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
                 error!(
@@ -2717,6 +2721,66 @@ mod tests {
     // Tests for `handle_sent_state`
     mod handle_sent_state_tests {
         use super::*;
+
+        /// A Sent tx over the rollup attempt threshold is NOOP-replaced AND the
+        /// replacement goes out as a RESUBMIT job: the stored raw/signature still
+        /// hold the original payload, so only the re-signing resubmit path
+        /// actually broadcasts the NOOP.
+        #[tokio::test]
+        async fn sent_state_noop_enqueues_resubmit_job() {
+            use crate::jobs::TransactionCommand;
+
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.hashes = vec!["0xHash1".to_string(); 11];
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+
+            // should_noop + prepare_noop_update_request both look the network up.
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            // make_noop estimates gas on Arbitrum.
+            mocks
+                .provider
+                .expect_estimate_gas()
+                .returning(|_| Box::pin(async { Ok(50_000u64) }));
+
+            // The persisted update must carry the NOOP'd network_data.
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .withf(|_, update| {
+                    update.network_data.as_ref().is_some_and(|data| {
+                        data.get_evm_transaction_data().is_ok_and(|d| {
+                            d.value == U256::ZERO && d.to.as_deref() == Some(&d.from)
+                        })
+                    })
+                })
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.network_data = update.network_data.clone().unwrap();
+                    updated_tx.noop_count = update.noop_count;
+                    Ok(updated_tx)
+                });
+
+            // The job must be a RESUBMIT (re-price + re-sign), not a plain submit.
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .withf(|job, _| matches!(job.command, TransactionCommand::Resubmit))
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx).await.unwrap();
+            assert!(result.noop_count.unwrap_or(0) > 0, "NOOP must be recorded");
+        }
 
         #[tokio::test]
         async fn test_sent_state_recent_no_resend() {
