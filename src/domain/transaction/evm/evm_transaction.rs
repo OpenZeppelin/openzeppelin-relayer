@@ -234,11 +234,29 @@ where
         metadata: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), TransactionError> {
         let delay = delay_seconds.map(calculate_scheduled_timestamp);
+        let status_check_retry_delay_seconds = self
+            .network_repository()
+            .get_by_name(NetworkType::Evm, &self.relayer.network)
+            .await
+            .map_err(|reason| reason.to_string())
+            .and_then(|network| network.ok_or_else(|| "network not found".to_string()))
+            .and_then(|network| EvmNetwork::try_from(network).map_err(|reason| reason.to_string()))
+            .map(|network| network.status_check_retry_delay_seconds())
+            .unwrap_or_else(|reason| {
+                warn!(
+                    transaction_id = %tx.id,
+                    network = %self.relayer.network,
+                    reason = %reason,
+                    "Could not enrich status check with network retry delay; using default backoff"
+                );
+                None
+            });
         let mut job = TransactionStatusCheck::new(
             tx.id.clone(),
             tx.relayer_id.clone(),
             crate::models::NetworkType::Evm,
-        );
+        )
+        .with_status_check_retry_delay_seconds(status_check_retry_delay_seconds);
         if let Some(meta) = metadata {
             job = job.with_metadata(meta);
         }
@@ -253,9 +271,8 @@ where
     /// Schedules a status check with nonce recovery metadata for immediate execution.
     ///
     /// This is used when a nonce-related error occurs during submission. The metadata
-    /// signals the status checker to perform nonce reconciliation on first check.
-    /// Subsequent retries (re-queued via `Err(Retry)`) won't carry the metadata,
-    /// so they follow normal status check flow — this is intentional one-shot behavior.
+    /// signals the status checker to perform nonce reconciliation. Queue retries preserve
+    /// the metadata, so reconciliation may run again after a transient failure.
     pub(super) async fn schedule_nonce_recovery_status_check(
         &self,
         tx: &TransactionRepoModel,
@@ -1334,23 +1351,21 @@ where
             }
         };
 
+        let chain_id = old_evm_data.chain_id;
         let network_repo_model = self
             .network_repository()
-            .get_by_chain_id(NetworkType::Evm, old_evm_data.chain_id)
+            .get_by_chain_id(NetworkType::Evm, chain_id)
             .await
             .map_err(|e| {
                 TransactionError::NetworkConfiguration(format!(
-                    "Failed to get network by chain_id {}: {}",
-                    old_evm_data.chain_id, e
+                    "Failed to get network by chain_id {chain_id}: {e}"
                 ))
             })?
             .ok_or_else(|| {
                 TransactionError::NetworkConfiguration(format!(
-                    "Network with chain_id {} not found",
-                    old_evm_data.chain_id
+                    "Network with chain_id {chain_id} not found"
                 ))
             })?;
-
         let network = EvmNetwork::try_from(network_repo_model).map_err(|e| {
             TransactionError::NetworkConfiguration(format!("Failed to convert network model: {e}"))
         })?;
@@ -1519,7 +1534,7 @@ mod tests {
         RelayerRepoModel {
             id: "test-relayer-id".to_string(),
             name: "Test Relayer".to_string(),
-            network: "1".to_string(), // Ethereum Mainnet
+            network: "mainnet".to_string(),
             address: "0xSender".to_string(),
             paused: false,
             system_disabled: false,
@@ -1566,6 +1581,128 @@ mod tests {
             noop_count: None,
             is_canceled: Some(false),
             metadata: None,
+        }
+    }
+
+    fn create_test_network_repo_model(
+        network: &str,
+        retry_delay_seconds: Option<u64>,
+    ) -> NetworkRepoModel {
+        use crate::config::{EvmNetworkConfig, NetworkConfigCommon, StatusCheckConfig};
+        use crate::models::RpcConfig;
+
+        NetworkRepoModel::new_evm(EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: network.to_string(),
+                from: None,
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12_000),
+                is_testnet: Some(false),
+                tags: None,
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(1),
+            status_check: Some(StatusCheckConfig {
+                initial_delay_seconds: None,
+                retry_delay_seconds,
+            }),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_nonce_recovery_still_schedules_when_retry_delay_lookup_fails() {
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .times(1)
+            .return_once(|_, _| {
+                Err(crate::models::RepositoryError::ConnectionError(
+                    "network repository unavailable".to_string(),
+                ))
+            });
+
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .times(1)
+            .withf(|job, _| {
+                job.status_check_retry_delay_seconds.is_none()
+                    && job
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.contains_key(TX_NONCE_RECONCILE_TRIGGER))
+            })
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: MockEvmProviderTrait::new(),
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(MockTransactionRepository::new()),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: MockPriceCalculator::new(),
+            signer: MockSigner::new(),
+        };
+
+        let result = evm_transaction
+            .schedule_nonce_recovery_status_check(
+                &create_test_transaction(),
+                &SubmissionErrorKind::NonceTooLow,
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_status_retry_delay_uses_relayer_network_when_chain_ids_match() {
+        use crate::repositories::InMemoryNetworkRepository;
+
+        let fast = create_test_network_repo_model("fast", Some(5));
+        let slow = create_test_network_repo_model("slow", Some(100));
+
+        for insertion_order in [[fast.clone(), slow.clone()], [slow.clone(), fast.clone()]] {
+            let network_repository = Arc::new(InMemoryNetworkRepository::new());
+            for network in insertion_order {
+                network_repository.create(network).await.unwrap();
+            }
+
+            for (network, expected_delay) in [("fast", 5), ("slow", 100)] {
+                let mut relayer = create_test_relayer();
+                relayer.network = network.to_string();
+                let mut job_producer = MockJobProducerTrait::new();
+                job_producer
+                    .expect_produce_check_transaction_status_job()
+                    .times(1)
+                    .withf(move |job, _| {
+                        job.status_check_retry_delay_seconds == Some(expected_delay)
+                    })
+                    .returning(|_, _| Box::pin(ready(Ok(()))));
+
+                let evm_transaction = EvmRelayerTransaction {
+                    relayer,
+                    provider: MockEvmProviderTrait::new(),
+                    relayer_repository: Arc::new(MockRelayerRepository::new()),
+                    network_repository: network_repository.clone(),
+                    transaction_repository: Arc::new(MockTransactionRepository::new()),
+                    transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+                    job_producer: Arc::new(job_producer),
+                    price_calculator: MockPriceCalculator::new(),
+                    signer: MockSigner::new(),
+                };
+
+                evm_transaction
+                    .schedule_status_check(&create_test_transaction(), None, None)
+                    .await
+                    .unwrap();
+            }
         }
     }
 
@@ -2207,6 +2344,7 @@ mod tests {
                         },
                         chain_id: Some(1),
                         required_confirmations: Some(12),
+                        status_check: None,
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
                         gas_price_cache: None,
@@ -2393,6 +2531,7 @@ mod tests {
                         },
                         chain_id: Some(1),
                         required_confirmations: Some(12),
+                        status_check: None,
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
                         gas_price_cache: None,
@@ -3244,121 +3383,113 @@ mod tests {
     /// Should NOT update hash, only status
     #[tokio::test]
     async fn test_resubmit_transaction_already_submitted_preserves_hash() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        for error_message in ["already known", "replacement transaction underpriced"] {
+            let mut mock_transaction = MockTransactionRepository::new();
+            let mock_relayer = MockRelayerRepository::new();
+            let mut mock_provider = MockEvmProviderTrait::new();
+            let mut mock_signer = MockSigner::new();
+            let mock_job_producer = MockJobProducerTrait::new();
+            let mut mock_price_calculator = MockPriceCalculator::new();
+            let counter_service = MockTransactionCounterTrait::new();
+            let mock_network = MockNetworkRepository::new();
 
-        let relayer = create_test_relayer();
-        let mut test_tx = create_test_transaction();
-        test_tx.status = TransactionStatus::Submitted;
-        test_tx.sent_at = Some(Utc::now().to_rfc3339());
-        let original_hash = "0xoriginal_hash".to_string();
-        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-            nonce: Some(42),
-            hash: Some(original_hash.clone()),
-            raw: Some(vec![1, 2, 3]),
-            ..test_tx.network_data.get_evm_transaction_data().unwrap()
-        });
-        test_tx.hashes = vec![original_hash.clone()];
-
-        // Price calculator returns bumped price
-        mock_price_calculator
-            .expect_calculate_bumped_gas_price()
-            .times(1)
-            .returning(|_, _, _| {
-                Ok(PriceParams {
-                    gas_price: Some(25000000000), // 25% bump
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    is_min_bumped: Some(true),
-                    extra_fee: None,
-                    total_cost: U256::from(525000000000000u64),
-                })
+            let relayer = create_test_relayer();
+            let mut test_tx = create_test_transaction();
+            test_tx.status = TransactionStatus::Sent;
+            test_tx.sent_at = Some("2026-08-21T00:00:00Z".to_string());
+            let original_hash = "0xoriginal_hash".to_string();
+            test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(42),
+                hash: Some(original_hash.clone()),
+                raw: Some(vec![1, 2, 3]),
+                ..test_tx.network_data.get_evm_transaction_data().unwrap()
             });
+            test_tx.hashes = vec![original_hash.clone()];
 
-        // Balance check passes
-        mock_provider
-            .expect_get_balance()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
-
-        // Signer creates new transaction with new hash
-        mock_signer
-            .expect_sign_transaction()
-            .times(1)
-            .returning(|_| {
-                Box::pin(ready(Ok(
-                    crate::domain::relayer::SignTransactionResponse::Evm(
-                        crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xnew_hash_that_should_not_be_saved".to_string(),
-                            signature: crate::models::EvmTransactionDataSignature {
-                                r: "r".to_string(),
-                                s: "s".to_string(),
-                                v: 1,
-                                sig: "0xsignature".to_string(),
+            mock_price_calculator
+                .expect_calculate_bumped_gas_price()
+                .times(1)
+                .returning(|_, _, _| {
+                    Ok(PriceParams {
+                        gas_price: Some(25000000000),
+                        max_fee_per_gas: None,
+                        max_priority_fee_per_gas: None,
+                        is_min_bumped: Some(true),
+                        extra_fee: None,
+                        total_cost: U256::from(525000000000000u64),
+                    })
+                });
+            mock_provider
+                .expect_get_balance()
+                .times(1)
+                .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
+            mock_signer
+                .expect_sign_transaction()
+                .times(1)
+                .returning(|_| {
+                    Box::pin(ready(Ok(
+                        crate::domain::relayer::SignTransactionResponse::Evm(
+                            crate::domain::relayer::SignTransactionResponseEvm {
+                                hash: "0xnew_hash_that_should_not_be_saved".to_string(),
+                                signature: crate::models::EvmTransactionDataSignature {
+                                    r: "r".to_string(),
+                                    s: "s".to_string(),
+                                    v: 1,
+                                    sig: "0xsignature".to_string(),
+                                },
+                                raw: vec![4, 5, 6],
                             },
-                            raw: vec![4, 5, 6],
-                        },
-                    ),
-                )))
-            });
+                        ),
+                    )))
+                });
+            mock_provider
+                .expect_send_raw_transaction()
+                .times(1)
+                .returning(move |_| {
+                    Box::pin(ready(Err(crate::services::provider::ProviderError::Other(
+                        error_message.to_string(),
+                    ))))
+                });
 
-        // Provider returns "already known" - transaction is already in mempool
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .returning(|_| {
-                Box::pin(async {
-                    Err(crate::services::provider::ProviderError::Other(
-                        "already known: transaction with same nonce already in mempool".to_string(),
-                    ))
+            let test_tx_clone = test_tx.clone();
+            mock_transaction
+                .expect_partial_update()
+                .times(1)
+                .withf(|_, update| {
+                    update.status == Some(TransactionStatus::Submitted)
+                        && update.sent_at.is_none()
+                        && update.network_data.is_none()
+                        && update.hashes.is_none()
+                        && update.priced_at.is_none()
                 })
-            });
+                .returning(move |_, update| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.status = update.status.unwrap();
+                    Ok(updated_tx)
+                });
 
-        // Verify that partial_update is called with NO network_data (preserving original hash)
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .withf(|_, update| {
-                // Should only update status, NOT network_data or hashes
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.network_data.is_none()
-                    && update.hashes.is_none()
-            })
-            .returning(move |_, _| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = TransactionStatus::Submitted;
-                // Hash should remain unchanged!
-                Ok(updated_tx)
-            });
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: relayer.clone(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(counter_service),
+                job_producer: Arc::new(mock_job_producer),
+                price_calculator: mock_price_calculator,
+                signer: mock_signer,
+            };
 
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
-        assert!(result.is_ok());
-        let updated_tx = result.unwrap();
-
-        // Verify hash was NOT changed
-        if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
-            assert_eq!(evm_data.hash, Some(original_hash));
-        } else {
-            panic!("Expected EVM network data");
+            let updated_tx = evm_transaction
+                .resubmit_transaction(test_tx.clone())
+                .await
+                .unwrap();
+            assert_eq!(updated_tx.sent_at, test_tx.sent_at, "{error_message}");
+            if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
+                assert_eq!(evm_data.hash, Some(original_hash), "{error_message}");
+            } else {
+                panic!("Expected EVM network data");
+            }
         }
     }
 
@@ -3839,8 +3970,13 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
-
+        let mut mock_network = MockNetworkRepository::new();
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
+        mock_network
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .times(1)
+            .return_once(move |_, _| Ok(Some(network_model)));
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
         test_tx.status = TransactionStatus::Submitted;
@@ -3877,10 +4013,11 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.metadata
-                    .as_ref()
-                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
-                    .unwrap_or(false)
+                job.status_check_retry_delay_seconds == Some(5)
+                    && job
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
@@ -3917,7 +4054,13 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mut mock_network = MockNetworkRepository::new();
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
+        mock_network
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .times(1)
+            .return_once(move |_, _| Ok(Some(network_model)));
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3955,10 +4098,11 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.metadata
-                    .as_ref()
-                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
-                    .unwrap_or(false)
+                job.status_check_retry_delay_seconds == Some(5)
+                    && job
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
@@ -3995,12 +4139,17 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mut mock_network = MockNetworkRepository::new();
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
+        mock_network
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .times(1)
+            .return_once(move |_, _| Ok(Some(network_model)));
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
-        test_tx.status = TransactionStatus::Submitted;
-        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        test_tx.status = TransactionStatus::Sent;
         let original_hash = "0xoriginal_hash".to_string();
         test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
             nonce: Some(42),
@@ -4069,10 +4218,11 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.metadata
-                    .as_ref()
-                    .map(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
-                    .unwrap_or(false)
+                job.status_check_retry_delay_seconds == Some(5)
+                    && job
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
@@ -4083,8 +4233,10 @@ mod tests {
             .times(1)
             .withf(|_, update| {
                 update.status == Some(TransactionStatus::Submitted)
+                    && update.sent_at.is_none()
                     && update.network_data.is_none()
                     && update.hashes.is_none()
+                    && update.priced_at.is_none()
             })
             .returning(move |_, _| {
                 let mut updated_tx = test_tx_clone.clone();
@@ -4107,6 +4259,7 @@ mod tests {
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.sent_at, test_tx.sent_at);
         // Hash should remain unchanged
         if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
             assert_eq!(evm_data.hash, Some(original_hash));

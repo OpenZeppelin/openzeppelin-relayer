@@ -14,6 +14,7 @@ use crate::{
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{
         ApiError, DefaultAppState, TransactionError, TransactionMetadata, TransactionRepoModel,
+        TransactionStatus,
     },
     observability::request_id::set_request_id,
     queues::{HandlerError, WorkerContext},
@@ -56,8 +57,16 @@ pub async fn transaction_status_handler(
         tx_id,
         req_result.metadata,
         req_result.should_retry_on_error,
+        req_result.use_fast_retry,
     )
     .await
+}
+
+fn is_healthy_on_chain_poll(status: &TransactionStatus) -> bool {
+    matches!(
+        status,
+        TransactionStatus::Submitted | TransactionStatus::Mined
+    )
 }
 
 /// Handles status check results with circuit breaker tracking.
@@ -76,6 +85,7 @@ async fn handle_result<TR>(
     tx_id: &str,
     metadata: Option<TransactionMetadata>,
     should_retry_on_error: bool,
+    use_fast_retry: bool,
 ) -> Result<(), HandlerError>
 where
     TR: TransactionRepository + Send + Sync,
@@ -118,11 +128,13 @@ where
                 }
             }
 
-            // Return error to trigger retry
-            Err(HandlerError::Retry(format!(
-                "transaction status: {:?} - not in final state, retrying",
-                tx.status
-            )))
+            if use_fast_retry {
+                Err(HandlerError::NotYetFinal)
+            } else {
+                Err(HandlerError::Retry(
+                    "transaction was not checked on-chain".to_string(),
+                ))
+            }
         }
         Err(e) => {
             if e.downcast_ref::<TransactionError>()
@@ -186,6 +198,8 @@ struct HandleRequestResult {
     metadata: Option<TransactionMetadata>,
     /// If false, errors should not trigger retry (e.g., transaction not found)
     should_retry_on_error: bool,
+    /// Whether a successful non-final result came from an on-chain poll.
+    use_fast_retry: bool,
 }
 
 /// Executes the status check logic and returns the result with counter values.
@@ -214,6 +228,7 @@ async fn handle_request(
                 result: Err(eyre::eyre!("Transaction not found: {}", msg)),
                 metadata: None,
                 should_retry_on_error: false,
+                use_fast_retry: false,
             };
         }
         Err(e) => {
@@ -222,6 +237,7 @@ async fn handle_request(
                 result: Err(e.into()),
                 metadata: None,
                 should_retry_on_error: true,
+                use_fast_retry: false,
             };
         }
     };
@@ -255,6 +271,8 @@ async fn handle_request(
         network_type,
     )
     .with_job_metadata(status_request.metadata.clone());
+    // Only the pre-check status proves whether this attempt actually polled on-chain.
+    let status_before_check = transaction.status.clone();
 
     // Get relayer transaction handler
     let relayer_transaction =
@@ -271,6 +289,7 @@ async fn handle_request(
                     result: Err(eyre::eyre!("Relayer or signer not found: {}", msg)),
                     metadata: Some(meta),
                     should_retry_on_error: false,
+                    use_fast_retry: false,
                 };
             }
             Err(e) => {
@@ -279,6 +298,7 @@ async fn handle_request(
                     result: Err(e.into()),
                     metadata: Some(meta),
                     should_retry_on_error: true,
+                    use_fast_retry: false,
                 };
             }
         };
@@ -286,8 +306,9 @@ async fn handle_request(
     // Execute status check
     let result = relayer_transaction
         .handle_transaction_status(transaction, Some(context))
-        .await
-        .map_err(|e| e.into());
+        .await;
+    let use_fast_retry = is_healthy_on_chain_poll(&status_before_check);
+    let result = result.map_err(|e| e.into());
 
     if let Ok(tx) = result.as_ref() {
         debug!(
@@ -301,6 +322,7 @@ async fn handle_request(
         result,
         metadata: Some(meta),
         should_retry_on_error: true,
+        use_fast_retry,
     }
 }
 
@@ -309,7 +331,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{NetworkType, TransactionStatus},
-        repositories::MockTransactionRepository,
+        repositories::{MockTransactionRepository, Repository, TransactionRepositoryStorage},
     };
     use std::collections::HashMap;
 
@@ -429,6 +451,45 @@ mod tests {
     mod handle_result_tests {
         use super::*;
 
+        #[test]
+        fn test_fast_retry_requires_a_healthy_on_chain_status_poll() {
+            assert!(!is_healthy_on_chain_poll(&TransactionStatus::Pending));
+            assert!(!is_healthy_on_chain_poll(&TransactionStatus::Sent));
+            assert!(is_healthy_on_chain_poll(&TransactionStatus::Submitted));
+            assert!(is_healthy_on_chain_poll(&TransactionStatus::Mined));
+        }
+
+        #[tokio::test]
+        async fn test_polled_non_final_check_returns_typed_marker() {
+            let tx_repo = MockTransactionRepository::new();
+            let tx = TransactionRepoModel {
+                status: TransactionStatus::Submitted,
+                metadata: None,
+                ..Default::default()
+            };
+
+            let result = handle_result(Ok(tx), &tx_repo, "tx-1", None, true, true).await;
+            assert!(matches!(result, Err(HandlerError::NotYetFinal)));
+        }
+
+        #[tokio::test]
+        async fn test_transient_failure_remains_ordinary_retry() {
+            let tx_repo = MockTransactionRepository::new();
+            let result = handle_result(
+                Err(eyre::eyre!("rpc unavailable")),
+                &tx_repo,
+                "tx-1",
+                None,
+                true,
+                false,
+            )
+            .await;
+
+            assert!(
+                matches!(result, Err(HandlerError::Retry(message)) if message == "rpc unavailable")
+            );
+        }
+
         /// Tests that counter increment uses saturating_add to prevent overflow
         #[test]
         fn test_counter_increment_saturating() {
@@ -456,19 +517,30 @@ mod tests {
             assert_eq!(new_total, 11);
         }
 
-        /// Tests that consecutive counter resets to 0 on success (non-final)
-        #[test]
-        fn test_consecutive_reset_on_success() {
-            // When status check succeeds but tx is not final,
-            // consecutive should reset to 0, total stays unchanged
-            let total: u32 = 20;
+        #[tokio::test]
+        async fn test_non_final_success_resets_counter_after_healthy_poll() {
+            let tx_repo = TransactionRepositoryStorage::new_in_memory();
+            let tx_id = "tx-noop-poll".to_string();
+            let metadata = TransactionMetadata {
+                consecutive_failures: get_max_consecutive_status_failures(NetworkType::Evm),
+                total_failures: 20,
+                ..Default::default()
+            };
+            let tx = TransactionRepoModel {
+                id: tx_id.clone(),
+                status: TransactionStatus::Submitted,
+                metadata: Some(metadata.clone()),
+                ..Default::default()
+            };
+            tx_repo.create(tx.clone()).await.unwrap();
 
-            // On success, consecutive resets
-            let new_consecutive = 0;
-            let new_total = total; // unchanged
+            let result = handle_result(Ok(tx), &tx_repo, &tx_id, Some(metadata), true, true).await;
 
-            assert_eq!(new_consecutive, 0);
-            assert_eq!(new_total, 20);
+            assert!(matches!(result, Err(HandlerError::NotYetFinal)));
+            let updated = tx_repo.get_by_id(tx_id).await.unwrap();
+            let updated_metadata = updated.metadata.unwrap();
+            assert_eq!(updated_metadata.consecutive_failures, 0);
+            assert_eq!(updated_metadata.total_failures, 20);
         }
 
         /// Tests that final states are correctly identified for cleanup
@@ -525,6 +597,7 @@ mod tests {
                     ..Default::default()
                 }),
                 true,
+                false,
             )
             .await;
 
@@ -543,6 +616,7 @@ mod tests {
                     nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
+                use_fast_retry: true,
             };
 
             assert!(result.result.is_ok());
@@ -559,6 +633,7 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 metadata: None,
                 should_retry_on_error: false,
+                use_fast_retry: false,
             };
 
             assert!(result.result.is_err());
@@ -573,6 +648,7 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 metadata: None,
                 should_retry_on_error: false,
+                use_fast_retry: false,
             };
 
             // Permanent errors have should_retry_on_error = false
@@ -592,6 +668,7 @@ mod tests {
                     nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
+                use_fast_retry: false,
             };
 
             // Transient errors have should_retry_on_error = true

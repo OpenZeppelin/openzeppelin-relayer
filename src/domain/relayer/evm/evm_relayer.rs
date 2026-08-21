@@ -27,10 +27,7 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{
-        transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    },
+    constants::{transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME},
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -248,6 +245,8 @@ where
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
+        let initial_delay_seconds = self.network.status_check_initial_delay_seconds();
+
         // Status check FIRST - this is our safety net for monitoring.
         // If this fails, mark transaction as failed and don't proceed.
         // This ensures we never have an unmonitored transaction.
@@ -258,10 +257,11 @@ where
                     transaction.id.clone(),
                     transaction.relayer_id.clone(),
                     crate::models::NetworkType::Evm,
+                )
+                .with_status_check_retry_delay_seconds(
+                    self.network.status_check_retry_delay_seconds(),
                 ),
-                Some(calculate_scheduled_timestamp(
-                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                )),
+                Some(calculate_scheduled_timestamp(initial_delay_seconds)),
             )
             .await
         {
@@ -269,6 +269,7 @@ where
             error!(
                 relayer_id = %self.relayer.id,
                 transaction_id = %transaction.id,
+                initial_delay_seconds,
                 error = %e,
                 "Status check queue push failed - marking transaction as failed"
             );
@@ -293,6 +294,12 @@ where
             }
             return Err(e.into());
         }
+        debug!(
+            relayer_id = %self.relayer.id,
+            transaction_id = %transaction.id,
+            initial_delay_seconds,
+            "Initial transaction status check scheduled"
+        );
 
         // Now safe to push transaction request.
         // Even if this fails, status check will monitor and detect the stuck transaction.
@@ -793,6 +800,8 @@ mod tests {
             tags: vec!["mainnet".to_string()],
             chain_id: 1,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -814,6 +823,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -930,15 +940,26 @@ mod tests {
         job_producer
             .expect_produce_transaction_request_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
+        let scheduled_at = Arc::new(std::sync::Mutex::new(None));
+        let captured_scheduled_at = Arc::clone(&scheduled_at);
+        let retry_delay = Arc::new(std::sync::Mutex::new(None));
+        let captured_retry_delay = Arc::clone(&retry_delay);
         job_producer
             .expect_produce_check_transaction_status_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
+            .returning(move |job, value| {
+                *captured_scheduled_at.lock().unwrap() = value;
+                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
+                Box::pin(ready(Ok(())))
+            });
 
+        let mut network = create_test_evm_network();
+        network.status_check_initial_delay_seconds = 1;
+        network.status_check_retry_delay_seconds = Some(5);
         let relayer = EvmRelayer::new(
             relayer_model,
             signer,
             provider,
-            create_test_evm_network(),
+            network,
             Arc::new(relayer_repo),
             Arc::new(network_repo),
             Arc::new(tx_repo),
@@ -947,8 +968,14 @@ mod tests {
         )
         .unwrap();
 
+        let before = chrono::Utc::now().timestamp();
         let result = relayer.process_transaction_request(network_tx).await;
+        let after = chrono::Utc::now().timestamp();
         assert!(result.is_ok());
+        let scheduled_at = scheduled_at.lock().unwrap().unwrap();
+        assert!(scheduled_at > before);
+        assert!(scheduled_at <= after + 1);
+        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
     }
 
     #[tokio::test]

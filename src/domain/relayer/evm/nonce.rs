@@ -15,8 +15,8 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     config::ServerConfig,
     constants::{
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, HEALTH_CHECK_ACTION_KEY,
-        HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY, MAX_GAP_SCAN_RANGE,
+        HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
+        MAX_GAP_SCAN_RANGE,
     },
     domain::{relayer::RelayerError, transaction::common::is_active_nonce_status},
     jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
@@ -516,21 +516,31 @@ where
             );
         }
 
+        let initial_delay_seconds = evm_network.status_check_initial_delay_seconds();
         let status_result = self
             .job_producer
             .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
-                Some(calculate_scheduled_timestamp(
-                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                )),
+                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm)
+                    .with_status_check_retry_delay_seconds(
+                        evm_network.status_check_retry_delay_seconds(),
+                    ),
+                Some(calculate_scheduled_timestamp(initial_delay_seconds)),
             )
             .await;
         if let Err(e) = &status_result {
             error!(
                 tx_id = %tx.id,
                 nonce = nonce,
+                initial_delay_seconds,
                 error = %e,
                 "failed to enqueue gap-filling NOOP status-check job"
+            );
+        } else {
+            debug!(
+                tx_id = %tx.id,
+                nonce,
+                initial_delay_seconds,
+                "initial gap-filling NOOP status check scheduled"
             );
         }
 
@@ -724,6 +734,8 @@ mod tests {
             tags: vec!["mainnet".to_string()],
             chain_id: 1,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: None,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             explorer_urls: None,
@@ -794,6 +806,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1123,6 +1136,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1232,6 +1246,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1597,7 +1612,13 @@ mod tests {
         ) = setup_mocks();
         let relayer_model = create_test_relayer();
 
-        let network_model = create_test_network_model();
+        let mut network_model = create_test_network_model();
+        if let crate::models::NetworkConfigData::Evm(config) = &mut network_model.config {
+            config.status_check = Some(crate::config::StatusCheckConfig {
+                initial_delay_seconds: Some(2),
+                retry_delay_seconds: Some(5),
+            });
+        }
         network_repo
             .expect_get_by_name()
             .returning(move |_, _| Ok(Some(network_model.clone())));
@@ -1613,9 +1634,17 @@ mod tests {
                 ))))
             });
         // Status-check job succeeds — one enqueue is enough to progress.
+        let scheduled_at = Arc::new(std::sync::Mutex::new(None));
+        let captured_scheduled_at = Arc::clone(&scheduled_at);
+        let retry_delay = Arc::new(std::sync::Mutex::new(None));
+        let captured_retry_delay = Arc::clone(&retry_delay);
         job_producer
             .expect_produce_check_transaction_status_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
+            .returning(move |job, value| {
+                *captured_scheduled_at.lock().unwrap() = value;
+                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
+                Box::pin(ready(Ok(())))
+            });
 
         // partial_update must NOT be called (no expectation → any call panics).
 
@@ -1632,8 +1661,14 @@ mod tests {
         )
         .unwrap();
 
+        let before = chrono::Utc::now().timestamp();
         let tx = relayer.create_gap_filling_noop(7).await.unwrap();
+        let after = chrono::Utc::now().timestamp();
         assert_eq!(tx.status, TransactionStatus::Pending);
+        let scheduled_at = scheduled_at.lock().unwrap().unwrap();
+        assert!(scheduled_at >= before + 2);
+        assert!(scheduled_at <= after + 2);
+        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
     }
 
     /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.

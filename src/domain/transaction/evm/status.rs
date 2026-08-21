@@ -1114,9 +1114,9 @@ where
             }
         }
 
-        // 1.2. Check for nonce recovery hint in job metadata (one-shot signal from submission errors).
-        // This performs nonce reconciliation before normal status flow.
-        // The hint is in job_metadata, not the transaction — subsequent retries won't have it.
+        // 1.2. Check for a nonce recovery hint in job metadata before normal status flow.
+        // Queue retries preserve the payload metadata, so reconciliation may run again
+        // after a transient failure.
         if let Some(ref ctx) = context {
             if let Some(ref metadata) = ctx.job_metadata {
                 if let Some(hint) = metadata.get(TX_NONCE_RECONCILE_TRIGGER) {
@@ -1674,6 +1674,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1706,6 +1707,7 @@ mod tests {
             },
             chain_id: Some(42161),
             required_confirmations: Some(12),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -2222,6 +2224,7 @@ mod tests {
                 },
                 chain_id: None, // This will cause the conversion to fail
                 required_confirmations: Some(12),
+                status_check: None,
                 features: Some(vec!["eip1559".to_string()]),
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
@@ -4862,7 +4865,7 @@ mod tests {
 
         /// Test handle_status_impl with nonce_error_hint metadata triggers recovery
         #[tokio::test]
-        async fn test_handle_status_impl_nonce_recovery_hint() {
+        async fn test_handle_status_impl_nonce_recovery_hint_runs_on_retry() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
@@ -4915,7 +4918,8 @@ mod tests {
                 TX_NONCE_RECONCILE_TRIGGER.to_string(),
                 "NonceTooLow".to_string(),
             );
-            let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
+            let context = StatusCheckContext::new(0, 0, 1, 25, 75, NetworkType::Evm)
+                .with_job_metadata(Some(metadata));
 
             let result = evm_transaction.handle_status_impl(tx, Some(context)).await;
             assert!(result.is_ok());
