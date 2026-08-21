@@ -199,7 +199,7 @@ pub struct TransactionStatusCheck {
     pub network_type: Option<NetworkType>,
     /// Optional fixed retry delay for healthy, non-final EVM status checks.
     #[serde(default)]
-    pub status_retry_delay_seconds: Option<u32>,
+    pub status_check_retry_delay_seconds: Option<u64>,
     pub metadata: Option<HashMap<String, String>>,
 }
 
@@ -214,14 +214,14 @@ impl TransactionStatusCheck {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
             network_type: Some(network_type),
-            status_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: None,
             metadata: None,
         }
     }
 
     /// Sets the fixed retry delay for healthy, non-final status checks.
-    pub fn with_status_retry_delay_seconds(mut self, delay_seconds: Option<u64>) -> Self {
-        self.status_retry_delay_seconds = delay_seconds.and_then(|delay| u32::try_from(delay).ok());
+    pub fn with_status_check_retry_delay_seconds(mut self, delay_seconds: Option<u64>) -> Self {
+        self.status_check_retry_delay_seconds = delay_seconds;
         self
     }
 
@@ -392,16 +392,12 @@ mod tests {
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
         assert_eq!(tx_status.network_type, Some(NetworkType::Evm));
-        assert_eq!(tx_status.status_retry_delay_seconds, None);
+        assert_eq!(tx_status.status_check_retry_delay_seconds, None);
         assert!(tx_status.metadata.is_none());
 
         let fast_status = TransactionStatusCheck::new("tx-fast", "relayer-1", NetworkType::Evm)
-            .with_status_retry_delay_seconds(Some(2));
-        assert_eq!(fast_status.status_retry_delay_seconds, Some(2));
-
-        let oversized = TransactionStatusCheck::new("tx-large", "relayer-1", NetworkType::Evm)
-            .with_status_retry_delay_seconds(Some(u64::from(u32::MAX) + 1));
-        assert_eq!(oversized.status_retry_delay_seconds, None);
+            .with_status_check_retry_delay_seconds(Some(5));
+        assert_eq!(fast_status.status_check_retry_delay_seconds, Some(5));
 
         let mut metadata = HashMap::new();
         metadata.insert("retries".to_string(), "3".to_string());
@@ -428,7 +424,7 @@ mod tests {
         assert_eq!(deserialized.transaction_id, "tx456");
         assert_eq!(deserialized.relayer_id, "relayer-2");
         assert_eq!(deserialized.network_type, None);
-        assert_eq!(deserialized.status_retry_delay_seconds, None);
+        assert_eq!(deserialized.status_check_retry_delay_seconds, None);
         assert!(deserialized.metadata.is_none());
 
         // New messages should include network_type

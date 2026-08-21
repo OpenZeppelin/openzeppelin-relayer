@@ -185,18 +185,10 @@ async fn apalis_transaction_status_evm_handler(
         &job.timestamp,
         QueueType::StatusCheckEvm.queue_name(),
     );
-    let ctx = WorkerContext::new(
-        evm_status_handler_attempt(attempt.current()),
-        task_id.to_string(),
-    );
+    let ctx = WorkerContext::new(attempt.current(), task_id.to_string());
     transaction_status_handler(job, (*state).clone(), ctx)
         .await
         .map_err(Into::into)
-}
-
-/// Apalis attempts are 1-based because TrackerLayer is outermost; handler attempts are 0-based.
-fn evm_status_handler_attempt(apalis_attempt: usize) -> usize {
-    apalis_attempt.saturating_sub(1)
 }
 
 async fn apalis_transaction_status_stellar_handler(
@@ -1108,12 +1100,6 @@ mod tests {
         observe_redis_pickup_latency(1, None, &ts, queue);
 
         assert_eq!(pickup_sample_count(queue), before + 1);
-    }
-
-    #[test]
-    fn test_evm_status_handler_attempt_is_zero_based() {
-        assert_eq!(evm_status_handler_attempt(1), 0);
-        assert_eq!(evm_status_handler_attempt(2), 1);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use crate::config::GasPriceCacheConfig;
 use crate::constants::{
     ARBITRUM_BASED_TAG, DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, LACKS_MEMPOOL_TAGS,
-    MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_DELAY_SECONDS, OPTIMISM_BASED_TAG,
-    OPTIMISM_TAG, POLYGON_ZKEVM_TAG, ROLLUP_TAG,
+    MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG,
+    ROLLUP_TAG,
 };
 use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcConfig};
 use std::time::Duration;
@@ -87,7 +88,8 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     .as_ref()
                     .and_then(|config| config.initial_delay_seconds)
                     .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS);
-                if !(MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                if !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+                    ..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
                     .contains(&configured_delay)
                 {
                     return Err(RepositoryError::InvalidData(format!(
@@ -108,7 +110,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     .as_ref()
                     .and_then(|config| config.retry_delay_seconds);
                 if status_check_retry_delay_seconds.is_some_and(|delay| {
-                    !(MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                    !(MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
                         .contains(&delay)
                 }) {
                     return Err(RepositoryError::InvalidData(format!(
@@ -383,11 +385,11 @@ mod tests {
 
         config.status_check = Some(StatusCheckConfig {
             initial_delay_seconds: Some(3),
-            retry_delay_seconds: Some(2),
+            retry_delay_seconds: Some(5),
         });
         let network = EvmNetwork::try_from(repo_model(config)).unwrap();
         assert_eq!(network.status_check_initial_delay_seconds(), 3);
-        assert_eq!(network.status_check_retry_delay_seconds(), Some(2));
+        assert_eq!(network.status_check_retry_delay_seconds(), Some(5));
     }
 
     #[test]
@@ -410,7 +412,7 @@ mod tests {
 
     #[test]
     fn test_try_from_rejects_invalid_status_check_retry_delay() {
-        for delay in [0, 101] {
+        for delay in [0, 1, 4, 101] {
             let mut config = create_test_evm_config();
             config.status_check = Some(StatusCheckConfig {
                 initial_delay_seconds: None,

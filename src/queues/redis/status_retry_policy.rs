@@ -107,7 +107,7 @@ fn configured_retry_delay<Ctx>(
     }
 
     configured_status_retry_delay(
-        req.args.data.status_retry_delay_seconds,
+        req.args.data.status_check_retry_delay_seconds,
         req.args.data.network_type,
     )
 }
@@ -132,12 +132,12 @@ mod tests {
 
     fn request(
         network_type: NetworkType,
-        retry_delay: Option<u32>,
+        retry_delay: Option<u64>,
     ) -> Request<Job<TransactionStatusCheck>, ()> {
         Request::new(Job::new(
             crate::jobs::JobType::TransactionStatusCheck,
             TransactionStatusCheck::new("tx", "relayer", network_type)
-                .with_status_retry_delay_seconds(retry_delay.map(u64::from)),
+                .with_status_check_retry_delay_seconds(retry_delay),
         ))
     }
 
@@ -147,10 +147,10 @@ mod tests {
 
     #[test]
     fn configured_delay_requires_valid_evm_not_yet_final_job() {
-        let req = request(NetworkType::Evm, Some(2));
+        let req = request(NetworkType::Evm, Some(5));
         let delay = configured_retry_delay(&req, &not_yet_final_error()).unwrap();
-        assert!(delay >= Duration::from_secs(2));
-        assert!(delay < Duration::from_secs(3));
+        assert!(delay >= Duration::from_secs(5));
+        assert!(delay < Duration::from_secs(6));
 
         let ordinary = Error::Failed(Arc::new("rpc unavailable".to_string().into()));
         assert_eq!(configured_retry_delay(&req, &ordinary), None);
@@ -161,7 +161,7 @@ mod tests {
             ),
             None
         );
-        for delay in [None, Some(0), Some(101)] {
+        for delay in [None, Some(0), Some(1), Some(4), Some(101), Some(u64::MAX)] {
             assert_eq!(
                 configured_retry_delay(&request(NetworkType::Evm, delay), &not_yet_final_error()),
                 None
@@ -174,7 +174,7 @@ mod tests {
         tokio::time::pause();
         let calls = Arc::new(AtomicUsize::new(0));
         let mut policy = EvmStatusRetryPolicy::new(usize::MAX, ImmediateBackoff(calls.clone()));
-        let mut req = request(NetworkType::Evm, Some(2));
+        let mut req = request(NetworkType::Evm, Some(5));
 
         let mut rpc_error = Err::<(), _>(Error::Failed(Arc::new(
             "rpc unavailable".to_string().into(),
@@ -189,8 +189,8 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         configured_sleep.await;
         let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_secs(2));
-        assert!(elapsed < Duration::from_secs(3));
+        assert!(elapsed >= Duration::from_secs(5));
+        assert!(elapsed < Duration::from_secs(6));
         assert_eq!(req.parts.attempt.current(), 2);
 
         let mut rpc_error = Err::<(), _>(Error::Failed(Arc::new(
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn policy_preserves_abort_and_exhaustion_semantics() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut req = request(NetworkType::Evm, Some(2));
+        let mut req = request(NetworkType::Evm, Some(5));
         let mut policy = EvmStatusRetryPolicy::new(1, ImmediateBackoff(calls.clone()));
         let mut abort = Err::<(), _>(Error::Abort(Arc::new("stop".to_string().into())));
         assert!(policy.retry(&mut req, &mut abort).is_none());
@@ -219,7 +219,7 @@ mod tests {
         let mut zero_policy = EvmStatusRetryPolicy::new(0, ImmediateBackoff(calls));
         let mut zero = Err::<(), _>(not_yet_final_error());
         assert!(zero_policy
-            .retry(&mut request(NetworkType::Evm, Some(2)), &mut zero)
+            .retry(&mut request(NetworkType::Evm, Some(5)), &mut zero)
             .is_none());
         assert!(matches!(zero, Err(Error::Abort(_))));
     }

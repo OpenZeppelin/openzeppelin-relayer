@@ -11,7 +11,10 @@
 
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
-use crate::constants::{MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_DELAY_SECONDS};
+use crate::constants::{
+    MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+};
 use serde::{Deserialize, Serialize};
 
 /// Default value for gas price cache enabled flag
@@ -99,19 +102,24 @@ pub struct StatusCheckConfig {
 
 impl StatusCheckConfig {
     fn validate(&self) -> Result<(), ConfigFileError> {
-        for (field, delay) in [
-            ("initial_delay_seconds", self.initial_delay_seconds),
-            ("retry_delay_seconds", self.retry_delay_seconds),
-        ] {
-            if delay.is_some_and(|delay| {
-                !(MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
-                    .contains(&delay)
-            }) {
-                return Err(ConfigFileError::InvalidFormat(format!(
-                    "status_check.{field} must be between {} and {} seconds",
-                    MIN_EVM_STATUS_CHECK_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS
-                )));
-            }
+        if self.initial_delay_seconds.is_some_and(|delay| {
+            !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                .contains(&delay)
+        }) {
+            return Err(ConfigFileError::InvalidFormat(format!(
+                "status_check.initial_delay_seconds must be between {} and {} seconds",
+                MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS
+            )));
+        }
+
+        if self.retry_delay_seconds.is_some_and(|delay| {
+            !(MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+                .contains(&delay)
+        }) {
+            return Err(ConfigFileError::InvalidFormat(format!(
+                "status_check.retry_delay_seconds must be between {} and {} seconds",
+                MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS
+            )));
         }
 
         Ok(())
@@ -266,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_validate_status_check_retry_delay_boundaries() {
-        for delay in [1, 100] {
+        for delay in [5, 100] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
                 initial_delay_seconds: None,
@@ -278,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_invalid_status_check_retry_delay() {
-        for delay in [0, 101] {
+        for delay in [0, 1, 4, 101] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
                 initial_delay_seconds: None,
@@ -308,7 +316,7 @@ mod tests {
             "required_confirmations": 1,
             "status_check": {
                 "initial_delay_seconds": 2,
-                "retry_delay_seconds": 1
+                "retry_delay_seconds": 5
             },
             "symbol": "ETH",
             "features": null,
@@ -320,7 +328,7 @@ mod tests {
             config.status_check,
             Some(StatusCheckConfig {
                 initial_delay_seconds: Some(2),
-                retry_delay_seconds: Some(1),
+                retry_delay_seconds: Some(5),
             })
         );
     }

@@ -521,7 +521,7 @@ where
             .job_producer
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm)
-                    .with_status_retry_delay_seconds(
+                    .with_status_check_retry_delay_seconds(
                         evm_network.status_check_retry_delay_seconds(),
                     ),
                 Some(calculate_scheduled_timestamp(initial_delay_seconds)),
@@ -1616,7 +1616,7 @@ mod tests {
         if let crate::models::NetworkConfigData::Evm(config) = &mut network_model.config {
             config.status_check = Some(crate::config::StatusCheckConfig {
                 initial_delay_seconds: Some(2),
-                retry_delay_seconds: Some(2),
+                retry_delay_seconds: Some(5),
             });
         }
         network_repo
@@ -1642,7 +1642,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .returning(move |job, value| {
                 *captured_scheduled_at.lock().unwrap() = value;
-                *captured_retry_delay.lock().unwrap() = job.status_retry_delay_seconds;
+                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
                 Box::pin(ready(Ok(())))
             });
 
@@ -1668,7 +1668,7 @@ mod tests {
         let scheduled_at = scheduled_at.lock().unwrap().unwrap();
         assert!(scheduled_at >= before + 2);
         assert!(scheduled_at <= after + 2);
-        assert_eq!(*retry_delay.lock().unwrap(), Some(2));
+        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
     }
 
     /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.
