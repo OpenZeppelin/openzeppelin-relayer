@@ -116,25 +116,6 @@ fn is_revert_hex(s: &str) -> bool {
     }
 }
 
-/// Returns `true` for statuses the circuit breaker can actually remediate.
-///
-/// The breaker exists to release a nonce slot held by a transaction that may never
-/// resolve, so it only knows how to act on `Pending`, `Sent` and `Submitted`.
-///
-/// `Mined` is deliberately excluded even though it is non-final: the nonce is already
-/// consumed on-chain and the transaction only needs its confirmations counted. Routing
-/// it through `handle_circuit_breaker_safely` would return it unchanged and non-final
-/// while `breaker_executed` suppresses the consecutive-failure reset, leaving the
-/// counter pegged so every later check short-circuits before ever polling the chain —
-/// the transaction would never reach `Confirmed` and its nonce slot would never be
-/// released.
-fn is_circuit_breaker_remediable(status: &TransactionStatus) -> bool {
-    matches!(
-        status,
-        TransactionStatus::Pending | TransactionStatus::Sent | TransactionStatus::Submitted
-    )
-}
-
 /// Per-key TTL gate: `should_fire` returns true at most once per `ttl` per key.
 struct TtlDebounce {
     entries: DashMap<String, Instant>,
@@ -1062,11 +1043,8 @@ where
                 Ok(updated_tx)
             }
             _ => {
-                // Unreachable: callers gate on `is_circuit_breaker_remediable`, and final
-                // states return before the breaker runs. Warn rather than debug — reaching
-                // here means a non-final status returns unchanged while the caller treats
-                // the breaker as executed, which suppresses the consecutive-failure reset.
-                warn!(
+                // Final states shouldn't reach here, but handle gracefully
+                debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
                     status = ?tx.status,
@@ -1085,9 +1063,7 @@ where
         &self,
         tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
-    ) -> crate::domain::TransactionStatusCheckOutcome {
-        let mut breaker_executed = false;
-        let result = async {
+    ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(
             tx_id = %tx.id,
             relayer_id = %tx.relayer_id,
@@ -1109,19 +1085,14 @@ where
         // 1.1. Check if circuit breaker should force finalization
         // Skip circuit breaker for NOOP transactions - they're already safe (just clearing nonce)
         // and should be handled by normal status logic which will eventually resolve them.
-        // Skip it too for statuses it cannot remediate (see `is_circuit_breaker_remediable`);
-        // entering it there would suppress the consecutive-failure reset and stall the check.
         if let Some(ref ctx) = context {
             let is_noop_tx = tx
                 .network_data
                 .get_evm_transaction_data()
                 .map(|data| is_noop(&data))
                 .unwrap_or(false);
-            let is_remediable = is_circuit_breaker_remediable(&tx.status);
 
-            if ctx.should_force_finalize() && !is_noop_tx && is_remediable {
-                // Report execution, not merely a reached threshold: NOOPs deliberately bypass it.
-                breaker_executed = true;
+            if ctx.should_force_finalize() && !is_noop_tx {
                 warn!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,
@@ -1141,49 +1112,37 @@ where
                     "circuit breaker would trigger but transaction is NOOP - continuing with normal status logic"
                 );
             }
-
-            if ctx.should_force_finalize() && !is_noop_tx && !is_remediable {
-                warn!(
-                    tx_id = %tx.id,
-                    consecutive_failures = ctx.consecutive_failures,
-                    total_failures = ctx.total_failures,
-                    relayer_id = %tx.relayer_id,
-                    status = ?tx.status,
-                    "circuit breaker would trigger but status is not remediable (nonce already consumed on-chain) - continuing with normal status logic"
-                );
-            }
         }
 
-        // 1.2. Check for a nonce recovery hint on the first attempt only.
-        // Queue retries preserve the payload metadata, so the attempt gates this one-shot work.
+        // 1.2. Check for a nonce recovery hint in job metadata before normal status flow.
+        // Queue retries preserve the payload metadata, so reconciliation may run again
+        // after a transient failure.
         if let Some(ref ctx) = context {
-            if ctx.total_retries == 0 {
-                if let Some(ref metadata) = ctx.job_metadata {
-                    if let Some(hint) = metadata.get(TX_NONCE_RECONCILE_TRIGGER) {
-                        debug!(
-                            tx_id = %tx.id,
-                            hint = %hint,
-                            "nonce recovery hint detected - performing nonce reconciliation"
-                        );
-                        match self.reconcile_tx_nonce_state(&tx).await {
-                            Ok(Some(recovered_tx)) => {
-                                return Ok(recovered_tx);
-                            }
-                            Ok(None) => {
-                                // Recovery didn't resolve it — fall through to normal flow
-                                debug!(
-                                    tx_id = %tx.id,
-                                    "nonce recovery did not resolve transaction, continuing normal flow"
-                                );
-                            }
-                            Err(e) => {
-                                // Recovery failed — log and continue with normal flow
-                                warn!(
-                                    tx_id = %tx.id,
-                                    error = %e,
-                                    "nonce recovery failed, falling through to normal status flow"
-                                );
-                            }
+            if let Some(ref metadata) = ctx.job_metadata {
+                if let Some(hint) = metadata.get(TX_NONCE_RECONCILE_TRIGGER) {
+                    debug!(
+                        tx_id = %tx.id,
+                        hint = %hint,
+                        "nonce recovery hint detected - performing nonce reconciliation"
+                    );
+                    match self.reconcile_tx_nonce_state(&tx).await {
+                        Ok(Some(recovered_tx)) => {
+                            return Ok(recovered_tx);
+                        }
+                        Ok(None) => {
+                            // Recovery didn't resolve it — fall through to normal flow
+                            debug!(
+                                tx_id = %tx.id,
+                                "nonce recovery did not resolve transaction, continuing normal flow"
+                            );
+                        }
+                        Err(e) => {
+                            // Recovery failed — log and continue with normal flow
+                            warn!(
+                                tx_id = %tx.id,
+                                error = %e,
+                                "nonce recovery failed, falling through to normal status flow"
+                            );
                         }
                     }
                 }
@@ -1252,13 +1211,6 @@ where
             TransactionStatus::Confirmed
             | TransactionStatus::Expired
             | TransactionStatus::Canceled => self.handle_final_state(tx, status, None).await,
-        }
-        }
-        .await;
-
-        crate::domain::TransactionStatusCheckOutcome {
-            result,
-            breaker_executed,
         }
     }
 
@@ -1490,19 +1442,7 @@ where
             return Ok(false);
         }
 
-        // Only try if transaction has been stuck for a while.
-        //
-        // Known limitation: `resubmit_transaction` refreshes `sent_at` on a duplicate-submit
-        // (AlreadyKnown / ReplacementUnderpriced / NonceTooLow) to stop status checks from
-        // re-signing every cycle. On a chain whose resubmit window is shorter than
-        // `min_age_for_recovery` — Arbitrum, at a flat 20s with no backoff — that refresh
-        // lands before this gate is ever reached, so recovery never fires from this path.
-        // Accepted: it is already unreachable there whenever resubmits succeed (the success
-        // branch refreshes `sent_at` too), and the case that matters in practice — an older
-        // hash actually got mined — surfaces as NonceTooLow, whose `reconcile_tx_nonce_state`
-        // calls `try_recover_with_historical_hashes` directly and bypasses this gate. Other
-        // networks are unaffected: recovery needs `hashes.len() >= 3`, which forces the
-        // window to `base * 2^2` (>= 8 min), comfortably above this threshold.
+        // Only try if transaction has been stuck for a while
         let age = get_age_of_sent_at(tx)?;
         let min_age_for_recovery = get_evm_min_age_for_hash_recovery();
 
@@ -3475,164 +3415,6 @@ mod tests {
         use super::*;
 
         #[tokio::test]
-        async fn test_duplicate_resubmit_is_throttled_then_retries_after_window() {
-            use crate::domain::Transaction;
-            use std::sync::atomic::{AtomicUsize, Ordering};
-
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-            let mut tx = make_test_transaction(TransactionStatus::Submitted);
-            tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
-            tx.sent_at = Some((Utc::now() - Duration::minutes(10)).to_rfc3339());
-            tx.hashes = vec!["0xoriginal".to_string()];
-            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-                nonce: Some(42),
-                hash: Some("0xoriginal".to_string()),
-                raw: Some(vec![1, 2, 3]),
-                ..tx.network_data.get_evm_transaction_data().unwrap()
-            });
-
-            mocks
-                .provider
-                .expect_get_transaction_receipt()
-                .returning(|_| Box::pin(async { Ok(None) }));
-            mocks
-                .provider
-                .expect_get_transaction_count()
-                .times(2)
-                .returning(|_| Box::pin(async { Ok(42) }));
-            mocks
-                .provider
-                .expect_get_block_by_number()
-                .times(2)
-                .returning(|| {
-                    Box::pin(async {
-                        use alloy::{network::AnyRpcBlock, rpc::types::Block};
-                        let mut block: Block = Block::default();
-                        block.header.gas_limit = 30_000_000;
-                        Ok(AnyRpcBlock::from(block))
-                    })
-                });
-            mocks
-                .provider
-                .expect_get_balance()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(U256::from(1_000_000_000_000_000_000u64)) }));
-            mocks
-                .provider
-                .expect_send_raw_transaction()
-                .times(1)
-                .returning(|_| {
-                    Box::pin(async {
-                        Err(crate::services::provider::ProviderError::Other(
-                            "already known".to_string(),
-                        ))
-                    })
-                });
-            mocks
-                .network_repo
-                .expect_get_by_chain_id()
-                .returning(|_, _| Ok(Some(create_test_network_model())));
-            mocks
-                .price_calc
-                .expect_calculate_bumped_gas_price()
-                .times(1)
-                .returning(|_, _, _| {
-                    Box::pin(async {
-                        Ok(crate::domain::evm::price_calculator::PriceParams {
-                            gas_price: Some(25_000_000_000),
-                            max_fee_per_gas: None,
-                            max_priority_fee_per_gas: None,
-                            is_min_bumped: Some(true),
-                            extra_fee: None,
-                            total_cost: U256::from(525_000_000_000_000u64),
-                        })
-                    })
-                });
-            mocks
-                .signer
-                .expect_sign_transaction()
-                .times(1)
-                .returning(|_| {
-                    Box::pin(async {
-                        Ok(crate::domain::relayer::SignTransactionResponse::Evm(
-                            crate::domain::relayer::SignTransactionResponseEvm {
-                                hash: "0xignored".to_string(),
-                                signature: crate::models::EvmTransactionDataSignature {
-                                    r: "r".to_string(),
-                                    s: "s".to_string(),
-                                    v: 1,
-                                    sig: "0xsig".to_string(),
-                                },
-                                raw: vec![4, 5, 6],
-                            },
-                        ))
-                    })
-                });
-
-            let tx_for_update = tx.clone();
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .times(1)
-                .returning(move |_, update| {
-                    let mut updated = tx_for_update.clone();
-                    updated.status = update.status.unwrap_or(updated.status);
-                    updated.sent_at = update.sent_at;
-                    Ok(updated)
-                });
-
-            let resubmit_jobs = Arc::new(AtomicUsize::new(0));
-            let resubmit_jobs_for_mock = resubmit_jobs.clone();
-            mocks
-                .job_producer
-                .expect_produce_submit_transaction_job()
-                .times(2)
-                .returning(move |_, _| {
-                    resubmit_jobs_for_mock.fetch_add(1, Ordering::SeqCst);
-                    Box::pin(async { Ok(()) })
-                });
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-
-            tx = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
-            assert_eq!(resubmit_jobs.load(Ordering::SeqCst), 1);
-
-            tx = evm_transaction.resubmit_transaction(tx).await.unwrap();
-            assert!(matches!(
-                evm_transaction.should_resubmit(&tx).await,
-                Ok(false)
-            ));
-            for _ in 0..3 {
-                tx = evm_transaction
-                    .handle_status_impl(tx, None)
-                    .await
-                    .result
-                    .unwrap();
-            }
-            assert_eq!(resubmit_jobs.load(Ordering::SeqCst), 1);
-
-            let speed = tx.network_data.get_evm_transaction_data().unwrap().speed;
-            tx.sent_at = Some(
-                (Utc::now()
-                    - Duration::milliseconds(crate::utils::get_resubmit_timeout_for_speed(&speed))
-                    - Duration::seconds(1))
-                .to_rfc3339(),
-            );
-            tx = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
-            assert_eq!(resubmit_jobs.load(Ordering::SeqCst), 2);
-            assert_eq!(tx.status, TransactionStatus::Submitted);
-        }
-
-        #[tokio::test]
         async fn test_impl_submitted_branch() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
@@ -3668,11 +3450,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Submitted);
         }
 
@@ -3723,11 +3501,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Mined);
         }
 
@@ -3750,11 +3524,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Confirmed);
         }
 
@@ -3775,11 +3545,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
         }
 
@@ -3838,11 +3604,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
             assert!(
@@ -3873,11 +3635,7 @@ mod tests {
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Expired);
         }
     }
@@ -3978,11 +3736,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             let reason = result.status_reason.unwrap();
             assert!(
@@ -4010,11 +3764,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert_eq!(result.status_reason.unwrap(), LEGACY_REASON);
         }
@@ -4028,11 +3778,7 @@ mod tests {
             let tx = make_test_transaction(TransactionStatus::Failed);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(
                 result.status_reason.is_none(),
@@ -4060,11 +3806,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result
                 .status_reason
@@ -4100,11 +3842,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result
                 .status_reason
@@ -4135,11 +3873,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert_eq!(result.status_reason.unwrap(), LEGACY_REASON);
         }
@@ -4169,11 +3903,7 @@ mod tests {
                 expect_reload_and_capture(&mut mocks);
 
                 let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-                let result = evm_transaction
-                    .handle_status_impl(tx, None)
-                    .await
-                    .result
-                    .unwrap();
+                let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
                 assert_eq!(result.status, TransactionStatus::Failed);
                 assert_eq!(
                     result.status_reason.unwrap(),
@@ -4200,11 +3930,7 @@ mod tests {
             expect_reload_and_capture(&mut mocks);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(
                 result
@@ -4218,7 +3944,6 @@ mod tests {
 
     // Tests for circuit breaker functionality
     mod circuit_breaker_tests {
-        use super::super::is_circuit_breaker_remediable;
         use super::*;
         use crate::jobs::StatusCheckContext;
 
@@ -4285,37 +4010,14 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let ctx = create_triggered_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
             assert!(result.status_reason.unwrap().contains("consecutive errors"));
-        }
-
-        #[tokio::test]
-        async fn test_circuit_breaker_error_still_reports_execution() {
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-            let tx = make_test_transaction(TransactionStatus::Pending);
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .times(1)
-                .returning(|_, _| {
-                    Err(crate::models::RepositoryError::ConnectionError(
-                        "database unavailable".to_string(),
-                    ))
-                });
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let outcome = evm_transaction
-                .handle_status_impl(tx, Some(create_triggered_context()))
-                .await;
-
-            assert!(outcome.breaker_executed);
-            assert!(outcome.result.is_err());
         }
 
         #[tokio::test]
@@ -4345,9 +4047,10 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let ctx = create_triggered_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             assert_eq!(result.status, TransactionStatus::Failed);
         }
@@ -4386,9 +4089,10 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let ctx = create_triggered_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             // NOOP processing should succeed
             assert!(result.noop_count.is_some());
@@ -4444,87 +4148,13 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let ctx = create_triggered_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(!outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             // NOOP tx should continue normal processing, not be force-failed
             assert_eq!(result.status, TransactionStatus::Submitted);
-        }
-
-        #[tokio::test]
-        async fn test_circuit_breaker_mined_tx_excluded() {
-            // Regression: `Mined` is non-final but not remediable by the breaker. Entering it
-            // returned the tx unchanged AND non-final with `breaker_executed = true`, which
-            // suppresses the consecutive-failure reset in the status handler — pegging the
-            // counter so the tx never advances to Confirmed and its nonce is never released.
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-            let mut tx = make_test_transaction(TransactionStatus::Mined);
-            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
-                evm_data.hash = Some("0xFakeHash".to_string());
-            }
-
-            // Must actually poll the chain rather than short-circuiting in the breaker.
-            mocks
-                .provider
-                .expect_get_transaction_receipt()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
-            // Current block == receipt block: still short of required_confirmations.
-            mocks
-                .provider
-                .expect_get_block_number()
-                .returning(|| Box::pin(async { Ok(100) }));
-
-            mocks
-                .network_repo
-                .expect_get_by_chain_id()
-                .returning(|_, _| Ok(Some(create_test_network_model())));
-
-            mocks
-                .job_producer
-                .expect_produce_send_notification_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
-
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
-                    let mut updated_tx = make_test_transaction(TransactionStatus::Mined);
-                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
-                    Ok(updated_tx)
-                });
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let ctx = create_triggered_context();
-
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            // The reset in `handle_result` is gated on `!breaker_executed`.
-            assert!(!outcome.breaker_executed);
-            let result = outcome.result.unwrap();
-            assert_eq!(result.status, TransactionStatus::Mined);
-        }
-
-        #[test]
-        fn test_is_circuit_breaker_remediable_covers_only_nonce_holding_states() {
-            for status in [
-                TransactionStatus::Pending,
-                TransactionStatus::Sent,
-                TransactionStatus::Submitted,
-            ] {
-                assert!(is_circuit_breaker_remediable(&status), "{status:?}");
-            }
-            // `Mined` is non-final but its nonce is already consumed on-chain.
-            for status in [
-                TransactionStatus::Mined,
-                TransactionStatus::Confirmed,
-                TransactionStatus::Failed,
-                TransactionStatus::Expired,
-                TransactionStatus::Canceled,
-            ] {
-                assert!(!is_circuit_breaker_remediable(&status), "{status:?}");
-            }
         }
 
         #[tokio::test]
@@ -4554,9 +4184,10 @@ mod tests {
             // Use context that triggers via total failures (safety net)
             let ctx = create_total_triggered_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
@@ -4601,9 +4232,10 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let ctx = create_safe_context();
 
-            let outcome = evm_transaction.handle_status_impl(tx, Some(ctx)).await;
-            assert!(!outcome.breaker_executed);
-            let result = outcome.result.unwrap();
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
 
             // Should continue normal processing, not trigger circuit breaker
             assert_eq!(result.status, TransactionStatus::Submitted);
@@ -4648,11 +4280,7 @@ mod tests {
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
 
             // Pass None for context
-            let result = evm_transaction
-                .handle_status_impl(tx, None)
-                .await
-                .result
-                .unwrap();
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
 
             // Should continue normal processing
             assert_eq!(result.status, TransactionStatus::Submitted);
@@ -4672,7 +4300,6 @@ mod tests {
             let result = evm_transaction
                 .handle_status_impl(tx, Some(ctx))
                 .await
-                .result
                 .unwrap();
 
             assert_eq!(result.status, TransactionStatus::Confirmed);
@@ -5238,7 +4865,7 @@ mod tests {
 
         /// Test handle_status_impl with nonce_error_hint metadata triggers recovery
         #[tokio::test]
-        async fn test_handle_status_impl_nonce_recovery_hint() {
+        async fn test_handle_status_impl_nonce_recovery_hint_runs_on_retry() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
@@ -5291,58 +4918,12 @@ mod tests {
                 TX_NONCE_RECONCILE_TRIGGER.to_string(),
                 "NonceTooLow".to_string(),
             );
-            let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
+            let context = StatusCheckContext::new(0, 0, 1, 25, 75, NetworkType::Evm)
+                .with_job_metadata(Some(metadata));
 
-            let result = evm_transaction
-                .handle_status_impl(tx, Some(context))
-                .await
-                .result;
+            let result = evm_transaction.handle_status_impl(tx, Some(context)).await;
             assert!(result.is_ok());
             assert_eq!(result.unwrap().status, TransactionStatus::Failed);
-        }
-
-        #[tokio::test]
-        async fn test_nonce_recovery_hint_runs_only_on_first_attempt() {
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-            let mut tx = make_test_transaction(TransactionStatus::Submitted);
-            tx.sent_at = Some(Utc::now().to_rfc3339());
-            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-                nonce: Some(5),
-                hash: Some("0xhash".to_string()),
-                raw: Some(vec![1, 2, 3]),
-                ..tx.network_data.get_evm_transaction_data().unwrap()
-            });
-
-            // Attempt zero reconciles and then monitors normally; attempt one only monitors.
-            mocks
-                .provider
-                .expect_get_transaction_receipt()
-                .times(3)
-                .returning(|_| Box::pin(async { Ok(None) }));
-            mocks
-                .provider
-                .expect_get_transaction_count()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok(5) }));
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let mut metadata = std::collections::HashMap::new();
-            metadata.insert(
-                TX_NONCE_RECONCILE_TRIGGER.to_string(),
-                "NonceTooLow".to_string(),
-            );
-
-            for attempt in [0, 1] {
-                let context = StatusCheckContext::new(0, 0, attempt, 25, 75, NetworkType::Evm)
-                    .with_job_metadata(Some(metadata.clone()));
-                let result = evm_transaction
-                    .handle_status_impl(tx.clone(), Some(context))
-                    .await
-                    .result
-                    .unwrap();
-                assert_eq!(result.status, TransactionStatus::Submitted);
-            }
         }
     }
 

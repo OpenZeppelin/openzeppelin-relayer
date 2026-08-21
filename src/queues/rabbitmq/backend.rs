@@ -784,7 +784,7 @@ mod tests {
             transaction_id: "tx-1".to_string(),
             relayer_id: "relayer-1".to_string(),
             network_type: network,
-            status_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: None,
             metadata: None,
         };
         Job::new(JobType::TransactionStatusCheck, data)
@@ -888,7 +888,7 @@ mod tests {
             transaction_id: "tx".to_string(),
             relayer_id: "r".to_string(),
             network_type: Some(NetworkType::Evm),
-            status_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: None,
             metadata: Some(std::collections::HashMap::from([("blob".to_string(), big)])),
         };
         let oversized = Job::new(JobType::TransactionStatusCheck, data);

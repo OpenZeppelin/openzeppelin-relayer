@@ -9495,7 +9495,7 @@
             "format": "int64",
             "description": "Optional delay between successful checks while the transaction is not final, in seconds.",
             "maximum": 100,
-            "minimum": 1
+            "minimum": 5
           }
         }
       },

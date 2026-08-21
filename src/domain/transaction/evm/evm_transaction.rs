@@ -234,7 +234,7 @@ where
         metadata: Option<std::collections::HashMap<String, String>>,
     ) -> Result<(), TransactionError> {
         let delay = delay_seconds.map(calculate_scheduled_timestamp);
-        let status_retry_delay_seconds = self
+        let status_check_retry_delay_seconds = self
             .network_repository()
             .get_by_name(NetworkType::Evm, &self.relayer.network)
             .await
@@ -256,7 +256,7 @@ where
             tx.relayer_id.clone(),
             crate::models::NetworkType::Evm,
         )
-        .with_status_retry_delay_seconds(status_retry_delay_seconds);
+        .with_status_check_retry_delay_seconds(status_check_retry_delay_seconds);
         if let Some(meta) = metadata {
             job = job.with_metadata(meta);
         }
@@ -271,9 +271,8 @@ where
     /// Schedules a status check with nonce recovery metadata for immediate execution.
     ///
     /// This is used when a nonce-related error occurs during submission. The metadata
-    /// signals the status checker to perform nonce reconciliation on first check.
-    /// Queue retries preserve the metadata, so the status-check attempt gates this
-    /// one-shot behavior.
+    /// signals the status checker to perform nonce reconciliation. Queue retries preserve
+    /// the metadata, so reconciliation may run again after a transient failure.
     pub(super) async fn schedule_nonce_recovery_status_check(
         &self,
         tx: &TransactionRepoModel,
@@ -1057,7 +1056,7 @@ where
         tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        self.handle_status_impl(tx, context).await.result
+        self.handle_status_impl(tx, context).await
     }
     /// Resubmits a transaction with updated parameters.
     ///
@@ -1133,7 +1132,6 @@ where
         })?;
 
         // Send resubmitted transaction to blockchain - this is the critical operation
-        let mut schedule_nonce_recovery: Option<SubmissionErrorKind> = None;
         let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
                 // Transaction resubmitted successfully with new pricing
@@ -1163,7 +1161,16 @@ where
                             error = %e,
                             "resubmission got nonce too low - scheduling nonce recovery"
                         );
-                        schedule_nonce_recovery = Some(error_kind.clone());
+                        if let Err(schedule_err) = self
+                            .schedule_nonce_recovery_status_check(&tx, &error_kind)
+                            .await
+                        {
+                            error!(
+                                tx_id = %tx.id,
+                                error = %schedule_err,
+                                "failed to schedule nonce recovery status check during resubmission"
+                            );
+                        }
                         true
                     }
                     // NonceTooHigh: same pattern as submit_transaction — track retries, escalate
@@ -1188,11 +1195,9 @@ where
 
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
-            // All three duplicate-submit outcomes need a fresh window to prevent status checks from
-            // multiplying KMS work; only sent_at is safe because no new hash was accepted.
+            // Keep original hash and data - just ensure status is Submitted
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
-                sent_at: Some(Utc::now().to_rfc3339()),
                 metadata: metadata_reset,
                 ..Default::default()
             }
@@ -1230,21 +1235,6 @@ where
                 tx
             }
         };
-
-        if let Some(error_kind) = schedule_nonce_recovery {
-            // Persist sent_at before publishing recovery so a fast worker cannot resubmit stale
-            // state; still publish after a DB failure because reconciliation remains necessary.
-            if let Err(schedule_err) = self
-                .schedule_nonce_recovery_status_check(&updated_tx, &error_kind)
-                .await
-            {
-                error!(
-                    tx_id = %updated_tx.id,
-                    error = %schedule_err,
-                    "failed to schedule nonce recovery status check during resubmission"
-                );
-            }
-        }
 
         Ok(updated_tx)
     }
@@ -1502,7 +1492,6 @@ mod tests {
             MockTransactionRepository,
         },
         services::{provider::MockEvmProviderTrait, signer::MockSigner},
-        utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
     };
     use chrono::Utc;
     use futures::future::ready;
@@ -1642,7 +1631,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_retry_delay_seconds.is_none()
+                job.status_check_retry_delay_seconds.is_none()
                     && job
                         .metadata
                         .as_ref()
@@ -1676,7 +1665,7 @@ mod tests {
     async fn test_status_retry_delay_uses_relayer_network_when_chain_ids_match() {
         use crate::repositories::InMemoryNetworkRepository;
 
-        let fast = create_test_network_repo_model("fast", Some(1));
+        let fast = create_test_network_repo_model("fast", Some(5));
         let slow = create_test_network_repo_model("slow", Some(100));
 
         for insertion_order in [[fast.clone(), slow.clone()], [slow.clone(), fast.clone()]] {
@@ -1685,14 +1674,16 @@ mod tests {
                 network_repository.create(network).await.unwrap();
             }
 
-            for (network, expected_delay) in [("fast", 1), ("slow", 100)] {
+            for (network, expected_delay) in [("fast", 5), ("slow", 100)] {
                 let mut relayer = create_test_relayer();
                 relayer.network = network.to_string();
                 let mut job_producer = MockJobProducerTrait::new();
                 job_producer
                     .expect_produce_check_transaction_status_job()
                     .times(1)
-                    .withf(move |job, _| job.status_retry_delay_seconds == Some(expected_delay))
+                    .withf(move |job, _| {
+                        job.status_check_retry_delay_seconds == Some(expected_delay)
+                    })
                     .returning(|_, _| Box::pin(ready(Ok(()))));
 
                 let evm_transaction = EvmRelayerTransaction {
@@ -3400,11 +3391,12 @@ mod tests {
             let mock_job_producer = MockJobProducerTrait::new();
             let mut mock_price_calculator = MockPriceCalculator::new();
             let counter_service = MockTransactionCounterTrait::new();
-            let mut mock_network = MockNetworkRepository::new();
+            let mock_network = MockNetworkRepository::new();
 
             let relayer = create_test_relayer();
             let mut test_tx = create_test_transaction();
             test_tx.status = TransactionStatus::Sent;
+            test_tx.sent_at = Some("2026-08-21T00:00:00Z".to_string());
             let original_hash = "0xoriginal_hash".to_string();
             test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
                 nonce: Some(42),
@@ -3465,7 +3457,7 @@ mod tests {
                 .times(1)
                 .withf(|_, update| {
                     update.status == Some(TransactionStatus::Submitted)
-                        && update.sent_at.is_some()
+                        && update.sent_at.is_none()
                         && update.network_data.is_none()
                         && update.hashes.is_none()
                         && update.priced_at.is_none()
@@ -3473,13 +3465,8 @@ mod tests {
                 .returning(move |_, update| {
                     let mut updated_tx = test_tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
-                    updated_tx.sent_at = update.sent_at;
                     Ok(updated_tx)
                 });
-            mock_network
-                .expect_get_by_chain_id()
-                .times(2)
-                .returning(|_, _| Ok(Some(create_test_network_repo_model("mainnet", None))));
 
             let evm_transaction = EvmRelayerTransaction {
                 relayer: relayer.clone(),
@@ -3493,31 +3480,11 @@ mod tests {
                 signer: mock_signer,
             };
 
-            let mut updated_tx = evm_transaction
+            let updated_tx = evm_transaction
                 .resubmit_transaction(test_tx.clone())
                 .await
                 .unwrap();
-            assert!(updated_tx.sent_at.is_some(), "{error_message}");
-            assert!(
-                matches!(
-                    evm_transaction.should_resubmit(&updated_tx).await,
-                    Ok(false)
-                ),
-                "{error_message}"
-            );
-            let evm_data = updated_tx.network_data.get_evm_transaction_data().unwrap();
-            let resubmit_timeout = get_resubmit_timeout_with_backoff(
-                get_resubmit_timeout_for_speed(&evm_data.speed),
-                updated_tx.hashes.len(),
-            );
-            // Guard against refreshing sent_at permanently suppressing repricing after one window.
-            updated_tx.sent_at = Some(
-                (Utc::now() - chrono::Duration::milliseconds(resubmit_timeout + 1)).to_rfc3339(),
-            );
-            assert!(matches!(
-                evm_transaction.should_resubmit(&updated_tx).await,
-                Ok(true)
-            ));
+            assert_eq!(updated_tx.sent_at, test_tx.sent_at, "{error_message}");
             if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
                 assert_eq!(evm_data.hash, Some(original_hash), "{error_message}");
             } else {
@@ -4004,7 +3971,7 @@ mod tests {
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
         let mut mock_network = MockNetworkRepository::new();
-        let network_model = create_test_network_repo_model("mainnet", Some(2));
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
             .with(eq(NetworkType::Evm), eq("mainnet"))
@@ -4046,7 +4013,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_retry_delay_seconds == Some(2)
+                job.status_check_retry_delay_seconds == Some(5)
                     && job
                         .metadata
                         .as_ref()
@@ -4088,7 +4055,7 @@ mod tests {
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
         let mut mock_network = MockNetworkRepository::new();
-        let network_model = create_test_network_repo_model("mainnet", Some(2));
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
             .with(eq(NetworkType::Evm), eq("mainnet"))
@@ -4131,7 +4098,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_retry_delay_seconds == Some(2)
+                job.status_check_retry_delay_seconds == Some(5)
                     && job
                         .metadata
                         .as_ref()
@@ -4173,17 +4140,12 @@ mod tests {
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
         let mut mock_network = MockNetworkRepository::new();
-        let persistence_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let network_model = create_test_network_repo_model("mainnet", Some(2));
+        let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
             .with(eq(NetworkType::Evm), eq("mainnet"))
             .times(1)
             .return_once(move |_, _| Ok(Some(network_model)));
-        mock_network
-            .expect_get_by_chain_id()
-            .times(2)
-            .returning(|_, _| Ok(Some(create_test_network_repo_model("mainnet", None))));
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4252,40 +4214,33 @@ mod tests {
             });
 
         // Should schedule nonce recovery status check
-        let persistence_seen_by_recovery = persistence_completed.clone();
         mock_job_producer
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_retry_delay_seconds == Some(2)
+                job.status_check_retry_delay_seconds == Some(5)
                     && job
                         .metadata
                         .as_ref()
                         .is_some_and(|m| m.contains_key(TX_NONCE_RECONCILE_TRIGGER))
             })
-            .returning(move |_, _| {
-                assert!(persistence_seen_by_recovery.load(std::sync::atomic::Ordering::SeqCst));
-                Box::pin(ready(Ok(())))
-            });
+            .returning(|_, _| Box::pin(ready(Ok(()))));
 
         // Should update status without changing hash (was_already_submitted = true)
         let test_tx_clone = test_tx.clone();
-        let persistence_completed_by_update = persistence_completed.clone();
         mock_transaction
             .expect_partial_update()
             .times(1)
             .withf(|_, update| {
                 update.status == Some(TransactionStatus::Submitted)
-                    && update.sent_at.is_some()
+                    && update.sent_at.is_none()
                     && update.network_data.is_none()
                     && update.hashes.is_none()
                     && update.priced_at.is_none()
             })
-            .returning(move |_, update| {
+            .returning(move |_, _| {
                 let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = update.status.unwrap();
-                updated_tx.sent_at = update.sent_at;
-                persistence_completed_by_update.store(true, std::sync::atomic::Ordering::SeqCst);
+                updated_tx.status = TransactionStatus::Submitted;
                 Ok(updated_tx)
             });
 
@@ -4303,24 +4258,8 @@ mod tests {
 
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
         assert!(result.is_ok());
-        let mut updated_tx = result.unwrap();
-        assert!(updated_tx.sent_at.is_some());
-        assert!(matches!(
-            evm_transaction.should_resubmit(&updated_tx).await,
-            Ok(false)
-        ));
-        let evm_data = updated_tx.network_data.get_evm_transaction_data().unwrap();
-        let resubmit_timeout = get_resubmit_timeout_with_backoff(
-            get_resubmit_timeout_for_speed(&evm_data.speed),
-            updated_tx.hashes.len(),
-        );
-        // Guard against refreshing sent_at permanently suppressing repricing after one window.
-        updated_tx.sent_at =
-            Some((Utc::now() - chrono::Duration::milliseconds(resubmit_timeout + 1)).to_rfc3339());
-        assert!(matches!(
-            evm_transaction.should_resubmit(&updated_tx).await,
-            Ok(true)
-        ));
+        let updated_tx = result.unwrap();
+        assert_eq!(updated_tx.sent_at, test_tx.sent_at);
         // Hash should remain unchanged
         if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
             assert_eq!(evm_data.hash, Some(original_hash));

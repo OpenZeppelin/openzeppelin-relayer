@@ -19,7 +19,7 @@ pub struct StatusCheckResponse {
     pub initial_delay_seconds: u64,
     /// Optional delay between successful checks while the transaction is not final, in seconds.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false, minimum = 1, maximum = 100)]
+    #[schema(nullable = false, minimum = 5, maximum = 100)]
     pub retry_delay_seconds: Option<u64>,
 }
 
@@ -207,7 +207,7 @@ mod tests {
         if let NetworkConfigData::Evm(config) = &mut model.config {
             config.status_check = Some(crate::config::StatusCheckConfig {
                 initial_delay_seconds: None,
-                retry_delay_seconds: Some(2),
+                retry_delay_seconds: Some(5),
             });
         }
 
@@ -215,7 +215,7 @@ mod tests {
             NetworkResponse::from(model).status_check,
             Some(StatusCheckResponse {
                 initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                retry_delay_seconds: Some(2),
+                retry_delay_seconds: Some(5),
             })
         );
     }

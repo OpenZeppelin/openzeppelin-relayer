@@ -23,7 +23,7 @@ use tracing::{error, warn};
 
 use crate::config::ServerConfig;
 use crate::{
-    constants::{MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_DELAY_SECONDS},
+    constants::{MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS},
     jobs::{
         notification_handler, relayer_health_check_handler, token_swap_request_handler,
         transaction_request_handler, transaction_status_handler, transaction_submission_handler,
@@ -231,7 +231,7 @@ pub(crate) fn is_retry_exhausted(max_retries: usize, retry_attempt: usize) -> bo
 #[derive(serde::Deserialize)]
 struct StatusCheckData {
     network_type: Option<crate::models::NetworkType>,
-    status_retry_delay_seconds: Option<u32>,
+    status_check_retry_delay_seconds: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -240,7 +240,7 @@ struct PartialStatusCheckJob {
 }
 
 pub(crate) fn configured_status_retry_delay(
-    delay_seconds: Option<u32>,
+    delay_seconds: Option<u64>,
     network_type: Option<NetworkType>,
 ) -> Option<Duration> {
     if network_type != Some(NetworkType::Evm) {
@@ -248,9 +248,8 @@ pub(crate) fn configured_status_retry_delay(
     }
 
     delay_seconds
-        .map(u64::from)
         .filter(|delay| {
-            (MIN_EVM_STATUS_CHECK_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+            (MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
                 .contains(delay)
         })
         .map(|delay| {
@@ -279,7 +278,7 @@ pub(crate) fn retry_delay_for_queue(
     if queue_type == QueueType::StatusCheckEvm && retry_kind == RetryKind::NotYetFinal {
         if let Ok(job) = serde_json::from_slice::<PartialStatusCheckJob>(body) {
             if let Some(delay) = configured_status_retry_delay(
-                job.data.status_retry_delay_seconds,
+                job.data.status_check_retry_delay_seconds,
                 job.data.network_type,
             ) {
                 return (delay.as_secs() as i32 + i32::from(delay.subsec_millis() >= 500))
@@ -387,14 +386,14 @@ mod tests {
 
     #[test]
     fn test_configured_retry_delay_requires_typed_evm_status_check() {
-        let fast_evm = br#"{"data":{"network_type":"evm","status_retry_delay_seconds":2}}"#;
+        let fast_evm = br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":5}}"#;
         let configured = retry_delay_for_queue(
             QueueType::StatusCheckEvm,
             fast_evm,
             0,
             RetryKind::NotYetFinal,
         );
-        assert!((2..=3).contains(&configured));
+        assert!((5..=6).contains(&configured));
 
         assert_eq!(
             retry_delay_for_queue(QueueType::StatusCheckEvm, fast_evm, 0, RetryKind::Other),
@@ -406,7 +405,7 @@ mod tests {
         );
 
         let wrong_network =
-            br#"{"data":{"network_type":"stellar","status_retry_delay_seconds":1}}"#;
+            br#"{"data":{"network_type":"stellar","status_check_retry_delay_seconds":1}}"#;
         assert_eq!(
             retry_delay_for_queue(
                 QueueType::StatusCheckEvm,
@@ -419,8 +418,11 @@ mod tests {
 
         for body in [
             br#"{"data":{"network_type":"evm"}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_retry_delay_seconds":0}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_retry_delay_seconds":101}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":0}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":1}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":4}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":101}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":18446744073709551615}}"#.as_slice(),
         ] {
             assert_eq!(
                 retry_delay_for_queue(QueueType::StatusCheckEvm, body, 0, RetryKind::NotYetFinal),
@@ -428,7 +430,8 @@ mod tests {
             );
         }
 
-        let max_delay = br#"{"data":{"network_type":"evm","status_retry_delay_seconds":100}}"#;
+        let max_delay =
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":100}}"#;
         for _ in 0..50 {
             assert!(
                 retry_delay_for_queue(
@@ -443,11 +446,11 @@ mod tests {
 
     #[test]
     fn test_configured_status_retry_delay_validates_and_jitters() {
-        let delay = configured_status_retry_delay(Some(2), Some(NetworkType::Evm)).unwrap();
-        assert!(delay >= Duration::from_secs(2));
-        assert!(delay < Duration::from_secs(3));
+        let delay = configured_status_retry_delay(Some(5), Some(NetworkType::Evm)).unwrap();
+        assert!(delay >= Duration::from_secs(5));
+        assert!(delay < Duration::from_secs(6));
 
-        for delay in [None, Some(0), Some(101)] {
+        for delay in [None, Some(0), Some(1), Some(4), Some(101), Some(u64::MAX)] {
             assert_eq!(
                 configured_status_retry_delay(delay, Some(NetworkType::Evm)),
                 None

@@ -44,7 +44,10 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 pub const DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 8;
 
 /// Minimum configurable status-check delay (in seconds).
-pub const MIN_EVM_STATUS_CHECK_DELAY_SECONDS: u64 = 1;
+pub const MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 1;
+
+/// Minimum configurable delay between status checks (in seconds).
+pub const MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS: u64 = 5;
 
 /// Maximum configurable status-check delay (in seconds).
 pub const MAX_EVM_STATUS_CHECK_DELAY_SECONDS: u64 = 100;

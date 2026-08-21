@@ -10,7 +10,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
-    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state},
+    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{
         ApiError, DefaultAppState, TransactionError, TransactionMetadata, TransactionRepoModel,
@@ -57,26 +57,23 @@ pub async fn transaction_status_handler(
         tx_id,
         req_result.metadata,
         req_result.should_retry_on_error,
-        req_result.breaker_executed,
         req_result.use_fast_retry,
     )
     .await
 }
 
-fn is_healthy_on_chain_poll(status: &TransactionStatus, breaker_executed: bool) -> bool {
-    !breaker_executed
-        && matches!(
-            status,
-            TransactionStatus::Submitted | TransactionStatus::Mined
-        )
+fn is_healthy_on_chain_poll(status: &TransactionStatus) -> bool {
+    matches!(
+        status,
+        TransactionStatus::Submitted | TransactionStatus::Mined
+    )
 }
 
 /// Handles status check results with circuit breaker tracking.
 ///
 /// # Strategy
 /// - If transaction is in final state → return Ok (job completes, metadata cleaned up via delete_at)
-/// - If a healthy on-chain poll is not final → Reset consecutive to 0, return Err (retries)
-/// - If no on-chain poll occurred → Keep counters unchanged, return Err (retries)
+/// - If success but not final → Reset consecutive to 0, return Err (retries)
 /// - If error with should_retry=true → Increment counters, return Err (retries)
 /// - If error with should_retry=false → Return Ok (job completes, e.g., transaction not found)
 /// - If counters are None (early failure) → Skip counter updates
@@ -88,7 +85,6 @@ async fn handle_result<TR>(
     tx_id: &str,
     metadata: Option<TransactionMetadata>,
     should_retry_on_error: bool,
-    breaker_executed: bool,
     use_fast_retry: bool,
 ) -> Result<(), HandlerError>
 where
@@ -118,18 +114,16 @@ where
                 "transaction not in final state"
             );
 
-            if !breaker_executed {
-                // Use fresh metadata from the transaction (updated during handle_transaction_status)
-                // to decide whether a reset is needed, falling back to the pre-check snapshot.
-                let fresh_meta = tx.metadata.clone().or(metadata);
-                if let Some(meta) = fresh_meta {
-                    if meta.consecutive_failures > 0 {
-                        if let Err(e) = tx_repo
-                            .reset_status_check_consecutive_failures(tx_id.to_string())
-                            .await
-                        {
-                            warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
-                        }
+            // Use fresh metadata from the transaction (updated during handle_transaction_status)
+            // to decide whether a reset is needed, falling back to the pre-check snapshot.
+            let fresh_meta = tx.metadata.clone().or(metadata);
+            if let Some(meta) = fresh_meta {
+                if meta.consecutive_failures > 0 {
+                    if let Err(e) = tx_repo
+                        .reset_status_check_consecutive_failures(tx_id.to_string())
+                        .await
+                    {
+                        warn!(error = %e, tx_id = %tx_id, relayer_id = %tx.relayer_id, "failed to reset consecutive counter");
                     }
                 }
             }
@@ -204,8 +198,6 @@ struct HandleRequestResult {
     metadata: Option<TransactionMetadata>,
     /// If false, errors should not trigger retry (e.g., transaction not found)
     should_retry_on_error: bool,
-    /// Whether the circuit-breaker path actually executed for this check.
-    breaker_executed: bool,
     /// Whether a successful non-final result came from an on-chain poll.
     use_fast_retry: bool,
 }
@@ -236,7 +228,6 @@ async fn handle_request(
                 result: Err(eyre::eyre!("Transaction not found: {}", msg)),
                 metadata: None,
                 should_retry_on_error: false,
-                breaker_executed: false,
                 use_fast_retry: false,
             };
         }
@@ -246,7 +237,6 @@ async fn handle_request(
                 result: Err(e.into()),
                 metadata: None,
                 should_retry_on_error: true,
-                breaker_executed: false,
                 use_fast_retry: false,
             };
         }
@@ -299,7 +289,6 @@ async fn handle_request(
                     result: Err(eyre::eyre!("Relayer or signer not found: {}", msg)),
                     metadata: Some(meta),
                     should_retry_on_error: false,
-                    breaker_executed: false,
                     use_fast_retry: false,
                 };
             }
@@ -309,18 +298,17 @@ async fn handle_request(
                     result: Err(e.into()),
                     metadata: Some(meta),
                     should_retry_on_error: true,
-                    breaker_executed: false,
                     use_fast_retry: false,
                 };
             }
         };
 
     // Execute status check
-    let outcome = relayer_transaction
-        .handle_transaction_status_with_outcome(transaction, Some(context))
+    let result = relayer_transaction
+        .handle_transaction_status(transaction, Some(context))
         .await;
-    let use_fast_retry = is_healthy_on_chain_poll(&status_before_check, outcome.breaker_executed);
-    let result = outcome.result.map_err(|e| e.into());
+    let use_fast_retry = is_healthy_on_chain_poll(&status_before_check);
+    let result = result.map_err(|e| e.into());
 
     if let Ok(tx) = result.as_ref() {
         debug!(
@@ -334,7 +322,6 @@ async fn handle_request(
         result,
         metadata: Some(meta),
         should_retry_on_error: true,
-        breaker_executed: outcome.breaker_executed,
         use_fast_retry,
     }
 }
@@ -466,20 +453,10 @@ mod tests {
 
         #[test]
         fn test_fast_retry_requires_a_healthy_on_chain_status_poll() {
-            assert!(!is_healthy_on_chain_poll(
-                &TransactionStatus::Pending,
-                false
-            ));
-            assert!(!is_healthy_on_chain_poll(&TransactionStatus::Sent, false));
-            assert!(is_healthy_on_chain_poll(
-                &TransactionStatus::Submitted,
-                false
-            ));
-            assert!(is_healthy_on_chain_poll(&TransactionStatus::Mined, false));
-            assert!(!is_healthy_on_chain_poll(
-                &TransactionStatus::Submitted,
-                true
-            ));
+            assert!(!is_healthy_on_chain_poll(&TransactionStatus::Pending));
+            assert!(!is_healthy_on_chain_poll(&TransactionStatus::Sent));
+            assert!(is_healthy_on_chain_poll(&TransactionStatus::Submitted));
+            assert!(is_healthy_on_chain_poll(&TransactionStatus::Mined));
         }
 
         #[tokio::test]
@@ -491,109 +468,8 @@ mod tests {
                 ..Default::default()
             };
 
-            let result = handle_result(Ok(tx), &tx_repo, "tx-1", None, true, false, true).await;
+            let result = handle_result(Ok(tx), &tx_repo, "tx-1", None, true, true).await;
             assert!(matches!(result, Err(HandlerError::NotYetFinal)));
-        }
-
-        #[tokio::test]
-        async fn test_pending_checks_only_trip_breaker_after_consecutive_failures() {
-            let tx_repo = TransactionRepositoryStorage::new_in_memory();
-            let tx_id = "tx-pending".to_string();
-            tx_repo
-                .create(TransactionRepoModel {
-                    id: tx_id.clone(),
-                    status: TransactionStatus::Pending,
-                    metadata: Some(TransactionMetadata::default()),
-                    ..Default::default()
-                })
-                .await
-                .unwrap();
-            let max_consecutive = get_max_consecutive_status_failures(NetworkType::Evm);
-            let max_total = get_max_total_status_failures(NetworkType::Evm);
-
-            for _ in 0..max_consecutive {
-                let tx = tx_repo.get_by_id(tx_id.clone()).await.unwrap();
-                let metadata = tx.metadata.clone().unwrap_or_default();
-                let breaker_fired = StatusCheckContext::new(
-                    metadata.consecutive_failures,
-                    metadata.total_failures,
-                    0,
-                    max_consecutive,
-                    max_total,
-                    NetworkType::Evm,
-                )
-                .should_force_finalize();
-                assert!(!breaker_fired);
-                handle_result(
-                    Err(eyre::eyre!("queue unavailable")),
-                    &tx_repo,
-                    &tx_id,
-                    Some(metadata),
-                    true,
-                    breaker_fired,
-                    false,
-                )
-                .await
-                .unwrap_err();
-
-                let tx = tx_repo.get_by_id(tx_id.clone()).await.unwrap();
-                let metadata = tx.metadata.clone().unwrap_or_default();
-                let breaker_fired = StatusCheckContext::new(
-                    metadata.consecutive_failures,
-                    metadata.total_failures,
-                    0,
-                    max_consecutive,
-                    max_total,
-                    NetworkType::Evm,
-                )
-                .should_force_finalize();
-                let use_fast_retry = is_healthy_on_chain_poll(&tx.status, breaker_fired);
-                let result = handle_result(
-                    Ok(tx),
-                    &tx_repo,
-                    &tx_id,
-                    Some(metadata),
-                    true,
-                    breaker_fired,
-                    use_fast_retry,
-                )
-                .await;
-                assert!(matches!(result, Err(HandlerError::Retry(_))));
-            }
-
-            let tx = tx_repo.get_by_id(tx_id.clone()).await.unwrap();
-            let metadata = tx.metadata.unwrap_or_default();
-            assert_eq!(metadata.consecutive_failures, 0);
-            assert_eq!(metadata.total_failures, max_consecutive);
-
-            for _ in 0..max_consecutive {
-                let tx = tx_repo.get_by_id(tx_id.clone()).await.unwrap();
-                let metadata = tx.metadata.unwrap_or_default();
-                handle_result(
-                    Err(eyre::eyre!("queue unavailable")),
-                    &tx_repo,
-                    &tx_id,
-                    Some(metadata),
-                    true,
-                    false,
-                    false,
-                )
-                .await
-                .unwrap_err();
-            }
-
-            let tx = tx_repo.get_by_id(tx_id).await.unwrap();
-            let metadata = tx.metadata.unwrap_or_default();
-            assert_eq!(metadata.consecutive_failures, max_consecutive);
-            assert!(StatusCheckContext::new(
-                metadata.consecutive_failures,
-                metadata.total_failures,
-                0,
-                max_consecutive,
-                max_total,
-                NetworkType::Evm,
-            )
-            .should_force_finalize());
         }
 
         #[tokio::test]
@@ -605,7 +481,6 @@ mod tests {
                 "tx-1",
                 None,
                 true,
-                false,
                 false,
             )
             .await;
@@ -643,7 +518,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_non_executed_breaker_resets_counter_after_healthy_poll() {
+        async fn test_non_final_success_resets_counter_after_healthy_poll() {
             let tx_repo = TransactionRepositoryStorage::new_in_memory();
             let tx_id = "tx-noop-poll".to_string();
             let metadata = TransactionMetadata {
@@ -659,8 +534,7 @@ mod tests {
             };
             tx_repo.create(tx.clone()).await.unwrap();
 
-            let result =
-                handle_result(Ok(tx), &tx_repo, &tx_id, Some(metadata), true, false, true).await;
+            let result = handle_result(Ok(tx), &tx_repo, &tx_id, Some(metadata), true, true).await;
 
             assert!(matches!(result, Err(HandlerError::NotYetFinal)));
             let updated = tx_repo.get_by_id(tx_id).await.unwrap();
@@ -724,7 +598,6 @@ mod tests {
                 }),
                 true,
                 false,
-                false,
             )
             .await;
 
@@ -743,7 +616,6 @@ mod tests {
                     nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
-                breaker_executed: false,
                 use_fast_retry: true,
             };
 
@@ -761,7 +633,6 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 metadata: None,
                 should_retry_on_error: false,
-                breaker_executed: false,
                 use_fast_retry: false,
             };
 
@@ -777,7 +648,6 @@ mod tests {
                 result: Err(eyre::eyre!("Transaction not found")),
                 metadata: None,
                 should_retry_on_error: false,
-                breaker_executed: false,
                 use_fast_retry: false,
             };
 
@@ -798,7 +668,6 @@ mod tests {
                     nonce_too_high_retries: 0,
                 }),
                 should_retry_on_error: true,
-                breaker_executed: false,
                 use_fast_retry: false,
             };
 

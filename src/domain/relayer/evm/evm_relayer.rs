@@ -258,7 +258,9 @@ where
                     transaction.relayer_id.clone(),
                     crate::models::NetworkType::Evm,
                 )
-                .with_status_retry_delay_seconds(self.network.status_check_retry_delay_seconds()),
+                .with_status_check_retry_delay_seconds(
+                    self.network.status_check_retry_delay_seconds(),
+                ),
                 Some(calculate_scheduled_timestamp(initial_delay_seconds)),
             )
             .await
@@ -946,13 +948,13 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .returning(move |job, value| {
                 *captured_scheduled_at.lock().unwrap() = value;
-                *captured_retry_delay.lock().unwrap() = job.status_retry_delay_seconds;
+                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
                 Box::pin(ready(Ok(())))
             });
 
         let mut network = create_test_evm_network();
         network.status_check_initial_delay_seconds = 1;
-        network.status_check_retry_delay_seconds = Some(2);
+        network.status_check_retry_delay_seconds = Some(5);
         let relayer = EvmRelayer::new(
             relayer_model,
             signer,
@@ -973,7 +975,7 @@ mod tests {
         let scheduled_at = scheduled_at.lock().unwrap().unwrap();
         assert!(scheduled_at > before);
         assert!(scheduled_at <= after + 1);
-        assert_eq!(*retry_delay.lock().unwrap(), Some(2));
+        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
     }
 
     #[tokio::test]

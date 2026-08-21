@@ -206,13 +206,13 @@ mod tests {
 
         let child = StatusCheckConfig {
             initial_delay_seconds: None,
-            retry_delay_seconds: Some(1),
+            retry_delay_seconds: Some(5),
         };
         assert_eq!(
             child.merge_with_parent(&parent),
             StatusCheckConfig {
                 initial_delay_seconds: Some(8),
-                retry_delay_seconds: Some(1),
+                retry_delay_seconds: Some(5),
             }
         );
     }

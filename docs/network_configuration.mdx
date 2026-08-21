@@ -173,9 +173,12 @@ These tags help the relayer:
 | ------------------------ | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `chain_id`               | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited) |
 | `required_confirmations` | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)    |
-| `status_check`            | object        | No       | Transaction status-check settings. `initial_delay_seconds` defaults to `8`; optional `retry_delay_seconds` sets the interval after a healthy, non-final check. Both accept `1`–`100` and inherit independently. Without a retry delay, the existing EVM backoff is preserved. |
+| `status_check`            | object        | No       | Transaction status-check settings. `initial_delay_seconds` defaults to `8` and accepts `1`–`100`; optional `retry_delay_seconds` accepts `5`–`100` and sets the interval after a healthy, non-final check. Both fields inherit independently. Without a retry delay, the existing EVM backoff is preserved. |
 | `symbol`                 | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                    |
 | `features`               | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                               |
+
+A larger `initial_delay_seconds` also delays the first resubmission and timeout
+evaluation, because both run only during a status check.
 
 #### Example: EVM Network Configuration
 
@@ -189,7 +192,7 @@ Here’s an example showing an EVM network configuration:
   "required_confirmations": 12, // High security: 12 confirmations
   "status_check": {
     "initial_delay_seconds": 8, // Delays the first status check
-    "retry_delay_seconds": 2 // Faster follow-up checks on fast-finality chains
+    "retry_delay_seconds": 5 // Faster follow-up checks on fast-finality chains
   },
   "symbol": "ETH", // Native currency symbol
   "features": ["eip1559"], // Supports EIP-1559 fee market
@@ -205,7 +208,7 @@ Here’s an example showing an EVM network configuration:
   confirmation time: for confirmation time `T`, initial delay `I`, and retry
   delay `R`, budget at least `1 + ceil(max(0, T - I) / R)` receives, plus margin
   for outages and duplicate deliveries. For example, `T=120s`, `I=8s`, and
-  `R=2s` require at least 57 receives before adding that margin. Otherwise SQS
+  `R=5s` require at least 24 receives before adding that margin. Otherwise SQS
   can dead-letter the status check and stop monitoring the transaction.
 </Callout>
 
