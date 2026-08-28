@@ -37,7 +37,9 @@ USER root
 RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
 ENV PATH="/usr/local/bin:$PATH"
 
-RUN npm install -g pnpm
+# Pin the pnpm major: pnpm 12 ships a preinstall script that newer npm blocks by
+# default, which leaves a broken pnpm shim. pnpm 10 matches the lockfile format.
+RUN npm install -g pnpm@10
 
 # Copy plugins folder and install dependencies
 COPY --chown=nonroot:nonroot ./plugins /app/plugins
