@@ -1014,12 +1014,12 @@ mod tests {
         },
     };
     use mockall::predicate::*;
-    use soroban_rs::xdr::{
+    use std::future::ready;
+    use std::sync::Arc;
+    use stellar_xdr::{
         AccountEntry, AccountEntryExt, AccountId, DecoratedSignature, PublicKey, SequenceNumber,
         Signature, SignatureHint, String32, Thresholds, Uint256, VecM,
     };
-    use std::future::ready;
-    use std::sync::Arc;
 
     /// Helper function to create a mock DEX service for testing
     fn create_mock_dex_service() -> Arc<MockStellarDexServiceTrait> {

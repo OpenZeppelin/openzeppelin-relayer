@@ -1,12 +1,12 @@
 //! # Stellar Local Signer Implementation
 //!
 //! This module provides a local signer implementation for Stellar transactions
-//! using the `ed25519-dalek` and `soroban-rs` libraries with an in-memory private key.
+//! using the `ed25519-dalek` and `stellar-xdr` libraries with an in-memory private key.
 //!
 //! ## Features
 //!
 //! - Transaction signing for Stellar networks
-//! - Integration with `soroban-rs` for Soroban compatibility
+//! - Signs both classic and Soroban transaction envelopes
 //!
 //! ## Security Considerations
 //!
@@ -30,17 +30,16 @@ use ed25519_dalek::Signer as Ed25519Signer;
 use ed25519_dalek::{ed25519::signature::SignerMut, SigningKey};
 use eyre::Result;
 use sha2::{Digest, Sha256};
-use soroban_rs::xdr::{
+use stellar_xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
-    TransactionEnvelope, Uint256, WriteXdr,
+    TransactionEnvelope, TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction,
+    Uint256, WriteXdr,
 };
 use tracing::info;
 
-use soroban_rs::Signer as SorobanSigner;
 use std::{convert::TryInto, sync::Arc};
 
 pub struct LocalSigner {
-    local_signer_client: SorobanSigner,
     signing_key: SigningKey,
 }
 
@@ -56,12 +55,30 @@ impl LocalSigner {
             .map_err(|_| SignerError::Configuration("Private key must be 32 bytes".into()))?;
 
         let signing_key = SigningKey::from_bytes(&key_bytes);
-        let local_signer_client = SorobanSigner::new(signing_key.clone());
 
-        Ok(Self {
-            local_signer_client,
-            signing_key,
-        })
+        Ok(Self { signing_key })
+    }
+
+    /// Strkey-encoded (G...) account id derived from the signing key.
+    fn account_id(&self) -> String {
+        let public_key =
+            stellar_strkey::ed25519::PublicKey(self.signing_key.verifying_key().to_bytes());
+        format!("{public_key}")
+    }
+
+    /// Sign a bare transaction (as opposed to an envelope) for the given network
+    fn sign_transaction_v1(
+        &self,
+        transaction: &Transaction,
+        network_id: &Hash,
+    ) -> Result<DecoratedSignature, SignerError> {
+        let payload = TransactionSignaturePayload {
+            network_id: network_id.clone(),
+            tagged_transaction: TransactionSignaturePayloadTaggedTransaction::Tx(
+                transaction.clone(),
+            ),
+        };
+        self.sign_payload(&payload)
     }
 
     /// Sign a transaction envelope based on its type
@@ -73,7 +90,14 @@ impl LocalSigner {
         // Create the appropriate signature payload based on envelope type
         let payload = create_signature_payload(envelope, network_id)
             .map_err(|e| SignerError::SigningError(format!("failed to create payload: {e}")))?;
+        self.sign_payload(&payload)
+    }
 
+    /// Hash and sign a signature payload, producing a hint-decorated signature
+    fn sign_payload(
+        &self,
+        payload: &TransactionSignaturePayload,
+    ) -> Result<DecoratedSignature, SignerError> {
         // Serialize and hash the payload
         let payload_bytes = payload
             .to_xdr(Limits::none())
@@ -101,8 +125,7 @@ impl LocalSigner {
 #[async_trait]
 impl Signer for LocalSigner {
     async fn address(&self) -> Result<Address, SignerError> {
-        let account_id = self.local_signer_client.account_id();
-        Ok(Address::Stellar(account_id.to_string()))
+        Ok(Address::Stellar(self.account_id()))
     }
 
     async fn sign_transaction(
@@ -125,11 +148,7 @@ impl Signer for LocalSigner {
                     SignerError::SigningError(format!("invalid transaction data: {e}"))
                 })?;
 
-                self.local_signer_client
-                    .sign_transaction(&transaction, &network_id)
-                    .map_err(|e| {
-                        SignerError::SigningError(format!("failed to sign transaction: {e}"))
-                    })?
+                self.sign_transaction_v1(&transaction, &network_id)?
             }
             TransactionInput::UnsignedXdr(xdr)
             | TransactionInput::SignedXdr { xdr, .. }
@@ -191,13 +210,38 @@ mod tests {
     };
     use secrets::SecretVec;
 
+    const TEST_SEED: [u8; 32] = [1u8; 32];
+    const TEST_PASSPHRASE: &str = "Test SDF Network ; September 2015";
+
     fn create_test_signer_model() -> SignerDomainModel {
-        let seed = vec![1u8; 32];
-        let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&seed));
+        let raw_key = SecretVec::new(32, |v| v.copy_from_slice(&TEST_SEED));
         SignerDomainModel {
             id: "test".to_string(),
             config: SignerConfig::Local(LocalSignerConfig { raw_key }),
         }
+    }
+
+    fn test_network_id() -> Hash {
+        Hash(Sha256::digest(TEST_PASSPHRASE.as_bytes()).into())
+    }
+
+    /// Assert `sig` is a valid ed25519 signature by the test key over sha256(payload XDR),
+    /// and that the hint is the last 4 bytes of the public key. This is exactly what
+    /// stellar-core checks when it verifies a DecoratedSignature.
+    fn assert_signature_verifies(payload: &TransactionSignaturePayload, sig: &DecoratedSignature) {
+        let verifying_key = SigningKey::from_bytes(&TEST_SEED).verifying_key();
+        let hash = Sha256::digest(payload.to_xdr(Limits::none()).unwrap());
+        let signature = ed25519_dalek::Signature::from_bytes(
+            sig.signature
+                .0
+                .as_slice()
+                .try_into()
+                .expect("64-byte signature"),
+        );
+        verifying_key
+            .verify_strict(&hash, &signature)
+            .expect("signature must verify against the signer public key");
+        assert_eq!(sig.hint.0, verifying_key.to_bytes()[28..]);
     }
 
     #[tokio::test]
@@ -245,18 +289,18 @@ mod tests {
             transaction_result_xdr: None,
         };
         let response = signer
-            .sign_transaction(NetworkTransactionData::Stellar(tx_data))
+            .sign_transaction(NetworkTransactionData::Stellar(tx_data.clone()))
             .await
             .unwrap();
         match response {
             SignTransactionResponse::Stellar(res) => {
-                let sig = res.signature;
-                let hint = sig.hint.0;
-                let signature = sig.signature.0;
-                assert_eq!(hint.len(), 4);
-                assert_eq!(signature.len(), 64);
-                // signature bytes should not all be zero
-                assert!(signature.iter().any(|&b| b != 0));
+                let payload = TransactionSignaturePayload {
+                    network_id: test_network_id(),
+                    tagged_transaction: TransactionSignaturePayloadTaggedTransaction::Tx(
+                        Transaction::try_from(tx_data).unwrap(),
+                    ),
+                };
+                assert_signature_verifies(&payload, &res.signature);
             }
             _ => panic!("Expected Stellar signature response"),
         }
@@ -264,8 +308,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_transaction_with_xdr() {
-        use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope};
         use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope};
 
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let source_account = match signer.address().await.unwrap() {
@@ -280,9 +324,9 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(1),
             time_bounds: None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -314,22 +358,63 @@ mod tests {
 
         match response {
             SignTransactionResponse::Stellar(res) => {
-                let sig = res.signature;
-                assert_eq!(sig.hint.0.len(), 4);
-                assert_eq!(sig.signature.0.len(), 64);
-                assert!(sig.signature.0.iter().any(|&b| b != 0));
+                let payload = create_signature_payload(&envelope, &test_network_id()).unwrap();
+                assert_signature_verifies(&payload, &res.signature);
             }
             _ => panic!("Expected Stellar signature response"),
         }
     }
 
+    /// Regression vector: seed 0x01*32 on the test network must always yield the same
+    /// address and (ed25519 is deterministic) the same signature over a fixed envelope.
+    #[tokio::test]
+    async fn test_known_vector_seed_one() {
+        use stellar_xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope};
+
+        let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
+        let Address::Stellar(address) = signer.address().await.unwrap() else {
+            panic!("Expected Stellar address");
+        };
+        assert_eq!(
+            address,
+            "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"
+        );
+
+        let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
+            tx: TransactionV0 {
+                source_account_ed25519: Uint256(
+                    SigningKey::from_bytes(&TEST_SEED)
+                        .verifying_key()
+                        .to_bytes(),
+                ),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                time_bounds: None,
+                memo: stellar_xdr::Memo::None,
+                operations: vec![].try_into().unwrap(),
+                ext: stellar_xdr::TransactionV0Ext::V0,
+            },
+            signatures: vec![].try_into().unwrap(),
+        });
+        let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
+        let result = signer
+            .sign_xdr_transaction(&xdr, TEST_PASSPHRASE)
+            .await
+            .unwrap();
+        assert_eq!(hex::encode(result.signature.hint.0), "b40f6f5c");
+        assert_eq!(
+            hex::encode(result.signature.signature.0.as_slice()),
+            "7ef68396db27802464c7ff623fe763dcecd1b712f31862cca0eaaf7cd0ec686684ace64b27918e6fcfb2249e0f5e00ef817979ad8384b2c1bb4a1cab01ad5704"
+        );
+    }
+
     #[tokio::test]
     async fn test_sign_fee_bump_transaction() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             FeeBumpTransaction, FeeBumpTransactionInnerTx, MuxedAccount, SequenceNumber,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let source_account = match signer.address().await.unwrap() {
@@ -344,10 +429,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256([1u8; 32])), // Different source
             fee: 100,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let inner_envelope = TransactionV1Envelope {
@@ -365,14 +450,13 @@ mod tests {
             fee_source: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 200,
             inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
-            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+            ext: stellar_xdr::FeeBumpTransactionExt::V0,
         };
 
-        let envelope =
-            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
-                tx: fee_bump_tx,
-                signatures: vec![].try_into().unwrap(),
-            });
+        let envelope = TransactionEnvelope::TxFeeBump(stellar_xdr::FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: vec![].try_into().unwrap(),
+        });
 
         let xdr = envelope.to_xdr_base64(Limits::none()).unwrap();
 
@@ -399,9 +483,8 @@ mod tests {
         match response {
             SignTransactionResponse::Stellar(res) => {
                 let sig = res.signature;
-                assert_eq!(sig.hint.0.len(), 4);
-                assert_eq!(sig.signature.0.len(), 64);
-                assert!(sig.signature.0.iter().any(|&b| b != 0));
+                let payload = create_signature_payload(&envelope, &test_network_id()).unwrap();
+                assert_signature_verifies(&payload, &sig);
             }
             _ => panic!("Expected Stellar signature response"),
         }
@@ -409,8 +492,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_xdr_transaction_success() {
-        use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
         use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
 
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let source_account = match signer.address().await.unwrap() {
@@ -425,9 +508,9 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(1),
             time_bounds: None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -446,9 +529,8 @@ mod tests {
 
         // Verify the response
         assert!(!result.signed_xdr.is_empty());
-        assert_eq!(result.signature.hint.0.len(), 4);
-        assert_eq!(result.signature.signature.0.len(), 64);
-        assert!(result.signature.signature.0.iter().any(|&b| b != 0));
+        let payload = create_signature_payload(&envelope, &test_network_id()).unwrap();
+        assert_signature_verifies(&payload, &result.signature);
 
         // Verify the signed XDR can be parsed back
         let signed_envelope =
@@ -497,8 +579,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_xdr_transaction_different_networks() {
-        use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
         use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
 
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let source_account = match signer.address().await.unwrap() {
@@ -513,9 +595,9 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(1),
             time_bounds: None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -548,10 +630,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_sign_xdr_transaction_with_v1_envelope() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             MuxedAccount, SequenceNumber, Transaction, TransactionV1Envelope, Uint256,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let source_account = match signer.address().await.unwrap() {
@@ -565,10 +647,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {

@@ -36,14 +36,14 @@ use alloy::{
 
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use soroban_rs::xdr::{TransactionEnvelope, TransactionV1Envelope, VecM};
 use std::{convert::TryFrom, str::FromStr};
+use stellar_xdr::{TransactionEnvelope, TransactionV1Envelope, VecM};
 use strum::Display;
 
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use soroban_rs::xdr::Transaction as SorobanTransaction;
+use stellar_xdr::Transaction as SorobanTransaction;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema, Display)]
 #[serde(rename_all = "lowercase")]
@@ -822,7 +822,7 @@ impl StellarTransactionData {
 
     // Helper method to parse XDR envelope
     fn parse_xdr_envelope(&self, xdr: &str) -> Result<TransactionEnvelope, SignerError> {
-        use soroban_rs::xdr::{Limits, ReadXdr};
+        use stellar_xdr::{Limits, ReadXdr};
         TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
             .map_err(|e| SignerError::ConversionError(format!("Invalid XDR: {e}")))
     }
@@ -832,7 +832,7 @@ impl StellarTransactionData {
         &self,
         envelope: TransactionEnvelope,
     ) -> Result<TransactionEnvelope, SignerError> {
-        use soroban_rs::xdr::{Limits, ReadXdr, WriteXdr};
+        use stellar_xdr::{Limits, ReadXdr, WriteXdr};
 
         // Serialize and re-parse to get a mutable version
         let envelope_xdr = envelope.to_xdr_base64(Limits::none()).map_err(|e| {
@@ -885,7 +885,7 @@ impl StellarTransactionData {
     /// Return a new instance with simulation data applied (fees and transaction extension).
     pub fn with_simulation_data(
         mut self,
-        sim_response: soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+        sim_response: stellar_rpc_client::SimulateTransactionResponse,
         operations_count: u64,
     ) -> Result<Self, SignerError> {
         use tracing::info;
@@ -1222,8 +1222,8 @@ impl From<&[u8; 65]> for EvmTransactionDataSignature {
 #[cfg(test)]
 mod tests {
     use lazy_static::lazy_static;
-    use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
     use std::sync::Mutex;
+    use stellar_xdr::{BytesM, Signature, SignatureHint};
 
     use super::*;
     use crate::{
@@ -1874,7 +1874,7 @@ mod tests {
         let env = env.unwrap();
         // Should be a TransactionV1Envelope with no signatures
         match env {
-            soroban_rs::xdr::TransactionEnvelope::Tx(tx_env) => {
+            stellar_xdr::TransactionEnvelope::Tx(tx_env) => {
                 assert_eq!(tx_env.signatures.len(), 0);
             }
             _ => {
@@ -1891,7 +1891,7 @@ mod tests {
         assert!(env.is_ok());
         let env = env.unwrap();
         match env {
-            soroban_rs::xdr::TransactionEnvelope::Tx(tx_env) => {
+            stellar_xdr::TransactionEnvelope::Tx(tx_env) => {
                 assert_eq!(tx_env.signatures.len(), 1);
             }
             _ => {
@@ -2482,7 +2482,7 @@ mod tests {
     fn test_stellar_transaction_data_serialization_roundtrip() {
         use crate::models::transaction::stellar::asset::AssetSpec;
         use crate::models::transaction::stellar::operation::OperationSpec;
-        use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
+        use stellar_xdr::{BytesM, Signature, SignatureHint};
 
         // Create a dummy signature
         let hint = SignatureHint([1, 2, 3, 4]);
@@ -2633,8 +2633,8 @@ mod tests {
         // Test case 3: Signed XDR with fee_bump
         // Create a signed XDR by duplicating the test logic from xdr_tests
         let signed_xdr = {
-            use soroban_rs::xdr::{Limits, TransactionEnvelope, TransactionV1Envelope, WriteXdr};
             use stellar_strkey::ed25519::PublicKey;
+            use stellar_xdr::{Limits, TransactionEnvelope, TransactionV1Envelope, WriteXdr};
 
             // Use the same transaction structure but add a dummy signature
             let source_pk =
@@ -2644,41 +2644,39 @@ mod tests {
                 PublicKey::from_string("GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ")
                     .unwrap();
 
-            let payment_op = soroban_rs::xdr::PaymentOp {
-                destination: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
-                    dest_pk.0,
-                )),
-                asset: soroban_rs::xdr::Asset::Native,
+            let payment_op = stellar_xdr::PaymentOp {
+                destination: stellar_xdr::MuxedAccount::Ed25519(stellar_xdr::Uint256(dest_pk.0)),
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             };
 
-            let operation = soroban_rs::xdr::Operation {
+            let operation = stellar_xdr::Operation {
                 source_account: None,
-                body: soroban_rs::xdr::OperationBody::Payment(payment_op),
+                body: stellar_xdr::OperationBody::Payment(payment_op),
             };
 
-            let operations: soroban_rs::xdr::VecM<soroban_rs::xdr::Operation, 100> =
+            let operations: stellar_xdr::VecM<stellar_xdr::Operation, 100> =
                 vec![operation].try_into().unwrap();
 
-            let tx = soroban_rs::xdr::Transaction {
-                source_account: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
+            let tx = stellar_xdr::Transaction {
+                source_account: stellar_xdr::MuxedAccount::Ed25519(stellar_xdr::Uint256(
                     source_pk.0,
                 )),
                 fee: 100,
-                seq_num: soroban_rs::xdr::SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                seq_num: stellar_xdr::SequenceNumber(1),
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations,
-                ext: soroban_rs::xdr::TransactionExt::V0,
+                ext: stellar_xdr::TransactionExt::V0,
             };
 
             // Add a dummy signature
-            let hint = soroban_rs::xdr::SignatureHint([0; 4]);
+            let hint = stellar_xdr::SignatureHint([0; 4]);
             let sig_bytes: Vec<u8> = vec![0u8; 64];
-            let sig_bytes_m: soroban_rs::xdr::BytesM<64> = sig_bytes.try_into().unwrap();
-            let sig = soroban_rs::xdr::DecoratedSignature {
+            let sig_bytes_m: stellar_xdr::BytesM<64> = sig_bytes.try_into().unwrap();
+            let sig = stellar_xdr::DecoratedSignature {
                 hint,
-                signature: soroban_rs::xdr::Signature(sig_bytes_m),
+                signature: stellar_xdr::Signature(sig_bytes_m),
             };
 
             let envelope = TransactionV1Envelope {

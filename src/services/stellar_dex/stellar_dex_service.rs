@@ -261,9 +261,9 @@ mod tests {
             Ok(crate::domain::SignTransactionResponse::Stellar(
                 crate::domain::SignTransactionResponseStellar {
                     signature: crate::models::DecoratedSignature {
-                        hint: soroban_rs::xdr::SignatureHint([0; 4]),
-                        signature: soroban_rs::xdr::Signature(
-                            soroban_rs::xdr::BytesM::try_from(vec![0u8; 64]).unwrap(),
+                        hint: stellar_xdr::SignatureHint([0; 4]),
+                        signature: stellar_xdr::Signature(
+                            stellar_xdr::BytesM::try_from(vec![0u8; 64]).unwrap(),
                         ),
                     },
                 },

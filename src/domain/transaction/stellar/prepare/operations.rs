@@ -129,8 +129,8 @@ mod tests {
             signer::MockSigner,
         },
     };
-    use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
-    use soroban_rs::xdr::{self};
+    use stellar_rpc_client::SimulateTransactionResponse;
+    use stellar_xdr as xdr;
 
     fn create_test_transaction() -> TransactionRepoModel {
         TransactionRepoModel {

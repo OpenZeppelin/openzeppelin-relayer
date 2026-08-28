@@ -7,12 +7,12 @@
 
 use crate::models::StellarValidationError;
 use eyre::{eyre, Result};
-use soroban_rs::xdr::{
+use stellar_strkey::ed25519::{MuxedAccount as StrkeyMuxedAccount, PublicKey};
+use stellar_xdr::{
     DecoratedSignature, FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionInnerTx,
     Limits, MuxedAccount, Operation, OperationBody, ReadXdr, TransactionEnvelope, TransactionExt,
     TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
-use stellar_strkey::ed25519::{MuxedAccount as StrkeyMuxedAccount, PublicKey};
 
 /// Parse a transaction XDR string into a TransactionEnvelope
 pub fn parse_transaction_xdr(xdr: &str, expect_signed: bool) -> Result<TransactionEnvelope> {
@@ -49,7 +49,7 @@ pub fn extract_source_account(envelope: &TransactionEnvelope) -> Result<String> 
             // For V0 transactions, the source account is Ed25519 only
             let bytes: [u8; 32] = e.tx.source_account_ed25519.0;
             let pk = PublicKey(bytes);
-            return Ok(pk.to_string());
+            return Ok(format!("{pk}"));
         }
         TransactionEnvelope::Tx(TransactionV1Envelope { tx, .. }) => &tx.source_account,
         TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope { tx, .. }) => &tx.fee_source,
@@ -110,7 +110,7 @@ pub fn build_fee_bump_envelope(
         fee_source: fee_source_muxed,
         fee: max_fee,
         inner_tx,
-        ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+        ext: stellar_xdr::FeeBumpTransactionExt::V0,
     };
 
     // Create the fee-bump envelope (unsigned initially)
@@ -158,13 +158,13 @@ pub fn muxed_account_to_string(muxed: &MuxedAccount) -> Result<String> {
         MuxedAccount::Ed25519(key) => {
             let bytes: [u8; 32] = key.0;
             let pk = PublicKey(bytes);
-            Ok(pk.to_string())
+            Ok(format!("{pk}"))
         }
         MuxedAccount::MuxedEd25519(m) => {
             // For muxed accounts, we need to extract the underlying ed25519 key
             let bytes: [u8; 32] = m.ed25519.0;
             let pk = PublicKey(bytes);
-            Ok(pk.to_string())
+            Ok(format!("{pk}"))
         }
     }
 }
@@ -175,7 +175,7 @@ pub fn string_to_muxed_account(address: &str) -> Result<MuxedAccount> {
     // Try to parse as muxed account first (M... format)
     if let Ok(muxed) = StrkeyMuxedAccount::from_string(address) {
         return Ok(MuxedAccount::MuxedEd25519(
-            soroban_rs::xdr::MuxedAccountMed25519 {
+            stellar_xdr::MuxedAccountMed25519 {
                 id: muxed.id,
                 ed25519: Uint256(muxed.ed25519),
             },
@@ -273,23 +273,23 @@ pub fn attach_signatures_to_envelope(
 /// Convert a V0 transaction envelope to V1 format
 /// This is required for fee-bump transactions as they only support V1 inner transactions
 fn convert_v0_to_v1_envelope(
-    v0_envelope: soroban_rs::xdr::TransactionV0Envelope,
+    v0_envelope: stellar_xdr::TransactionV0Envelope,
 ) -> TransactionV1Envelope {
     let v0_tx = &v0_envelope.tx;
     let source_bytes: [u8; 32] = v0_tx.source_account_ed25519.0;
 
     // Create V1 transaction from V0 data
-    let tx = soroban_rs::xdr::Transaction {
+    let tx = stellar_xdr::Transaction {
         source_account: MuxedAccount::Ed25519(Uint256(source_bytes)),
         fee: v0_tx.fee,
         seq_num: v0_tx.seq_num.clone(),
         cond: match v0_tx.time_bounds.clone() {
-            Some(tb) => soroban_rs::xdr::Preconditions::Time(tb),
-            None => soroban_rs::xdr::Preconditions::None,
+            Some(tb) => stellar_xdr::Preconditions::Time(tb),
+            None => stellar_xdr::Preconditions::None,
         },
         memo: v0_tx.memo.clone(),
         operations: v0_tx.operations.clone(),
-        ext: soroban_rs::xdr::TransactionExt::V0,
+        ext: stellar_xdr::TransactionExt::V0,
     };
 
     // Create V1 envelope with V0 signatures
@@ -303,10 +303,10 @@ fn convert_v0_to_v1_envelope(
 pub fn update_xdr_sequence(envelope: &mut TransactionEnvelope, sequence: i64) -> Result<()> {
     match envelope {
         TransactionEnvelope::TxV0(ref mut e) => {
-            e.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
+            e.tx.seq_num = stellar_xdr::SequenceNumber(sequence);
         }
         TransactionEnvelope::Tx(ref mut e) => {
-            e.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
+            e.tx.seq_num = stellar_xdr::SequenceNumber(sequence);
         }
         TransactionEnvelope::TxFeeBump(_) => {
             return Err(eyre!("Cannot set sequence number on fee-bump transaction"));
@@ -337,13 +337,13 @@ pub fn update_xdr_fee(envelope: &mut TransactionEnvelope, fee: u32) -> Result<()
 mod tests {
     use super::*;
     use crate::domain::transaction::stellar::test_helpers::*;
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Asset, FeeBumpTransactionInnerTx, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
         Limits, Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
         SequenceNumber, Signature, SignatureHint, TransactionV0, TransactionV0Envelope, Uint256,
         VecM,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     // Helper to get test XDR
     fn get_unsigned_xdr() -> String {
@@ -533,9 +533,9 @@ mod tests {
         // Test that Soroban operations require simulation
         let invoke_op = InvokeHostFunctionOp {
             host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                contract_address: soroban_rs::xdr::ScAddress::Contract(
-                    soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
-                ),
+                contract_address: stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(
+                    stellar_xdr::Hash([0u8; 32]),
+                )),
                 function_name: "test".try_into().unwrap(),
                 args: vec![].try_into().unwrap(),
             }),
@@ -576,9 +576,9 @@ mod tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: soroban_rs::xdr::ScAddress::Contract(
-                        soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
-                    ),
+                    contract_address: stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(
+                        stellar_xdr::Hash([0u8; 32]),
+                    )),
                     function_name: "test".try_into().unwrap(),
                     args: vec![].try_into().unwrap(),
                 }),
@@ -642,7 +642,7 @@ mod tests {
         // Test handling of MuxedEd25519 accounts
         let pk = parse_public_key(TEST_PK);
 
-        let muxed = MuxedAccount::MuxedEd25519(soroban_rs::xdr::MuxedAccountMed25519 {
+        let muxed = MuxedAccount::MuxedEd25519(stellar_xdr::MuxedAccountMed25519 {
             id: 123456789,
             ed25519: Uint256(pk.0),
         });
@@ -662,9 +662,9 @@ mod tests {
                 .unwrap();
 
         // Create V0 transaction with time bounds
-        let time_bounds = soroban_rs::xdr::TimeBounds {
-            min_time: soroban_rs::xdr::TimePoint(1000),
-            max_time: soroban_rs::xdr::TimePoint(2000),
+        let time_bounds = stellar_xdr::TimeBounds {
+            min_time: stellar_xdr::TimePoint(1000),
+            max_time: stellar_xdr::TimePoint(2000),
         };
 
         let payment_op = Operation {
@@ -685,7 +685,7 @@ mod tests {
             time_bounds: Some(time_bounds.clone()),
             memo: Memo::Text("Test memo".as_bytes().to_vec().try_into().unwrap()),
             operations: operations.clone(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         // Add a signature to V0 envelope
@@ -747,11 +747,11 @@ mod tests {
 
     #[test]
     fn test_attach_signatures_to_envelope() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             DecoratedSignature, Memo, Operation, OperationBody, PaymentOp, SequenceNumber,
             Signature, SignatureHint, TransactionV0, TransactionV0Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -765,7 +765,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -779,7 +779,7 @@ mod tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -814,11 +814,11 @@ mod tests {
 
     #[test]
     fn test_extract_operations() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction, TransactionV0,
             TransactionV0Envelope, TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -832,7 +832,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -847,7 +847,7 @@ mod tests {
             time_bounds: None,
             memo: Memo::None,
             operations: operations.clone(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let v0_envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -863,10 +863,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: operations.clone(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let v1_envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -880,11 +880,11 @@ mod tests {
 
     #[test]
     fn test_xdr_needs_simulation() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             HostFunction, InvokeHostFunctionOp, Memo, Operation, OperationBody, PaymentOp,
             ScSymbol, ScVal, SequenceNumber, Transaction, TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -898,7 +898,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -909,10 +909,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -926,10 +926,10 @@ mod tests {
         let invoke_op = Operation {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
-                host_function: HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
-                    contract_address: soroban_rs::xdr::ScAddress::Contract(
-                        soroban_rs::xdr::ContractId(soroban_rs::xdr::Hash([0u8; 32])),
-                    ),
+                host_function: HostFunction::InvokeContract(stellar_xdr::InvokeContractArgs {
+                    contract_address: stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(
+                        stellar_xdr::Hash([0u8; 32]),
+                    )),
                     function_name: ScSymbol("test".try_into().unwrap()),
                     args: vec![ScVal::U32(42)].try_into().unwrap(),
                 }),
@@ -943,10 +943,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -959,11 +959,11 @@ mod tests {
 
     #[test]
     fn test_v0_to_v1_conversion() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TimeBounds, TimePoint,
             TransactionV0, TransactionV0Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -982,7 +982,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -996,12 +996,12 @@ mod tests {
             time_bounds: Some(time_bounds.clone()),
             memo: Memo::Text("Test".as_bytes().to_vec().try_into().unwrap()),
             operations: operations.clone(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
-        let sig = soroban_rs::xdr::DecoratedSignature {
-            hint: soroban_rs::xdr::SignatureHint([1, 2, 3, 4]),
-            signature: soroban_rs::xdr::Signature(vec![0u8; 64].try_into().unwrap()),
+        let sig = stellar_xdr::DecoratedSignature {
+            hint: stellar_xdr::SignatureHint([1, 2, 3, 4]),
+            signature: stellar_xdr::Signature(vec![0u8; 64].try_into().unwrap()),
         };
 
         let v0_envelope = TransactionV0Envelope {
@@ -1026,7 +1026,7 @@ mod tests {
         }
 
         // Check time bounds conversion
-        if let soroban_rs::xdr::Preconditions::Time(tb) = &v1_envelope.tx.cond {
+        if let stellar_xdr::Preconditions::Time(tb) = &v1_envelope.tx.cond {
             assert_eq!(tb.min_time.0, 1000);
             assert_eq!(tb.max_time.0, 2000);
         } else {
@@ -1043,11 +1043,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_sequence_v0() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
             TransactionV0Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1060,7 +1060,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1074,7 +1074,7 @@ mod tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -1096,11 +1096,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_sequence_v1() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1113,7 +1113,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1124,10 +1124,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1167,11 +1167,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_fee_v0() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
             TransactionV0Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1184,7 +1184,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1198,7 +1198,7 @@ mod tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -1220,11 +1220,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_fee_v1() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1237,7 +1237,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1248,10 +1248,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1291,11 +1291,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_sequence_preserves_other_fields() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1308,7 +1308,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 5000000,
             }),
         };
@@ -1319,10 +1319,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 300,
             seq_num: SequenceNumber(10),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::Text("Test".as_bytes().to_vec().try_into().unwrap()),
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1350,11 +1350,11 @@ mod tests {
 
     #[test]
     fn test_update_xdr_fee_preserves_other_fields() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1367,7 +1367,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 5000000,
             }),
         };
@@ -1378,10 +1378,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 300,
             seq_num: SequenceNumber(10),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::Text("Test".as_bytes().to_vec().try_into().unwrap()),
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         let mut envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1409,11 +1409,11 @@ mod tests {
 
     #[test]
     fn test_extract_soroban_resource_fee_with_v1_data() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             LedgerFootprint, Memo, SequenceNumber, SorobanResources, SorobanTransactionData,
             SorobanTransactionDataExt, Transaction, TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1438,10 +1438,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
-            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+            ext: stellar_xdr::TransactionExt::V1(soroban_data),
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1455,11 +1455,11 @@ mod tests {
 
     #[test]
     fn test_extract_soroban_resource_fee_with_v0_data() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, Transaction,
             TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1472,7 +1472,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1483,10 +1483,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionExt::V0, // V0 extension
+            ext: stellar_xdr::TransactionExt::V0, // V0 extension
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1500,11 +1500,11 @@ mod tests {
 
     #[test]
     fn test_extract_soroban_resource_fee_with_zero_fee() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             LedgerFootprint, Memo, SequenceNumber, SorobanResources, SorobanTransactionData,
             SorobanTransactionDataExt, Transaction, TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1529,10 +1529,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
-            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+            ext: stellar_xdr::TransactionExt::V1(soroban_data),
         };
 
         let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1546,13 +1546,13 @@ mod tests {
 
     #[test]
     fn test_extract_soroban_resource_fee_from_fee_bump() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             DecoratedSignature, FeeBumpTransaction, FeeBumpTransactionEnvelope,
             FeeBumpTransactionInnerTx, LedgerFootprint, Memo, SequenceNumber, Signature,
             SignatureHint, SorobanResources, SorobanTransactionData, SorobanTransactionDataExt,
             Transaction, TransactionV1Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1580,10 +1580,10 @@ mod tests {
             source_account: MuxedAccount::Ed25519(Uint256(source_pk.0)),
             fee: 100,
             seq_num: SequenceNumber(42),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
-            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+            ext: stellar_xdr::TransactionExt::V1(soroban_data),
         };
 
         // Add a signature to the inner transaction
@@ -1602,7 +1602,7 @@ mod tests {
             fee_source: MuxedAccount::Ed25519(Uint256(fee_source_pk.0)),
             fee: 10_000_000,
             inner_tx: FeeBumpTransactionInnerTx::Tx(inner_envelope),
-            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+            ext: stellar_xdr::FeeBumpTransactionExt::V0,
         };
 
         let fee_bump_envelope = TransactionEnvelope::TxFeeBump(FeeBumpTransactionEnvelope {
@@ -1616,11 +1616,11 @@ mod tests {
 
     #[test]
     fn test_extract_soroban_resource_fee_from_v0_envelope() {
-        use soroban_rs::xdr::{
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionV0,
             TransactionV0Envelope,
         };
-        use stellar_strkey::ed25519::PublicKey;
 
         let source_pk =
             PublicKey::from_string("GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")
@@ -1633,7 +1633,7 @@ mod tests {
             source_account: None,
             body: OperationBody::Payment(PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -1647,7 +1647,7 @@ mod tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {

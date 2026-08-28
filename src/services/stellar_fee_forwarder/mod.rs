@@ -16,12 +16,12 @@
 
 use crate::constants::STELLAR_LEDGER_TIME_SECONDS;
 use crate::services::provider::StellarProviderTrait;
-use soroban_rs::xdr::{
+use std::sync::Arc;
+use stellar_xdr::{
     ContractId, Hash, Int128Parts, InvokeContractArgs, Limits, Operation, OperationBody, ScAddress,
     ScSymbol, ScVal, ScVec, SorobanAddressCredentials, SorobanAuthorizationEntry,
     SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials, VecM, WriteXdr,
 };
-use std::sync::Arc;
 use thiserror::Error;
 
 /// Default validity duration for gas abstraction authorizations (2 minutes).
@@ -389,8 +389,8 @@ where
             FeeForwarderError::InvalidAccountAddress(format!("Invalid account '{address}': {e}"))
         })?;
 
-        Ok(ScAddress::Account(soroban_rs::xdr::AccountId(
-            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(soroban_rs::xdr::Uint256(account.0)),
+        Ok(ScAddress::Account(stellar_xdr::AccountId(
+            stellar_xdr::PublicKey::PublicKeyTypeEd25519(stellar_xdr::Uint256(account.0)),
         )))
     }
 
@@ -540,7 +540,7 @@ where
     pub fn deserialize_auth_entry(
         xdr: &str,
     ) -> Result<SorobanAuthorizationEntry, FeeForwarderError> {
-        use soroban_rs::xdr::ReadXdr;
+        use stellar_xdr::ReadXdr;
         SorobanAuthorizationEntry::from_xdr_base64(xdr, Limits::none())
             .map_err(|e| FeeForwarderError::XdrError(format!("Failed to deserialize auth: {e}")))
     }
@@ -574,13 +574,13 @@ where
         let fee_forwarder_addr = Self::parse_contract_address(fee_forwarder_address)?;
         let forward_args = Self::build_forward_args_standalone(fee_forwarder_address, params)?;
 
-        let host_function = soroban_rs::xdr::HostFunction::InvokeContract(InvokeContractArgs {
+        let host_function = stellar_xdr::HostFunction::InvokeContract(InvokeContractArgs {
             contract_address: fee_forwarder_addr,
             function_name: Self::create_symbol("forward")?,
             args: forward_args.into(),
         });
 
-        let invoke_op = soroban_rs::xdr::InvokeHostFunctionOp {
+        let invoke_op = stellar_xdr::InvokeHostFunctionOp {
             host_function,
             auth: auth_entries.try_into().map_err(|_| {
                 FeeForwarderError::AuthorizationBuildError(

@@ -282,9 +282,9 @@ impl TurnkeyService {
             .map_err(|e| TurnkeyError::ConfigError(format!("Invalid public key hex: {e}")))?;
 
         // Stellar uses StrKey encoding with 'G' prefix for account addresses
-        let stellar_address = stellar_strkey::ed25519::PublicKey::from_payload(&raw_pubkey)
-            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {e}")))?
-            .to_string();
+        let public_key = stellar_strkey::ed25519::PublicKey::from_payload(&raw_pubkey)
+            .map_err(|e| TurnkeyError::ConfigError(format!("Invalid Ed25519 public key: {e}")))?;
+        let stellar_address = format!("{public_key}");
 
         Ok(Address::Stellar(stellar_address))
     }

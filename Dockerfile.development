@@ -1,7 +1,7 @@
 # Base image
-# Rustc v1.91.1
-# The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.91.1
-FROM cgr.dev/chainguard/rust:latest-dev@sha256:33faad9a26e8437ed9725bea3eb2d1e85facd1c035a31af8d485ea8c0a935532 AS base
+# Rustc v1.93.0 minimum (MSRV, see rust-version in Cargo.toml)
+# The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.93.0
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:63fe36977879f68bb449c681f1e1e3a60d7368ec2b7a67f21fae3737fe7cc3a4 AS base
 
 USER root
 RUN apk update && apk --no-cache add \

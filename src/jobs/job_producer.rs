@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::{JobType, TokenSwapRequest};
 

@@ -2,7 +2,7 @@
 name = "openzeppelin-relayer"
 version = "1.8.0"
 edition = "2021"
-rust-version = "1.91"         #MSRV
+rust-version = "1.93"         #MSRV
 
 [features]
 default = []
@@ -97,9 +97,10 @@ zeroize = "1.8"
 subtle = "2.6"
 aes-gcm = "0.10"
 ed25519-dalek = { version = "2.2", features = ["pkcs8"] }
-stellar-strkey = "0.0.14"
-soroban-rs = "0.2.6"
-jsonrpsee-core = "0.20.4"
+stellar-strkey = "0.0.18"
+stellar-xdr = { version = "28.0.0", features = ["std", "serde", "serde_json", "base64"] }
+stellar-rpc-client = "28.0.0-rc.1"
+jsonrpsee-core = "0.26.0"
 p256 = { version = "0.13.2" }
 google-cloud-auth = "0.22.1"
 # GCP Pub/Sub queue backend. EXACT-pinned (transport deps must be pinned +

@@ -3,7 +3,7 @@
 //! The user signs an authorization entry, which is injected into the transaction before submission.
 //! The relayer also signs its own authorization entry for the FeeForwarder contract.
 
-use soroban_rs::xdr::{
+use stellar_xdr::{
     InvokeHostFunctionOp, Limits, Operation, OperationBody, ReadXdr, ScAddress, ScVal,
     SorobanAuthorizationEntry, SorobanAuthorizedFunction, SorobanCredentials, SorobanResources,
     SorobanTransactionData, TransactionEnvelope, TransactionExt, WriteXdr,
@@ -238,7 +238,7 @@ fn inject_auth_entries_into_envelope(
     let result_auth_entries = auth_entries.clone();
 
     // Create the updated InvokeHostFunction operation
-    let updated_invoke = soroban_rs::xdr::InvokeHostFunctionOp {
+    let updated_invoke = stellar_xdr::InvokeHostFunctionOp {
         host_function: invoke_op.host_function,
         auth: auth_entries.try_into().map_err(|_| {
             TransactionError::UnexpectedError("Failed to create auth entries vector".to_string())
@@ -246,7 +246,7 @@ fn inject_auth_entries_into_envelope(
     };
 
     // Create the updated operation
-    let updated_op = soroban_rs::xdr::Operation {
+    let updated_op = stellar_xdr::Operation {
         source_account: first_op.source_account.clone(),
         body: OperationBody::InvokeHostFunction(updated_invoke),
     };
@@ -444,7 +444,7 @@ fn build_simulation_envelope(
             })?;
 
             Ok(TransactionEnvelope::Tx(
-                soroban_rs::xdr::TransactionV1Envelope {
+                stellar_xdr::TransactionV1Envelope {
                     tx: sim_tx,
                     signatures: Default::default(),
                 },
@@ -613,7 +613,7 @@ fn extract_contract_address_from_scval(val: &ScVal) -> Result<String, String> {
     match val {
         ScVal::Address(ScAddress::Contract(contract_id)) => {
             let strkey = stellar_strkey::Contract(contract_id.0 .0);
-            Ok(strkey.to_string())
+            Ok(format!("{strkey}"))
         }
         ScVal::Address(ScAddress::Account(_)) => {
             Err("Expected contract address, found account address".to_string())
@@ -681,7 +681,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         ContractId, FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
         FeeBumpTransactionInnerTx, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
         Memo, MuxedAccount, Preconditions, ScAddress, ScSymbol, ScVal, SequenceNumber,
@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn test_apply_resource_buffer_standard_values() {
         let mut resources = SorobanResources {
-            footprint: soroban_rs::xdr::LedgerFootprint {
+            footprint: stellar_xdr::LedgerFootprint {
                 read_only: VecM::default(),
                 read_write: VecM::default(),
             },
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn test_apply_resource_buffer_zero_values() {
         let mut resources = SorobanResources {
-            footprint: soroban_rs::xdr::LedgerFootprint {
+            footprint: stellar_xdr::LedgerFootprint {
                 read_only: VecM::default(),
                 read_write: VecM::default(),
             },
@@ -870,7 +870,7 @@ mod tests {
     fn test_apply_resource_buffer_large_values_no_overflow() {
         let large_value = u32::MAX - 1000;
         let mut resources = SorobanResources {
-            footprint: soroban_rs::xdr::LedgerFootprint {
+            footprint: stellar_xdr::LedgerFootprint {
                 read_only: VecM::default(),
                 read_write: VecM::default(),
             },
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn test_apply_resource_buffer_max_value_saturates() {
         let mut resources = SorobanResources {
-            footprint: soroban_rs::xdr::LedgerFootprint {
+            footprint: stellar_xdr::LedgerFootprint {
                 read_only: VecM::default(),
                 read_write: VecM::default(),
             },
@@ -909,12 +909,12 @@ mod tests {
 
     #[test]
     fn test_apply_resource_buffer_preserves_footprint() {
-        use soroban_rs::xdr::{LedgerFootprint, LedgerKey, LedgerKeyAccount};
+        use stellar_xdr::{LedgerFootprint, LedgerKey, LedgerKeyAccount};
 
         let account_key = LedgerKey::Account(LedgerKeyAccount {
-            account_id: soroban_rs::xdr::AccountId(
-                soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(Uint256([0u8; 32])),
-            ),
+            account_id: stellar_xdr::AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(
+                Uint256([0u8; 32]),
+            )),
         });
 
         let mut resources = SorobanResources {
@@ -985,7 +985,7 @@ mod tests {
 
     #[test]
     fn test_inject_auth_entries_multiple_operations_returns_error() {
-        use soroban_rs::xdr::{Asset, PaymentOp};
+        use stellar_xdr::{Asset, PaymentOp};
 
         // Create an InvokeHostFunction operation
         let invoke_op = Operation {
@@ -1044,7 +1044,7 @@ mod tests {
 
     #[test]
     fn test_inject_auth_entries_non_invoke_host_function_returns_error() {
-        use soroban_rs::xdr::{Asset, PaymentOp};
+        use stellar_xdr::{Asset, PaymentOp};
 
         // Create envelope with a Payment operation (not InvokeHostFunction)
         let payment_op = Operation {
@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_build_simulation_envelope_non_invoke_host_function_returns_error() {
-        use soroban_rs::xdr::{Asset, PaymentOp};
+        use stellar_xdr::{Asset, PaymentOp};
 
         let payment_op = Operation {
             source_account: None,
@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_extract_i128_from_scval_positive() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
         let val = ScVal::I128(Int128Parts { hi: 0, lo: 1000000 });
         let result = extract_i128_from_scval(&val);
         assert!(result.is_ok());
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_extract_i128_from_scval_large() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
         // Test a large value that uses both hi and lo parts
         let val = ScVal::I128(Int128Parts { hi: 1, lo: 0 });
         let result = extract_i128_from_scval(&val);
@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn test_extract_i128_from_scval_negative() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
         let val = ScVal::I128(Int128Parts {
             hi: -1,
             lo: u64::MAX,
@@ -1318,9 +1318,9 @@ mod tests {
     #[test]
     fn test_extract_contract_address_from_scval_account_address() {
         // Account addresses (G...) should return error
-        let account_id = soroban_rs::xdr::AccountId(
-            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(Uint256([0u8; 32])),
-        );
+        let account_id = stellar_xdr::AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(
+            Uint256([0u8; 32]),
+        ));
         let val = ScVal::Address(ScAddress::Account(account_id));
         let result = extract_contract_address_from_scval(&val);
         assert!(result.is_err());
@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn test_extract_fee_params_from_auth_valid() {
-        use soroban_rs::xdr::{Int128Parts, InvokeContractArgs, ScSymbol};
+        use stellar_xdr::{Int128Parts, InvokeContractArgs, ScSymbol};
 
         // Create auth entry with proper FeeForwarder args:
         // fee_token, max_fee_amount, expiration_ledger, target_contract, target_fn, target_args
@@ -1379,7 +1379,7 @@ mod tests {
 
     #[test]
     fn test_extract_fee_params_from_auth_insufficient_args() {
-        use soroban_rs::xdr::{InvokeContractArgs, ScSymbol};
+        use stellar_xdr::{InvokeContractArgs, ScSymbol};
 
         // Create auth entry with only 1 argument (not enough)
         let auth = SorobanAuthorizationEntry {
@@ -1410,15 +1410,15 @@ mod integration_tests {
     use crate::repositories::MockTransactionCounterTrait;
     use crate::services::provider::MockStellarProviderTrait;
     use crate::services::stellar_dex::MockStellarDexServiceTrait;
-    use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
-    use soroban_rs::xdr::{
+    use std::future::ready;
+    use stellar_rpc_client::SimulateTransactionResponse;
+    use stellar_xdr::{
         ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
         MuxedAccount, Operation, Preconditions, ScAddress, ScSymbol, ScVal, SequenceNumber,
         SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
         SorobanAuthorizedInvocation, SorobanCredentials, SorobanTransactionData, Transaction,
         TransactionExt, TransactionV1Envelope, Uint256, VecM,
     };
-    use std::future::ready;
 
     /// Create a mock DEX service for tests (not used when policy is None)
     fn create_mock_dex_service() -> MockStellarDexServiceTrait {
@@ -1491,12 +1491,12 @@ mod integration_tests {
     }
 
     fn create_valid_soroban_tx_data_xdr() -> String {
-        use soroban_rs::xdr::SorobanTransactionDataExt;
+        use stellar_xdr::SorobanTransactionDataExt;
 
         let tx_data = SorobanTransactionData {
             ext: SorobanTransactionDataExt::V0,
-            resources: soroban_rs::xdr::SorobanResources {
-                footprint: soroban_rs::xdr::LedgerFootprint {
+            resources: stellar_xdr::SorobanResources {
+                footprint: stellar_xdr::LedgerFootprint {
                     read_only: VecM::default(),
                     read_write: VecM::default(),
                 },
@@ -1817,8 +1817,9 @@ mod validate_gas_abstraction_fee_tests {
     };
     use crate::services::provider::MockStellarProviderTrait;
     use crate::services::stellar_dex::{MockStellarDexServiceTrait, StellarQuoteResponse};
-    use soroban_rs::stellar_rpc_client::SimulateTransactionResponse;
-    use soroban_rs::xdr::{
+    use std::future::ready;
+    use stellar_rpc_client::SimulateTransactionResponse;
+    use stellar_xdr::{
         ContractId, Hash, HostFunction, Int128Parts, InvokeContractArgs, InvokeHostFunctionOp,
         Memo, MuxedAccount, Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal,
         SequenceNumber, SorobanAddressCredentials, SorobanAuthorizationEntry,
@@ -1826,12 +1827,11 @@ mod validate_gas_abstraction_fee_tests {
         SorobanTransactionData, SorobanTransactionDataExt, Transaction, TransactionExt,
         TransactionV1Envelope, Uint256, VecM,
     };
-    use std::future::ready;
 
     // Helper to get the contract address string from a 32-byte hash
     fn get_contract_address_from_hash(hash: [u8; 32]) -> String {
         let strkey = stellar_strkey::Contract(hash);
-        strkey.to_string()
+        format!("{strkey}")
     }
 
     /// Create a valid FeeForwarder auth entry with specified fee token and max fee amount
@@ -1912,8 +1912,8 @@ mod validate_gas_abstraction_fee_tests {
     fn create_valid_soroban_tx_data_xdr() -> String {
         let tx_data = SorobanTransactionData {
             ext: SorobanTransactionDataExt::V0,
-            resources: soroban_rs::xdr::SorobanResources {
-                footprint: soroban_rs::xdr::LedgerFootprint {
+            resources: stellar_xdr::SorobanResources {
+                footprint: stellar_xdr::LedgerFootprint {
                     read_only: VecM::default(),
                     read_write: VecM::default(),
                 },

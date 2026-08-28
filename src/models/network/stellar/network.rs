@@ -2,7 +2,7 @@ use crate::models::{NetworkConfigData, NetworkRepoModel, RepositoryError, RpcCon
 use core::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use soroban_rs::xdr::Hash;
+use stellar_xdr::Hash;
 
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct StellarNetwork {
