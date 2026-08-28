@@ -1,4 +1,8 @@
 ---
+# pnpm >= 11 requires dependency build scripts to be approved explicitly; pnpm >= 12
+# fails the install otherwise. esbuild's postinstall selects the platform binary.
+allowBuilds:
+  esbuild: true
 overrides:
   axios: '>=1.18.0'
   esbuild: '>=0.28.2'
