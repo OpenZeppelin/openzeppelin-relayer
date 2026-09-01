@@ -26,7 +26,7 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920  # v2.20.0
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c  # v2.21.0
         with:
           egress-policy: audit
       - name: Get github app token
@@ -119,7 +119,7 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'false' &&  needs.release-please.outputs.pr_created == 'true' }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920  # v2.20.0
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c  # v2.21.0
         with:
           egress-policy: audit
       - name: Get github app token
@@ -158,7 +158,7 @@ jobs:
           fi
       - name: Commit cargo update
         if: steps.lock-file-commit.outputs.cargo_changed == 'true'
-        uses: iarekylew00t/verified-bot-commit@33985d44b7719dcaf0b854a0f4b0caad9bdc5b86  # v2.3.3
+        uses: iarekylew00t/verified-bot-commit@42a042b0407248f3c0acac00c389e729e3476e86  # v2.3.5
         with:
           message: 'chore: Updating lock file'
           token: ${{ steps.gh-app-token.outputs.token }}
@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920  # v2.20.0
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c  # v2.21.0
         with:
           egress-policy: audit
       - name: Get github app token
@@ -214,7 +214,7 @@ jobs:
           fi
       - name: Commit openapi spec file
         if: steps.update-openapi-spec-commit.outputs.openapi_changed == 'true'
-        uses: iarekylew00t/verified-bot-commit@33985d44b7719dcaf0b854a0f4b0caad9bdc5b86  # v2.3.3
+        uses: iarekylew00t/verified-bot-commit@42a042b0407248f3c0acac00c389e729e3476e86  # v2.3.5
         with:
           message: 'chore: Updating openapi spec file and bumping version'
           token: ${{ steps.gh-app-token.outputs.token }}
