@@ -1,7 +1,7 @@
 ---
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: integration-redis
     command:
       - redis-server
