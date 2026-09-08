@@ -33,6 +33,9 @@ pub const STATUS_GENERIC_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     jitter: 0.99,
 };
 /// Backoff profile for EVM status-check retries.
+///
+/// Overridable via `EVM_STATUS_RETRY_INITIAL_MS` / `EVM_STATUS_RETRY_MAX_MS`;
+/// see [`evm_status_backoff_config`].
 pub const STATUS_EVM_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     initial_ms: 8000,
     max_ms: 12000,
@@ -44,6 +47,19 @@ pub const STATUS_STELLAR_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     max_ms: 3000,
     jitter: 0.99,
 };
+/// Returns the EVM status-check backoff profile, honoring env overrides.
+///
+/// Values come from [`ServerConfig`] (`EVM_STATUS_RETRY_INITIAL_MS` /
+/// `EVM_STATUS_RETRY_MAX_MS`, each read once and cached). Unset or invalid
+/// values fall back to [`STATUS_EVM_BACKOFF`].
+pub fn evm_status_backoff_config() -> RetryBackoffConfig {
+    RetryBackoffConfig {
+        initial_ms: ServerConfig::get_evm_status_retry_initial_ms(),
+        max_ms: ServerConfig::get_evm_status_retry_max_ms(),
+        jitter: STATUS_EVM_BACKOFF.jitter,
+    }
+}
+
 /// Returns the Stellar status-check backoff profile, honoring env overrides.
 ///
 /// Values come from [`ServerConfig`] (`STELLAR_STATUS_RETRY_INITIAL_MS` /
@@ -97,12 +113,13 @@ pub const TOKEN_SWAP_CRON_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
 /// Returns status-check backoff config for a network type.
 ///
 /// `network_type` selects network-specific status timing:
-/// EVM -> `STATUS_EVM_BACKOFF`, Stellar -> env-configurable
+/// EVM -> env-configurable [`evm_status_backoff_config`] (defaults to
+/// `STATUS_EVM_BACKOFF`), Stellar -> env-configurable
 /// [`stellar_status_backoff_config`] (defaults to `STATUS_STELLAR_BACKOFF`),
 /// Solana/`None` -> `STATUS_GENERIC_BACKOFF`.
 pub fn status_backoff_config(network_type: Option<NetworkType>) -> RetryBackoffConfig {
     match network_type {
-        Some(NetworkType::Evm) => STATUS_EVM_BACKOFF,
+        Some(NetworkType::Evm) => evm_status_backoff_config(),
         Some(NetworkType::Stellar) => stellar_status_backoff_config(),
         Some(NetworkType::Solana) | None => STATUS_GENERIC_BACKOFF,
     }
@@ -281,6 +298,16 @@ mod tests {
             backoff_config_for_queue(QueueType::StatusCheckStellar).initial_ms,
             STATUS_GENERIC_BACKOFF.initial_ms
         );
+    }
+
+    #[test]
+    fn test_evm_status_backoff_config_defaults_match_constant() {
+        // With the env vars unset, the env-aware profile must equal the
+        // compiled-in fallback.
+        let cfg = evm_status_backoff_config();
+        assert_eq!(cfg.initial_ms, STATUS_EVM_BACKOFF.initial_ms);
+        assert_eq!(cfg.max_ms, STATUS_EVM_BACKOFF.max_ms);
+        assert_eq!(cfg.jitter, STATUS_EVM_BACKOFF.jitter);
     }
 
     #[test]

@@ -49,8 +49,8 @@ use crate::metrics::observe_queue_pickup_latency;
 
 use super::{filter_relayers_for_swap, QueueType, WorkerContext};
 use crate::queues::retry_config::{
-    stellar_status_backoff_config, RetryBackoffConfig, NOTIFICATION_BACKOFF,
-    RELAYER_HEALTH_BACKOFF, STATUS_EVM_BACKOFF, STATUS_GENERIC_BACKOFF, SYSTEM_CLEANUP_BACKOFF,
+    evm_status_backoff_config, stellar_status_backoff_config, RetryBackoffConfig,
+    NOTIFICATION_BACKOFF, RELAYER_HEALTH_BACKOFF, STATUS_GENERIC_BACKOFF, SYSTEM_CLEANUP_BACKOFF,
     TOKEN_SWAP_CRON_BACKOFF, TOKEN_SWAP_REQUEST_BACKOFF, TX_CLEANUP_BACKOFF, TX_REQUEST_BACKOFF,
     TX_SUBMISSION_BACKOFF,
 };
@@ -430,8 +430,9 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(
-            RetryPolicy::retries(QueueType::StatusCheck.max_retries())
-                .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
+            RetryPolicy::retries(QueueType::StatusCheck.max_retries()).with_backoff(
+                create_backoff_from_config(evm_status_backoff_config())?.make_backoff(),
+            ),
         )
         .concurrency(ServerConfig::get_worker_concurrency(
             QueueType::StatusCheckEvm.concurrency_env_key(),

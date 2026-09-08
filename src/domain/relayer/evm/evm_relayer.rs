@@ -27,10 +27,8 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{
-        transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    },
+    config::ServerConfig,
+    constants::{transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME},
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
@@ -260,7 +258,7 @@ where
                     crate::models::NetworkType::Evm,
                 ),
                 Some(calculate_scheduled_timestamp(
-                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    ServerConfig::get_evm_status_check_initial_delay_seconds(),
                 )),
             )
             .await

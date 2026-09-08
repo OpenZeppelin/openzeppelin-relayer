@@ -6,13 +6,13 @@ use tracing::warn;
 use crate::{
     constants::{
         DEFAULT_PROVIDER_FAILURE_EXPIRATION_SECS, DEFAULT_PROVIDER_FAILURE_THRESHOLD,
-        DEFAULT_PROVIDER_PAUSE_DURATION_SECS, MINIMUM_SECRET_VALUE_LENGTH,
-        STELLAR_FEE_FORWARDER_MAINNET, STELLAR_SOROSWAP_MAINNET_FACTORY,
-        STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER, STELLAR_SOROSWAP_MAINNET_ROUTER,
-        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+        DEFAULT_PROVIDER_PAUSE_DURATION_SECS, EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+        MINIMUM_SECRET_VALUE_LENGTH, STELLAR_FEE_FORWARDER_MAINNET,
+        STELLAR_SOROSWAP_MAINNET_FACTORY, STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER,
+        STELLAR_SOROSWAP_MAINNET_ROUTER, STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
     },
     models::SecretString,
-    queues::retry_config::STATUS_STELLAR_BACKOFF,
+    queues::retry_config::{STATUS_EVM_BACKOFF, STATUS_STELLAR_BACKOFF},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Display)]
@@ -759,7 +759,7 @@ impl ServerConfig {
     }
 
     // =========================================================================
-    // Stellar Status Poll Cadence Getters
+    // Status Poll Cadence Getters
     // =========================================================================
     // Each value is read from the environment once (cached in a `OnceLock`) and
     // falls back to the compiled-in default when unset or invalid.
@@ -803,6 +803,49 @@ impl ServerConfig {
             parse_stellar_status_retry_max_ms(
                 env::var("STELLAR_STATUS_RETRY_MAX_MS").ok().as_deref(),
                 Self::get_stellar_status_retry_initial_ms(),
+            )
+        })
+    }
+
+    /// Gets the initial delay in seconds before the first EVM status check.
+    ///
+    /// Reads `EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS` (valid `0..=60`);
+    /// defaults to [`EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+    pub fn get_evm_status_check_initial_delay_seconds() -> i64 {
+        static RESOLVED: OnceLock<i64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_evm_status_check_initial_delay_seconds(
+                env::var("EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS")
+                    .ok()
+                    .as_deref(),
+            )
+        })
+    }
+
+    /// Gets the initial EVM status-check retry delay in milliseconds.
+    ///
+    /// Reads `EVM_STATUS_RETRY_INITIAL_MS` (valid `500..=60000`);
+    /// defaults to `STATUS_EVM_BACKOFF.initial_ms`.
+    pub fn get_evm_status_retry_initial_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_evm_status_retry_initial_ms(
+                env::var("EVM_STATUS_RETRY_INITIAL_MS").ok().as_deref(),
+            )
+        })
+    }
+
+    /// Gets the maximum EVM status-check retry delay in milliseconds.
+    ///
+    /// Reads `EVM_STATUS_RETRY_MAX_MS` (valid `500..=60000`); defaults to
+    /// `STATUS_EVM_BACKOFF.max_ms`. The result is clamped up to the resolved
+    /// initial retry delay so the cap is never below it.
+    pub fn get_evm_status_retry_max_ms() -> u64 {
+        static RESOLVED: OnceLock<u64> = OnceLock::new();
+        *RESOLVED.get_or_init(|| {
+            parse_evm_status_retry_max_ms(
+                env::var("EVM_STATUS_RETRY_MAX_MS").ok().as_deref(),
+                Self::get_evm_status_retry_initial_ms(),
             )
         })
     }
@@ -855,26 +898,49 @@ impl ServerConfig {
     }
 }
 
-/// Parses the initial status-check delay override in seconds.
+/// Parses an initial status-check delay override in seconds.
 ///
-/// Valid range is `0..=60`. Unset or invalid values fall back to
-/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
-fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+/// Valid range is `0..=60`. Unset or invalid values fall back to `default`.
+fn parse_status_check_initial_delay_seconds(env_var: &str, raw: Option<&str>, default: i64) -> i64 {
     let Some(raw) = raw else {
-        return STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+        return default;
     };
     match raw.trim().parse::<i64>() {
         Ok(value) if (0..=60).contains(&value) => value,
         _ => {
             warn!(
-                env_var = "STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS",
+                env_var,
                 value = raw,
-                default = STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                "invalid Stellar status-check initial delay override; using default"
+                default,
+                "invalid status-check initial delay override; using default"
             );
-            STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS
+            default
         }
     }
+}
+
+/// Parses the Stellar status-check initial delay override in seconds.
+///
+/// Valid range is `0..=60`. Unset or invalid values fall back to
+/// [`STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+    parse_status_check_initial_delay_seconds(
+        "STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS",
+        raw,
+        STELLAR_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    )
+}
+
+/// Parses the EVM status-check initial delay override in seconds.
+///
+/// Valid range is `0..=60`. Unset or invalid values fall back to
+/// [`EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS`].
+fn parse_evm_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
+    parse_status_check_initial_delay_seconds(
+        "EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS",
+        raw,
+        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    )
 }
 
 /// Parses the Stellar status-check initial retry delay override in milliseconds.
@@ -882,7 +948,7 @@ fn parse_stellar_status_check_initial_delay_seconds(raw: Option<&str>) -> i64 {
 /// Valid range is `500..=60000`. Unset or invalid values fall back to
 /// `STATUS_STELLAR_BACKOFF.initial_ms`.
 fn parse_stellar_status_retry_initial_ms(raw: Option<&str>) -> u64 {
-    parse_stellar_status_retry_ms(
+    parse_status_retry_ms(
         "STELLAR_STATUS_RETRY_INITIAL_MS",
         raw,
         STATUS_STELLAR_BACKOFF.initial_ms,
@@ -896,22 +962,63 @@ fn parse_stellar_status_retry_initial_ms(raw: Option<&str>) -> u64 {
 /// so the cap is never below the initial delay; the clamp is logged so an
 /// explicit-but-overridden value leaves a trace.
 fn parse_stellar_status_retry_max_ms(raw: Option<&str>, initial_ms: u64) -> u64 {
-    let max_ms = parse_stellar_status_retry_ms(
+    parse_status_retry_max_ms(
         "STELLAR_STATUS_RETRY_MAX_MS",
         raw,
         STATUS_STELLAR_BACKOFF.max_ms,
-    );
+        initial_ms,
+    )
+}
+
+/// Parses the EVM status-check initial retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_EVM_BACKOFF.initial_ms`.
+fn parse_evm_status_retry_initial_ms(raw: Option<&str>) -> u64 {
+    parse_status_retry_ms(
+        "EVM_STATUS_RETRY_INITIAL_MS",
+        raw,
+        STATUS_EVM_BACKOFF.initial_ms,
+    )
+}
+
+/// Parses the EVM status-check maximum retry delay override in milliseconds.
+///
+/// Valid range is `500..=60000`. Unset or invalid values fall back to
+/// `STATUS_EVM_BACKOFF.max_ms`. The result is clamped up to `initial_ms` so the
+/// cap is never below the initial delay.
+fn parse_evm_status_retry_max_ms(raw: Option<&str>, initial_ms: u64) -> u64 {
+    parse_status_retry_max_ms(
+        "EVM_STATUS_RETRY_MAX_MS",
+        raw,
+        STATUS_EVM_BACKOFF.max_ms,
+        initial_ms,
+    )
+}
+
+/// Parses a maximum status-retry delay override, clamping it up to `initial_ms`.
+///
+/// The cap must never sit below the initial delay, so a lower value is clamped
+/// and logged — an explicit-but-overridden value leaves a trace.
+fn parse_status_retry_max_ms(
+    env_var: &str,
+    raw: Option<&str>,
+    default: u64,
+    initial_ms: u64,
+) -> u64 {
+    let max_ms = parse_status_retry_ms(env_var, raw, default);
     if max_ms < initial_ms {
         warn!(
+            env_var,
             max_ms,
             initial_ms,
-            "STELLAR_STATUS_RETRY_MAX_MS is below the resolved initial retry delay; clamping up to the initial delay"
+            "status retry max is below the resolved initial retry delay; clamping up to the initial delay"
         );
     }
     max_ms.max(initial_ms)
 }
 
-fn parse_stellar_status_retry_ms(name: &str, raw: Option<&str>, default: u64) -> u64 {
+fn parse_status_retry_ms(name: &str, raw: Option<&str>, default: u64) -> u64 {
     let Some(raw) = raw else {
         return default;
     };
@@ -922,7 +1029,7 @@ fn parse_stellar_status_retry_ms(name: &str, raw: Option<&str>, default: u64) ->
                 env_var = name,
                 value = raw,
                 default,
-                "invalid Stellar status retry override; using default"
+                "invalid status retry override; using default"
             );
             default
         }
@@ -2612,6 +2719,97 @@ mod tests {
             );
             // Unset with default below initial: default then clamp up.
             assert_eq!(parse_stellar_status_retry_max_ms(None, 5000), 5000);
+        }
+    }
+
+    mod evm_status_poll_cadence_tests {
+        use super::super::*;
+
+        #[test]
+        fn test_parse_initial_delay_unset_uses_default() {
+            assert_eq!(
+                parse_evm_status_check_initial_delay_seconds(None),
+                EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+            );
+        }
+
+        #[test]
+        fn test_parse_initial_delay_valid_override() {
+            assert_eq!(parse_evm_status_check_initial_delay_seconds(Some("1")), 1);
+            assert_eq!(parse_evm_status_check_initial_delay_seconds(Some("0")), 0);
+            assert_eq!(parse_evm_status_check_initial_delay_seconds(Some("60")), 60);
+            assert_eq!(parse_evm_status_check_initial_delay_seconds(Some(" 3 ")), 3);
+        }
+
+        #[test]
+        fn test_parse_initial_delay_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "61", "2.5"] {
+                assert_eq!(
+                    parse_evm_status_check_initial_delay_seconds(Some(raw)),
+                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_unset_uses_default() {
+            assert_eq!(
+                parse_evm_status_retry_initial_ms(None),
+                STATUS_EVM_BACKOFF.initial_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_valid_override() {
+            assert_eq!(parse_evm_status_retry_initial_ms(Some("1000")), 1000);
+            assert_eq!(parse_evm_status_retry_initial_ms(Some(" 500 ")), 500);
+            assert_eq!(parse_evm_status_retry_initial_ms(Some("60000")), 60000);
+        }
+
+        #[test]
+        fn test_parse_retry_initial_ms_invalid_uses_default() {
+            for raw in ["garbage", "", "-1", "2.5", "499", "60001"] {
+                assert_eq!(
+                    parse_evm_status_retry_initial_ms(Some(raw)),
+                    STATUS_EVM_BACKOFF.initial_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_unset_uses_default() {
+            assert_eq!(
+                parse_evm_status_retry_max_ms(None, STATUS_EVM_BACKOFF.initial_ms),
+                STATUS_EVM_BACKOFF.max_ms
+            );
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_valid_override() {
+            assert_eq!(parse_evm_status_retry_max_ms(Some("2000"), 1000), 2000);
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_invalid_uses_default() {
+            for raw in ["garbage", "-1", "499", "60001"] {
+                assert_eq!(
+                    parse_evm_status_retry_max_ms(Some(raw), 1000),
+                    STATUS_EVM_BACKOFF.max_ms,
+                    "raw {raw:?} should fall back to default"
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_retry_max_ms_clamped_up_to_initial() {
+            // Valid but below initial: clamp up to initial.
+            assert_eq!(parse_evm_status_retry_max_ms(Some("1000"), 5000), 5000);
+            // Invalid with default below initial: default then clamp up.
+            assert_eq!(parse_evm_status_retry_max_ms(Some("garbage"), 20000), 20000);
+            // Unset with default below initial: default then clamp up.
+            assert_eq!(parse_evm_status_retry_max_ms(None, 20000), 20000);
         }
     }
 }
