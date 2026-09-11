@@ -19,11 +19,11 @@ use crate::services::provider::StellarProviderTrait;
 use crate::services::stellar_dex::StellarDexServiceTrait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
-use soroban_rs::xdr::{
+use stellar_strkey::ed25519::PublicKey;
+use stellar_xdr::{
     AccountId, HostFunction, InvokeHostFunctionOp, LedgerKey, OperationBody, PaymentOp,
     PublicKey as XdrPublicKey, ScAddress, SorobanCredentials, TransactionEnvelope,
 };
-use stellar_strkey::ed25519::PublicKey;
 use thiserror::Error;
 #[derive(Debug, Error, Serialize)]
 pub enum StellarTransactionValidationError {
@@ -377,7 +377,7 @@ impl StellarTransactionValidator {
         envelope: &TransactionEnvelope,
     ) -> Result<(), StellarTransactionValidationError> {
         match envelope {
-            soroban_rs::xdr::TransactionEnvelope::TxFeeBump(_) => {
+            stellar_xdr::TransactionEnvelope::TxFeeBump(_) => {
                 Err(StellarTransactionValidationError::ValidationError(
                     "Fee-bump transactions are not supported for gasless transactions".to_string(),
                 ))
@@ -482,9 +482,66 @@ impl StellarTransactionValidator {
             XdrPublicKey::PublicKeyTypeEd25519(uint256) => {
                 let bytes: [u8; 32] = uint256.0;
                 let pk = PublicKey(bytes);
-                Ok(pk.to_string())
+                Ok(format!("{pk}"))
             }
         }
+    }
+
+    /// Resolve an auth `ScAddress` to the G... account it is controlled by, if any.
+    ///
+    /// Plain and muxed accounts both resolve to their underlying ed25519 key (a muxed
+    /// address is just an account plus an id, so it is signed by the same key).
+    /// Contract, claimable balance and liquidity pool addresses are not signer accounts.
+    fn auth_address_account(
+        address: &ScAddress,
+    ) -> Result<Option<String>, StellarTransactionValidationError> {
+        match address {
+            ScAddress::Account(acc_id) => Ok(Some(Self::account_id_to_string(acc_id)?)),
+            ScAddress::MuxedAccount(muxed) => {
+                let pk = PublicKey(muxed.ed25519.0);
+                Ok(Some(format!("{pk}")))
+            }
+            ScAddress::Contract(_)
+            | ScAddress::ClaimableBalance(_)
+            | ScAddress::LiquidityPool(_) => Ok(None),
+        }
+    }
+
+    /// Reject an auth address that is (or is a muxed form of) the relayer account.
+    fn ensure_auth_address_is_not_relayer(
+        address: &ScAddress,
+        op_idx: usize,
+        entry_idx: usize,
+        relayer_address: &str,
+    ) -> Result<(), StellarTransactionValidationError> {
+        if let Some(account) = Self::auth_address_account(address)? {
+            if account == relayer_address {
+                return Err(StellarTransactionValidationError::ValidationError(format!(
+                    "Op {op_idx}: Soroban auth entry {entry_idx} requires relayer ({relayer_address}). Forbidden."
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Reject a delegate signature (protocol 28 `AddressWithDelegates`) naming the relayer,
+    /// at any nesting depth.
+    fn ensure_delegate_is_not_relayer(
+        delegate: &stellar_xdr::SorobanDelegateSignature,
+        op_idx: usize,
+        entry_idx: usize,
+        relayer_address: &str,
+    ) -> Result<(), StellarTransactionValidationError> {
+        Self::ensure_auth_address_is_not_relayer(
+            &delegate.address,
+            op_idx,
+            entry_idx,
+            relayer_address,
+        )?;
+        for nested in delegate.nested_delegates.iter() {
+            Self::ensure_delegate_is_not_relayer(nested, op_idx, entry_idx, relayer_address)?;
+        }
+        Ok(())
     }
 
     /// Check if a footprint key targets relayer-owned storage
@@ -567,40 +624,30 @@ impl StellarTransactionValidator {
             }
         }
 
-        // Validate Soroban auth entries
+        // Validate Soroban auth entries: the relayer must never be a required signer,
+        // whether it is named directly in the credentials or as a (nested) delegate.
         for (i, entry) in invoke.auth.iter().enumerate() {
-            // Validate that relayer is NOT required signer
-            match &entry.credentials {
+            let address_creds = match &entry.credentials {
                 SorobanCredentials::SourceAccount => {
                     // We've already validated that the source account is not the relayer,
                     // so SourceAccount credentials are safe.
+                    continue;
                 }
-                SorobanCredentials::Address(address_creds) => {
-                    // Check if the address is the relayer
-                    match &address_creds.address {
-                        ScAddress::Account(acc_id) => {
-                            // Convert account ID to string for comparison
-                            let account_str = Self::account_id_to_string(acc_id)?;
-                            if account_str == relayer_address {
-                                return Err(StellarTransactionValidationError::ValidationError(
-                                    format!(
-                                        "Op {op_idx}: Soroban auth entry {i} requires relayer ({relayer_address}). Forbidden."
-                                    ),
-                                ));
-                            }
-                        }
-                        ScAddress::Contract(_) => {
-                            // Contract addresses in auth are allowed
-                        }
-                        ScAddress::MuxedAccount(_) => {
-                            // Muxed accounts are allowed
-                        }
-                        ScAddress::ClaimableBalance(_) | ScAddress::LiquidityPool(_) => {
-                            // These are not account addresses, so they're safe
-                        }
+                SorobanCredentials::Address(address_creds)
+                | SorobanCredentials::AddressV2(address_creds) => address_creds,
+                SorobanCredentials::AddressWithDelegates(with_delegates) => {
+                    for delegate in with_delegates.delegates.iter() {
+                        Self::ensure_delegate_is_not_relayer(delegate, op_idx, i, relayer_address)?;
                     }
+                    &with_delegates.address_credentials
                 }
-            }
+            };
+            Self::ensure_auth_address_is_not_relayer(
+                &address_creds.address,
+                op_idx,
+                i,
+                relayer_address,
+            )?;
         }
 
         Ok(())
@@ -1095,7 +1142,7 @@ mod tests {
     use crate::services::provider::MockStellarProviderTrait;
     use crate::services::stellar_dex::MockStellarDexServiceTrait;
     use futures::future::ready;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         AccountEntry, AccountEntryExt, Asset as XdrAsset, ChangeTrustAsset, ChangeTrustOp,
         HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation, OperationBody,
         ScAddress, ScSymbol, SequenceNumber, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
@@ -1479,7 +1526,7 @@ mod tests {
         fn test_extract_negative_amount_rejected() {
             let payment_op = Operation {
                 source_account: None,
-                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                body: OperationBody::Payment(stellar_xdr::PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
                     asset: XdrAsset::Native,
                     amount: -100, // Negative amount
@@ -1490,8 +1537,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1531,11 +1578,11 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                cond: stellar_xdr::Preconditions::Time(TimeBounds {
                     min_time: TimePoint(now - 60),
                     max_time: TimePoint(now + 60),
                 }),
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1559,11 +1606,11 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                cond: stellar_xdr::Preconditions::Time(TimeBounds {
                     min_time: TimePoint(now - 120),
                     max_time: TimePoint(now - 60), // Expired
                 }),
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1587,11 +1634,11 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                cond: stellar_xdr::Preconditions::Time(TimeBounds {
                     min_time: TimePoint(now + 60), // Not yet valid
                     max_time: TimePoint(now + 120),
                 }),
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1619,11 +1666,11 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                cond: stellar_xdr::Preconditions::Time(TimeBounds {
                     min_time: TimePoint(0),
                     max_time: TimePoint(now + 60), // 1 minute from now
                 }),
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1652,11 +1699,11 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::Time(TimeBounds {
+                cond: stellar_xdr::Preconditions::Time(TimeBounds {
                     min_time: TimePoint(0),
                     max_time: TimePoint(now + 600), // 10 minutes from now
                 }),
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1804,8 +1851,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: operations.try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1873,8 +1920,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![operation].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1899,7 +1946,7 @@ mod tests {
         fn test_set_options_rejected() {
             let operation = Operation {
                 source_account: None,
-                body: OperationBody::SetOptions(soroban_rs::xdr::SetOptionsOp {
+                body: OperationBody::SetOptions(stellar_xdr::SetOptionsOp {
                     inflation_dest: None,
                     clear_flags: None,
                     set_flags: None,
@@ -1916,8 +1963,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![operation].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -1943,8 +1990,8 @@ mod tests {
             let operation = Operation {
                 source_account: None,
                 body: OperationBody::ChangeTrust(ChangeTrustOp {
-                    line: ChangeTrustAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    line: ChangeTrustAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(TEST_PK_2),
                     }),
                     limit: 1_000_000_000,
@@ -1955,8 +2002,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![operation].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2098,10 +2145,10 @@ mod tests {
             let usdc_asset = format!("USDC:{TEST_PK}");
             let payment_op = Operation {
                 source_account: None,
-                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                body: OperationBody::Payment(stellar_xdr::PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
-                    asset: XdrAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: XdrAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(TEST_PK),
                     }),
                     amount: 1_000_000,
@@ -2112,8 +2159,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2147,10 +2194,10 @@ mod tests {
             let usdc_asset = format!("USDC:{TEST_PK}");
             let usdc_payment = Operation {
                 source_account: None,
-                body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+                body: OperationBody::Payment(stellar_xdr::PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
-                    asset: XdrAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: XdrAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(TEST_PK),
                     }),
                     amount: 500_000,
@@ -2163,8 +2210,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![xlm_payment, usdc_payment].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2190,10 +2237,8 @@ mod tests {
 
     mod validate_user_fee_payment_amounts_tests {
         use super::*;
-        use soroban_rs::stellar_rpc_client::{
-            GetLatestLedgerResponse, SimulateTransactionResponse,
-        };
-        use soroban_rs::xdr::WriteXdr;
+        use stellar_rpc_client::{GetLatestLedgerResponse, SimulateTransactionResponse};
+        use stellar_xdr::WriteXdr;
 
         const USDC_ISSUER: &str = TEST_PK;
 
@@ -2206,8 +2251,8 @@ mod tests {
                 source_account: None,
                 body: OperationBody::Payment(PaymentOp {
                     destination: create_muxed_account(destination),
-                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: stellar_xdr::Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(USDC_ISSUER),
                     }),
                     amount,
@@ -2218,8 +2263,8 @@ mod tests {
                 source_account: create_muxed_account(source),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2283,16 +2328,16 @@ mod tests {
 
             // Mock get_ledger_entries for trustline balance check
             provider.expect_get_ledger_entries().returning(|_| {
-                use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-                use soroban_rs::xdr::{
+                use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+                use stellar_xdr::{
                     LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, TrustLineEntry,
                     TrustLineEntryExt,
                 };
 
                 let trustline_entry = TrustLineEntry {
                     account_id: create_account_id(TEST_PK),
-                    asset: TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: TrustLineAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(TEST_PK_2),
                     }),
                     balance: 10_000_000, // 10 USDC
@@ -2309,7 +2354,7 @@ mod tests {
 
                 let xdr_base64 = ledger_entry
                     .data
-                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .to_xdr_base64(stellar_xdr::Limits::none())
                     .unwrap();
 
                 Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -2396,8 +2441,8 @@ mod tests {
                 source_account: None,
                 body: OperationBody::Payment(PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
-                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: stellar_xdr::Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(USDC_ISSUER),
                     }),
                     amount: 500_000,
@@ -2407,8 +2452,8 @@ mod tests {
                 source_account: None,
                 body: OperationBody::Payment(PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
-                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: stellar_xdr::Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(USDC_ISSUER),
                     }),
                     amount: 500_000,
@@ -2419,8 +2464,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment1, payment2].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2457,8 +2502,8 @@ mod tests {
                 source_account: None,
                 body: OperationBody::Payment(PaymentOp {
                     destination: create_muxed_account(TEST_PK_2),
-                    asset: soroban_rs::xdr::Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"EURC"),
+                    asset: stellar_xdr::Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"EURC"),
                         issuer: create_account_id(TEST_PK),
                     }),
                     amount: 1_000_000,
@@ -2469,8 +2514,8 @@ mod tests {
                 source_account: create_muxed_account(TEST_PK),
                 fee: 100,
                 seq_num: SequenceNumber(1),
-                cond: soroban_rs::xdr::Preconditions::None,
-                memo: soroban_rs::xdr::Memo::None,
+                cond: stellar_xdr::Preconditions::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![payment_op].try_into().unwrap(),
                 ext: TransactionExt::V0,
             };
@@ -2612,16 +2657,16 @@ mod tests {
 
             // Mock get_ledger_entries with low USDC balance
             provider.expect_get_ledger_entries().returning(|_| {
-                use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-                use soroban_rs::xdr::{
+                use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+                use stellar_xdr::{
                     LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, TrustLineEntry,
                     TrustLineEntryExt,
                 };
 
                 let trustline_entry = TrustLineEntry {
                     account_id: create_account_id(TEST_PK),
-                    asset: TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: TrustLineAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: create_account_id(USDC_ISSUER),
                     }),
                     balance: 500_000, // Only 0.05 USDC - insufficient
@@ -2638,7 +2683,7 @@ mod tests {
 
                 let xdr_base64 = ledger_entry
                     .data
-                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .to_xdr_base64(stellar_xdr::Limits::none())
                     .unwrap();
 
                 Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -2730,8 +2775,8 @@ mod tests {
         fn test_invoke_contract_allowed() {
             let invoke_op = InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
-                        soroban_rs::xdr::Hash([0u8; 32]),
+                    contract_address: ScAddress::Contract(stellar_xdr::ContractId(
+                        stellar_xdr::Hash([0u8; 32]),
                     )),
                     function_name: ScSymbol("test".try_into().unwrap()),
                     args: Default::default(),
@@ -2749,16 +2794,14 @@ mod tests {
         #[test]
         fn test_create_contract_rejected() {
             let invoke_op = InvokeHostFunctionOp {
-                host_function: HostFunction::CreateContract(soroban_rs::xdr::CreateContractArgs {
-                    contract_id_preimage: soroban_rs::xdr::ContractIdPreimage::Address(
-                        soroban_rs::xdr::ContractIdPreimageFromAddress {
+                host_function: HostFunction::CreateContract(stellar_xdr::CreateContractArgs {
+                    contract_id_preimage: stellar_xdr::ContractIdPreimage::Address(
+                        stellar_xdr::ContractIdPreimageFromAddress {
                             address: ScAddress::Account(create_account_id(TEST_PK)),
-                            salt: soroban_rs::xdr::Uint256([0u8; 32]),
+                            salt: stellar_xdr::Uint256([0u8; 32]),
                         },
                     ),
-                    executable: soroban_rs::xdr::ContractExecutable::Wasm(soroban_rs::xdr::Hash(
-                        [0u8; 32],
-                    )),
+                    executable: stellar_xdr::ContractExecutable::Wasm(stellar_xdr::Hash([0u8; 32])),
                 }),
                 auth: Default::default(),
             };
@@ -2795,19 +2838,17 @@ mod tests {
         #[test]
         fn test_relayer_in_auth_rejected() {
             let auth_entry = SorobanAuthorizationEntry {
-                credentials: SorobanCredentials::Address(
-                    soroban_rs::xdr::SorobanAddressCredentials {
-                        address: ScAddress::Account(create_account_id(TEST_PK_2)),
-                        nonce: 0,
-                        signature_expiration_ledger: 0,
-                        signature: soroban_rs::xdr::ScVal::Void,
-                    },
-                ),
-                root_invocation: soroban_rs::xdr::SorobanAuthorizedInvocation {
+                credentials: SorobanCredentials::Address(stellar_xdr::SorobanAddressCredentials {
+                    address: ScAddress::Account(create_account_id(TEST_PK_2)),
+                    nonce: 0,
+                    signature_expiration_ledger: 0,
+                    signature: stellar_xdr::ScVal::Void,
+                }),
+                root_invocation: stellar_xdr::SorobanAuthorizedInvocation {
                     function: SorobanAuthorizedFunction::ContractFn(
-                        soroban_rs::xdr::InvokeContractArgs {
-                            contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
-                                soroban_rs::xdr::Hash([0u8; 32]),
+                        stellar_xdr::InvokeContractArgs {
+                            contract_address: ScAddress::Contract(stellar_xdr::ContractId(
+                                stellar_xdr::Hash([0u8; 32]),
                             )),
                             function_name: ScSymbol("test".try_into().unwrap()),
                             args: Default::default(),
@@ -2819,8 +2860,8 @@ mod tests {
 
             let invoke_op = InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(
-                        soroban_rs::xdr::Hash([0u8; 32]),
+                    contract_address: ScAddress::Contract(stellar_xdr::ContractId(
+                        stellar_xdr::Hash([0u8; 32]),
                     )),
                     function_name: ScSymbol("test".try_into().unwrap()),
                     args: Default::default(),
@@ -2835,6 +2876,184 @@ mod tests {
             );
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("requires relayer"));
+        }
+
+        // ---- Protocol 28 credential variants ----
+
+        fn test_contract_address() -> ScAddress {
+            ScAddress::Contract(stellar_xdr::ContractId(stellar_xdr::Hash([0u8; 32])))
+        }
+
+        fn address_creds(address: ScAddress) -> stellar_xdr::SorobanAddressCredentials {
+            stellar_xdr::SorobanAddressCredentials {
+                address,
+                nonce: 0,
+                signature_expiration_ledger: 0,
+                signature: stellar_xdr::ScVal::Void,
+            }
+        }
+
+        /// Muxed (M...) form of a G... account: same ed25519 key, plus an id.
+        fn muxed_address(g_address: &str) -> ScAddress {
+            let pk = stellar_strkey::ed25519::PublicKey::from_string(g_address).unwrap();
+            ScAddress::MuxedAccount(stellar_xdr::MuxedEd25519Account {
+                id: 7,
+                ed25519: stellar_xdr::Uint256(pk.0),
+            })
+        }
+
+        fn delegate(
+            address: ScAddress,
+            nested: Vec<stellar_xdr::SorobanDelegateSignature>,
+        ) -> stellar_xdr::SorobanDelegateSignature {
+            stellar_xdr::SorobanDelegateSignature {
+                address,
+                signature: stellar_xdr::ScVal::Void,
+                nested_delegates: nested.try_into().unwrap(),
+            }
+        }
+
+        fn invoke_op_with_credentials(credentials: SorobanCredentials) -> InvokeHostFunctionOp {
+            let auth_entry = SorobanAuthorizationEntry {
+                credentials,
+                root_invocation: stellar_xdr::SorobanAuthorizedInvocation {
+                    function: SorobanAuthorizedFunction::ContractFn(
+                        stellar_xdr::InvokeContractArgs {
+                            contract_address: test_contract_address(),
+                            function_name: ScSymbol("test".try_into().unwrap()),
+                            args: Default::default(),
+                        },
+                    ),
+                    sub_invocations: Default::default(),
+                },
+            };
+            InvokeHostFunctionOp {
+                host_function: HostFunction::InvokeContract(InvokeContractArgs {
+                    contract_address: test_contract_address(),
+                    function_name: ScSymbol("test".try_into().unwrap()),
+                    args: Default::default(),
+                }),
+                auth: vec![auth_entry].try_into().unwrap(),
+            }
+        }
+
+        fn validate_with_relayer(
+            credentials: SorobanCredentials,
+            relayer: &str,
+        ) -> Result<(), StellarTransactionValidationError> {
+            StellarTransactionValidator::validate_contract_invocation(
+                &invoke_op_with_credentials(credentials),
+                0,
+                relayer,
+                &RelayerStellarPolicy::default(),
+            )
+        }
+
+        fn assert_requires_relayer(result: Result<(), StellarTransactionValidationError>) {
+            let err = result.expect_err("relayer as auth signer must be rejected");
+            assert!(
+                err.to_string().contains("requires relayer"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn test_relayer_in_auth_v2_rejected() {
+            let creds = SorobanCredentials::AddressV2(address_creds(ScAddress::Account(
+                create_account_id(TEST_PK_2),
+            )));
+            assert_requires_relayer(validate_with_relayer(creds, TEST_PK_2));
+        }
+
+        #[test]
+        fn test_other_account_in_auth_v2_accepted() {
+            let creds = SorobanCredentials::AddressV2(address_creds(ScAddress::Account(
+                create_account_id(TEST_PK_2),
+            )));
+            assert!(validate_with_relayer(creds, TEST_PK).is_ok());
+        }
+
+        #[test]
+        fn test_relayer_muxed_address_in_auth_rejected() {
+            // A muxed address is signed by the underlying account key, so it must be
+            // treated as the relayer even though it is not byte-equal to the G... address.
+            for make in [
+                SorobanCredentials::Address as fn(_) -> _,
+                SorobanCredentials::AddressV2 as fn(_) -> _,
+            ] {
+                let creds = make(address_creds(muxed_address(TEST_PK_2)));
+                assert_requires_relayer(validate_with_relayer(creds, TEST_PK_2));
+            }
+        }
+
+        #[test]
+        fn test_other_muxed_address_in_auth_accepted() {
+            let creds = SorobanCredentials::Address(address_creds(muxed_address(TEST_PK_2)));
+            assert!(validate_with_relayer(creds, TEST_PK).is_ok());
+        }
+
+        #[test]
+        fn test_relayer_as_direct_delegate_rejected() {
+            let creds = SorobanCredentials::AddressWithDelegates(
+                stellar_xdr::SorobanAddressCredentialsWithDelegates {
+                    address_credentials: address_creds(test_contract_address()),
+                    delegates: vec![delegate(
+                        ScAddress::Account(create_account_id(TEST_PK_2)),
+                        vec![],
+                    )]
+                    .try_into()
+                    .unwrap(),
+                },
+            );
+            assert_requires_relayer(validate_with_relayer(creds, TEST_PK_2));
+        }
+
+        #[test]
+        fn test_relayer_as_nested_delegate_rejected() {
+            // relayer is two levels deep: contract -> other account -> relayer (muxed)
+            let creds = SorobanCredentials::AddressWithDelegates(
+                stellar_xdr::SorobanAddressCredentialsWithDelegates {
+                    address_credentials: address_creds(test_contract_address()),
+                    delegates: vec![delegate(
+                        ScAddress::Account(create_account_id(TEST_PK)),
+                        vec![delegate(muxed_address(TEST_PK_2), vec![])],
+                    )]
+                    .try_into()
+                    .unwrap(),
+                },
+            );
+            assert_requires_relayer(validate_with_relayer(creds, TEST_PK_2));
+        }
+
+        #[test]
+        fn test_relayer_as_delegated_primary_address_rejected() {
+            let creds = SorobanCredentials::AddressWithDelegates(
+                stellar_xdr::SorobanAddressCredentialsWithDelegates {
+                    address_credentials: address_creds(ScAddress::Account(create_account_id(
+                        TEST_PK_2,
+                    ))),
+                    delegates: vec![delegate(test_contract_address(), vec![])]
+                        .try_into()
+                        .unwrap(),
+                },
+            );
+            assert_requires_relayer(validate_with_relayer(creds, TEST_PK_2));
+        }
+
+        #[test]
+        fn test_delegates_without_relayer_accepted() {
+            let creds = SorobanCredentials::AddressWithDelegates(
+                stellar_xdr::SorobanAddressCredentialsWithDelegates {
+                    address_credentials: address_creds(test_contract_address()),
+                    delegates: vec![delegate(
+                        ScAddress::Account(create_account_id(TEST_PK_2)),
+                        vec![delegate(muxed_address(TEST_PK_2), vec![])],
+                    )]
+                    .try_into()
+                    .unwrap(),
+                },
+            );
+            assert!(validate_with_relayer(creds, TEST_PK).is_ok());
         }
     }
 }

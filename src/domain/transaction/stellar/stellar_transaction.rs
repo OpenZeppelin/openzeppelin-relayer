@@ -750,11 +750,11 @@ mod tests {
             .times(1)
             .returning(|_| {
                 Box::pin(async {
-                    use soroban_rs::xdr::{
+                    use stellar_strkey::ed25519;
+                    use stellar_xdr::{
                         AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
                         String32, Thresholds, Uint256,
                     };
-                    use stellar_strkey::ed25519;
 
                     // Create a dummy public key for account ID
                     let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
@@ -821,11 +821,11 @@ mod tests {
         // Mock provider success
         mocks.provider.expect_get_account().times(1).returning(|_| {
             Box::pin(async {
-                use soroban_rs::xdr::{
+                use stellar_strkey::ed25519;
+                use stellar_xdr::{
                     AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
                     Thresholds, Uint256,
                 };
-                use stellar_strkey::ed25519;
 
                 // Create a dummy public key for account ID
                 let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
@@ -872,12 +872,12 @@ mod tests {
     }
 
     /// Builds an `AccountEntry` for the test relayer with the given on-chain sequence.
-    fn test_account_entry(seq: i64) -> soroban_rs::xdr::AccountEntry {
-        use soroban_rs::xdr::{
+    fn test_account_entry(seq: i64) -> stellar_xdr::AccountEntry {
+        use stellar_strkey::ed25519;
+        use stellar_xdr::{
             AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
             Thresholds, Uint256,
         };
-        use stellar_strkey::ed25519;
 
         let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
         let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));

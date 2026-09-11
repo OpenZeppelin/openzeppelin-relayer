@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
-use soroban_rs::xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
+use stellar_xdr::{Limits, Operation, TransactionEnvelope, WriteXdr};
 use tracing::{debug, warn};
 
 use crate::constants::{
@@ -42,7 +42,7 @@ use crate::services::signer::StellarSignTrait;
 use crate::services::stellar_dex::StellarDexServiceTrait;
 use crate::services::stellar_fee_forwarder::{FeeForwarderParams, FeeForwarderService};
 use crate::services::TransactionCounterServiceTrait;
-use soroban_rs::xdr::{HostFunction, OperationBody, ReadXdr, ScVal};
+use stellar_xdr::{HostFunction, OperationBody, ReadXdr, ScVal};
 
 /// Information extracted from a Soroban InvokeHostFunction operation
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ pub struct SorobanInvokeInfo {
 /// - `Ok(None)` if XDR is a classic transaction (no InvokeHostFunction)
 /// - `Err(...)` if XDR is invalid
 fn detect_soroban_invoke_from_xdr(xdr: &str) -> Result<Option<SorobanInvokeInfo>, RelayerError> {
-    use soroban_rs::xdr::TransactionEnvelope;
+    use stellar_xdr::TransactionEnvelope;
 
     let envelope = TransactionEnvelope::from_xdr_base64(xdr, Limits::none())
         .map_err(|e| RelayerError::ValidationError(format!("Invalid XDR: {e}")))?;
@@ -73,7 +73,7 @@ fn detect_soroban_invoke_from_xdr(xdr: &str) -> Result<Option<SorobanInvokeInfo>
         TransactionEnvelope::TxV0(env) => env.tx.operations.to_vec(),
         TransactionEnvelope::Tx(env) => env.tx.operations.to_vec(),
         TransactionEnvelope::TxFeeBump(env) => match &env.tx.inner_tx {
-            soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner) => inner.tx.operations.to_vec(),
+            stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner) => inner.tx.operations.to_vec(),
         },
     };
 
@@ -110,8 +110,8 @@ fn detect_soroban_invoke_from_xdr(xdr: &str) -> Result<Option<SorobanInvokeInfo>
         if let HostFunction::InvokeContract(invoke_args) = &invoke_op.host_function {
             // Extract contract address
             let target_contract = match &invoke_args.contract_address {
-                soroban_rs::xdr::ScAddress::Contract(contract_id) => {
-                    stellar_strkey::Contract(contract_id.0 .0).to_string()
+                stellar_xdr::ScAddress::Contract(contract_id) => {
+                    format!("{}", stellar_strkey::Contract(contract_id.0 .0))
                 }
                 _ => {
                     return Err(RelayerError::ValidationError(
@@ -914,7 +914,7 @@ fn build_soroban_transaction_envelope(
     operation: Operation,
     fee: u32,
 ) -> Result<TransactionEnvelope, RelayerError> {
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction, TransactionExt,
         TransactionV1Envelope, Uint256, VecM,
     };
@@ -945,7 +945,7 @@ fn build_soroban_transaction_envelope(
 
 /// Calculate total fee for a Soroban transaction from simulation response.
 fn calculate_total_soroban_fee(
-    sim_response: &soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+    sim_response: &stellar_rpc_client::SimulateTransactionResponse,
     operations_count: u64,
 ) -> Result<u32, RelayerError> {
     if let Some(err) = sim_response.error.clone() {
@@ -966,10 +966,10 @@ fn calculate_total_soroban_fee(
 /// Apply Soroban simulation data to a transaction envelope (fee + extension data).
 fn apply_simulation_to_soroban_envelope(
     envelope: &mut TransactionEnvelope,
-    sim_response: &soroban_rs::stellar_rpc_client::SimulateTransactionResponse,
+    sim_response: &stellar_rpc_client::SimulateTransactionResponse,
     operations_count: u64,
 ) -> Result<(), RelayerError> {
-    use soroban_rs::xdr::SorobanTransactionData;
+    use stellar_xdr::SorobanTransactionData;
 
     let total_fee = calculate_total_soroban_fee(sim_response, operations_count)?;
 
@@ -982,7 +982,7 @@ fn apply_simulation_to_soroban_envelope(
     match envelope {
         TransactionEnvelope::Tx(ref mut env) => {
             env.tx.fee = total_fee;
-            env.tx.ext = soroban_rs::xdr::TransactionExt::V1(tx_data);
+            env.tx.ext = stellar_xdr::TransactionExt::V1(tx_data);
         }
         TransactionEnvelope::TxV0(_) | TransactionEnvelope::TxFeeBump(_) => {
             return Err(RelayerError::Internal(
@@ -1152,18 +1152,18 @@ mod tests {
     };
     use mockall::predicate::*;
     use serial_test::serial;
-    use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
-    use soroban_rs::stellar_rpc_client::LedgerEntryResult;
-    use soroban_rs::xdr::{
+    use std::future::ready;
+    use std::sync::Arc;
+    use stellar_rpc_client::GetLedgerEntriesResponse;
+    use stellar_rpc_client::LedgerEntryResult;
+    use stellar_strkey::ed25519::PublicKey as Ed25519PublicKey;
+    use stellar_xdr::{
         AccountEntry, AccountEntryExt, AccountId, AlphaNum4, AssetCode4, LedgerEntry,
         LedgerEntryData, LedgerEntryExt, LedgerKey, Limits, MuxedAccount, Operation, OperationBody,
         PaymentOp, Preconditions, PublicKey, SequenceNumber, String32, Thresholds, Transaction,
         TransactionEnvelope, TransactionExt, TransactionV1Envelope, TrustLineEntry,
         TrustLineEntryExt, Uint256, VecM, WriteXdr,
     };
-    use std::future::ready;
-    use std::sync::Arc;
-    use stellar_strkey::ed25519::PublicKey as Ed25519PublicKey;
 
     const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     const TEST_NETWORK_PASSPHRASE: &str = "Test SDF Network ; September 2015";
@@ -1183,7 +1183,7 @@ mod tests {
 
         let payment_op = PaymentOp {
             destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
+            asset: stellar_xdr::Asset::Native,
             amount: 1000000,
         };
 
@@ -1199,7 +1199,7 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(2), // Must be > account sequence (1)
             cond: Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations,
             ext: TransactionExt::V0,
         };
@@ -1421,7 +1421,7 @@ mod tests {
             // Create a trustline entry with sufficient balance
             let trustline_entry = TrustLineEntry {
                 account_id,
-                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                     asset_code: AssetCode4(*b"USDC"),
                     issuer: issuer_id,
                 }),
@@ -1440,7 +1440,7 @@ mod tests {
             // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
             let xdr = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .expect("Failed to encode trustline entry data to XDR");
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1543,7 +1543,7 @@ mod tests {
             // Create a trustline entry with sufficient balance
             let trustline_entry = TrustLineEntry {
                 account_id,
-                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                     asset_code: AssetCode4(*b"USDC"),
                     issuer: issuer_id,
                 }),
@@ -1562,20 +1562,18 @@ mod tests {
             // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
             let xdr = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .expect("Failed to encode trustline entry data to XDR");
 
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
-                    entries: Some(vec![LedgerEntryResult {
-                        key: "test_key".to_string(),
-                        xdr,
-                        last_modified_ledger: 0u32,
-                        live_until_ledger_seq_ledger_seq: None,
-                    }]),
-                    latest_ledger: 0,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: "test_key".to_string(),
+                    xdr,
+                    last_modified_ledger: 0u32,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
         });
 
         let mut dex_service = MockStellarDexServiceTrait::new();
@@ -1715,7 +1713,7 @@ mod tests {
             // Create a trustline entry with sufficient balance (10 USDC = 10000000 with 6 decimals)
             let trustline_entry = TrustLineEntry {
                 account_id,
-                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                     asset_code: AssetCode4(*b"USDC"),
                     issuer: issuer_id,
                 }),
@@ -1734,20 +1732,18 @@ mod tests {
             // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
             let xdr = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .expect("Failed to encode trustline entry data to XDR");
 
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
-                    entries: Some(vec![LedgerEntryResult {
-                        key: "test_key".to_string(),
-                        xdr,
-                        last_modified_ledger: 0u32,
-                        live_until_ledger_seq_ledger_seq: None,
-                    }]),
-                    latest_ledger: 0,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: "test_key".to_string(),
+                    xdr,
+                    last_modified_ledger: 0u32,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
         });
 
         let mut dex_service = MockStellarDexServiceTrait::new();
@@ -1821,8 +1817,8 @@ mod tests {
 
         provider.expect_get_ledger_entries().returning(|_| {
             use crate::domain::transaction::stellar::utils::parse_account_id;
-            use soroban_rs::stellar_rpc_client::LedgerEntryResult;
-            use soroban_rs::xdr::{
+            use stellar_rpc_client::LedgerEntryResult;
+            use stellar_xdr::{
                 AccountId, AlphaNum4, AssetCode4, LedgerEntry, LedgerEntryData, LedgerEntryExt,
                 PublicKey, TrustLineEntry, TrustLineEntryExt, Uint256, WriteXdr,
             };
@@ -1839,7 +1835,7 @@ mod tests {
             // The fee is 1500000 (from the quote), so 10 USDC is more than enough
             let trustline_entry = TrustLineEntry {
                 account_id,
-                asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                     asset_code: AssetCode4(*b"USDC"),
                     issuer: issuer_id,
                 }),
@@ -1859,20 +1855,18 @@ mod tests {
             // The parse_ledger_entry_from_xdr function expects just the data portion
             let xdr = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .expect("Failed to encode trustline entry data to XDR");
 
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
-                    entries: Some(vec![LedgerEntryResult {
-                        key: "test_key".to_string(),
-                        xdr,
-                        last_modified_ledger: 0u32,
-                        live_until_ledger_seq_ledger_seq: None,
-                    }]),
-                    latest_ledger: 0,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLedgerEntriesResponse {
+                entries: Some(vec![LedgerEntryResult {
+                    key: "test_key".to_string(),
+                    xdr,
+                    last_modified_ledger: 0u32,
+                    live_until_ledger_seq_ledger_seq: None,
+                }]),
+                latest_ledger: 0,
+            })))
         });
 
         let mut dex_service = MockStellarDexServiceTrait::new();
@@ -2085,7 +2079,7 @@ mod tests {
 
     #[test]
     fn test_detect_soroban_invoke_from_xdr_with_soroban_transaction() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
             MuxedAccount, Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal,
             SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
@@ -2146,7 +2140,7 @@ mod tests {
 
     #[test]
     fn test_detect_soroban_invoke_from_xdr_multiple_operations_error() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
             MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, ScAddress, ScSymbol,
             SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
@@ -2177,7 +2171,7 @@ mod tests {
 
         let payment_op = PaymentOp {
             destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
+            asset: stellar_xdr::Asset::Native,
             amount: 1000000,
         };
 
@@ -2222,7 +2216,7 @@ mod tests {
 
     #[test]
     fn test_detect_soroban_invoke_from_xdr_v0_envelope() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             Memo, Operation, OperationBody, PaymentOp, SequenceNumber, TransactionEnvelope,
             TransactionV0, TransactionV0Envelope, TransactionV0Ext, Uint256, VecM,
         };
@@ -2239,7 +2233,7 @@ mod tests {
 
         let payment_op = PaymentOp {
             destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
+            asset: stellar_xdr::Asset::Native,
             amount: 1000000,
         };
 
@@ -2273,7 +2267,7 @@ mod tests {
 
     #[test]
     fn test_detect_soroban_invoke_from_xdr_fee_bump_envelope() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
             FeeBumpTransactionInnerTx, Memo, MuxedAccount, Operation, OperationBody, PaymentOp,
             Preconditions, SequenceNumber, Transaction, TransactionEnvelope, TransactionExt,
@@ -2291,7 +2285,7 @@ mod tests {
 
         let payment_op = PaymentOp {
             destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
+            asset: stellar_xdr::Asset::Native,
             amount: 1000000,
         };
 
@@ -2337,7 +2331,7 @@ mod tests {
 
     #[test]
     fn test_detect_soroban_invoke_non_contract_address_error() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount, Operation,
             OperationBody, Preconditions, ScAddress, ScSymbol, SequenceNumber, Transaction,
             TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM,
@@ -2399,7 +2393,7 @@ mod tests {
 
     #[test]
     fn test_calculate_total_soroban_fee_success() {
-        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+        let sim_response = stellar_rpc_client::SimulateTransactionResponse {
             error: None,
             transaction_data: "".to_string(),
             min_resource_fee: 50000,
@@ -2415,7 +2409,7 @@ mod tests {
 
     #[test]
     fn test_calculate_total_soroban_fee_with_multiple_operations() {
-        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+        let sim_response = stellar_rpc_client::SimulateTransactionResponse {
             error: None,
             transaction_data: "".to_string(),
             min_resource_fee: 50000,
@@ -2431,7 +2425,7 @@ mod tests {
 
     #[test]
     fn test_calculate_total_soroban_fee_simulation_error() {
-        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+        let sim_response = stellar_rpc_client::SimulateTransactionResponse {
             error: Some("Simulation failed: insufficient funds".to_string()),
             transaction_data: "".to_string(),
             min_resource_fee: 0,
@@ -2450,7 +2444,7 @@ mod tests {
     #[test]
     fn test_calculate_total_soroban_fee_minimum_fee() {
         // When calculated fee is less than minimum, should return minimum
-        let sim_response = soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+        let sim_response = stellar_rpc_client::SimulateTransactionResponse {
             error: None,
             transaction_data: "".to_string(),
             min_resource_fee: 0, // Very low resource fee
@@ -2470,7 +2464,7 @@ mod tests {
 
     #[test]
     fn test_build_soroban_transaction_envelope_success() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation,
             OperationBody, ScAddress, ScSymbol, VecM,
         };
@@ -2507,7 +2501,7 @@ mod tests {
 
     #[test]
     fn test_build_soroban_transaction_envelope_invalid_source() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Operation,
             OperationBody, ScAddress, ScSymbol, VecM,
         };
@@ -2563,7 +2557,7 @@ mod tests {
 
     #[test]
     fn test_add_payment_operation_to_envelope_soroban_no_op_added() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
             Operation, OperationBody, Preconditions, ScAddress, ScSymbol, SequenceNumber,
             Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope, Uint256, VecM,
@@ -2637,7 +2631,7 @@ mod tests {
 
         let payment_op = PaymentOp {
             destination: MuxedAccount::Ed25519(Uint256(dest_pk.0)),
-            asset: soroban_rs::xdr::Asset::Native,
+            asset: stellar_xdr::Asset::Native,
             amount: 1000000,
         };
 
@@ -2646,7 +2640,7 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(1),
             cond: Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![Operation {
                 source_account: None,
                 body: OperationBody::Payment(payment_op),
@@ -2691,7 +2685,7 @@ mod tests {
 
     #[test]
     fn test_soroban_invoke_info_debug_clone() {
-        use soroban_rs::xdr::ScVal;
+        use stellar_xdr::ScVal;
 
         let info = SorobanInvokeInfo {
             target_contract: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC".to_string(),
@@ -2771,7 +2765,7 @@ mod tests {
 
     /// Helper function to create a valid SorobanTransactionData XDR for mocking simulation responses
     fn create_valid_soroban_transaction_data_xdr() -> String {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             LedgerFootprint, SorobanResources, SorobanTransactionData, SorobanTransactionDataExt,
         };
 
@@ -2794,7 +2788,7 @@ mod tests {
 
     /// Helper function to create a Soroban InvokeHostFunction transaction XDR
     fn create_test_soroban_transaction_xdr() -> String {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo,
             ScAddress, ScSymbol, ScVal,
         };
@@ -2882,13 +2876,11 @@ mod tests {
 
         // Mock get_latest_ledger for expiration calculation
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         // Mock simulate_transaction_envelope for Soroban fee estimation
@@ -2896,7 +2888,7 @@ mod tests {
             .expect_simulate_transaction_envelope()
             .returning(|_| {
                 Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                    stellar_rpc_client::SimulateTransactionResponse {
                         min_resource_fee: 50000,
                         transaction_data: "AAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAABgAAAAEAAAAGAAAAAG0JZTO9fU6p3NeJp5w3TpKhZmx6p1pR7mq9wFwCnEIuAAAAFAAAAAEAAAAAAAAAB8NVb2IAAAH0AAAAAQAAAAAAABfAAAAAAAAAAPUAAAAAAAAENgAAAAA=".to_string(),
                         ..Default::default()
@@ -2906,7 +2898,7 @@ mod tests {
 
         // Mock call_contract for Soroban token balance check (balance function)
         provider.expect_call_contract().returning(|_, _, _| {
-            use soroban_rs::xdr::Int128Parts;
+            use stellar_xdr::Int128Parts;
             // Return a balance of 10_000_000 (10 tokens with 6 decimals)
             Box::pin(ready(Ok(ScVal::I128(Int128Parts {
                 hi: 0,
@@ -3106,13 +3098,11 @@ mod tests {
 
         // Mock get_latest_ledger for expiration calculation (called twice - for simulation and for valid_until)
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         // Mock simulate_transaction_envelope for Soroban fee estimation
@@ -3121,18 +3111,16 @@ mod tests {
             .expect_simulate_transaction_envelope()
             .returning(move |_| {
                 let tx_data = valid_tx_data.clone();
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee: 50000,
-                        transaction_data: tx_data,
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee: 50000,
+                    transaction_data: tx_data,
+                    ..Default::default()
+                })))
             });
 
         // Mock call_contract for Soroban token balance check
         provider.expect_call_contract().returning(|_, _, _| {
-            use soroban_rs::xdr::Int128Parts;
+            use stellar_xdr::Int128Parts;
             // Return a balance of 10_000_000 (sufficient for fee)
             Box::pin(ready(Ok(ScVal::I128(Int128Parts {
                 hi: 0,
@@ -3261,13 +3249,11 @@ mod tests {
 
         // Mock get_latest_ledger
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         // Mock simulate_transaction_envelope
@@ -3275,7 +3261,7 @@ mod tests {
             .expect_simulate_transaction_envelope()
             .returning(|_| {
                 Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
+                    stellar_rpc_client::SimulateTransactionResponse {
                         min_resource_fee: 50000,
                         transaction_data: "AAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAABgAAAAEAAAAGAAAAAG0JZTO9fU6p3NeJp5w3TpKhZmx6p1pR7mq9wFwCnEIuAAAAFAAAAAEAAAAAAAAAB8NVb2IAAAH0AAAAAQAAAAAAABfAAAAAAAAAAPUAAAAAAAAENgAAAAA=".to_string(),
                         ..Default::default()
@@ -3285,7 +3271,7 @@ mod tests {
 
         // Mock call_contract with INSUFFICIENT balance
         provider.expect_call_contract().returning(|_, _, _| {
-            use soroban_rs::xdr::Int128Parts;
+            use stellar_xdr::Int128Parts;
             // Return a very low balance (100, much less than required 1500000)
             Box::pin(ready(Ok(ScVal::I128(Int128Parts { hi: 0, lo: 100 }))))
         });
@@ -3352,29 +3338,23 @@ mod tests {
 
         // Mock get_latest_ledger
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         // Mock simulate_transaction_envelope to return error
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        error: Some(
-                            "Contract execution failed: insufficient resources".to_string(),
-                        ),
-                        min_resource_fee: 0,
-                        transaction_data: "".to_string(),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    error: Some("Contract execution failed: insufficient resources".to_string()),
+                    min_resource_fee: 0,
+                    transaction_data: "".to_string(),
+                    ..Default::default()
+                })))
             });
 
         let mut dex_service = MockStellarDexServiceTrait::new();

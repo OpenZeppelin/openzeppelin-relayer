@@ -1,10 +1,8 @@
 //! Common functionality shared across preparation modules.
 
 use eyre::Result;
-use soroban_rs::{
-    stellar_rpc_client::SimulateTransactionResponse,
-    xdr::{Limits, TransactionEnvelope, WriteXdr},
-};
+use stellar_rpc_client::SimulateTransactionResponse;
+use stellar_xdr::{Limits, TransactionEnvelope, WriteXdr};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -277,7 +275,7 @@ fn extract_inner_transaction_fee(inner_envelope: &TransactionEnvelope) -> i64 {
         TransactionEnvelope::TxV0(e) => i64::from(e.tx.fee),
         TransactionEnvelope::Tx(e) => i64::from(e.tx.fee),
         TransactionEnvelope::TxFeeBump(fb) => {
-            let soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner) = &fb.tx.inner_tx;
+            let stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner) = &fb.tx.inner_tx;
             i64::from(inner.tx.fee)
         }
     }
@@ -463,11 +461,11 @@ mod tests {
     use std::future::ready;
 
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Memo, MuxedAccount, SequenceNumber, Transaction, TransactionExt, TransactionV1Envelope,
         Uint256, VecM,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     fn create_test_envelope() -> TransactionEnvelope {
         let pk = PublicKey([0; 32]);
@@ -477,7 +475,7 @@ mod tests {
             source_account: source,
             fee: 100,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
             ext: TransactionExt::V0,
@@ -569,11 +567,11 @@ mod tests {
         let mut envelope = create_test_envelope();
 
         // Add an operation to test fee calculation
-        let payment_op = soroban_rs::xdr::Operation {
+        let payment_op = stellar_xdr::Operation {
             source_account: None,
-            body: soroban_rs::xdr::OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+            body: stellar_xdr::OperationBody::Payment(stellar_xdr::PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256([0; 32])),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };
@@ -705,13 +703,13 @@ mod calculate_fee_bump_required_fee_tests {
     use super::*;
     use crate::models::TransactionError;
     use crate::services::provider::MockStellarProviderTrait;
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerFootprint, Memo,
         MuxedAccount, Operation, OperationBody, PaymentOp, ScAddress, SequenceNumber,
         SorobanResources, SorobanTransactionData, SorobanTransactionDataExt, Transaction,
         TransactionV1Envelope, Uint256, VecM,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     fn create_soroban_envelope_with_existing_data(resource_fee: i64) -> TransactionEnvelope {
         let pk = PublicKey([0; 32]);
@@ -735,9 +733,7 @@ mod calculate_fee_bump_required_fee_tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
-                        [0u8; 32],
-                    ))),
+                    contract_address: ScAddress::Contract(stellar_xdr::ContractId(Hash([0u8; 32]))),
                     function_name: "test".try_into().unwrap(),
                     args: vec![].try_into().unwrap(),
                 }),
@@ -749,10 +745,10 @@ mod calculate_fee_bump_required_fee_tests {
             source_account: source,
             fee: u32::try_from(resource_fee + STELLAR_DEFAULT_TRANSACTION_FEE as i64).unwrap(),
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: vec![invoke_op].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V1(soroban_data),
+            ext: stellar_xdr::TransactionExt::V1(soroban_data),
         };
 
         TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -770,7 +766,7 @@ mod calculate_fee_bump_required_fee_tests {
                 source_account: None,
                 body: OperationBody::Payment(PaymentOp {
                     destination: MuxedAccount::Ed25519(Uint256([1; 32])),
-                    asset: soroban_rs::xdr::Asset::Native,
+                    asset: stellar_xdr::Asset::Native,
                     amount: 1_000_000,
                 }),
             })
@@ -780,10 +776,10 @@ mod calculate_fee_bump_required_fee_tests {
             source_account: source,
             fee,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: operations.try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -890,9 +886,7 @@ mod calculate_fee_bump_required_fee_tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
-                        [0u8; 32],
-                    ))),
+                    contract_address: ScAddress::Contract(stellar_xdr::ContractId(Hash([0u8; 32]))),
                     function_name: "test".try_into().unwrap(),
                     args: vec![].try_into().unwrap(),
                 }),
@@ -904,10 +898,10 @@ mod calculate_fee_bump_required_fee_tests {
             source_account: source,
             fee,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: vec![invoke_op].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1021,12 +1015,12 @@ mod calculate_fee_bump_required_fee_tests {
 mod simulate_if_needed_tests {
     use super::*;
     use crate::services::provider::MockStellarProviderTrait;
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Memo, MuxedAccount,
         Operation, OperationBody, ScAddress, SequenceNumber, Transaction, TransactionV1Envelope,
         Uint256, VecM,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     fn create_non_soroban_envelope() -> TransactionEnvelope {
         let pk = PublicKey([0; 32]);
@@ -1034,9 +1028,9 @@ mod simulate_if_needed_tests {
 
         let payment_op = Operation {
             source_account: None,
-            body: OperationBody::Payment(soroban_rs::xdr::PaymentOp {
+            body: OperationBody::Payment(stellar_xdr::PaymentOp {
                 destination: MuxedAccount::Ed25519(Uint256([0; 32])),
-                asset: soroban_rs::xdr::Asset::Native,
+                asset: stellar_xdr::Asset::Native,
                 amount: 1_000_000,
             }),
         };
@@ -1045,10 +1039,10 @@ mod simulate_if_needed_tests {
             source_account: source,
             fee: 100,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: vec![payment_op].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         TransactionEnvelope::Tx(TransactionV1Envelope {
@@ -1065,9 +1059,7 @@ mod simulate_if_needed_tests {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(InvokeContractArgs {
-                    contract_address: ScAddress::Contract(soroban_rs::xdr::ContractId(Hash(
-                        [0u8; 32],
-                    ))),
+                    contract_address: ScAddress::Contract(stellar_xdr::ContractId(Hash([0u8; 32]))),
                     function_name: "test".try_into().unwrap(),
                     args: vec![].try_into().unwrap(),
                 }),
@@ -1079,10 +1071,10 @@ mod simulate_if_needed_tests {
             source_account: source,
             fee: 100,
             seq_num: SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: vec![invoke_op].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
 
         TransactionEnvelope::Tx(TransactionV1Envelope {

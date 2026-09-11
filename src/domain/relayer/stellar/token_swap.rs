@@ -422,12 +422,12 @@ mod tests {
         },
     };
     use mockall::predicate::*;
-    use soroban_rs::xdr::{
+    use std::future::ready;
+    use std::sync::Arc;
+    use stellar_xdr::{
         AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32, Thresholds,
         Uint256, VecM, WriteXdr,
     };
-    use std::future::ready;
-    use std::sync::Arc;
 
     const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     const TEST_NETWORK_PASSPHRASE: &str = "Test SDF Network ; September 2015";
@@ -437,8 +437,8 @@ mod tests {
     fn create_mock_provider_with_usdc_balance(balance: i64) -> MockStellarProviderTrait {
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_ledger_entries().returning(move |keys| {
-            use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-            use soroban_rs::xdr::{
+            use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+            use stellar_xdr::{
                 LedgerEntry, LedgerEntryData, LedgerEntryExt, LedgerKey, TrustLineAsset,
                 TrustLineEntry, TrustLineEntryExt, WriteXdr,
             };
@@ -458,8 +458,8 @@ mod tests {
                 let fallback_issuer =
                     parse_account_id("GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN")
                         .unwrap_or(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))));
-                let fallback_asset = TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                    asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                let fallback_asset = TrustLineAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                    asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                     issuer: fallback_issuer,
                 });
                 (fallback_account, fallback_asset)
@@ -483,7 +483,7 @@ mod tests {
             // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .expect("Failed to encode trustline entry data to XDR");
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1145,15 +1145,15 @@ mod tests {
             call_count += 1;
             if call_count == 1 {
                 // First token (USDC) - return balance
-                use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-                use soroban_rs::xdr::{
+                use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+                use stellar_xdr::{
                     LedgerEntry, LedgerEntryData, TrustLineAsset, TrustLineEntry, TrustLineEntryExt,
                 };
 
                 let trustline_entry = TrustLineEntry {
                     account_id: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0; 32]))),
-                    asset: TrustLineAsset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-                        asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+                    asset: TrustLineAsset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+                        asset_code: stellar_xdr::AssetCode4(*b"USDC"),
                         issuer: AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([
                             0x3b, 0x99, 0x11, 0x38, 0x0e, 0xfe, 0x98, 0x8b, 0xa0, 0xa8, 0x90, 0x0e,
                             0xb1, 0xcf, 0xe4, 0x4f, 0x36, 0x6f, 0x7d, 0xbe, 0x94, 0x6b, 0xed, 0x07,
@@ -1169,13 +1169,13 @@ mod tests {
                 let ledger_entry = LedgerEntry {
                     last_modified_ledger_seq: 0,
                     data: LedgerEntryData::Trustline(trustline_entry),
-                    ext: soroban_rs::xdr::LedgerEntryExt::V0,
+                    ext: stellar_xdr::LedgerEntryExt::V0,
                 };
 
                 // Encode LedgerEntryData to XDR base64 (not the full LedgerEntry)
                 let xdr_base64 = ledger_entry
                     .data
-                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                    .to_xdr_base64(stellar_xdr::Limits::none())
                     .unwrap();
 
                 Box::pin(ready(Ok(GetLedgerEntriesResponse {

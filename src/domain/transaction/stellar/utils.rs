@@ -9,14 +9,14 @@ use crate::services::stellar_dex::StellarDexServiceTrait;
 use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use soroban_rs::xdr::{
+use std::str::FromStr;
+use stellar_strkey::ed25519::PublicKey;
+use stellar_xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, ChangeTrustAsset, ContractDataEntry, ContractId, Hash,
     LedgerEntryData, LedgerKey, LedgerKeyContractData, Limits, Operation, Preconditions,
     PublicKey as XdrPublicKey, ReadXdr, ScAddress, ScSymbol, ScVal, TimeBounds, TimePoint,
     TransactionEnvelope, TransactionMeta, TransactionResult, Uint256, VecM,
 };
-use std::str::FromStr;
-use stellar_strkey::ed25519::PublicKey;
 use thiserror::Error;
 use tracing::{debug, warn};
 
@@ -288,7 +288,7 @@ pub fn is_bad_sequence_error(error_msg: &str) -> bool {
 /// The RPC `sendTransaction` ERROR response exposes `errorResultXdr` as base64-encoded XDR,
 /// so callers must decode it before checking for specific result codes.
 pub fn decode_transaction_result_code(xdr_base64: &str) -> Option<String> {
-    use soroban_rs::xdr::{Limits, TransactionResult};
+    use stellar_xdr::{Limits, TransactionResult};
 
     let result = TransactionResult::from_xdr_base64(xdr_base64, Limits::none()).ok()?;
     Some(result.result.name().to_string())
@@ -341,44 +341,42 @@ where
 /// Convert a V0 transaction to V1 format for signing.
 /// This is needed because the signature payload for V0 transactions uses V1 format internally.
 pub fn convert_v0_to_v1_transaction(
-    v0_tx: &soroban_rs::xdr::TransactionV0,
-) -> soroban_rs::xdr::Transaction {
-    soroban_rs::xdr::Transaction {
-        source_account: soroban_rs::xdr::MuxedAccount::Ed25519(
-            v0_tx.source_account_ed25519.clone(),
-        ),
+    v0_tx: &stellar_xdr::TransactionV0,
+) -> stellar_xdr::Transaction {
+    stellar_xdr::Transaction {
+        source_account: stellar_xdr::MuxedAccount::Ed25519(v0_tx.source_account_ed25519.clone()),
         fee: v0_tx.fee,
         seq_num: v0_tx.seq_num.clone(),
         cond: match v0_tx.time_bounds.clone() {
-            Some(tb) => soroban_rs::xdr::Preconditions::Time(tb),
-            None => soroban_rs::xdr::Preconditions::None,
+            Some(tb) => stellar_xdr::Preconditions::Time(tb),
+            None => stellar_xdr::Preconditions::None,
         },
         memo: v0_tx.memo.clone(),
         operations: v0_tx.operations.clone(),
-        ext: soroban_rs::xdr::TransactionExt::V0,
+        ext: stellar_xdr::TransactionExt::V0,
     }
 }
 
 /// Create a signature payload for the given envelope type
 pub fn create_signature_payload(
-    envelope: &soroban_rs::xdr::TransactionEnvelope,
-    network_id: &soroban_rs::xdr::Hash,
-) -> Result<soroban_rs::xdr::TransactionSignaturePayload, RelayerError> {
+    envelope: &stellar_xdr::TransactionEnvelope,
+    network_id: &stellar_xdr::Hash,
+) -> Result<stellar_xdr::TransactionSignaturePayload, RelayerError> {
     let tagged_transaction = match envelope {
-        soroban_rs::xdr::TransactionEnvelope::TxV0(e) => {
+        stellar_xdr::TransactionEnvelope::TxV0(e) => {
             // For V0, convert to V1 transaction format for signing
             let v1_tx = convert_v0_to_v1_transaction(&e.tx);
-            soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
+            stellar_xdr::TransactionSignaturePayloadTaggedTransaction::Tx(v1_tx)
         }
-        soroban_rs::xdr::TransactionEnvelope::Tx(e) => {
-            soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
+        stellar_xdr::TransactionEnvelope::Tx(e) => {
+            stellar_xdr::TransactionSignaturePayloadTaggedTransaction::Tx(e.tx.clone())
         }
-        soroban_rs::xdr::TransactionEnvelope::TxFeeBump(e) => {
-            soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
+        stellar_xdr::TransactionEnvelope::TxFeeBump(e) => {
+            stellar_xdr::TransactionSignaturePayloadTaggedTransaction::TxFeeBump(e.tx.clone())
         }
     };
 
-    Ok(soroban_rs::xdr::TransactionSignaturePayload {
+    Ok(stellar_xdr::TransactionSignaturePayload {
         network_id: network_id.clone(),
         tagged_transaction,
     })
@@ -386,12 +384,12 @@ pub fn create_signature_payload(
 
 /// Create signature payload for a transaction directly (for operations-based signing)
 pub fn create_transaction_signature_payload(
-    transaction: &soroban_rs::xdr::Transaction,
-    network_id: &soroban_rs::xdr::Hash,
-) -> soroban_rs::xdr::TransactionSignaturePayload {
-    soroban_rs::xdr::TransactionSignaturePayload {
+    transaction: &stellar_xdr::Transaction,
+    network_id: &stellar_xdr::Hash,
+) -> stellar_xdr::TransactionSignaturePayload {
+    stellar_xdr::TransactionSignaturePayload {
         network_id: network_id.clone(),
-        tagged_transaction: soroban_rs::xdr::TransactionSignaturePayloadTaggedTransaction::Tx(
+        tagged_transaction: stellar_xdr::TransactionSignaturePayloadTaggedTransaction::Tx(
             transaction.clone(),
         ),
     }
@@ -406,7 +404,7 @@ pub fn update_envelope_sequence(
 ) -> Result<(), StellarTransactionUtilsError> {
     match envelope {
         TransactionEnvelope::Tx(v1) => {
-            v1.tx.seq_num = soroban_rs::xdr::SequenceNumber(sequence);
+            v1.tx.seq_num = stellar_xdr::SequenceNumber(sequence);
             Ok(())
         }
         TransactionEnvelope::TxV0(_) => {
@@ -514,7 +512,7 @@ pub fn create_contract_data_key(
         StellarTransactionUtilsError::KeyVectorCreationFailed(symbol.to_string(), format!("{e:?}"))
     })?;
 
-    Ok(ScVal::Vec(Some(soroban_rs::xdr::ScVec(key_vec))))
+    Ok(ScVal::Vec(Some(stellar_xdr::ScVec(key_vec))))
 }
 
 /// Query contract data with Persistent/Temporary durability fallback.
@@ -538,17 +536,17 @@ pub async fn query_contract_data_with_fallback<P>(
     contract_hash: Hash,
     key: ScVal,
     error_context: &str,
-) -> Result<soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse, StellarTransactionUtilsError>
+) -> Result<stellar_rpc_client::GetLedgerEntriesResponse, StellarTransactionUtilsError>
 where
     P: StellarProviderTrait + Send + Sync,
 {
     let contract_address_sc =
-        soroban_rs::xdr::ScAddress::Contract(soroban_rs::xdr::ContractId(contract_hash));
+        stellar_xdr::ScAddress::Contract(stellar_xdr::ContractId(contract_hash));
 
     let mut ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
         contract: contract_address_sc.clone(),
         key: key.clone(),
-        durability: soroban_rs::xdr::ContractDataDurability::Persistent,
+        durability: stellar_xdr::ContractDataDurability::Persistent,
     });
 
     // Query ledger entry with Persistent durability
@@ -572,7 +570,7 @@ where
         ledger_key = LedgerKey::ContractData(LedgerKeyContractData {
             contract: contract_address_sc,
             key,
-            durability: soroban_rs::xdr::ContractDataDurability::Temporary,
+            durability: stellar_xdr::ContractDataDurability::Temporary,
         });
         ledger_entries = provider
             .get_ledger_entries(&[ledger_key])
@@ -639,7 +637,7 @@ pub fn parse_ledger_entry_from_xdr(
 ///
 /// ScVal from contract data or error if extraction fails
 pub fn extract_scval_from_contract_data(
-    ledger_entries: &soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse,
+    ledger_entries: &stellar_rpc_client::GetLedgerEntriesResponse,
     context: &str,
 ) -> Result<ScVal, StellarTransactionUtilsError> {
     let entries = ledger_entries
@@ -1171,13 +1169,11 @@ pub fn extract_time_bounds(envelope: &TransactionEnvelope) -> Option<&TimeBounds
         TransactionEnvelope::TxFeeBump(fb) => {
             // Extract from inner transaction
             match &fb.tx.inner_tx {
-                soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_tx) => {
-                    match &inner_tx.tx.cond {
-                        Preconditions::Time(tb) => Some(tb),
-                        Preconditions::V2(v2) => v2.time_bounds.as_ref(),
-                        Preconditions::None => None,
-                    }
-                }
+                stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner_tx) => match &inner_tx.tx.cond {
+                    Preconditions::Time(tb) => Some(tb),
+                    Preconditions::V2(v2) => v2.time_bounds.as_ref(),
+                    Preconditions::None => None,
+                },
             }
         }
     }
@@ -1503,14 +1499,14 @@ mod tests {
 
     mod decode_tx_result_code_tests {
         use super::*;
-        use soroban_rs::xdr::{TransactionResult, TransactionResultResult, WriteXdr};
+        use stellar_xdr::{TransactionResult, TransactionResultResult, WriteXdr};
 
         #[test]
         fn test_decodes_tx_bad_seq() {
             let result = TransactionResult {
                 fee_charged: 100,
                 result: TransactionResultResult::TxBadSeq,
-                ext: soroban_rs::xdr::TransactionResultExt::V0,
+                ext: stellar_xdr::TransactionResultExt::V0,
             };
             let xdr = result.to_xdr_base64(Limits::none()).unwrap();
             assert_eq!(decode_tx_result_code(&xdr), Some("TxBadSeq".to_string()));
@@ -1521,7 +1517,7 @@ mod tests {
             let result = TransactionResult {
                 fee_charged: 100,
                 result: TransactionResultResult::TxInsufficientBalance,
-                ext: soroban_rs::xdr::TransactionResultExt::V0,
+                ext: stellar_xdr::TransactionResultExt::V0,
             };
             let xdr = result.to_xdr_base64(Limits::none()).unwrap();
             assert_eq!(
@@ -1699,20 +1695,20 @@ mod tests {
 
     #[test]
     fn test_create_signature_payload_functions() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             Hash, SequenceNumber, TransactionEnvelope, TransactionV0, TransactionV0Envelope,
             Uint256,
         };
 
         // Test create_transaction_signature_payload
-        let transaction = soroban_rs::xdr::Transaction {
-            source_account: soroban_rs::xdr::MuxedAccount::Ed25519(Uint256([1u8; 32])),
+        let transaction = stellar_xdr::Transaction {
+            source_account: stellar_xdr::MuxedAccount::Ed25519(Uint256([1u8; 32])),
             fee: 100,
             seq_num: SequenceNumber(123),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionExt::V0,
+            ext: stellar_xdr::TransactionExt::V0,
         };
         let network_id = Hash([2u8; 32]);
 
@@ -1725,9 +1721,9 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(123),
             time_bounds: None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
         let v0_envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
             tx: v0_tx,
@@ -1740,7 +1736,7 @@ mod tests {
 
     mod convert_v0_to_v1_transaction_tests {
         use super::*;
-        use soroban_rs::xdr::{SequenceNumber, TransactionV0, Uint256};
+        use stellar_xdr::{SequenceNumber, TransactionV0, Uint256};
 
         #[test]
         fn test_convert_v0_to_v1_transaction() {
@@ -1750,9 +1746,9 @@ mod tests {
                 fee: 100,
                 seq_num: SequenceNumber(123),
                 time_bounds: None,
-                memo: soroban_rs::xdr::Memo::None,
+                memo: stellar_xdr::Memo::None,
                 operations: vec![].try_into().unwrap(),
-                ext: soroban_rs::xdr::TransactionV0Ext::V0,
+                ext: stellar_xdr::TransactionV0Ext::V0,
             };
 
             // Convert to V1
@@ -1763,12 +1759,12 @@ mod tests {
             assert_eq!(v1_tx.seq_num, v0_tx.seq_num);
             assert_eq!(v1_tx.memo, v0_tx.memo);
             assert_eq!(v1_tx.operations, v0_tx.operations);
-            assert!(matches!(v1_tx.ext, soroban_rs::xdr::TransactionExt::V0));
-            assert!(matches!(v1_tx.cond, soroban_rs::xdr::Preconditions::None));
+            assert!(matches!(v1_tx.ext, stellar_xdr::TransactionExt::V0));
+            assert!(matches!(v1_tx.cond, stellar_xdr::Preconditions::None));
 
             // Check source account conversion
             match v1_tx.source_account {
-                soroban_rs::xdr::MuxedAccount::Ed25519(addr) => {
+                stellar_xdr::MuxedAccount::Ed25519(addr) => {
                     assert_eq!(addr, v0_tx.source_account_ed25519);
                 }
                 _ => panic!("Expected Ed25519 muxed account"),
@@ -1778,9 +1774,9 @@ mod tests {
         #[test]
         fn test_convert_v0_to_v1_transaction_with_time_bounds() {
             // Create a V0 transaction with time bounds
-            let time_bounds = soroban_rs::xdr::TimeBounds {
-                min_time: soroban_rs::xdr::TimePoint(100),
-                max_time: soroban_rs::xdr::TimePoint(200),
+            let time_bounds = stellar_xdr::TimeBounds {
+                min_time: stellar_xdr::TimePoint(100),
+                max_time: stellar_xdr::TimePoint(200),
             };
 
             let v0_tx = TransactionV0 {
@@ -1788,9 +1784,9 @@ mod tests {
                 fee: 200,
                 seq_num: SequenceNumber(456),
                 time_bounds: Some(time_bounds.clone()),
-                memo: soroban_rs::xdr::Memo::Text("test".try_into().unwrap()),
+                memo: stellar_xdr::Memo::Text("test".try_into().unwrap()),
                 operations: vec![].try_into().unwrap(),
-                ext: soroban_rs::xdr::TransactionV0Ext::V0,
+                ext: stellar_xdr::TransactionV0Ext::V0,
             };
 
             // Convert to V1
@@ -1798,7 +1794,7 @@ mod tests {
 
             // Check that time bounds were correctly converted to preconditions
             match v1_tx.cond {
-                soroban_rs::xdr::Preconditions::Time(tb) => {
+                stellar_xdr::Preconditions::Time(tb) => {
                     assert_eq!(tb, time_bounds);
                 }
                 _ => panic!("Expected Time preconditions"),
@@ -1857,7 +1853,7 @@ mod parse_contract_address_tests {
 #[cfg(test)]
 mod update_envelope_sequence_tests {
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         FeeBumpTransaction, FeeBumpTransactionEnvelope, FeeBumpTransactionExt,
         FeeBumpTransactionInnerTx, Memo, MuxedAccount, Preconditions, SequenceNumber, Transaction,
         TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV0Ext,
@@ -2032,7 +2028,7 @@ mod create_contract_data_key_tests {
     fn test_create_key_with_address() {
         let pk = PublicKey::from_string(TEST_ACCOUNT).unwrap();
         let uint256 = Uint256(pk.0);
-        let account_id = AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(uint256));
+        let account_id = AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(uint256));
         let sc_address = ScAddress::Account(account_id);
 
         let result = create_contract_data_key("Balance", Some(sc_address.clone()));
@@ -2081,8 +2077,8 @@ mod create_contract_data_key_tests {
 #[cfg(test)]
 mod extract_scval_from_contract_data_tests {
     use super::*;
-    use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-    use soroban_rs::xdr::{
+    use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+    use stellar_xdr::{
         ContractDataDurability, ContractDataEntry, ExtensionPoint, Hash, LedgerEntry,
         LedgerEntryData, LedgerEntryExt, ScSymbol, ScVal, WriteXdr,
     };
@@ -2105,7 +2101,7 @@ mod extract_scval_from_contract_data_tests {
 
         let xdr = ledger_entry
             .data
-            .to_xdr_base64(soroban_rs::xdr::Limits::none())
+            .to_xdr_base64(stellar_xdr::Limits::none())
             .unwrap();
 
         let response = GetLedgerEntriesResponse {
@@ -2167,7 +2163,7 @@ mod extract_scval_from_contract_data_tests {
 #[cfg(test)]
 mod extract_u32_from_scval_tests {
     use super::*;
-    use soroban_rs::xdr::{Int128Parts, ScVal, UInt128Parts};
+    use stellar_xdr::{Int128Parts, ScVal, UInt128Parts};
 
     #[test]
     fn test_extract_from_u32() {
@@ -2293,14 +2289,14 @@ mod amount_to_ui_amount_tests {
 #[cfg(test)]
 mod count_operations_tests {
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         Limits, MuxedAccount, Operation, OperationBody, PaymentOp, TransactionV1Envelope, Uint256,
         WriteXdr,
     };
 
     #[test]
     fn test_count_operations_from_xdr() {
-        use soroban_rs::xdr::{Memo, Preconditions, SequenceNumber, Transaction, TransactionExt};
+        use stellar_xdr::{Memo, Preconditions, SequenceNumber, Transaction, TransactionExt};
 
         // Create two payment operations
         let payment_op = Operation {
@@ -2524,7 +2520,7 @@ mod parse_account_id_tests {
 
         let account_id = result.unwrap();
         match account_id.0 {
-            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(_) => {}
+            stellar_xdr::PublicKey::PublicKeyTypeEd25519(_) => {}
         }
     }
 
@@ -2741,7 +2737,7 @@ mod parse_transaction_envelope_tests {
 #[cfg(test)]
 mod add_operation_to_envelope_tests {
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
         Transaction, TransactionExt, TransactionV0, TransactionV0Envelope, TransactionV1Envelope,
         Uint256,
@@ -2770,7 +2766,7 @@ mod add_operation_to_envelope_tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -2847,17 +2843,17 @@ mod add_operation_to_envelope_tests {
             signatures: vec![].try_into().unwrap(),
         };
 
-        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+        let inner_tx = stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
 
-        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+        let fee_bump_tx = stellar_xdr::FeeBumpTransaction {
             fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
             fee: 200,
             inner_tx,
-            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+            ext: stellar_xdr::FeeBumpTransactionExt::V0,
         };
 
         let mut envelope =
-            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
+            TransactionEnvelope::TxFeeBump(stellar_xdr::FeeBumpTransactionEnvelope {
                 tx: fee_bump_tx,
                 signatures: vec![].try_into().unwrap(),
             });
@@ -2877,7 +2873,7 @@ mod add_operation_to_envelope_tests {
 #[cfg(test)]
 mod extract_time_bounds_tests {
     use super::*;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
         TimeBounds, TimePoint, Transaction, TransactionExt, TransactionV0, TransactionV0Envelope,
         TransactionV1Envelope, Uint256,
@@ -2911,7 +2907,7 @@ mod extract_time_bounds_tests {
             time_bounds: Some(time_bounds.clone()),
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -2939,7 +2935,7 @@ mod extract_time_bounds_tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -3034,20 +3030,19 @@ mod extract_time_bounds_tests {
             signatures: vec![].try_into().unwrap(),
         };
 
-        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+        let inner_tx = stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
 
-        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+        let fee_bump_tx = stellar_xdr::FeeBumpTransaction {
             fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
             fee: 200,
             inner_tx,
-            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+            ext: stellar_xdr::FeeBumpTransactionExt::V0,
         };
 
-        let envelope =
-            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
-                tx: fee_bump_tx,
-                signatures: vec![].try_into().unwrap(),
-            });
+        let envelope = TransactionEnvelope::TxFeeBump(stellar_xdr::FeeBumpTransactionEnvelope {
+            tx: fee_bump_tx,
+            signatures: vec![].try_into().unwrap(),
+        });
 
         let result = extract_time_bounds(&envelope);
         assert!(result.is_some());
@@ -3062,7 +3057,7 @@ mod extract_time_bounds_tests {
 mod set_time_bounds_tests {
     use super::*;
     use chrono::Utc;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions, SequenceNumber,
         TimeBounds, TimePoint, Transaction, TransactionExt, TransactionV0, TransactionV0Envelope,
         TransactionV1Envelope, Uint256,
@@ -3091,7 +3086,7 @@ mod set_time_bounds_tests {
             time_bounds: None,
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -3173,17 +3168,17 @@ mod set_time_bounds_tests {
             signatures: vec![].try_into().unwrap(),
         };
 
-        let inner_tx = soroban_rs::xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
+        let inner_tx = stellar_xdr::FeeBumpTransactionInnerTx::Tx(inner_envelope);
 
-        let fee_bump_tx = soroban_rs::xdr::FeeBumpTransaction {
+        let fee_bump_tx = stellar_xdr::FeeBumpTransaction {
             fee_source: MuxedAccount::Ed25519(Uint256([2u8; 32])),
             fee: 200,
             inner_tx,
-            ext: soroban_rs::xdr::FeeBumpTransactionExt::V0,
+            ext: stellar_xdr::FeeBumpTransactionExt::V0,
         };
 
         let mut envelope =
-            TransactionEnvelope::TxFeeBump(soroban_rs::xdr::FeeBumpTransactionEnvelope {
+            TransactionEnvelope::TxFeeBump(stellar_xdr::FeeBumpTransactionEnvelope {
                 tx: fee_bump_tx,
                 signatures: vec![].try_into().unwrap(),
             });
@@ -3216,7 +3211,7 @@ mod set_time_bounds_tests {
             time_bounds: Some(old_time_bounds),
             memo: Memo::None,
             operations,
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let mut envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {

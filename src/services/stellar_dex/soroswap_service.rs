@@ -16,14 +16,14 @@ use crate::domain::transaction::stellar::utils::{parse_account_id, parse_contrac
 use crate::services::provider::StellarProviderTrait;
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
-use soroban_rs::xdr::{
+use std::collections::HashSet;
+use std::sync::Arc;
+use stellar_xdr::{
     ContractId, HostFunction, Int128Parts, InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo,
     Operation, OperationBody, Preconditions, ScAddress, ScSymbol, ScVal, ScVec, SequenceNumber,
     TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope,
     VecM, WriteXdr,
 };
-use std::collections::HashSet;
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Transaction validity window in minutes
@@ -588,7 +588,7 @@ mod tests {
     use crate::constants::STELLAR_SOROSWAP_MAINNET_NATIVE_WRAPPER;
     use crate::services::provider::MockStellarProviderTrait;
     use futures::FutureExt;
-    use soroban_rs::xdr::ReadXdr;
+    use stellar_xdr::ReadXdr;
 
     const TEST_NATIVE_WRAPPER: &str = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 

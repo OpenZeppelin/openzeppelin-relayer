@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use eyre::Result;
-use soroban_rs::xdr::{Limits, TransactionEnvelope, WriteXdr};
+use stellar_xdr::{Limits, TransactionEnvelope, WriteXdr};
 
 use super::common::{calculate_fee_bump_required_fee, create_signing_data};
 
@@ -315,11 +315,11 @@ mod signed_xdr_tests {
     use crate::domain::transaction::stellar::test_helpers::*;
     use crate::domain::SignTransactionResponse;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Memo, MuxedAccount, ReadXdr, Transaction, TransactionEnvelope, TransactionExt,
         TransactionV1Envelope, Uint256, VecM,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     fn create_unsigned_xdr_envelope(source_account: &str) -> TransactionEnvelope {
         let pk = match PublicKey::from_string(source_account) {
@@ -336,8 +336,8 @@ mod signed_xdr_tests {
         let tx = Transaction {
             source_account: source,
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
             ext: TransactionExt::V0,
@@ -365,9 +365,9 @@ mod signed_xdr_tests {
         let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
         let mut envelope = create_unsigned_xdr_envelope(different_account);
         if let TransactionEnvelope::Tx(ref mut e) = envelope {
-            e.signatures = vec![soroban_rs::xdr::DecoratedSignature {
-                hint: soroban_rs::xdr::SignatureHint([0; 4]),
-                signature: soroban_rs::xdr::Signature(vec![0; 64].try_into().unwrap()),
+            e.signatures = vec![stellar_xdr::DecoratedSignature {
+                hint: stellar_xdr::SignatureHint([0; 4]),
+                signature: stellar_xdr::Signature(vec![0; 64].try_into().unwrap()),
             }]
             .try_into()
             .unwrap();
@@ -484,9 +484,9 @@ mod signed_xdr_tests {
         let different_account = "GBCFR5QVA3K7JKIPT7WFULRXQVNTDZQLZHTUTGONFSTS5KCEGS6O5AZB";
         let mut envelope = create_unsigned_xdr_envelope(different_account);
         if let TransactionEnvelope::Tx(ref mut e) = envelope {
-            e.signatures = vec![soroban_rs::xdr::DecoratedSignature {
-                hint: soroban_rs::xdr::SignatureHint([0; 4]),
-                signature: soroban_rs::xdr::Signature(vec![0; 64].try_into().unwrap()),
+            e.signatures = vec![stellar_xdr::DecoratedSignature {
+                hint: stellar_xdr::SignatureHint([0; 4]),
+                signature: stellar_xdr::Signature(vec![0; 64].try_into().unwrap()),
             }]
             .try_into()
             .unwrap();
@@ -550,16 +550,16 @@ mod signed_xdr_tests {
         use crate::services::provider::MockStellarProviderTrait;
         use crate::services::signer::MockSigner;
         use crate::services::stellar_dex::MockStellarDexServiceTrait;
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
+        use std::future::ready;
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_strkey::ed25519::PublicKey;
+        use stellar_xdr::{
             AccountEntry, AccountEntryExt, AccountId, AlphaNum4, Asset, AssetCode4, LedgerEntry,
             LedgerEntryData, LedgerEntryExt, Limits, Memo, MuxedAccount, Operation, OperationBody,
             PaymentOp, Preconditions, SequenceNumber, Signature, SignatureHint, String32,
             Thresholds, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope,
             TrustLineEntry, TrustLineEntryExt, Uint256, VecM, WriteXdr,
         };
-        use std::future::ready;
-        use stellar_strkey::ed25519::PublicKey;
 
         const USDC_ASSET: &str = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
@@ -581,11 +581,11 @@ mod signed_xdr_tests {
             source_account: &str,
             relayer_address: &str,
         ) -> String {
-            use soroban_rs::xdr::{
+            use stellar_strkey::ed25519::PublicKey;
+            use stellar_xdr::{
                 Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
                 SequenceNumber, Transaction, TransactionExt, TransactionV1Envelope, Uint256,
             };
-            use stellar_strkey::ed25519::PublicKey;
 
             let source_pk = PublicKey::from_string(source_account).unwrap();
             let relayer_pk = PublicKey::from_string(relayer_address).unwrap();
@@ -601,9 +601,9 @@ mod signed_xdr_tests {
                     destination: MuxedAccount::Ed25519(Uint256(relayer_pk.0)),
                     asset: Asset::CreditAlphanum4(AlphaNum4 {
                         asset_code: AssetCode4(*b"USDC"),
-                        issuer: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                            Uint256(usdc_issuer.0),
-                        )),
+                        issuer: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                            usdc_issuer.0,
+                        ))),
                     }),
                     amount: 1500000, // 1.5 USDC fee
                 }),
@@ -619,7 +619,7 @@ mod signed_xdr_tests {
                 ext: TransactionExt::V0,
             };
 
-            let dummy_signature = soroban_rs::xdr::DecoratedSignature {
+            let dummy_signature = stellar_xdr::DecoratedSignature {
                 hint: SignatureHint([0; 4]),
                 signature: Signature(vec![0u8; 64].try_into().unwrap()),
             };
@@ -651,7 +651,7 @@ mod signed_xdr_tests {
             signer.expect_sign_transaction().returning(|_| {
                 Box::pin(ready(Ok(SignTransactionResponse::Stellar(
                     SignTransactionResponseStellar {
-                        signature: soroban_rs::xdr::DecoratedSignature {
+                        signature: stellar_xdr::DecoratedSignature {
                             hint: SignatureHint([0; 4]),
                             signature: Signature(vec![0u8; 64].try_into().unwrap()),
                         },
@@ -662,9 +662,9 @@ mod signed_xdr_tests {
             // Mock get_account for validation
             provider.expect_get_account().returning(|_| {
                 Box::pin(ready(Ok(AccountEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
                     balance: 1000000000,
                     seq_num: SequenceNumber(1),
                     num_sub_entries: 0,
@@ -680,14 +680,14 @@ mod signed_xdr_tests {
             // Mock get_ledger_entries for token balance validation
             provider.expect_get_ledger_entries().returning(|_| {
                 let trustline_entry = TrustLineEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
-                    asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
+                    asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                         asset_code: AssetCode4(*b"USDC"),
-                        issuer: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                            Uint256([0; 32]),
-                        )),
+                        issuer: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                            [0; 32],
+                        ))),
                     }),
                     balance: 10_000_000i64,
                     limit: i64::MAX,
@@ -783,7 +783,7 @@ mod signed_xdr_tests {
             signer.expect_sign_transaction().returning(|_| {
                 Box::pin(ready(Ok(SignTransactionResponse::Stellar(
                     SignTransactionResponseStellar {
-                        signature: soroban_rs::xdr::DecoratedSignature {
+                        signature: stellar_xdr::DecoratedSignature {
                             hint: SignatureHint([0; 4]),
                             signature: Signature(vec![0u8; 64].try_into().unwrap()),
                         },
@@ -794,9 +794,9 @@ mod signed_xdr_tests {
             // Mock get_account for validation
             provider.expect_get_account().returning(|_| {
                 Box::pin(ready(Ok(AccountEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
                     balance: 1000000000,
                     seq_num: SequenceNumber(1),
                     num_sub_entries: 0,
@@ -834,7 +834,7 @@ mod signed_xdr_tests {
                 ext: TransactionExt::V0,
             };
 
-            let dummy_signature = soroban_rs::xdr::DecoratedSignature {
+            let dummy_signature = stellar_xdr::DecoratedSignature {
                 hint: SignatureHint([0; 4]),
                 signature: Signature(vec![0u8; 64].try_into().unwrap()),
             };
@@ -903,7 +903,7 @@ mod signed_xdr_tests {
             signer.expect_sign_transaction().returning(|_| {
                 Box::pin(ready(Ok(SignTransactionResponse::Stellar(
                     SignTransactionResponseStellar {
-                        signature: soroban_rs::xdr::DecoratedSignature {
+                        signature: stellar_xdr::DecoratedSignature {
                             hint: SignatureHint([0; 4]),
                             signature: Signature(vec![0u8; 64].try_into().unwrap()),
                         },
@@ -914,9 +914,9 @@ mod signed_xdr_tests {
             // Mock get_account for validation
             provider.expect_get_account().returning(|_| {
                 Box::pin(ready(Ok(AccountEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
                     balance: 1000000000,
                     seq_num: SequenceNumber(1),
                     num_sub_entries: 0,
@@ -932,11 +932,11 @@ mod signed_xdr_tests {
             let policy = create_user_fee_policy();
 
             // Create XDR with fee payment in non-allowed token (EURC instead of USDC)
-            use soroban_rs::xdr::{
+            use stellar_strkey::ed25519::PublicKey;
+            use stellar_xdr::{
                 Memo, MuxedAccount, Operation, OperationBody, PaymentOp, Preconditions,
                 SequenceNumber, Transaction, TransactionExt, TransactionV1Envelope, Uint256,
             };
-            use stellar_strkey::ed25519::PublicKey;
 
             let source_pk = PublicKey::from_string(user_account).unwrap();
             let relayer_pk = PublicKey::from_string(&relayer.address).unwrap();
@@ -950,9 +950,9 @@ mod signed_xdr_tests {
                     destination: MuxedAccount::Ed25519(Uint256(relayer_pk.0)),
                     asset: Asset::CreditAlphanum4(AlphaNum4 {
                         asset_code: AssetCode4(*b"EURC"),
-                        issuer: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                            Uint256(eurc_issuer.0),
-                        )),
+                        issuer: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                            eurc_issuer.0,
+                        ))),
                     }),
                     amount: 1500000,
                 }),
@@ -968,7 +968,7 @@ mod signed_xdr_tests {
                 ext: TransactionExt::V0,
             };
 
-            let dummy_signature = soroban_rs::xdr::DecoratedSignature {
+            let dummy_signature = stellar_xdr::DecoratedSignature {
                 hint: SignatureHint([0; 4]),
                 signature: Signature(vec![0u8; 64].try_into().unwrap()),
             };
@@ -1037,7 +1037,7 @@ mod signed_xdr_tests {
             signer.expect_sign_transaction().returning(|_| {
                 Box::pin(ready(Ok(SignTransactionResponse::Stellar(
                     SignTransactionResponseStellar {
-                        signature: soroban_rs::xdr::DecoratedSignature {
+                        signature: stellar_xdr::DecoratedSignature {
                             hint: SignatureHint([0; 4]),
                             signature: Signature(vec![0u8; 64].try_into().unwrap()),
                         },
@@ -1072,7 +1072,7 @@ mod signed_xdr_tests {
                 ext: TransactionExt::V0,
             };
 
-            let dummy_signature = soroban_rs::xdr::DecoratedSignature {
+            let dummy_signature = stellar_xdr::DecoratedSignature {
                 hint: SignatureHint([0; 4]),
                 signature: Signature(vec![0u8; 64].try_into().unwrap()),
             };
@@ -1139,7 +1139,7 @@ mod signed_xdr_tests {
             signer.expect_sign_transaction().returning(|_| {
                 Box::pin(ready(Ok(SignTransactionResponse::Stellar(
                     SignTransactionResponseStellar {
-                        signature: soroban_rs::xdr::DecoratedSignature {
+                        signature: stellar_xdr::DecoratedSignature {
                             hint: SignatureHint([0; 4]),
                             signature: Signature(vec![0u8; 64].try_into().unwrap()),
                         },
@@ -1150,9 +1150,9 @@ mod signed_xdr_tests {
             // Mock get_account for validation
             provider.expect_get_account().returning(|_| {
                 Box::pin(ready(Ok(AccountEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
                     balance: 1000000000,
                     seq_num: SequenceNumber(1),
                     num_sub_entries: 0,
@@ -1168,14 +1168,14 @@ mod signed_xdr_tests {
             // Mock get_ledger_entries with insufficient balance
             provider.expect_get_ledger_entries().returning(|_| {
                 let trustline_entry = TrustLineEntry {
-                    account_id: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                        Uint256([0; 32]),
-                    )),
-                    asset: soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
+                    account_id: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                        [0; 32],
+                    ))),
+                    asset: stellar_xdr::TrustLineAsset::CreditAlphanum4(AlphaNum4 {
                         asset_code: AssetCode4(*b"USDC"),
-                        issuer: AccountId(soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(
-                            Uint256([0; 32]),
-                        )),
+                        issuer: AccountId(stellar_xdr::PublicKey::PublicKeyTypeEd25519(Uint256(
+                            [0; 32],
+                        ))),
                     }),
                     balance: 100_000i64, // Only 0.01 USDC - insufficient
                     limit: i64::MAX,

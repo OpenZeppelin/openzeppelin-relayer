@@ -2,7 +2,7 @@
 //! It includes XDR parsing, validation, sequence updating, and fee updating.
 
 use eyre::Result;
-use soroban_rs::xdr::{
+use stellar_xdr::{
     HostFunction, Limits, OperationBody, ReadXdr, ScAddress, ScVal, SorobanTransactionData,
     TransactionEnvelope, TransactionExt, WriteXdr,
 };
@@ -152,7 +152,7 @@ fn is_valid_swap_transaction(
 
 /// Validate an OrderBook swap transaction (PathPaymentStrictSend)
 fn is_valid_orderbook_swap(
-    path_payment: &soroban_rs::xdr::PathPaymentStrictSendOp,
+    path_payment: &stellar_xdr::PathPaymentStrictSendOp,
     relayer_address: &str,
     policy: &RelayerStellarPolicy,
 ) -> Result<bool, TransactionError> {
@@ -222,7 +222,7 @@ fn is_valid_soroswap_swap(
 
     let to_address = match &invoke_args.args[3] {
         ScVal::Address(ScAddress::Account(account_id)) => {
-            use soroban_rs::xdr::PublicKey;
+            use stellar_xdr::PublicKey;
             match &account_id.0 {
                 PublicKey::PublicKeyTypeEd25519(key) => {
                     stellar_strkey::ed25519::PublicKey(key.0).to_string()
@@ -480,8 +480,8 @@ mod tests {
         models::DecoratedSignature,
         services::{signer::MockSigner, stellar_dex::MockStellarDexServiceTrait},
     };
-    use soroban_rs::xdr::{BytesM, Signature, SignatureHint};
     use std::future::ready;
+    use stellar_xdr::{BytesM, Signature, SignatureHint};
 
     use crate::repositories::MockTransactionCounterTrait;
     use crate::services::provider::MockStellarProviderTrait;
@@ -505,13 +505,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee: 0,
-                        transaction_data: String::new(),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -589,13 +587,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee: 0,
-                        transaction_data: String::new(),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -674,13 +670,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee: 0,
-                        transaction_data: String::new(),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -887,13 +881,11 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee: 0,
-                        transaction_data: String::new(),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee: 0,
+                    transaction_data: String::new(),
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -957,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_with_valid_swap() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
             TransactionV1Envelope, VecM,
         };
@@ -965,8 +957,8 @@ mod tests {
         let relayer_address = TEST_PK;
 
         // Create a PathPaymentStrictSend operation from USDC to XLM
-        let usdc_asset = Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-            asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+        let usdc_asset = Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+            asset_code: stellar_xdr::AssetCode4(*b"USDC"),
             issuer: create_account_id(TEST_PK_2),
         });
 
@@ -987,9 +979,9 @@ mod tests {
         let tx = Transaction {
             source_account: create_muxed_account(relayer_address),
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![op].try_into().unwrap(),
             ext: TransactionExt::V0,
         };
@@ -1014,7 +1006,7 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_with_multiple_operations() {
-        use soroban_rs::xdr::{Operation, Transaction, TransactionExt, TransactionV1Envelope};
+        use stellar_xdr::{Operation, Transaction, TransactionExt, TransactionV1Envelope};
 
         let relayer_address = TEST_PK;
 
@@ -1026,9 +1018,9 @@ mod tests {
         let tx = Transaction {
             source_account: create_muxed_account(relayer_address),
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: operations.try_into().unwrap(),
             ext: TransactionExt::V0,
         };
@@ -1057,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_with_native_source() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
             TransactionV1Envelope, VecM,
         };
@@ -1082,9 +1074,9 @@ mod tests {
         let tx = Transaction {
             source_account: create_muxed_account(relayer_address),
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![op].try_into().unwrap(),
             ext: TransactionExt::V0,
         };
@@ -1102,15 +1094,15 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_with_wrong_destination() {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             Asset, Operation, OperationBody, PathPaymentStrictSendOp, Transaction, TransactionExt,
             TransactionV1Envelope, VecM,
         };
 
         let relayer_address = TEST_PK;
 
-        let usdc_asset = Asset::CreditAlphanum4(soroban_rs::xdr::AlphaNum4 {
-            asset_code: soroban_rs::xdr::AssetCode4(*b"USDC"),
+        let usdc_asset = Asset::CreditAlphanum4(stellar_xdr::AlphaNum4 {
+            asset_code: stellar_xdr::AssetCode4(*b"USDC"),
             issuer: create_account_id(TEST_PK_2),
         });
 
@@ -1132,9 +1124,9 @@ mod tests {
         let tx = Transaction {
             source_account: create_muxed_account(relayer_address),
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
-            memo: soroban_rs::xdr::Memo::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![op].try_into().unwrap(),
             ext: TransactionExt::V0,
         };
@@ -1165,7 +1157,7 @@ mod tests {
         function_name: &str,
         args: Vec<ScVal>,
     ) -> TransactionEnvelope {
-        use soroban_rs::xdr::{ContractId, Hash, InvokeContractArgs, InvokeHostFunctionOp, VecM};
+        use stellar_xdr::{ContractId, Hash, InvokeContractArgs, InvokeHostFunctionOp, VecM};
 
         let invoke_args = InvokeContractArgs {
             contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
@@ -1173,7 +1165,7 @@ mod tests {
             args: args.try_into().unwrap(),
         };
 
-        let op = soroban_rs::xdr::Operation {
+        let op = stellar_xdr::Operation {
             source_account: None,
             body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
                 host_function: HostFunction::InvokeContract(invoke_args),
@@ -1186,7 +1178,7 @@ mod tests {
 
     /// Helper: build the 5 ScVal args for `swap_exact_tokens_for_tokens`
     fn create_soroswap_swap_args(to_address: &str) -> Vec<ScVal> {
-        use soroban_rs::xdr::{AccountId, Int128Parts, PublicKey, Uint256};
+        use stellar_xdr::{AccountId, Int128Parts, PublicKey, Uint256};
 
         let pk = stellar_strkey::ed25519::PublicKey::from_string(to_address).unwrap();
         let to_account = ScVal::Address(ScAddress::Account(AccountId(
@@ -1229,7 +1221,7 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_soroswap_wrong_arg_count() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let relayer_address = TEST_PK;
         // Only 3 args instead of 5
@@ -1249,7 +1241,7 @@ mod tests {
 
     #[test]
     fn test_is_valid_swap_transaction_soroswap_non_address_to_arg() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let relayer_address = TEST_PK;
         // args[3] is U64 instead of Address
@@ -1286,7 +1278,7 @@ mod tests {
 
     /// Helper: create a valid SorobanTransactionData XDR base64 string
     fn create_valid_soroban_tx_data_xdr() -> String {
-        use soroban_rs::xdr::{LedgerFootprint, SorobanResources, SorobanTransactionDataExt, VecM};
+        use stellar_xdr::{LedgerFootprint, SorobanResources, SorobanTransactionDataExt, VecM};
 
         let data = SorobanTransactionData {
             ext: SorobanTransactionDataExt::V0,
@@ -1306,7 +1298,7 @@ mod tests {
 
     /// Helper: create a valid SorobanAuthorizationEntry XDR base64 string
     fn create_valid_auth_entry_xdr() -> String {
-        use soroban_rs::xdr::{
+        use stellar_xdr::{
             ContractId, Hash, InvokeContractArgs, SorobanAuthorizationEntry,
             SorobanAuthorizedFunction, SorobanAuthorizedInvocation, SorobanCredentials, VecM,
         };
@@ -1353,7 +1345,7 @@ mod tests {
     fn setup_simulation_mocks(
         min_resource_fee: u64,
         tx_data_xdr: String,
-        results: Vec<soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw>,
+        results: Vec<stellar_rpc_client::SimulateHostFunctionResultRaw>,
     ) -> (
         MockTransactionCounterTrait,
         MockStellarProviderTrait,
@@ -1370,14 +1362,12 @@ mod tests {
             .returning(move |_| {
                 let tx_data = tx_data_xdr.clone();
                 let res = results.clone();
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        min_resource_fee,
-                        transaction_data: tx_data,
-                        results: res,
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    min_resource_fee,
+                    transaction_data: tx_data,
+                    results: res,
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -1408,12 +1398,10 @@ mod tests {
         let relayer_id = "test-relayer";
         let tx_data_xdr = create_valid_soroban_tx_data_xdr();
         let auth_xdr = create_valid_auth_entry_xdr();
-        let results = vec![
-            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
-                auth: vec![auth_xdr],
-                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
-            },
-        ];
+        let results = vec![stellar_rpc_client::SimulateHostFunctionResultRaw {
+            auth: vec![auth_xdr],
+            xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+        }];
 
         let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
 
@@ -1477,12 +1465,10 @@ mod tests {
         let relayer_address = TEST_PK;
         let relayer_id = "test-relayer";
         let tx_data_xdr = create_valid_soroban_tx_data_xdr();
-        let results = vec![
-            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
-                auth: vec![], // empty auth
-                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
-            },
-        ];
+        let results = vec![stellar_rpc_client::SimulateHostFunctionResultRaw {
+            auth: vec![], // empty auth
+            xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+        }];
 
         let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
 
@@ -1513,12 +1499,10 @@ mod tests {
         let relayer_id = "test-relayer";
         let tx_data_xdr = create_valid_soroban_tx_data_xdr();
         // Invalid auth XDR causes results() to fail, which is silently skipped
-        let results = vec![
-            soroban_rs::stellar_rpc_client::SimulateHostFunctionResultRaw {
-                auth: vec!["invalid-auth-xdr".to_string()],
-                xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
-            },
-        ];
+        let results = vec![stellar_rpc_client::SimulateHostFunctionResultRaw {
+            auth: vec!["invalid-auth-xdr".to_string()],
+            xdr: ScVal::Void.to_xdr_base64(Limits::none()).unwrap(),
+        }];
 
         let (counter, provider, signer) = setup_simulation_mocks(5000, tx_data_xdr, results);
 
@@ -1635,12 +1619,10 @@ mod tests {
         provider
             .expect_simulate_transaction_envelope()
             .returning(|_| {
-                Box::pin(ready(Ok(
-                    soroban_rs::stellar_rpc_client::SimulateTransactionResponse {
-                        error: Some("Simulation failed: insufficient resources".to_string()),
-                        ..Default::default()
-                    },
-                )))
+                Box::pin(ready(Ok(stellar_rpc_client::SimulateTransactionResponse {
+                    error: Some("Simulation failed: insufficient resources".to_string()),
+                    ..Default::default()
+                })))
             });
 
         let mut signer = MockSigner::new();
@@ -1688,11 +1670,11 @@ mod xdr_transaction_tests {
     use crate::domain::SignTransactionResponse;
     use crate::models::{NetworkTransactionData, RepositoryError, TransactionStatus};
     use crate::services::stellar_dex::MockStellarDexServiceTrait;
-    use soroban_rs::xdr::{
+    use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{
         Limits, Memo, MuxedAccount, Transaction, TransactionEnvelope, TransactionExt,
         TransactionV1Envelope, Uint256, VecM, WriteXdr,
     };
-    use stellar_strkey::ed25519::PublicKey;
 
     fn create_unsigned_xdr_envelope(source_account: &str) -> TransactionEnvelope {
         let pk = match PublicKey::from_string(source_account) {
@@ -1709,8 +1691,8 @@ mod xdr_transaction_tests {
         let tx = Transaction {
             source_account: source,
             fee: 100,
-            seq_num: soroban_rs::xdr::SequenceNumber(1),
-            cond: soroban_rs::xdr::Preconditions::None,
+            seq_num: stellar_xdr::SequenceNumber(1),
+            cond: stellar_xdr::Preconditions::None,
             memo: Memo::None,
             operations: VecM::default(),
             ext: TransactionExt::V0,
@@ -1836,11 +1818,11 @@ mod xdr_transaction_tests {
         // Mock sync_sequence_from_chain for error handling
         mocks.provider.expect_get_account().returning(|_| {
             Box::pin(async {
-                use soroban_rs::xdr::{
+                use stellar_strkey::ed25519;
+                use stellar_xdr::{
                     AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber, String32,
                     Thresholds, Uint256,
                 };
-                use stellar_strkey::ed25519;
 
                 let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
                 let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
@@ -1987,8 +1969,8 @@ mod xdr_transaction_tests {
                     Ok(SignTransactionResponse::Stellar(
                         crate::domain::SignTransactionResponseStellar {
                             signature: crate::models::DecoratedSignature {
-                                hint: soroban_rs::xdr::SignatureHint([0; 4]),
-                                signature: soroban_rs::xdr::Signature(
+                                hint: stellar_xdr::SignatureHint([0; 4]),
+                                signature: stellar_xdr::Signature(
                                     vec![1, 2, 3, 4].try_into().unwrap(),
                                 ),
                             },
@@ -2029,13 +2011,11 @@ mod xdr_transaction_tests {
         let mut envelope = create_unsigned_xdr_envelope(&relayer.address);
 
         // Add a payment operation so fee calculation works
-        let payment_op = soroban_rs::xdr::Operation {
+        let payment_op = stellar_xdr::Operation {
             source_account: None,
-            body: soroban_rs::xdr::OperationBody::Payment(soroban_rs::xdr::PaymentOp {
-                destination: soroban_rs::xdr::MuxedAccount::Ed25519(soroban_rs::xdr::Uint256(
-                    [0; 32],
-                )),
-                asset: soroban_rs::xdr::Asset::Native,
+            body: stellar_xdr::OperationBody::Payment(stellar_xdr::PaymentOp {
+                destination: stellar_xdr::MuxedAccount::Ed25519(stellar_xdr::Uint256([0; 32])),
+                asset: stellar_xdr::Asset::Native,
                 amount: 1000000,
             }),
         };

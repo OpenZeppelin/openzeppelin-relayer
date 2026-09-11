@@ -19,7 +19,7 @@ use crate::{
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use soroban_rs::xdr::{
+use stellar_xdr::{
     DecoratedSignature, Hash, Limits, ReadXdr, Signature, SignatureHint, Transaction,
     TransactionEnvelope, WriteXdr,
 };
@@ -199,12 +199,9 @@ impl<T: GoogleCloudKmsStellarService + GoogleCloudKmsServiceTrait> GoogleCloudKm
         let hint = self.get_signature_hint().await?;
 
         // Convert signature bytes to BytesM<64>
-        let signature_bytes_m =
-            soroban_rs::xdr::BytesM::try_from(signature_bytes).map_err(|_| {
-                SignerError::SigningError(
-                    "Failed to convert signature to BytesM format".to_string(),
-                )
-            })?;
+        let signature_bytes_m = stellar_xdr::BytesM::try_from(signature_bytes).map_err(|_| {
+            SignerError::SigningError("Failed to convert signature to BytesM format".to_string())
+        })?;
 
         Ok(DecoratedSignature {
             hint,
@@ -284,8 +281,8 @@ mod tests {
             GoogleCloudKmsError, MockGoogleCloudKmsServiceTrait, MockGoogleCloudKmsStellarService,
         },
     };
-    use soroban_rs::xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
     use stellar_strkey::ed25519::PublicKey;
+    use stellar_xdr::{SequenceNumber, TransactionV0, TransactionV0Envelope, Uint256};
 
     // Helper to create a mock service with both traits
     struct MockCombinedService {
@@ -338,7 +335,7 @@ mod tests {
     async fn test_address() {
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
 
         let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
         let test_address_for_mock = test_address.clone();
@@ -372,7 +369,7 @@ mod tests {
         // Create test Stellar address - use all zeros public key
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
         let source_pk = PublicKey::from_string(&test_address).unwrap();
 
         // Create a simple unsigned transaction envelope
@@ -381,9 +378,9 @@ mod tests {
             fee: 100,
             seq_num: SequenceNumber(1),
             time_bounds: None,
-            memo: soroban_rs::xdr::Memo::None,
+            memo: stellar_xdr::Memo::None,
             operations: vec![].try_into().unwrap(),
-            ext: soroban_rs::xdr::TransactionV0Ext::V0,
+            ext: stellar_xdr::TransactionV0Ext::V0,
         };
 
         let envelope = TransactionEnvelope::TxV0(TransactionV0Envelope {
@@ -481,7 +478,7 @@ mod tests {
     async fn test_sign_transaction_with_operations_input_success() {
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
 
         let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
         stellar_mock
@@ -567,7 +564,7 @@ mod tests {
     async fn test_sign_transaction_with_invalid_signature_length() {
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
 
         let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
         stellar_mock
@@ -619,7 +616,7 @@ mod tests {
     async fn test_sign_transaction_with_kms_service_error() {
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
 
         let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
         stellar_mock
@@ -698,7 +695,7 @@ mod tests {
     async fn test_error_handling_with_address_retrieval_failure() {
         use stellar_strkey::ed25519::PublicKey as StrKeyPublicKey;
         let test_pk = StrKeyPublicKey([0u8; 32]);
-        let test_address = test_pk.to_string();
+        let test_address = format!("{test_pk}");
 
         let mut stellar_mock = MockGoogleCloudKmsStellarService::new();
         // First call for signing succeeds

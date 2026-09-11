@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
-use soroban_rs::xdr::{Hash, Memo, StringM};
+use stellar_xdr::{Hash, Memo, StringM};
 use utoipa::ToSchema;
 
 use crate::models::SignerError;

@@ -20,12 +20,12 @@ use clap::Parser;
 use ed25519_dalek::{Signer, SigningKey};
 use eyre::{eyre, Result, WrapErr};
 use sha2::{Digest, Sha256};
-use soroban_rs::xdr::{
+use stellar_strkey::ed25519::{PrivateKey, PublicKey};
+use stellar_xdr::{
     AccountId, Hash, HashIdPreimage, HashIdPreimageSorobanAuthorization, Limits, ReadXdr,
     ScAddress, ScBytes, ScMap, ScMapEntry, ScSymbol, ScVal, ScVec, SorobanAddressCredentials,
     SorobanAuthorizationEntry, SorobanCredentials, WriteXdr,
 };
-use stellar_strkey::ed25519::{PrivateKey, PublicKey};
 
 /// CLI arguments for signing Soroban authorization entries
 #[derive(Parser, Debug)]
@@ -75,7 +75,7 @@ fn resolve_network_passphrase(network: &str) -> Result<String> {
 fn extract_account_public_key(address: &ScAddress) -> Result<[u8; 32]> {
     match address {
         ScAddress::Account(AccountId(public_key)) => match public_key {
-            soroban_rs::xdr::PublicKey::PublicKeyTypeEd25519(uint256) => Ok(uint256.0),
+            stellar_xdr::PublicKey::PublicKeyTypeEd25519(uint256) => Ok(uint256.0),
         },
         _ => Err(eyre!(
             "Expected Account address (G...), got a different address type"

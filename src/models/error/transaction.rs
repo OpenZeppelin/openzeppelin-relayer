@@ -10,7 +10,7 @@ use crate::{
 use super::{ApiError, RepositoryError, StellarProviderError};
 use eyre::Report;
 use serde::Serialize;
-use soroban_rs::xdr;
+use stellar_xdr as xdr;
 use thiserror::Error;
 
 #[derive(Error, Debug, Serialize)]
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_xdr_error_conversion() {
-        use soroban_rs::xdr::{Limits, ReadXdr, TransactionEnvelope};
+        use stellar_xdr::{Limits, ReadXdr, TransactionEnvelope};
 
         // Create an XDR error by trying to parse invalid base64
         let xdr_error =
