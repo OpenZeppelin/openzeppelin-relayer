@@ -235,12 +235,8 @@ where
     ) -> Result<(), TransactionError> {
         let delay = delay_seconds.map(calculate_scheduled_timestamp);
         let status_check_retry_delay_seconds = self.status_check_retry_delay_seconds(&tx.id).await;
-        let mut job = TransactionStatusCheck::new(
-            tx.id.clone(),
-            tx.relayer_id.clone(),
-            crate::models::NetworkType::Evm,
-        )
-        .with_status_check_retry_delay_seconds(status_check_retry_delay_seconds);
+        let mut job = TransactionStatusCheck::new(&tx.id, &tx.relayer_id, NetworkType::Evm)
+            .with_status_check_retry_delay_seconds(status_check_retry_delay_seconds);
         if let Some(meta) = metadata {
             job = job.with_metadata(meta);
         }

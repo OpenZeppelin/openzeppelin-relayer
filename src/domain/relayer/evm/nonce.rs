@@ -19,7 +19,7 @@ use crate::{
         MAX_GAP_SCAN_RANGE,
     },
     domain::{relayer::RelayerError, transaction::common::is_active_nonce_status},
-    jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
+    jobs::{JobProducerTrait, TransactionRequest},
     models::{
         EvmNetwork, EvmTransactionData, NetworkRepoModel, NetworkType, RelayerRepoModel,
         TransactionRepoModel, TransactionStatus, TransactionUpdateRequest,
@@ -28,7 +28,7 @@ use crate::{
     services::{
         provider::EvmProviderTrait, signer::DataSignerTrait, TransactionCounterServiceTrait,
     },
-    utils::{calculate_scheduled_timestamp, DistributedLock},
+    utils::DistributedLock,
 };
 
 use super::EvmRelayer;
@@ -517,16 +517,9 @@ where
         }
 
         let initial_delay_seconds = evm_network.status_check_initial_delay_seconds();
-        let status_result = self
-            .job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm)
-                    .with_status_check_retry_delay_seconds(
-                        evm_network.status_check_retry_delay_seconds(),
-                    ),
-                Some(calculate_scheduled_timestamp(initial_delay_seconds as i64)),
-            )
-            .await;
+        let status_result =
+            super::schedule_initial_status_check(self.job_producer.as_ref(), &tx, &evm_network)
+                .await;
         if let Err(e) = &status_result {
             error!(
                 tx_id = %tx.id,

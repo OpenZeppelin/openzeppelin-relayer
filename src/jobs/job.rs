@@ -7,7 +7,7 @@
 use crate::constants::{
     HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
 };
-use crate::models::{NetworkType, WebhookNotification};
+use crate::models::{EvmNetwork, NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -217,6 +217,17 @@ impl TransactionStatusCheck {
             status_check_retry_delay_seconds: None,
             metadata: None,
         }
+    }
+
+    /// Status check for an EVM transaction, carrying the network's configured
+    /// retry interval (if any).
+    pub fn for_evm_network(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        network: &EvmNetwork,
+    ) -> Self {
+        Self::new(transaction_id, relayer_id, NetworkType::Evm)
+            .with_status_check_retry_delay_seconds(network.status_check_retry_delay_seconds())
     }
 
     /// Sets the fixed retry delay for healthy, non-final status checks.
