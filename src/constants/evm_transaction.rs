@@ -1,3 +1,4 @@
+use crate::config::ServerConfig;
 use crate::models::evm::Speed;
 use chrono::Duration;
 
@@ -41,6 +42,9 @@ pub const HISTORICAL_BLOCKS: u64 = 4;
 // EVM Status check and timeout constants
 
 /// Initial delay before first status check (in seconds)
+///
+/// Overridable via the `EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS` env var;
+/// see [`ServerConfig::get_evm_status_check_initial_delay_seconds`].
 pub const EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: i64 = 8;
 
 /// Minimum age of transaction before allowing resubmission and timeout checks (in seconds)
@@ -87,9 +91,9 @@ pub fn get_evm_pending_recovery_trigger_timeout() -> Duration {
     Duration::seconds(EVM_PENDING_RECOVERY_TRIGGER_SECONDS)
 }
 
-/// Get status check initial delay duration
+/// Get status check initial delay duration, honoring the env override.
 pub fn get_evm_status_check_initial_delay() -> Duration {
-    Duration::seconds(EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+    Duration::seconds(ServerConfig::get_evm_status_check_initial_delay_seconds())
 }
 
 /// Get minimum age for hash recovery duration

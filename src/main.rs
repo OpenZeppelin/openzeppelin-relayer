@@ -133,7 +133,14 @@ async fn main() -> Result<()> {
     let runtime_config = RuntimeConfig::from_env();
     runtime_config.log_startup();
 
-    // Resolve and log the Stellar status poll cadence (env-configurable).
+    // Resolve and log the status poll cadence per network family (env-configurable).
+    let evm_status_backoff = status_backoff_config(Some(NetworkType::Evm));
+    info!(
+        initial_delay_seconds = config::ServerConfig::get_evm_status_check_initial_delay_seconds(),
+        retry_initial_ms = evm_status_backoff.initial_ms,
+        retry_max_ms = evm_status_backoff.max_ms,
+        "resolved EVM status poll cadence"
+    );
     let stellar_status_backoff = status_backoff_config(Some(NetworkType::Stellar));
     info!(
         initial_delay_seconds =

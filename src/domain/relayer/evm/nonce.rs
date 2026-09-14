@@ -15,8 +15,8 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::{
     config::ServerConfig,
     constants::{
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, HEALTH_CHECK_ACTION_KEY,
-        HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY, MAX_GAP_SCAN_RANGE,
+        HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
+        MAX_GAP_SCAN_RANGE,
     },
     domain::{relayer::RelayerError, transaction::common::is_active_nonce_status},
     jobs::{JobProducerTrait, TransactionRequest, TransactionStatusCheck},
@@ -521,7 +521,7 @@ where
             .produce_check_transaction_status_job(
                 TransactionStatusCheck::new(tx.id.clone(), tx.relayer_id.clone(), NetworkType::Evm),
                 Some(calculate_scheduled_timestamp(
-                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                    ServerConfig::get_evm_status_check_initial_delay_seconds(),
                 )),
             )
             .await;
