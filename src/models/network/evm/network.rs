@@ -25,6 +25,11 @@ pub struct EvmNetwork {
     pub chain_id: u64,
     /// Number of block confirmations required before a transaction is considered final.
     pub required_confirmations: u64,
+    /// Delay before the first transaction status check, in seconds.
+    pub status_check_initial_delay_seconds: u64,
+    /// Delay between healthy checks while the transaction is not final, in seconds.
+    /// The retry backoff starts here and caps at 1.5x this value.
+    pub status_check_retry_delay_seconds: u64,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Vec<String>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
@@ -77,6 +82,17 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     ))
                 })?;
 
+                // Deliberate re-validation at the model boundary: stored config can be
+                // out of range after a binary downgrade, so fail loudly here instead of
+                // letting the worker silently fall back to the default backoff.
+                if let Some(status_check) = &evm_config.status_check {
+                    status_check.validate().map_err(|e| {
+                        RepositoryError::InvalidData(format!(
+                            "EVM network '{}' has an invalid status_check: {e}",
+                            network_repo.name
+                        ))
+                    })?;
+                }
                 Ok(EvmNetwork {
                     network: common.network.clone(),
                     rpc_urls: common.rpc_urls.clone().unwrap_or_default(),
@@ -86,6 +102,9 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     tags: common.tags.clone().unwrap_or_default(),
                     chain_id,
                     required_confirmations,
+                    status_check_initial_delay_seconds: evm_config
+                        .status_check_initial_delay_seconds(),
+                    status_check_retry_delay_seconds: evm_config.status_check_retry_delay_seconds(),
                     features: evm_config.features.clone().unwrap_or_default(),
                     symbol,
                     gas_price_cache: evm_config.gas_price_cache.clone(),
@@ -141,6 +160,16 @@ impl EvmNetwork {
         self.required_confirmations
     }
 
+    /// Returns the delay before the first transaction status check, in seconds.
+    pub fn status_check_initial_delay_seconds(&self) -> u64 {
+        self.status_check_initial_delay_seconds
+    }
+
+    /// Returns the delay that healthy, non-final status checks back off from, in seconds.
+    pub fn status_check_retry_delay_seconds(&self) -> u64 {
+        self.status_check_retry_delay_seconds
+    }
+
     pub fn id(&self) -> u64 {
         self.chain_id
     }
@@ -169,12 +198,11 @@ impl EvmNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+    use crate::config::{EvmNetworkConfig, NetworkConfigCommon, StatusCheckConfig};
     use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
-    use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
+    use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType, RpcConfig};
 
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
-        use crate::models::RpcConfig;
         EvmNetwork {
             network: "test-network".to_string(),
             rpc_urls: vec![RpcConfig::new("https://rpc.example.com".to_string())],
@@ -184,9 +212,40 @@ mod tests {
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             chain_id: 1,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+        }
+    }
+
+    fn create_test_evm_config() -> EvmNetworkConfig {
+        EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "test-network".to_string(),
+                from: None,
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
+                explorer_urls: None,
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(vec![ROLLUP_TAG.to_string(), OPTIMISM_BASED_TAG.to_string()]),
+            },
+            chain_id: Some(10),
+            required_confirmations: Some(1),
+            status_check: None,
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+        }
+    }
+
+    fn repo_model(config: EvmNetworkConfig) -> NetworkRepoModel {
+        NetworkRepoModel {
+            id: "evm:test-network".to_string(),
+            name: "test-network".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(config),
         }
     }
 
@@ -283,34 +342,58 @@ mod tests {
 
     #[test]
     fn test_try_from_with_tags() {
-        use crate::models::RpcConfig;
-        let config = EvmNetworkConfig {
-            common: NetworkConfigCommon {
-                network: "test-network".to_string(),
-                from: None,
-                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
-                explorer_urls: None,
-                average_blocktime_ms: Some(12000),
-                is_testnet: Some(false),
-                tags: Some(vec![ROLLUP_TAG.to_string(), OPTIMISM_BASED_TAG.to_string()]),
-            },
-            chain_id: Some(10),
-            required_confirmations: Some(1),
-            features: Some(vec!["eip1559".to_string()]),
-            symbol: Some("ETH".to_string()),
-            gas_price_cache: None,
-        };
-
-        let repo_model = NetworkRepoModel {
-            id: "evm:test-network".to_string(),
-            name: "test-network".to_string(),
-            network_type: NetworkType::Evm,
-            config: NetworkConfigData::Evm(config),
-        };
-
-        let network = EvmNetwork::try_from(repo_model).unwrap();
+        let network = EvmNetwork::try_from(repo_model(create_test_evm_config())).unwrap();
         assert!(network.is_optimism());
         assert!(network.is_rollup());
         assert!(network.lacks_mempool());
+    }
+
+    #[test]
+    fn test_try_from_resolves_status_check_initial_delay() {
+        let mut config = create_test_evm_config();
+        let default_network = EvmNetwork::try_from(repo_model(config.clone())).unwrap();
+        assert_eq!(
+            default_network.status_check_initial_delay_seconds(),
+            crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        );
+        assert_eq!(
+            default_network.status_check_retry_delay_seconds(),
+            crate::constants::DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
+        );
+
+        config.status_check = Some(StatusCheckConfig {
+            initial_delay_seconds: Some(3),
+            retry_delay_seconds: Some(5),
+        });
+        let network = EvmNetwork::try_from(repo_model(config)).unwrap();
+        assert_eq!(network.status_check_initial_delay_seconds(), 3);
+        assert_eq!(network.status_check_retry_delay_seconds(), 5);
+    }
+
+    #[test]
+    fn test_try_from_rejects_invalid_status_check() {
+        for (status_check, field) in [
+            (
+                StatusCheckConfig {
+                    initial_delay_seconds: Some(0),
+                    retry_delay_seconds: None,
+                },
+                "status_check.initial_delay_seconds",
+            ),
+            (
+                StatusCheckConfig {
+                    initial_delay_seconds: None,
+                    retry_delay_seconds: Some(4),
+                },
+                "status_check.retry_delay_seconds",
+            ),
+        ] {
+            let mut config = create_test_evm_config();
+            config.status_check = Some(status_check);
+            let error = EvmNetwork::try_from(repo_model(config)).unwrap_err();
+            assert!(
+                matches!(error, RepositoryError::InvalidData(message) if message.contains(field))
+            );
+        }
     }
 }
