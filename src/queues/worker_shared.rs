@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use actix_web::web::ThinData;
 use futures::FutureExt;
-use rand::Rng;
 use serde::de::DeserializeOwned;
 use tracing::{error, warn};
 
@@ -33,7 +32,10 @@ use crate::{
     models::{DefaultAppState, NetworkType},
 };
 
-use super::{worker_types::RetryKind, HandlerError, QueueType, WorkerContext};
+use super::{
+    worker_types::{NotYetFinal, RetryKind},
+    HandlerError, QueueType, WorkerContext,
+};
 
 /// Handler timeout bound. Every handler is well under this; it cancels a stuck
 /// handler so a hung job is reprocessed (via the bounded-retry path), never run
@@ -43,8 +45,6 @@ pub(crate) const HANDLER_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Max time to await in-flight handlers during a graceful-shutdown drain.
 pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
-
-const MAX_FIXED_JITTER_MILLIS: u64 = 1_000;
 
 /// Internal classification of a handler error.
 #[derive(Debug)]
@@ -211,8 +211,8 @@ pub(crate) fn map_handler_error(error: HandlerError) -> ProcessingError {
             message,
             kind: RetryKind::Other,
         },
-        HandlerError::NotYetFinal => ProcessingError::Retryable {
-            message: crate::queues::NotYetFinal.to_string(),
+        HandlerError::NotYetFinal(status) => ProcessingError::Retryable {
+            message: NotYetFinal { status }.to_string(),
             kind: RetryKind::NotYetFinal,
         },
     }
@@ -231,7 +231,11 @@ pub(crate) fn is_retry_exhausted(max_retries: usize, retry_attempt: usize) -> bo
 #[derive(serde::Deserialize)]
 struct StatusCheckData {
     network_type: Option<crate::models::NetworkType>,
-    status_check_retry_delay_seconds: Option<u64>,
+    /// Kept as a raw `Value` so a malformed delay (payload drift between versions)
+    /// does not sink the whole parse and lose `network_type`; the typed job has
+    /// already been deserialized by the time this runs, so this is defensive only.
+    #[serde(default)]
+    status_check_retry_delay_seconds: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -239,32 +243,34 @@ struct PartialStatusCheckJob {
     data: StatusCheckData,
 }
 
-pub(crate) fn configured_status_retry_delay(
+/// Returns the payload-stamped retry delay when it applies: EVM only, and within
+/// the configurable range. Anything else falls back to the stock backoff.
+pub(crate) fn configured_evm_status_retry_delay(
     delay_seconds: Option<u64>,
     network_type: Option<NetworkType>,
-) -> Option<Duration> {
+) -> Option<u64> {
     if network_type != Some(NetworkType::Evm) {
         return None;
     }
 
-    delay_seconds
-        .filter(|delay| {
-            (MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
-                .contains(delay)
-        })
-        .map(|delay| {
-            Duration::from_secs(delay)
-                + Duration::from_millis(rand::rng().random_range(1..MAX_FIXED_JITTER_MILLIS))
-        })
+    delay_seconds.filter(|delay| {
+        (MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
+            .contains(delay)
+    })
 }
 
-/// Network-aware retry delay for status checks (EVM 8→12s, Stellar 2→3s,
-/// Solana/default 5→8s), aligned with Redis/Apalis and the SQS backend.
-pub(crate) fn compute_status_retry_delay(body: &[u8], attempt: usize) -> i32 {
-    let network_type = serde_json::from_slice::<PartialStatusCheckJob>(body)
-        .ok()
-        .and_then(|j| j.data.network_type);
-    crate::queues::status_check_retry_delay_secs(network_type, attempt)
+fn parse_status_check_retry_data(body: &[u8]) -> (Option<NetworkType>, Option<u64>) {
+    serde_json::from_slice::<PartialStatusCheckJob>(body)
+        .map(|job| {
+            (
+                job.data.network_type,
+                job.data
+                    .status_check_retry_delay_seconds
+                    .as_ref()
+                    .and_then(serde_json::Value::as_u64),
+            )
+        })
+        .unwrap_or_default()
 }
 
 /// Selects the retry delay (seconds) for a failed job: network-aware backoff for
@@ -275,20 +281,14 @@ pub(crate) fn retry_delay_for_queue(
     retry_attempt: usize,
     retry_kind: RetryKind,
 ) -> i32 {
-    if queue_type == QueueType::StatusCheckEvm && retry_kind == RetryKind::NotYetFinal {
-        if let Ok(job) = serde_json::from_slice::<PartialStatusCheckJob>(body) {
-            if let Some(delay) = configured_status_retry_delay(
-                job.data.status_check_retry_delay_seconds,
-                job.data.network_type,
-            ) {
-                return (delay.as_secs() as i32 + i32::from(delay.subsec_millis() >= 500))
-                    .min(MAX_EVM_STATUS_CHECK_DELAY_SECONDS as i32);
+    if queue_type.is_status_check() {
+        let (network_type, delay) = parse_status_check_retry_data(body);
+        if queue_type == QueueType::StatusCheckEvm && retry_kind == RetryKind::NotYetFinal {
+            if let Some(delay) = configured_evm_status_retry_delay(delay, network_type) {
+                return delay as i32;
             }
         }
-    }
-
-    if queue_type.is_status_check() {
-        compute_status_retry_delay(body, retry_attempt)
+        crate::queues::status_check_retry_delay_secs(network_type, retry_attempt)
     } else {
         crate::queues::retry_delay_secs(
             crate::queues::backoff_config_for_queue(queue_type),
@@ -329,19 +329,29 @@ pub(crate) fn get_concurrency_for_queue(queue_type: QueueType) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::TransactionStatus;
+
+    /// Production routing for a generic status-check body (no configured interval).
+    fn status_delay(body: &[u8], attempt: usize) -> i32 {
+        retry_delay_for_queue(QueueType::StatusCheck, body, attempt, RetryKind::Other)
+    }
 
     #[test]
     fn test_map_handler_error() {
         assert!(matches!(
             map_handler_error(HandlerError::Abort("x".into())),
-            ProcessingError::Permanent(_)
+            ProcessingError::Permanent(m) if m == "x"
         ));
         assert!(matches!(
-            map_handler_error(HandlerError::Retry("x".into())),
-            ProcessingError::Retryable { .. }
+            map_handler_error(HandlerError::Retry("y".into())),
+            ProcessingError::Retryable { message, .. } if message == "y"
         ));
         assert!(matches!(
-            map_handler_error(HandlerError::NotYetFinal),
+            map_handler_error(HandlerError::Abort(String::new())),
+            ProcessingError::Permanent(m) if m.is_empty()
+        ));
+        assert!(matches!(
+            map_handler_error(HandlerError::NotYetFinal(TransactionStatus::Submitted)),
             ProcessingError::Retryable {
                 kind: RetryKind::NotYetFinal,
                 ..
@@ -350,20 +360,46 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_status_retry_delay_by_network() {
+    fn test_status_retry_delay_by_network() {
         let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
-        assert_eq!(compute_status_retry_delay(evm, 0), 8);
-        assert_eq!(compute_status_retry_delay(evm, 1), 12);
+        assert_eq!(status_delay(evm, 0), 8);
+        assert_eq!(status_delay(evm, 1), 12);
 
         let stellar = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"stellar"}}"#;
-        assert_eq!(compute_status_retry_delay(stellar, 0), 2);
+        assert_eq!(status_delay(stellar, 0), 2);
 
         // Missing network → generic (Solana/default) profile.
         let none = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r"}}"#;
-        assert_eq!(compute_status_retry_delay(none, 0), 5);
+        assert_eq!(status_delay(none, 0), 5);
 
         // Invalid body → generic fallback.
-        assert_eq!(compute_status_retry_delay(b"not json", 0), 5);
+        assert_eq!(status_delay(b"not json", 0), 5);
+    }
+
+    #[test]
+    fn test_status_retry_delay_malformed_bodies() {
+        assert_eq!(status_delay(b"", 0), 5);
+        assert_eq!(status_delay(b"{}", 0), 5);
+        assert_eq!(status_delay(br#"{"data":{}}"#, 0), 5);
+        assert_eq!(status_delay(br#"{"data":{"network_type":"evm"}}"#, 0), 8);
+        assert_eq!(status_delay(br#"{"not_data":{}}"#, 0), 5);
+        let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
+        for body in [
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":"5"}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":-1}}"#.as_slice(),
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":1.5}}"#.as_slice(),
+        ] {
+            assert_eq!(
+                retry_delay_for_queue(QueueType::StatusCheckEvm, body, 0, RetryKind::NotYetFinal),
+                8
+            );
+            assert_eq!(
+                retry_delay_for_queue(QueueType::StatusCheckEvm, body, 1, RetryKind::NotYetFinal),
+                12
+            );
+        }
+        assert_eq!(status_delay(evm, 1000), 12);
+        assert_eq!(status_delay(evm, usize::MAX), 12);
     }
 
     #[test]
@@ -372,7 +408,7 @@ mod tests {
         let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
         assert_eq!(
             retry_delay_for_queue(QueueType::StatusCheckEvm, evm, 0, RetryKind::Other),
-            compute_status_retry_delay(evm, 0)
+            status_delay(evm, 0)
         );
         // Bounded queue uses its configured backoff (body ignored).
         assert_eq!(
@@ -393,7 +429,7 @@ mod tests {
             0,
             RetryKind::NotYetFinal,
         );
-        assert!((5..=6).contains(&configured));
+        assert_eq!(configured, 5);
 
         assert_eq!(
             retry_delay_for_queue(QueueType::StatusCheckEvm, fast_evm, 0, RetryKind::Other),
@@ -405,7 +441,7 @@ mod tests {
         );
 
         let wrong_network =
-            br#"{"data":{"network_type":"stellar","status_check_retry_delay_seconds":1}}"#;
+            br#"{"data":{"network_type":"stellar","status_check_retry_delay_seconds":100}}"#;
         assert_eq!(
             retry_delay_for_queue(
                 QueueType::StatusCheckEvm,
@@ -416,48 +452,55 @@ mod tests {
             2
         );
 
-        for body in [
-            br#"{"data":{"network_type":"evm"}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":0}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":1}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":4}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":101}}"#.as_slice(),
-            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":18446744073709551615}}"#.as_slice(),
-        ] {
-            assert_eq!(
-                retry_delay_for_queue(QueueType::StatusCheckEvm, body, 0, RetryKind::NotYetFinal),
-                8
-            );
-        }
+        let solana =
+            br#"{"data":{"network_type":"solana","status_check_retry_delay_seconds":100}}"#;
+        assert_eq!(
+            retry_delay_for_queue(QueueType::StatusCheckEvm, solana, 0, RetryKind::NotYetFinal),
+            5
+        );
+
+        let out_of_range =
+            br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":4}}"#;
+        assert_eq!(
+            retry_delay_for_queue(
+                QueueType::StatusCheckEvm,
+                out_of_range,
+                0,
+                RetryKind::NotYetFinal
+            ),
+            8
+        );
 
         let max_delay =
             br#"{"data":{"network_type":"evm","status_check_retry_delay_seconds":100}}"#;
-        for _ in 0..50 {
-            assert!(
-                retry_delay_for_queue(
-                    QueueType::StatusCheckEvm,
-                    max_delay,
-                    0,
-                    RetryKind::NotYetFinal,
-                ) <= 100
-            );
-        }
+        assert_eq!(
+            retry_delay_for_queue(
+                QueueType::StatusCheckEvm,
+                max_delay,
+                0,
+                RetryKind::NotYetFinal
+            ),
+            100
+        );
     }
 
     #[test]
-    fn test_configured_status_retry_delay_validates_and_jitters() {
-        let delay = configured_status_retry_delay(Some(5), Some(NetworkType::Evm)).unwrap();
-        assert!(delay >= Duration::from_secs(5));
-        assert!(delay < Duration::from_secs(6));
+    fn test_configured_evm_status_retry_delay_validates() {
+        let delay = configured_evm_status_retry_delay(Some(5), Some(NetworkType::Evm)).unwrap();
+        assert_eq!(delay, 5);
 
-        for delay in [None, Some(0), Some(1), Some(4), Some(101), Some(u64::MAX)] {
+        for delay in [None, Some(4)] {
             assert_eq!(
-                configured_status_retry_delay(delay, Some(NetworkType::Evm)),
+                configured_evm_status_retry_delay(delay, Some(NetworkType::Evm)),
                 None
             );
         }
         assert_eq!(
-            configured_status_retry_delay(Some(2), Some(NetworkType::Stellar)),
+            configured_evm_status_retry_delay(Some(100), Some(NetworkType::Stellar)),
+            None
+        );
+        assert_eq!(
+            configured_evm_status_retry_delay(Some(100), Some(NetworkType::Solana)),
             None
         );
     }
@@ -505,13 +548,13 @@ mod tests {
         let evm = br#"{"message_id":"m","version":"1","timestamp":"0","job_type":"TransactionStatusCheck","data":{"transaction_id":"t","relayer_id":"r","network_type":"evm"}}"#;
         let mut prev = 0;
         for attempt in 0..10 {
-            let d = compute_status_retry_delay(evm, attempt);
+            let d = status_delay(evm, attempt);
             assert!(d >= prev, "status backoff must be non-decreasing");
             assert!(d <= 12, "status backoff must stay <= cap");
             prev = d;
         }
         // It actually increases at least once before capping.
-        assert!(compute_status_retry_delay(evm, 1) > compute_status_retry_delay(evm, 0));
+        assert!(status_delay(evm, 1) > status_delay(evm, 0));
     }
 
     #[test]

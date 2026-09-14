@@ -431,7 +431,6 @@ where
         .enable_tracing()
         .catch_panic()
         .retry(EvmStatusRetryPolicy::new(
-            QueueType::StatusCheck.max_retries(),
             create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff(),
         ))
         .concurrency(ServerConfig::get_worker_concurrency(

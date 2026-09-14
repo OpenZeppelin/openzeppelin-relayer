@@ -31,11 +31,8 @@ use crate::{
     utils::{aws_error::DisplayErrorContext, classify_sdk_error},
 };
 
-use super::{QueueBackendError, QueueType, WorkerHandle};
-use crate::queues::{
-    worker_shared::{map_handler_error, retry_delay_for_queue, ProcessingError},
-    HandlerError, WorkerContext,
-};
+use super::{HandlerError, QueueBackendError, QueueType, WorkerContext, WorkerHandle};
+use crate::queues::worker_shared::{map_handler_error, retry_delay_for_queue, ProcessingError};
 
 /// Outcome of processing a single SQS message, used to decide whether the
 /// message should be batch-deleted or left in the queue.
