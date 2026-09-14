@@ -15,7 +15,9 @@ use crate::{
     },
     services::{
         signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            evm::{
+                construct_eip712_message_hash, resolve_message_bytes, validate_and_format_signature,
+            },
             DataSignerTrait, Signer,
         },
         AwsKmsClient, AwsKmsEvmService, AwsKmsService,
@@ -124,7 +126,7 @@ impl<T: AwsKmsEvmService> Signer for AwsKmsSigner<T> {
 #[async_trait]
 impl<T: AwsKmsEvmService> DataSignerTrait for AwsKmsSigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        let eip191_message = eip191_message(&request.message);
+        let eip191_message = eip191_message(&resolve_message_bytes(&request)?);
 
         let signature_bytes = self
             .aws_kms_service
@@ -216,6 +218,7 @@ mod tests {
         let signer = setup_mock_aws_signer();
         let request = SignDataRequest {
             message: "Test message".to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await.unwrap();
@@ -236,6 +239,7 @@ mod tests {
         let signer = setup_mock_aws_signer();
         let request = SignDataRequest {
             message: "".to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;

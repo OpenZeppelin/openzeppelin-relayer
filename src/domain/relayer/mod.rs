@@ -629,9 +629,23 @@ impl<
     }
 }
 
+/// How the `message` field of a [`SignDataRequest`] is interpreted.
+#[derive(Serialize, Deserialize, ToSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SignDataRequestEncoding {
+    /// Interpreted as UTF-8 text. (default)
+    #[default]
+    Text,
+    /// Interpreted as a hex-encoded byte string (optional `0x` prefix), decoded to raw bytes.
+    Hex,
+}
+
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct SignDataRequest {
     pub message: String,
+    /// Encoding of `message`; defaults to `text`.
+    #[serde(default)]
+    pub encoding: SignDataRequestEncoding,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
