@@ -13,7 +13,8 @@ use tracing::{debug, error, info, warn};
 use crate::{
     constants::{
         matches_known_transaction, ALREADY_SUBMITTED_PATTERNS, DEFAULT_EVM_GAS_LIMIT_ESTIMATION,
-        GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
+        DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS, GAS_LIMIT_BUFFER_MULTIPLIER,
+        MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
         evm::is_noop,
@@ -253,7 +254,7 @@ where
     /// Resolves by the relayer's network name, not by chain id like the checks in
     /// `status.rs`: two networks can share a chain id with different timing, and the
     /// relayer's network is the one whose config applies.
-    async fn status_check_retry_delay_seconds(&self, tx_id: &str) -> Option<u64> {
+    async fn status_check_retry_delay_seconds(&self, tx_id: &str) -> u64 {
         let network = match self
             .network_repository()
             .get_by_name(NetworkType::Evm, &self.relayer.network)
@@ -272,7 +273,7 @@ where
                     reason = %reason,
                     "network lookup failed; status check keeps default backoff"
                 );
-                None
+                DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
             }
         }
     }
@@ -1640,7 +1641,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_check_retry_delay_seconds.is_none()
+                job.status_check_retry_delay_seconds == DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
                     && job
                         .metadata
                         .as_ref()
@@ -1686,7 +1687,7 @@ mod tests {
             job_producer
                 .expect_produce_check_transaction_status_job()
                 .times(1)
-                .withf(move |job, _| job.status_check_retry_delay_seconds == Some(expected_delay))
+                .withf(move |job, _| job.status_check_retry_delay_seconds == expected_delay)
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
             let evm_transaction = EvmRelayerTransaction {
@@ -4023,7 +4024,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_check_retry_delay_seconds == Some(5)
+                job.status_check_retry_delay_seconds == 5
                     && job
                         .metadata
                         .as_ref()
@@ -4108,7 +4109,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_check_retry_delay_seconds == Some(5)
+                job.status_check_retry_delay_seconds == 5
                     && job
                         .metadata
                         .as_ref()
@@ -4229,7 +4230,7 @@ mod tests {
             .expect_produce_check_transaction_status_job()
             .times(1)
             .withf(|job, _| {
-                job.status_check_retry_delay_seconds == Some(5)
+                job.status_check_retry_delay_seconds == 5
                     && job
                         .metadata
                         .as_ref()

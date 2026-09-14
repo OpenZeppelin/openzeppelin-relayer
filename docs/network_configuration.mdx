@@ -174,7 +174,7 @@ These tags help the relayer:
 | `chain_id`                           | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited)           |
 | `required_confirmations`             | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)              |
 | `status_check.initial_delay_seconds` | number        | No       | Delay before the first status check, in seconds. Default `8`, range `1`–`100`.                                                           |
-| `status_check.retry_delay_seconds`   | number        | No       | Interval between checks while a transaction is healthy but not final, in seconds. Range `5`–`100`. Unset keeps the existing EVM backoff. |
+| `status_check.retry_delay_seconds`   | number        | No       | Delay between checks while a transaction is healthy but not final, in seconds. Default `8`, range `5`–`100`. Checks back off from this value to 1.5× it. |
 | `symbol`                             | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                              |
 | `features`                           | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                                         |
 

@@ -12,8 +12,9 @@
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use crate::constants::{
-    DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS,
-    MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+    DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+    MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+    MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +97,8 @@ impl GasPriceCacheConfig {
 pub struct StatusCheckConfig {
     /// Delay before the first transaction status check, in seconds.
     pub initial_delay_seconds: Option<u64>,
-    /// Delay between successful checks while the transaction is not final, in seconds.
+    /// Delay between healthy checks while the transaction is not final, in seconds.
+    /// The retry backoff starts here and caps at 1.5x this value.
     pub retry_delay_seconds: Option<u64>,
 }
 
@@ -180,11 +182,12 @@ impl EvmNetworkConfig {
             .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
     }
 
-    /// Configured delay between healthy non-final status checks, in seconds.
-    pub fn status_check_retry_delay_seconds(&self) -> Option<u64> {
+    /// Effective delay between healthy non-final status checks, in seconds (default when unset).
+    pub fn status_check_retry_delay_seconds(&self) -> u64 {
         self.status_check
             .as_ref()
             .and_then(|c| c.retry_delay_seconds)
+            .unwrap_or(DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS)
     }
 
     /// Validates the specific configuration fields for an EVM network.
@@ -376,14 +379,17 @@ mod tests {
             config.status_check_initial_delay_seconds(),
             DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
         );
-        assert_eq!(config.status_check_retry_delay_seconds(), None);
+        assert_eq!(
+            config.status_check_retry_delay_seconds(),
+            DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
+        );
 
         config.status_check = Some(StatusCheckConfig {
             initial_delay_seconds: Some(2),
             retry_delay_seconds: Some(5),
         });
         assert_eq!(config.status_check_initial_delay_seconds(), 2);
-        assert_eq!(config.status_check_retry_delay_seconds(), Some(5));
+        assert_eq!(config.status_check_retry_delay_seconds(), 5);
     }
 
     #[test]

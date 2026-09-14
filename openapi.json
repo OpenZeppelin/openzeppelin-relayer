@@ -9480,7 +9480,8 @@
         "type": "object",
         "description": "Effective EVM transaction status-check settings.",
         "required": [
-          "initial_delay_seconds"
+          "initial_delay_seconds",
+          "retry_delay_seconds"
         ],
         "properties": {
           "initial_delay_seconds": {
@@ -9493,7 +9494,7 @@
           "retry_delay_seconds": {
             "type": "integer",
             "format": "int64",
-            "description": "Optional delay between successful checks while the transaction is not final, in seconds.",
+            "description": "Delay between healthy checks while the transaction is not final, in seconds.\nThe retry backoff starts here and caps at 1.5x this value.",
             "maximum": 100,
             "minimum": 5
           }

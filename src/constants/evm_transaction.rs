@@ -46,6 +46,11 @@ pub const DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 8;
 /// Minimum configurable status-check delay (in seconds).
 pub const MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS: u64 = 1;
 
+/// Default delay between healthy, non-final status checks (in seconds). The
+/// backoff starts here and caps at 1.5x, so the default reproduces the 8->12s
+/// cadence the relayer always had.
+pub const DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS: u64 = 8;
+
 /// Minimum configurable delay between status checks (in seconds).
 pub const MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS: u64 = 5;
 
