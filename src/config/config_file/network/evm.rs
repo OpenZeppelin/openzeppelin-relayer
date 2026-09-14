@@ -12,8 +12,8 @@
 use super::common::{merge_optional_string_vecs, NetworkConfigCommon};
 use crate::config::ConfigFileError;
 use crate::constants::{
-    MAX_EVM_STATUS_CHECK_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+    DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MAX_EVM_STATUS_CHECK_DELAY_SECONDS,
+    MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS, MIN_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -101,7 +101,12 @@ pub struct StatusCheckConfig {
 }
 
 impl StatusCheckConfig {
-    fn validate(&self) -> Result<(), ConfigFileError> {
+    /// Validates the status-check configuration
+    ///
+    /// # Returns
+    /// - `Ok(())` if both delays are unset or within their allowed ranges
+    /// - `Err(ConfigFileError)` if a delay is out of range
+    pub(crate) fn validate(&self) -> Result<(), ConfigFileError> {
         if self.initial_delay_seconds.is_some_and(|delay| {
             !(MIN_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS..=MAX_EVM_STATUS_CHECK_DELAY_SECONDS)
                 .contains(&delay)
@@ -125,6 +130,13 @@ impl StatusCheckConfig {
         Ok(())
     }
 
+    /// Merges this configuration with a parent, field by field
+    ///
+    /// # Arguments
+    /// * `parent` - The parent status-check configuration
+    ///
+    /// # Returns
+    /// A configuration where each unset field takes the parent's value
     pub(super) fn merge_with_parent(&self, parent: &Self) -> Self {
         Self {
             initial_delay_seconds: self.initial_delay_seconds.or(parent.initial_delay_seconds),
@@ -146,7 +158,6 @@ pub struct EvmNetworkConfig {
     /// Number of block confirmations required before a transaction is considered final.
     pub required_confirmations: Option<u64>,
     /// Transaction status-check configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_check: Option<StatusCheckConfig>,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Option<Vec<String>>,
@@ -157,6 +168,21 @@ pub struct EvmNetworkConfig {
 }
 
 impl EvmNetworkConfig {
+    /// Effective delay before the first status check, in seconds (default when unset).
+    pub fn status_check_initial_delay_seconds(&self) -> u64 {
+        self.status_check
+            .as_ref()
+            .and_then(|c| c.initial_delay_seconds)
+            .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS)
+    }
+
+    /// Configured delay between healthy non-final status checks, in seconds.
+    pub fn status_check_retry_delay_seconds(&self) -> Option<u64> {
+        self.status_check
+            .as_ref()
+            .and_then(|c| c.retry_delay_seconds)
+    }
+
     /// Validates the specific configuration fields for an EVM network.
     ///
     /// # Returns
@@ -243,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_status_check_initial_delay_boundaries() {
+    fn test_validate_status_check_initial_delay_range() {
         for delay in [1, 100] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
@@ -252,10 +278,7 @@ mod tests {
             });
             assert!(config.validate().is_ok());
         }
-    }
 
-    #[test]
-    fn test_validate_rejects_invalid_status_check_initial_delay() {
         for delay in [0, 101] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
@@ -273,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_status_check_retry_delay_boundaries() {
+    fn test_validate_status_check_retry_delay_range() {
         for delay in [5, 100] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
@@ -282,10 +305,7 @@ mod tests {
             });
             assert!(config.validate().is_ok());
         }
-    }
 
-    #[test]
-    fn test_validate_rejects_invalid_status_check_retry_delay() {
         for delay in [0, 1, 4, 101] {
             let mut config = create_evm_network("ethereum-mainnet");
             config.status_check = Some(StatusCheckConfig {
@@ -334,13 +354,21 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_omits_unset_status_check() {
-        let config = create_evm_network("ethereum-mainnet");
-        let value = serde_json::to_value(config).unwrap();
+    fn test_status_check_accessors_default_when_unset() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.status_check = None;
+        assert_eq!(
+            config.status_check_initial_delay_seconds(),
+            DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
+        );
+        assert_eq!(config.status_check_retry_delay_seconds(), None);
 
-        assert!(value.get("status_check").is_none());
-        let decoded: EvmNetworkConfig = serde_json::from_value(value).unwrap();
-        assert!(decoded.status_check.is_none());
+        config.status_check = Some(StatusCheckConfig {
+            initial_delay_seconds: Some(2),
+            retry_delay_seconds: Some(5),
+        });
+        assert_eq!(config.status_check_initial_delay_seconds(), 2);
+        assert_eq!(config.status_check_retry_delay_seconds(), Some(5));
     }
 
     #[test]

@@ -3,7 +3,6 @@
 //! This module provides response structures for network operations, converting
 //! internal repository models to API-friendly formats.
 
-use crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS;
 use crate::models::{
     network::{NetworkConfigData, NetworkRepoModel},
     NetworkType, RpcConfig,
@@ -63,7 +62,9 @@ pub struct NetworkResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub required_confirmations: Option<u64>,
-    /// EVM-specific: Transaction status-check configuration
+    /// EVM-specific: Effective transaction status-check settings after inheritance
+    /// and defaults are applied. Always present for EVM networks so operators can
+    /// verify the timing in effect, even when nothing was configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub status_check: Option<StatusCheckResponse>,
@@ -115,15 +116,8 @@ impl From<NetworkRepoModel> for NetworkResponse {
                 response.chain_id = evm_config.chain_id;
                 response.required_confirmations = evm_config.required_confirmations;
                 response.status_check = Some(StatusCheckResponse {
-                    initial_delay_seconds: evm_config
-                        .status_check
-                        .as_ref()
-                        .and_then(|config| config.initial_delay_seconds)
-                        .unwrap_or(DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS),
-                    retry_delay_seconds: evm_config
-                        .status_check
-                        .as_ref()
-                        .and_then(|config| config.retry_delay_seconds),
+                    initial_delay_seconds: evm_config.status_check_initial_delay_seconds(),
+                    retry_delay_seconds: evm_config.status_check_retry_delay_seconds(),
                 });
                 response.features = evm_config.features.clone();
                 response.symbol = evm_config.symbol.clone();
@@ -144,6 +138,7 @@ impl From<NetworkRepoModel> for NetworkResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS;
     use crate::models::RpcConfig;
 
     fn create_test_evm_network() -> NetworkRepoModel {
