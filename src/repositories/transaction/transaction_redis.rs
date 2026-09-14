@@ -15,8 +15,8 @@ use crate::models::{
 };
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{
-    BatchDeleteResult, BatchRetrievalResult, PaginatedResult, Repository, TransactionDeleteRequest,
-    TransactionRepository,
+    BatchDeleteResult, BatchRetrievalResult, NonceOccupancy, PaginatedResult, Repository,
+    TransactionDeleteRequest, TransactionRepository,
 };
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
@@ -166,6 +166,95 @@ impl RedisTransactionRepository {
         let key_prefix = format!("{}:{}:", self.key_prefix, RELAYER_PREFIX);
         let key_suffix = format!(":{TX_PREFIX}:{tx_id}");
         (lookup_key, key_prefix, key_suffix)
+    }
+
+    /// Scans `[from_nonce, to_nonce)` of the relayer's nonce index and returns the
+    /// occupying record's rewind-relevant fields per slot, or `None` when empty.
+    ///
+    /// Two MGET round trips regardless of range width: one for the nonce index, one
+    /// for the transaction blobs. A blob that fails to deserialize is reported as an
+    /// empty slot, matching the previous behaviour of `get_nonce_occupancy`.
+    async fn scan_nonce_slots(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError> {
+        if from_nonce >= to_nonce {
+            return Ok(vec![]);
+        }
+
+        let nonces: Vec<u64> = (from_nonce..to_nonce).collect();
+        let nonce_keys: Vec<String> = nonces
+            .iter()
+            .map(|n| self.relayer_nonce_key(relayer_id, *n))
+            .collect();
+
+        // Phase 1: MGET nonce keys → tx_ids (single round trip)
+        // Uses primary to avoid replica lag fabricating false gaps.
+        let mut conn = self
+            .get_connection(self.connections.primary(), "get_nonce_occupancy")
+            .await?;
+        let tx_ids: Vec<Option<String>> = redis::cmd("MGET")
+            .arg(&nonce_keys)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_nonces"))?;
+
+        // Build tx data keys for non-None slots. We know the relayer_id so we
+        // skip the reverse lookup and go straight to the data key.
+        let mut tx_key_entries: Vec<(usize, String)> = Vec::new();
+        for (i, tx_id) in tx_ids.iter().enumerate() {
+            if let Some(id) = tx_id {
+                tx_key_entries.push((i, self.tx_key(relayer_id, id)));
+            }
+        }
+
+        // Phase 2: MGET tx data keys → JSON blobs (single round trip)
+        let occupancies: Vec<Option<NonceOccupancy>> = if tx_key_entries.is_empty() {
+            vec![]
+        } else {
+            let data_keys: Vec<&str> = tx_key_entries.iter().map(|(_, k)| k.as_str()).collect();
+            let raw_values: Vec<Option<String>> = redis::cmd("MGET")
+                .arg(&data_keys)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_txs"))?;
+
+            raw_values
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    v.and_then(|json| {
+                        match serde_json::from_str::<TransactionRepoModel>(&json) {
+                            Ok(tx) => Some(NonceOccupancy::from(&tx)),
+                            Err(e) => {
+                                let nonce = tx_key_entries.get(i).map(|(idx, _)| nonces[*idx]);
+                                warn!(
+                                    relayer_id = %relayer_id,
+                                    nonce = ?nonce,
+                                    error = %e,
+                                    "get_nonce_occupancy: failed to deserialize transaction, treating as empty"
+                                );
+                                None
+                            }
+                        }
+                    })
+                })
+                .collect()
+        };
+
+        // Assemble results
+        let mut results: Vec<(u64, Option<NonceOccupancy>)> =
+            nonces.iter().map(|n| (*n, None)).collect();
+
+        for (idx, (original_idx, _)) in tx_key_entries.iter().enumerate() {
+            if let Some(occ) = occupancies.get(idx).and_then(|o| o.clone()) {
+                results[*original_idx].1 = Some(occ);
+            }
+        }
+
+        Ok(results)
     }
 
     /// Executes an atomic Lua script with retry/backoff for transient Redis failures.
@@ -1975,81 +2064,23 @@ impl TransactionRepository for RedisTransactionRepository {
         from_nonce: u64,
         to_nonce: u64,
     ) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError> {
-        if from_nonce >= to_nonce {
-            return Ok(vec![]);
-        }
-
-        let nonces: Vec<u64> = (from_nonce..to_nonce).collect();
-        let nonce_keys: Vec<String> = nonces
-            .iter()
-            .map(|n| self.relayer_nonce_key(relayer_id, *n))
-            .collect();
-
-        // Phase 1: MGET nonce keys → tx_ids (single round trip)
-        // Uses primary to avoid replica lag fabricating false gaps.
-        let mut conn = self
-            .get_connection(self.connections.primary(), "get_nonce_occupancy")
+        let detailed = self
+            .scan_nonce_slots(relayer_id, from_nonce, to_nonce)
             .await?;
-        let tx_ids: Vec<Option<String>> = redis::cmd("MGET")
-            .arg(&nonce_keys)
-            .query_async(&mut conn)
+        Ok(detailed
+            .into_iter()
+            .map(|(nonce, occ)| (nonce, occ.map(|o| o.status)))
+            .collect())
+    }
+
+    async fn get_nonce_occupancy_detailed(
+        &self,
+        relayer_id: &str,
+        from_nonce: u64,
+        to_nonce: u64,
+    ) -> Result<Vec<(u64, Option<NonceOccupancy>)>, RepositoryError> {
+        self.scan_nonce_slots(relayer_id, from_nonce, to_nonce)
             .await
-            .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_nonces"))?;
-
-        // Build tx data keys for non-None slots. We know the relayer_id so we
-        // skip the reverse lookup and go straight to the data key.
-        let mut tx_key_entries: Vec<(usize, String)> = Vec::new();
-        for (i, tx_id) in tx_ids.iter().enumerate() {
-            if let Some(id) = tx_id {
-                tx_key_entries.push((i, self.tx_key(relayer_id, id)));
-            }
-        }
-
-        // Phase 2: MGET tx data keys → JSON blobs (single round trip)
-        let tx_statuses: Vec<Option<TransactionStatus>> = if tx_key_entries.is_empty() {
-            vec![]
-        } else {
-            let data_keys: Vec<&str> = tx_key_entries.iter().map(|(_, k)| k.as_str()).collect();
-            let raw_values: Vec<Option<String>> = redis::cmd("MGET")
-                .arg(&data_keys)
-                .query_async(&mut conn)
-                .await
-                .map_err(|e| self.map_redis_error(e, "get_nonce_occupancy:mget_txs"))?;
-
-            raw_values
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    v.and_then(|json| {
-                        match serde_json::from_str::<TransactionRepoModel>(&json) {
-                            Ok(tx) => Some(tx.status),
-                            Err(e) => {
-                                let nonce = tx_key_entries.get(i).map(|(idx, _)| nonces[*idx]);
-                                warn!(
-                                    relayer_id = %relayer_id,
-                                    nonce = ?nonce,
-                                    error = %e,
-                                    "get_nonce_occupancy: failed to deserialize transaction, treating as empty"
-                                );
-                                None
-                            }
-                        }
-                    })
-                })
-                .collect()
-        };
-
-        // Assemble results
-        let mut results: Vec<(u64, Option<TransactionStatus>)> =
-            nonces.iter().map(|n| (*n, None)).collect();
-
-        for (idx, (original_idx, _)) in tx_key_entries.iter().enumerate() {
-            if let Some(status) = tx_statuses.get(idx).and_then(|s| s.clone()) {
-                results[*original_idx].1 = Some(status);
-            }
-        }
-
-        Ok(results)
     }
 
     async fn update_status(
