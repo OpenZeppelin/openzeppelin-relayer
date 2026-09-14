@@ -158,6 +158,10 @@ pub struct EvmNetworkConfig {
     /// Number of block confirmations required before a transaction is considered final.
     pub required_confirmations: Option<u64>,
     /// Transaction status-check configuration.
+    ///
+    /// Omitted from serialized output when unset so stored network models stay
+    /// readable by binaries that predate this field (`deny_unknown_fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_check: Option<StatusCheckConfig>,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Option<Vec<String>>,
@@ -351,6 +355,17 @@ mod tests {
                 retry_delay_seconds: Some(5),
             })
         );
+    }
+
+    #[test]
+    fn test_serialize_omits_unset_status_check() {
+        let mut config = create_evm_network("ethereum-mainnet");
+        config.status_check = None;
+        let value = serde_json::to_value(config).unwrap();
+
+        assert!(value.get("status_check").is_none());
+        let decoded: EvmNetworkConfig = serde_json::from_value(value).unwrap();
+        assert!(decoded.status_check.is_none());
     }
 
     #[test]
