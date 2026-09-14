@@ -88,7 +88,11 @@ fn not_yet_final_delay<Ctx>(
     };
     inner.as_ref().as_ref().downcast_ref::<NotYetFinal>()?;
     let backoff = evm_status_check_backoff(req.args.data.status_check_retry_delay_seconds);
-    let seconds = retry_delay_secs(backoff, req.parts.attempt.current());
+    // apalis increments the attempt before the first execution, so the first
+    // healthy retry sees `current() == 1`. `retry_delay_secs` treats 0 as the
+    // base delay, matching the per-message backends whose counters start at 0.
+    let attempt = req.parts.attempt.current().saturating_sub(1);
+    let seconds = retry_delay_secs(backoff, attempt);
     Some(Duration::from_secs(seconds as u64))
 }
 
@@ -117,11 +121,14 @@ mod tests {
         network_type: NetworkType,
         retry_delay: u64,
     ) -> Request<Job<TransactionStatusCheck>, ()> {
-        Request::new(Job::new(
+        let req = Request::new(Job::new(
             crate::jobs::JobType::TransactionStatusCheck,
             TransactionStatusCheck::new("tx", "relayer", network_type)
                 .with_status_check_retry_delay_seconds(retry_delay),
-        ))
+        ));
+        // Mirror apalis: the worker increments the attempt before the first run.
+        req.parts.attempt.increment();
+        req
     }
 
     fn not_yet_final_error() -> Error {
@@ -130,7 +137,9 @@ mod tests {
 
     #[test]
     fn test_not_yet_final_delay_backs_off_from_configured_delay() {
+        // First delivery (attempt 1 on Redis) must use the base delay, not the cap.
         let req = request(NetworkType::Evm, 5);
+        assert_eq!(req.parts.attempt.current(), 1);
         let delay = not_yet_final_delay(&req, &not_yet_final_error()).unwrap();
         assert_eq!(delay, Duration::from_secs(5));
 
@@ -168,25 +177,25 @@ mod tests {
         )));
         policy.retry(&mut req, &mut rpc_error).unwrap().await;
         assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(req.parts.attempt.current(), 1);
+        assert_eq!(req.parts.attempt.current(), 2);
 
         let mut not_final = Err::<(), _>(not_yet_final_error());
         let started = tokio::time::Instant::now();
         let configured_sleep = policy.retry(&mut req, &mut not_final).unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         configured_sleep.await;
-        // attempt 1 of a 5s delay: capped at 1.5x = 8s (rounded up from 7.5s).
+        // Second retry of a 5s delay: capped at 1.5x = 8s (rounded up from 7.5s).
         let elapsed = started.elapsed();
         assert!(elapsed >= Duration::from_secs(8));
         assert!(elapsed < Duration::from_secs(9));
-        assert_eq!(req.parts.attempt.current(), 2);
+        assert_eq!(req.parts.attempt.current(), 3);
 
         let mut rpc_error = Err::<(), _>(Error::Failed(Arc::new(
             "rpc unavailable".to_string().into(),
         )));
         policy.retry(&mut req, &mut rpc_error).unwrap().await;
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(req.parts.attempt.current(), 3);
+        assert_eq!(req.parts.attempt.current(), 4);
     }
 
     #[test]
