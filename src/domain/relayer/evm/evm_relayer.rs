@@ -261,7 +261,7 @@ where
                 .with_status_check_retry_delay_seconds(
                     self.network.status_check_retry_delay_seconds(),
                 ),
-                Some(calculate_scheduled_timestamp(initial_delay_seconds)),
+                Some(calculate_scheduled_timestamp(initial_delay_seconds as i64)),
             )
             .await
         {
@@ -940,15 +940,13 @@ mod tests {
         job_producer
             .expect_produce_transaction_request_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
-        let scheduled_at = Arc::new(std::sync::Mutex::new(None));
-        let captured_scheduled_at = Arc::clone(&scheduled_at);
-        let retry_delay = Arc::new(std::sync::Mutex::new(None));
-        let captured_retry_delay = Arc::clone(&retry_delay);
+        let scheduled_check = Arc::new(std::sync::Mutex::new(None));
+        let captured_check = Arc::clone(&scheduled_check);
         job_producer
             .expect_produce_check_transaction_status_job()
             .returning(move |job, value| {
-                *captured_scheduled_at.lock().unwrap() = value;
-                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
+                *captured_check.lock().unwrap() =
+                    Some((value, job.status_check_retry_delay_seconds));
                 Box::pin(ready(Ok(())))
             });
 
@@ -972,10 +970,11 @@ mod tests {
         let result = relayer.process_transaction_request(network_tx).await;
         let after = chrono::Utc::now().timestamp();
         assert!(result.is_ok());
-        let scheduled_at = scheduled_at.lock().unwrap().unwrap();
-        assert!(scheduled_at > before);
+        let (scheduled_at, retry_delay) = scheduled_check.lock().unwrap().unwrap();
+        let scheduled_at = scheduled_at.unwrap();
+        assert!(scheduled_at >= before + 1);
         assert!(scheduled_at <= after + 1);
-        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
+        assert_eq!(retry_delay, Some(5));
     }
 
     #[tokio::test]

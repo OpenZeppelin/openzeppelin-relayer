@@ -524,7 +524,7 @@ where
                     .with_status_check_retry_delay_seconds(
                         evm_network.status_check_retry_delay_seconds(),
                     ),
-                Some(calculate_scheduled_timestamp(initial_delay_seconds)),
+                Some(calculate_scheduled_timestamp(initial_delay_seconds as i64)),
             )
             .await;
         if let Err(e) = &status_result {
@@ -1634,15 +1634,13 @@ mod tests {
                 ))))
             });
         // Status-check job succeeds — one enqueue is enough to progress.
-        let scheduled_at = Arc::new(std::sync::Mutex::new(None));
-        let captured_scheduled_at = Arc::clone(&scheduled_at);
-        let retry_delay = Arc::new(std::sync::Mutex::new(None));
-        let captured_retry_delay = Arc::clone(&retry_delay);
+        let scheduled_check = Arc::new(std::sync::Mutex::new(None));
+        let captured_check = Arc::clone(&scheduled_check);
         job_producer
             .expect_produce_check_transaction_status_job()
             .returning(move |job, value| {
-                *captured_scheduled_at.lock().unwrap() = value;
-                *captured_retry_delay.lock().unwrap() = job.status_check_retry_delay_seconds;
+                *captured_check.lock().unwrap() =
+                    Some((value, job.status_check_retry_delay_seconds));
                 Box::pin(ready(Ok(())))
             });
 
@@ -1665,10 +1663,11 @@ mod tests {
         let tx = relayer.create_gap_filling_noop(7).await.unwrap();
         let after = chrono::Utc::now().timestamp();
         assert_eq!(tx.status, TransactionStatus::Pending);
-        let scheduled_at = scheduled_at.lock().unwrap().unwrap();
+        let (scheduled_at, retry_delay) = scheduled_check.lock().unwrap().unwrap();
+        let scheduled_at = scheduled_at.unwrap();
         assert!(scheduled_at >= before + 2);
         assert!(scheduled_at <= after + 2);
-        assert_eq!(*retry_delay.lock().unwrap(), Some(5));
+        assert_eq!(retry_delay, Some(5));
     }
 
     /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.
