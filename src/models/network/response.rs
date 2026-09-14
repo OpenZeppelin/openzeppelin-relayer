@@ -16,10 +16,10 @@ pub struct StatusCheckResponse {
     /// Delay before the first transaction status check, in seconds.
     #[schema(minimum = 1, maximum = 100)]
     pub initial_delay_seconds: u64,
-    /// Optional delay between successful checks while the transaction is not final, in seconds.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false, minimum = 5, maximum = 100)]
-    pub retry_delay_seconds: Option<u64>,
+    /// Delay between healthy checks while the transaction is not final, in seconds.
+    /// The retry backoff starts here and caps at 1.5x this value.
+    #[schema(minimum = 5, maximum = 100)]
+    pub retry_delay_seconds: u64,
 }
 
 /// Network response model for API endpoints.
@@ -138,7 +138,10 @@ impl From<NetworkRepoModel> for NetworkResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS;
+    use crate::constants::{
+        DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+        DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+    };
     use crate::models::RpcConfig;
 
     fn create_test_evm_network() -> NetworkRepoModel {
@@ -177,7 +180,7 @@ mod tests {
             response.status_check,
             Some(StatusCheckResponse {
                 initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                retry_delay_seconds: None,
+                retry_delay_seconds: DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
             })
         );
         assert_eq!(response.symbol, Some("ETH".to_string()));
@@ -197,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_network_repo_model_exposes_optional_retry_delay() {
+    fn test_from_network_repo_model_exposes_configured_retry_delay() {
         let mut model = create_test_evm_network();
         if let NetworkConfigData::Evm(config) = &mut model.config {
             config.status_check = Some(crate::config::StatusCheckConfig {
@@ -210,7 +213,7 @@ mod tests {
             NetworkResponse::from(model).status_check,
             Some(StatusCheckResponse {
                 initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                retry_delay_seconds: Some(5),
+                retry_delay_seconds: 5,
             })
         );
     }

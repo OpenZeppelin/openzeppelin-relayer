@@ -790,7 +790,7 @@ mod tests {
             chain_id: 1,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
-            status_check_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -941,7 +941,7 @@ mod tests {
 
         let mut network = create_test_evm_network();
         network.status_check_initial_delay_seconds = 1;
-        network.status_check_retry_delay_seconds = Some(5);
+        network.status_check_retry_delay_seconds = 5;
         let relayer = EvmRelayer::new(
             relayer_model,
             signer,
@@ -963,7 +963,7 @@ mod tests {
         let scheduled_at = scheduled_at.unwrap();
         assert!(scheduled_at >= before + 1);
         assert!(scheduled_at <= after + 1);
-        assert_eq!(retry_delay, Some(5));
+        assert_eq!(retry_delay, 5);
     }
 
     #[tokio::test]

@@ -728,7 +728,7 @@ mod tests {
             chain_id: 1,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
-            status_check_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             explorer_urls: None,
@@ -1660,7 +1660,7 @@ mod tests {
         let scheduled_at = scheduled_at.unwrap();
         assert!(scheduled_at >= before + 2);
         assert!(scheduled_at <= after + 2);
-        assert_eq!(retry_delay, Some(5));
+        assert_eq!(retry_delay, 5);
     }
 
     /// Gap-fill NOOP (g2): both jobs fail to enqueue — the record is marked Failed and the enqueue error propagates.

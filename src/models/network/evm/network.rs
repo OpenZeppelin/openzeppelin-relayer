@@ -27,8 +27,9 @@ pub struct EvmNetwork {
     pub required_confirmations: u64,
     /// Delay before the first transaction status check, in seconds.
     pub status_check_initial_delay_seconds: u64,
-    /// Optional delay between successful checks while the transaction is not final, in seconds.
-    pub status_check_retry_delay_seconds: Option<u64>,
+    /// Delay between healthy checks while the transaction is not final, in seconds.
+    /// The retry backoff starts here and caps at 1.5x this value.
+    pub status_check_retry_delay_seconds: u64,
     /// List of specific features supported by the network (e.g., "eip1559").
     pub features: Vec<String>,
     /// The symbol of the network's native currency (e.g., "ETH", "MATIC").
@@ -164,8 +165,8 @@ impl EvmNetwork {
         self.status_check_initial_delay_seconds
     }
 
-    /// Returns the configured delay between successful non-final status checks.
-    pub fn status_check_retry_delay_seconds(&self) -> Option<u64> {
+    /// Returns the delay that healthy, non-final status checks back off from, in seconds.
+    pub fn status_check_retry_delay_seconds(&self) -> u64 {
         self.status_check_retry_delay_seconds
     }
 
@@ -212,7 +213,7 @@ mod tests {
             chain_id: 1,
             required_confirmations: 1,
             status_check_initial_delay_seconds: 8,
-            status_check_retry_delay_seconds: None,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -355,7 +356,10 @@ mod tests {
             default_network.status_check_initial_delay_seconds(),
             crate::constants::DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS
         );
-        assert_eq!(default_network.status_check_retry_delay_seconds(), None);
+        assert_eq!(
+            default_network.status_check_retry_delay_seconds(),
+            crate::constants::DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
+        );
 
         config.status_check = Some(StatusCheckConfig {
             initial_delay_seconds: Some(3),
@@ -363,7 +367,7 @@ mod tests {
         });
         let network = EvmNetwork::try_from(repo_model(config)).unwrap();
         assert_eq!(network.status_check_initial_delay_seconds(), 3);
-        assert_eq!(network.status_check_retry_delay_seconds(), Some(5));
+        assert_eq!(network.status_check_retry_delay_seconds(), 5);
     }
 
     #[test]
