@@ -31,6 +31,7 @@ use crate::queues::worker_shared::{
     get_concurrency_for_queue, is_retry_exhausted, job_correlation_id, retry_delay_for_queue,
     run_handler_with_timeout, HandlerOutcome, DRAIN_TIMEOUT,
 };
+use crate::queues::worker_types::RetryKind;
 
 use super::backend::retry_attempt_from_attrs;
 use super::schedule::{zadd_scheduled, ScheduledJob};
@@ -328,7 +329,7 @@ async fn settle_retry(
     retry_attempt: usize,
     correlation_id: &str,
     err: &str,
-    retry_kind: crate::queues::worker_types::RetryKind,
+    retry_kind: RetryKind,
 ) {
     let queue_type = config.queue_type;
     let next_attempt = retry_attempt.saturating_add(1);

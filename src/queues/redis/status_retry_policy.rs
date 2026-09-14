@@ -1,7 +1,13 @@
-use std::{sync::Arc, time::Duration};
+//! Retry policy for the Redis EVM status-check queue.
+//!
+//! Healthy, non-final checks (`NotYetFinal`) sleep for the interval stamped on the
+//! job when the network configures one. Every other failure keeps the stock
+//! per-request exponential backoff.
+
+use std::time::Duration;
 
 use apalis::{
-    layers::retry::{backoff::Backoff, RetryPolicyError},
+    layers::retry::backoff::Backoff,
     prelude::{Error, Request},
 };
 use futures::{future::BoxFuture, FutureExt};
@@ -9,22 +15,22 @@ use tower::retry::Policy;
 
 use crate::{
     jobs::{Job, TransactionStatusCheck},
-    queues::{worker_shared::configured_status_retry_delay, NotYetFinal},
+    queues::{worker_shared::configured_evm_status_retry_delay, worker_types::NotYetFinal},
 };
 
 /// Retry policy for EVM status checks.
 ///
 /// Healthy, non-final checks may use the delay captured in the job. Every other
 /// error uses the existing per-request exponential backoff.
+/// Status-check retries are unbounded (see `QueueType::max_retries`); exhaustion is not handled here.
 #[derive(Clone, Debug)]
 pub(crate) struct EvmStatusRetryPolicy<B> {
-    retries: usize,
     backoff: B,
 }
 
 impl<B> EvmStatusRetryPolicy<B> {
-    pub(crate) fn new(retries: usize, backoff: B) -> Self {
-        Self { retries, backoff }
+    pub(crate) fn new(backoff: B) -> Self {
+        Self { backoff }
     }
 }
 
@@ -42,29 +48,13 @@ where
         req: &mut Request<Job<TransactionStatusCheck>, Ctx>,
         result: &mut Result<Res, Error>,
     ) -> Option<Self::Future> {
-        let attempt = req.parts.attempt.current();
         let error = match result.as_mut() {
             Ok(_) | Err(Error::Abort(_)) => return None,
             Err(error) => error,
         };
 
-        if self.retries == 0 {
-            *error = Error::Abort(Arc::new(Box::new(RetryPolicyError::ZeroRetries(
-                error.clone(),
-            ))));
-            return None;
-        }
-
-        if self.retries < attempt {
-            *error = Error::Abort(Arc::new(Box::new(RetryPolicyError::OutOfRetries {
-                current_attempt: attempt,
-                inner: error.clone(),
-            })));
-            return None;
-        }
-
         let counter = req.parts.attempt.clone();
-        if let Some(delay) = configured_retry_delay(req, error) {
+        if let Some(delay) = not_yet_final_delay(req, error) {
             Some(Box::pin(async move {
                 tokio::time::sleep(delay).await;
                 counter.increment();
@@ -89,34 +79,29 @@ where
     }
 }
 
-fn configured_retry_delay<Ctx>(
+fn not_yet_final_delay<Ctx>(
     req: &Request<Job<TransactionStatusCheck>, Ctx>,
     error: &Error,
 ) -> Option<Duration> {
-    let is_not_yet_final = match error {
-        Error::Failed(inner) => inner
-            .as_ref()
-            .as_ref()
-            .downcast_ref::<NotYetFinal>()
-            .is_some(),
-        _ => false,
-    };
-
-    if !is_not_yet_final {
+    let Error::Failed(inner) = error else {
         return None;
-    }
-
-    configured_status_retry_delay(
+    };
+    inner.as_ref().as_ref().downcast_ref::<NotYetFinal>()?;
+    configured_evm_status_retry_delay(
         req.args.data.status_check_retry_delay_seconds,
         req.args.data.network_type,
     )
+    .map(Duration::from_secs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::NetworkType;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::models::{NetworkType, TransactionStatus};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     #[derive(Clone, Debug)]
     struct ImmediateBackoff(Arc<AtomicUsize>);
@@ -142,38 +127,42 @@ mod tests {
     }
 
     fn not_yet_final_error() -> Error {
-        crate::queues::HandlerError::NotYetFinal.into()
+        crate::queues::HandlerError::NotYetFinal(TransactionStatus::Submitted).into()
     }
 
     #[test]
-    fn configured_delay_requires_valid_evm_not_yet_final_job() {
+    fn test_not_yet_final_delay_requires_valid_evm_job() {
         let req = request(NetworkType::Evm, Some(5));
-        let delay = configured_retry_delay(&req, &not_yet_final_error()).unwrap();
-        assert!(delay >= Duration::from_secs(5));
-        assert!(delay < Duration::from_secs(6));
+        let delay = not_yet_final_delay(&req, &not_yet_final_error()).unwrap();
+        assert_eq!(delay, Duration::from_secs(5));
 
         let ordinary = Error::Failed(Arc::new("rpc unavailable".to_string().into()));
-        assert_eq!(configured_retry_delay(&req, &ordinary), None);
+        assert_eq!(not_yet_final_delay(&req, &ordinary), None);
         assert_eq!(
-            configured_retry_delay(
-                &request(NetworkType::Stellar, Some(2)),
+            not_yet_final_delay(
+                &request(NetworkType::Stellar, Some(100)),
                 &not_yet_final_error()
             ),
             None
         );
-        for delay in [None, Some(0), Some(1), Some(4), Some(101), Some(u64::MAX)] {
-            assert_eq!(
-                configured_retry_delay(&request(NetworkType::Evm, delay), &not_yet_final_error()),
-                None
-            );
-        }
+        assert_eq!(
+            not_yet_final_delay(
+                &request(NetworkType::Solana, Some(100)),
+                &not_yet_final_error()
+            ),
+            None
+        );
+        assert_eq!(
+            not_yet_final_delay(&request(NetworkType::Evm, Some(4)), &not_yet_final_error()),
+            None
+        );
     }
 
     #[tokio::test]
-    async fn policy_keeps_configured_checks_out_of_rpc_backoff_state() {
+    async fn test_policy_keeps_configured_checks_out_of_rpc_backoff_state() {
         tokio::time::pause();
         let calls = Arc::new(AtomicUsize::new(0));
-        let mut policy = EvmStatusRetryPolicy::new(usize::MAX, ImmediateBackoff(calls.clone()));
+        let mut policy = EvmStatusRetryPolicy::new(ImmediateBackoff(calls.clone()));
         let mut req = request(NetworkType::Evm, Some(5));
 
         let mut rpc_error = Err::<(), _>(Error::Failed(Arc::new(
@@ -202,25 +191,12 @@ mod tests {
     }
 
     #[test]
-    fn policy_preserves_abort_and_exhaustion_semantics() {
+    fn test_policy_does_not_retry_abort() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut req = request(NetworkType::Evm, Some(5));
-        let mut policy = EvmStatusRetryPolicy::new(1, ImmediateBackoff(calls.clone()));
+        let mut policy = EvmStatusRetryPolicy::new(ImmediateBackoff(calls.clone()));
         let mut abort = Err::<(), _>(Error::Abort(Arc::new("stop".to_string().into())));
         assert!(policy.retry(&mut req, &mut abort).is_none());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-        req.parts.attempt.increment();
-        req.parts.attempt.increment();
-        let mut exhausted = Err::<(), _>(not_yet_final_error());
-        assert!(policy.retry(&mut req, &mut exhausted).is_none());
-        assert!(matches!(exhausted, Err(Error::Abort(_))));
-
-        let mut zero_policy = EvmStatusRetryPolicy::new(0, ImmediateBackoff(calls));
-        let mut zero = Err::<(), _>(not_yet_final_error());
-        assert!(zero_policy
-            .retry(&mut request(NetworkType::Evm, Some(5)), &mut zero)
-            .is_none());
-        assert!(matches!(zero, Err(Error::Abort(_))));
     }
 }

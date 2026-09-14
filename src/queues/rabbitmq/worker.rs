@@ -473,10 +473,7 @@ async fn settle_retry(
             // persists, makes the broker redeliver instantly → a zero-backoff hot
             // loop. Pause for the computed retry delay (capped) first so redelivery
             // is paced, then nack.
-            // A Redis scheduling outage must use ordinary backoff, never the healthy-poll override.
-            let persistence_delay =
-                retry_delay_for_queue(queue_type, &delivery.data, retry_attempt, RetryKind::Other);
-            let pause = Duration::from_secs(persistence_delay.max(0) as u64).min(NACK_BACKOFF_MAX);
+            let pause = Duration::from_secs(delay.max(0) as u64).min(NACK_BACKOFF_MAX);
             error!(
                 queue_type = %queue_type,
                 correlation_id = %correlation_id,

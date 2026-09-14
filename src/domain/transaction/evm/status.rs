@@ -4865,7 +4865,7 @@ mod tests {
 
         /// Test handle_status_impl with nonce_error_hint metadata triggers recovery
         #[tokio::test]
-        async fn test_handle_status_impl_nonce_recovery_hint_runs_on_retry() {
+        async fn test_handle_status_impl_nonce_recovery_hint() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
@@ -4918,8 +4918,7 @@ mod tests {
                 TX_NONCE_RECONCILE_TRIGGER.to_string(),
                 "NonceTooLow".to_string(),
             );
-            let context = StatusCheckContext::new(0, 0, 1, 25, 75, NetworkType::Evm)
-                .with_job_metadata(Some(metadata));
+            let context = StatusCheckContext::default().with_job_metadata(Some(metadata));
 
             let result = evm_transaction.handle_status_impl(tx, Some(context)).await;
             assert!(result.is_ok());
