@@ -58,6 +58,7 @@ The repository includes several ready-to-use examples to help you get started wi
 | [`basic-example-metrics`](./examples/basic-example-metrics/)                         | Setup with Prometheus and Grafana metrics                |
 | [`vault-secret-signer`](./examples/vault-secret-signer/)                             | Using HashiCorp Vault for key management                 |
 | [`vault-transit-signer`](./examples/vault-transit-signer/)                           | Using Vault Transit for secure signing                   |
+| [`stellar-vault-transit-signer`](./examples/stellar-vault-transit-signer/)           | Using Vault Transit for Stellar secure signing           |
 | [`evm-azure-key-vault-signer`](./examples/evm-azure-key-vault-signer/)               | Using Azure Key Vault for EVM secure signing             |
 | [`evm-turnkey-signer`](./examples/evm-turnkey-signer/)                               | Using Turnkey Signer for EVM secure signing              |
 | [`solana-turnkey-signer`](./examples/solana-turnkey-signer/)                         | Using Turnkey Signer for Solana secure signing           |

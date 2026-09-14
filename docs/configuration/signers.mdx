@@ -48,7 +48,7 @@ The following table shows which signer types are compatible with each network ty
 | --- | --- | --- | --- |
 | `local` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `vault` | ✅ Supported | ✅ Supported | ❌ Not supported |
-| `vault_transit` | ❌ Not supported | ✅ Supported | ❌ Not supported |
+| `vault_transit` | ❌ Not supported | ✅ Supported | ✅ Supported |
 | `turnkey` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `google_cloud_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
 | `aws_kms` | ✅ Supported | ✅ Supported | ✅ Supported |
@@ -62,7 +62,7 @@ The following table shows which signer types are compatible with each network ty
 
 * ***EVM Networks***: Use secp256k1 cryptography. Most signers support EVM networks with proper key generation.
 * ***Solana Networks***: Use ed25519 cryptography. Ensure your signer supports ed25519 key generation and signing.
-* ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Supported by local, AWS KMS, Google Cloud KMS, and Turnkey signers.
+* ***Stellar Networks***: Use ed25519 cryptography with specific Stellar requirements. Supported by local, Vault Transit, AWS KMS, Google Cloud KMS, and Turnkey signers.
 * ***AWS KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
 * ***Azure Key Vault***: Supports EVM networks with secp256k1 keys stored in Azure Key Vault.
 * ***Google Cloud KMS***: Supports secp256k1 (EVM) and ed25519 (Solana, Stellar) key types.
@@ -179,7 +179,12 @@ Configuration fields:
 | key_name | String | The name of the cryptographic key within Vault’s Transit engine that is used for signing operations |
 | mount_point | String | The mount point for the Transit secrets engine in Vault. Defaults to `transit` if not explicitly specified. Optional. |
 | namespace | String | The Vault namespace for API calls. This is used only in Vault Enterprise environments. Optional. |
-| pubkey | String | Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations |
+| pubkey | String | Public key of the cryptographic key within Vault’s Transit engine that is used for signing operations. For Solana and Stellar, provide the raw Ed25519 public key encoded in standard base64 as returned by Vault Transit |
+
+Vault Transit-specific requirements:
+* Supported for Solana and Stellar networks
+* Use an Ed25519 key in Vault Transit
+* Grant the configured AppRole permission to sign with the Transit key
 
 ## Turnkey Signer Configuration
 
@@ -441,5 +446,11 @@ Configuration fields:
 * Verify Vault server address and network connectivity
 * Check AppRole credentials and permissions
 * Ensure the secret/transit engine is properly mounted and configured
+
+***Vault Transit signing failures***
+
+* Confirm the Transit key is an Ed25519 key and the configured `pubkey` matches the key exported by Vault
+* Verify the AppRole policy allows `update` on the Transit signing path for the configured key
+* Check that the Transit mount point is correct if you are not using the default `transit`
 
 For additional troubleshooting help, check the application logs and refer to the specific cloud provider or service documentation.
