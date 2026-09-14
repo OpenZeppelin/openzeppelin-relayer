@@ -33,10 +33,7 @@ use crate::{
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{
-        JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionSend,
-        TransactionStatusCheck,
-    },
+    jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionSend},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
@@ -250,20 +247,12 @@ where
         // Status check FIRST - this is our safety net for monitoring.
         // If this fails, mark transaction as failed and don't proceed.
         // This ensures we never have an unmonitored transaction.
-        if let Err(e) = self
-            .job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(
-                    transaction.id.clone(),
-                    transaction.relayer_id.clone(),
-                    crate::models::NetworkType::Evm,
-                )
-                .with_status_check_retry_delay_seconds(
-                    self.network.status_check_retry_delay_seconds(),
-                ),
-                Some(calculate_scheduled_timestamp(initial_delay_seconds as i64)),
-            )
-            .await
+        if let Err(e) = super::schedule_initial_status_check(
+            self.job_producer.as_ref(),
+            &transaction,
+            &self.network,
+        )
+        .await
         {
             // Status queue failed - mark transaction as failed to prevent orphaned tx
             error!(
