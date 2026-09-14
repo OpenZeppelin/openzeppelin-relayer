@@ -481,6 +481,25 @@ mod tests {
             assert_eq!(updated_metadata.total_failures, 20);
         }
 
+        /// An RPC or repository error must stay an ordinary retry, never `NotYetFinal`,
+        /// so it keeps the failure backoff instead of the configured interval.
+        #[tokio::test]
+        async fn test_transient_failure_remains_ordinary_retry() {
+            let tx_repo = MockTransactionRepository::new();
+            let result = handle_result(
+                Err(eyre::eyre!("rpc unavailable")),
+                &tx_repo,
+                "tx-1",
+                None,
+                true,
+            )
+            .await;
+
+            assert!(
+                matches!(result, Err(HandlerError::Retry(message)) if message == "rpc unavailable")
+            );
+        }
+
         /// Tests that final states are correctly identified for cleanup
         #[test]
         fn test_final_state_triggers_cleanup() {
