@@ -18,7 +18,7 @@ use super::EvmRelayerTransaction;
 use super::{
     ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
     has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    too_many_noop_attempts, too_many_rollup_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
@@ -383,7 +383,7 @@ where
             ))
         })?;
 
-        if network.is_rollup() && too_many_attempts(tx) {
+        if network.is_rollup() && too_many_rollup_attempts(tx) {
             let reason =
                 "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
             debug!(
@@ -1380,7 +1380,10 @@ where
                 .partial_update(tx.id.clone(), update)
                 .await?;
 
-            self.send_transaction_submit_job(&updated_tx).await?;
+            // Resubmit, not submit: the NOOP rewrote the logical fields, but the
+            // stored raw/signature still hold the original payload. The resubmit
+            // path re-prices and re-signs, so the NOOP is what gets broadcast.
+            self.send_transaction_resubmit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
                 error!(
@@ -1407,6 +1410,22 @@ where
                     .await;
             }
 
+            // Arbitrum head gate: the sequencer holds a nonce-above-head tx ~1s and
+            // then rejects it, so a resubmit of anything but the head always fails.
+            // Only the tx at the on-chain nonce is broadcast. Successors are delivered
+            // by the broadcast-success chain link, or by this gate once they become
+            // the head.
+            if self.is_behind_arbitrum_head(&tx).await {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    "stuck Sent tx is queued behind the chain head on Arbitrum; skipping resubmit"
+                );
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
+                    .await;
+            }
+
             warn!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
@@ -1420,6 +1439,47 @@ where
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
             .await
+    }
+
+    /// Arbitrum only: returns `true` when the tx nonce is above the on-chain account
+    /// nonce (queued behind other txs, guaranteed rejection if broadcast). Non-Arbitrum
+    /// networks and lookup failures return `false` so resubmit behavior is preserved.
+    async fn is_behind_arbitrum_head(&self, tx: &TransactionRepoModel) -> bool {
+        let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
+            return false;
+        };
+        let Some(tx_nonce) = evm_data.nonce else {
+            return false;
+        };
+
+        match self.get_evm_network(evm_data.chain_id).await {
+            Ok(network) if network.is_arbitrum() => {}
+            Ok(_) => return false,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "head gate: failed to load network; allowing resubmit"
+                );
+                return false;
+            }
+        }
+
+        match self
+            .provider()
+            .get_transaction_count(&self.relayer().address)
+            .await
+        {
+            Ok(chain_nonce) => tx_nonce > chain_nonce,
+            Err(e) => {
+                debug!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "head gate: failed to fetch on-chain nonce; allowing resubmit"
+                );
+                false
+            }
+        }
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
@@ -1713,6 +1773,35 @@ mod tests {
         NetworkRepoModel {
             id: "evm:arbitrum".to_string(),
             name: "arbitrum".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(evm_config),
+        }
+    }
+
+    /// Creates a test NetworkRepoModel for chain_id 1 with Arbitrum-based rollup tags,
+    /// so `is_arbitrum()` and `is_rollup()` both return true.
+    pub fn create_test_arbitrum_network_model() -> NetworkRepoModel {
+        let evm_config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "arbitrum-one".to_string(),
+                from: None,
+                rpc_urls: Some(vec![RpcConfig::new(
+                    "https://arb-rpc.example.com".to_string(),
+                )]),
+                explorer_urls: Some(vec!["https://arb-explorer.example.com".to_string()]),
+                average_blocktime_ms: Some(250),
+                is_testnet: Some(false),
+                tags: Some(vec!["rollup".to_string(), "arbitrum-based".to_string()]),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(1),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+        };
+        NetworkRepoModel {
+            id: "evm:arbitrum-one".to_string(),
+            name: "arbitrum-one".to_string(),
             network_type: NetworkType::Evm,
             config: NetworkConfigData::Evm(evm_config),
         }
@@ -2382,6 +2471,98 @@ mod tests {
             );
         }
 
+        /// Rollup give-up valve: with attempts persisted pre-broadcast, a rollup tx
+        /// is NOOP-replaced after ROLLUP_MAX_DELIVERY_ATTEMPTS (10) recorded hashes —
+        /// long before the generic 50-attempt cap.
+        #[tokio::test]
+        async fn test_rollup_noop_fires_at_rollup_delivery_threshold() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            // 11 recorded delivery attempts (> 10) on a never-mined transaction.
+            tx.hashes = vec!["0xHash1".to_string(); 11];
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
+            assert!(
+                res,
+                "Rollup transaction with 11 delivery attempts should be replaced with NOOP."
+            );
+            assert!(
+                reason.unwrap().contains("too many attempts"),
+                "Reason should mention too many attempts"
+            );
+        }
+
+        /// At exactly the threshold (10 hashes) the rollup NOOP does not fire yet.
+        #[tokio::test]
+        async fn test_rollup_noop_does_not_fire_at_threshold_boundary() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.hashes = vec!["0xHash1".to_string(); 10];
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            // Falls through to the gas-limit check.
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
+            assert!(!res, "10 attempts is at, not above, the rollup threshold.");
+            assert!(reason.is_none());
+        }
+
+        /// Non-rollup networks keep the generic 50-attempt cap: 11 hashes must not
+        /// trigger a NOOP on mainnet.
+        #[tokio::test]
+        async fn test_non_rollup_unaffected_by_rollup_delivery_threshold() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.hashes = vec!["0xHash1".to_string(); 11];
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
+            assert!(
+                !res,
+                "Non-rollup transaction with 11 attempts must not be NOOP-replaced."
+            );
+            assert!(reason.is_none());
+        }
+
         #[tokio::test]
         async fn test_pending_state_timeout_triggers_noop() {
             let mut mocks = default_test_mocks();
@@ -2539,6 +2720,66 @@ mod tests {
     // Tests for `handle_sent_state`
     mod handle_sent_state_tests {
         use super::*;
+
+        /// A Sent tx over the rollup attempt threshold is NOOP-replaced AND the
+        /// replacement goes out as a RESUBMIT job: the stored raw/signature still
+        /// hold the original payload, so only the re-signing resubmit path
+        /// actually broadcasts the NOOP.
+        #[tokio::test]
+        async fn sent_state_noop_enqueues_resubmit_job() {
+            use crate::jobs::TransactionCommand;
+
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.hashes = vec!["0xHash1".to_string(); 11];
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+
+            // should_noop + prepare_noop_update_request both look the network up.
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            // make_noop estimates gas on Arbitrum.
+            mocks
+                .provider
+                .expect_estimate_gas()
+                .returning(|_| Box::pin(async { Ok(50_000u64) }));
+
+            // The persisted update must carry the NOOP'd network_data.
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .withf(|_, update| {
+                    update.network_data.as_ref().is_some_and(|data| {
+                        data.get_evm_transaction_data().is_ok_and(|d| {
+                            d.value == U256::ZERO && d.to.as_deref() == Some(&d.from)
+                        })
+                    })
+                })
+                .returning(move |_, update| {
+                    let mut updated_tx = tx_clone.clone();
+                    updated_tx.network_data = update.network_data.clone().unwrap();
+                    updated_tx.noop_count = update.noop_count;
+                    Ok(updated_tx)
+                });
+
+            // The job must be a RESUBMIT (re-price + re-sign), not a plain submit.
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .times(1)
+                .withf(|job, _| matches!(job.command, TransactionCommand::Resubmit))
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx).await.unwrap();
+            assert!(result.noop_count.unwrap_or(0) > 0, "NOOP must be recorded");
+        }
 
         #[tokio::test]
         async fn test_sent_state_recent_no_resend() {
@@ -2818,6 +3059,123 @@ mod tests {
             let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
 
             assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// Arbitrum head gate: a stale Sent tx whose nonce is above the on-chain
+        /// nonce gets NO resubmit job — broadcasting it is a guaranteed rejection.
+        #[tokio::test]
+        async fn arbitrum_sent_state_behind_head_skips_resubmit() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "arb-head-gate-behind-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(7),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // On-chain nonce is 5: the tx at nonce 7 is queued behind others.
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(5) }));
+
+            // Slots 5 and 6 are actively occupied — no gap, so only the head gate
+            // stands between this tx and a resubmit job.
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .returning(|_, from, to| {
+                    Ok((from..to)
+                        .map(|n| (n, Some(TransactionStatus::Sent)))
+                        .collect())
+                });
+
+            // No resubmit job may be queued for a tx behind the head.
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+        }
+
+        /// Arbitrum head gate: the stale Sent tx AT the on-chain nonce (the head)
+        /// does get its resubmit job — it is the only deliverable transaction.
+        #[tokio::test]
+        async fn arbitrum_sent_state_at_head_proceeds_to_resubmit() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Arc as StdArc;
+
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = "arb-head-gate-at-head-relayer".to_string();
+            tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // On-chain nonce equals the tx nonce — this tx is the head.
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(5) }));
+
+            let submit_calls = StdArc::new(AtomicUsize::new(0));
+            let submit_calls_clone = submit_calls.clone();
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(move |_, _| {
+                    submit_calls_clone.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(()) })
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_sent_state(tx.clone()).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+            assert_eq!(
+                submit_calls.load(Ordering::SeqCst),
+                1,
+                "the head transaction must get its resubmit job"
+            );
         }
 
         /// A failed enqueue must not hold the debounce window: after `clear`, the
