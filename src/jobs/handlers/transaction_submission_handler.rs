@@ -15,7 +15,7 @@ use crate::{
         WORKER_TRANSACTION_CANCEL_RETRIES, WORKER_TRANSACTION_RESEND_RETRIES,
         WORKER_TRANSACTION_RESUBMIT_RETRIES, WORKER_TRANSACTION_SUBMIT_RETRIES,
     },
-    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
+    domain::{get_relayer_transaction, get_transaction_by_id_on_primary, Transaction},
     jobs::{handle_result, Job, TransactionCommand, TransactionSend},
     metrics::{observe_processing_time, STAGE_SUBMISSION_QUEUE_DWELL, STAGE_SUBMIT_DURATION},
     models::DefaultAppState,
@@ -83,7 +83,8 @@ async fn handle_request(
     let relayer_transaction =
         get_relayer_transaction(status_request.relayer_id.clone(), state).await?;
 
-    let transaction = get_transaction_by_id(status_request.transaction_id, state).await?;
+    let transaction =
+        get_transaction_by_id_on_primary(status_request.transaction_id, state).await?;
 
     // Capture transaction info for completion log
     let tx_id = transaction.id.clone();

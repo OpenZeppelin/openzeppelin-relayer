@@ -10,7 +10,9 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     constants::{get_max_consecutive_status_failures, get_max_total_status_failures},
-    domain::{get_relayer_transaction, get_transaction_by_id, is_final_state, Transaction},
+    domain::{
+        get_relayer_transaction, get_transaction_by_id_on_primary, is_final_state, Transaction,
+    },
     jobs::{Job, StatusCheckContext, TransactionStatusCheck},
     models::{
         ApiError, DefaultAppState, TransactionError, TransactionMetadata, TransactionRepoModel,
@@ -205,7 +207,7 @@ async fn handle_request(
     );
 
     // Fetch transaction - if this fails, we can't read counters yet
-    let transaction = match get_transaction_by_id(tx_id.clone(), state).await {
+    let transaction = match get_transaction_by_id_on_primary(tx_id.clone(), state).await {
         Ok(tx) => tx,
         Err(ApiError::NotFound(msg)) => {
             // Transaction not found - permanent failure, don't retry

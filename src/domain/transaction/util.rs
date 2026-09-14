@@ -63,6 +63,42 @@ where
         .map_err(|e| e.into())
 }
 
+/// Retrieves a transaction by its ID from the primary data source.
+///
+/// Job handlers (prepare/submit/status) must use this instead of
+/// [`get_transaction_by_id`]: they act on the record and need
+/// read-your-writes consistency, which the replica-backed read
+/// cannot guarantee when `REDIS_READER_URL` is configured.
+#[instrument(
+    level = "debug",
+    skip(state),
+    fields(
+        request_id = ?crate::observability::request_id::get_request_id(),
+        tx_id = %transaction_id,
+    )
+)]
+pub async fn get_transaction_by_id_on_primary<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
+    transaction_id: String,
+    state: &ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    J: JobProducerTrait + Send + Sync + 'static,
+    RR: RelayerRepository + Repository<RelayerRepoModel, String> + Send + Sync + 'static,
+    TR: TransactionRepository + Repository<TransactionRepoModel, String> + Send + Sync + 'static,
+    NR: NetworkRepository + Repository<NetworkRepoModel, String> + Send + Sync + 'static,
+    NFR: Repository<NotificationRepoModel, String> + Send + Sync + 'static,
+    SR: Repository<SignerRepoModel, String> + Send + Sync + 'static,
+    TCR: TransactionCounterTrait + Send + Sync + 'static,
+    PR: PluginRepositoryTrait + Send + Sync + 'static,
+    AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
+{
+    state
+        .transaction_repository
+        .get_by_id_on_primary(transaction_id)
+        .await
+        .map_err(|e| e.into())
+}
+
 /// Creates a relayer network transaction instance based on the relayer ID.
 ///
 /// # Arguments
