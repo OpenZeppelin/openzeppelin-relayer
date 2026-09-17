@@ -411,9 +411,12 @@ DISTRIBUTED_MODE=true
 
 Redis queue workers include a unique process identifier in their consumer IDs.
 This allows Redis to distinguish overlapping replicas during rolling deployments
-and return jobs owned by a stopped replica to the queue after the orphan timeout.
-Because recovery provides at-least-once delivery, deployments should still allow
-the relayer time to handle its shutdown signal and drain in-flight work.
+and prevents a replacement replica from keeping a stopped replica's consumer
+heartbeat alive. Apalis also re-enqueues existing in-flight jobs whenever any
+replica starts, including jobs that healthy replicas may still be processing.
+Handlers must therefore tolerate concurrent duplicate execution. Deployments
+should still allow the relayer time to handle its shutdown signal and drain
+in-flight work.
 
 For single-instance local development, keep:
 
