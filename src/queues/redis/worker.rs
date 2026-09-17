@@ -41,9 +41,10 @@ pub use tower::util::rng::HasherRng;
 
 use apalis_cron::CronStream;
 use eyre::Result;
-use std::{str::FromStr, time::Duration};
+use std::{str::FromStr, sync::LazyLock, time::Duration};
 use tokio::signal::unix::SignalKind;
 use tracing::{debug, error, info};
+use uuid::Uuid;
 
 use crate::metrics::observe_queue_pickup_latency;
 
@@ -317,6 +318,24 @@ const TRANSACTION_CLEANUP: &str = "transaction_cleanup";
 const RELAYER_HEALTH_CHECK: &str = "relayer_health_check";
 const SYSTEM_CLEANUP: &str = "system_cleanup";
 
+/// Distinguishes this process from overlapping replicas of the relayer.
+///
+/// Apalis uses the worker ID as the Redis consumer identity and as part of the
+/// in-flight job key. Reusing an ID lets a replacement process refresh the same
+/// consumer heartbeat, so abandoned jobs may never become eligible for periodic
+/// orphan recovery.
+static WORKER_INSTANCE_ID: LazyLock<Uuid> = LazyLock::new(Uuid::new_v4);
+
+/// Builds a role-prefixed worker name for a specific process instance.
+fn worker_name_for_instance(role: &str, instance_id: &Uuid) -> String {
+    format!("{role}-{instance_id}")
+}
+
+/// Builds a worker name scoped to the current process instance.
+fn worker_id(role: &str) -> String {
+    worker_name_for_instance(role, &WORKER_INSTANCE_ID)
+}
+
 /// Creates an exponential backoff with configurable parameters
 ///
 /// # Arguments
@@ -373,7 +392,7 @@ where
         .cloned()
         .ok_or_else(|| eyre::eyre!("Redis queue is not available for active backend"))?;
 
-    let transaction_request_queue_worker = WorkerBuilder::new(TRANSACTION_REQUEST)
+    let transaction_request_queue_worker = WorkerBuilder::new(worker_id(TRANSACTION_REQUEST))
         .layer(ErrorHandlingLayer::new())
         .retry(
             RetryPolicy::retries(QueueType::TransactionRequest.max_retries())
@@ -389,7 +408,7 @@ where
         .backend(queue.transaction_request_queue.clone())
         .build_fn(apalis_transaction_request_handler);
 
-    let transaction_submission_queue_worker = WorkerBuilder::new(TRANSACTION_SENDER)
+    let transaction_submission_queue_worker = WorkerBuilder::new(worker_id(TRANSACTION_SENDER))
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -407,7 +426,7 @@ where
 
     // Generic status checker
     // Uses medium settings that work reasonably for most chains
-    let transaction_status_queue_worker = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER)
+    let transaction_status_queue_worker = WorkerBuilder::new(worker_id(TRANSACTION_STATUS_CHECKER))
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -425,26 +444,27 @@ where
 
     // EVM status checker - slower retries to avoid premature resubmission
     // EVM has longer block times (~12s) and needs time for resubmission logic
-    let transaction_status_queue_worker_evm = WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_EVM)
-        .layer(ErrorHandlingLayer::new())
-        .enable_tracing()
-        .catch_panic()
-        .retry(
-            RetryPolicy::retries(QueueType::StatusCheck.max_retries())
-                .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
-        )
-        .concurrency(ServerConfig::get_worker_concurrency(
-            QueueType::StatusCheckEvm.concurrency_env_key(),
-            QueueType::StatusCheckEvm.default_concurrency(),
-        ))
-        .data(app_state.clone())
-        .backend(queue.transaction_status_queue_evm.clone())
-        .build_fn(apalis_transaction_status_evm_handler);
+    let transaction_status_queue_worker_evm =
+        WorkerBuilder::new(worker_id(TRANSACTION_STATUS_CHECKER_EVM))
+            .layer(ErrorHandlingLayer::new())
+            .enable_tracing()
+            .catch_panic()
+            .retry(
+                RetryPolicy::retries(QueueType::StatusCheck.max_retries())
+                    .with_backoff(create_backoff_from_config(STATUS_EVM_BACKOFF)?.make_backoff()),
+            )
+            .concurrency(ServerConfig::get_worker_concurrency(
+                QueueType::StatusCheckEvm.concurrency_env_key(),
+                QueueType::StatusCheckEvm.default_concurrency(),
+            ))
+            .data(app_state.clone())
+            .backend(queue.transaction_status_queue_evm.clone())
+            .build_fn(apalis_transaction_status_evm_handler);
 
     // Stellar status checker - fast retries for fast finality
     // Stellar has sub-second finality, needs more frequent status checks
     let transaction_status_queue_worker_stellar =
-        WorkerBuilder::new(TRANSACTION_STATUS_CHECKER_STELLAR)
+        WorkerBuilder::new(worker_id(TRANSACTION_STATUS_CHECKER_STELLAR))
             .layer(ErrorHandlingLayer::new())
             .enable_tracing()
             .catch_panic()
@@ -461,7 +481,7 @@ where
             .backend(queue.transaction_status_queue_stellar.clone())
             .build_fn(apalis_transaction_status_stellar_handler);
 
-    let notification_queue_worker = WorkerBuilder::new(NOTIFICATION_SENDER)
+    let notification_queue_worker = WorkerBuilder::new(worker_id(NOTIFICATION_SENDER))
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -477,7 +497,7 @@ where
         .backend(queue.notification_queue.clone())
         .build_fn(apalis_notification_handler);
 
-    let token_swap_request_queue_worker = WorkerBuilder::new(TOKEN_SWAP_REQUEST)
+    let token_swap_request_queue_worker = WorkerBuilder::new(worker_id(TOKEN_SWAP_REQUEST))
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -524,7 +544,7 @@ where
         )?))
         .build_fn(apalis_system_cleanup_handler);
 
-    let relayer_health_check_worker = WorkerBuilder::new(RELAYER_HEALTH_CHECK)
+    let relayer_health_check_worker = WorkerBuilder::new(worker_id(RELAYER_HEALTH_CHECK))
         .layer(ErrorHandlingLayer::new())
         .enable_tracing()
         .catch_panic()
@@ -997,6 +1017,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_worker_names_are_unique_across_process_instances() {
+        let first_instance = Uuid::new_v4();
+        let second_instance = Uuid::new_v4();
+
+        let first = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &first_instance);
+        let second = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &second_instance);
+
+        assert_ne!(first, second);
+        assert!(first.starts_with(TRANSACTION_STATUS_CHECKER_EVM));
+        assert!(second.starts_with(TRANSACTION_STATUS_CHECKER_EVM));
+    }
+
+    #[test]
+    fn test_worker_names_share_stable_process_instance_suffix() {
+        let instance_id = Uuid::new_v4();
+        let request = worker_name_for_instance(TRANSACTION_REQUEST, &instance_id);
+        let status = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &instance_id);
+        let suffix = instance_id.to_string();
+
+        assert!(request.ends_with(&suffix));
+        assert!(status.ends_with(&suffix));
+        assert_ne!(request, status);
+    }
+
+    #[test]
+    fn test_worker_id_is_stable_within_process() {
+        let first = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
+        let second = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
+
+        assert_eq!(first, second);
     }
 
     #[test]
