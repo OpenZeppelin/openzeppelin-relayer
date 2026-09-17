@@ -321,14 +321,17 @@ const SYSTEM_CLEANUP: &str = "system_cleanup";
 /// Distinguishes this process from overlapping replicas of the relayer.
 ///
 /// Apalis uses the worker ID as the Redis consumer identity and as part of the
-/// in-flight job key. Reusing an ID across processes prevents orphan recovery
-/// from telling which process owned an abandoned job during rolling deploys.
+/// in-flight job key. Reusing an ID lets a replacement process refresh the same
+/// consumer heartbeat, so abandoned jobs may never become eligible for periodic
+/// orphan recovery.
 static WORKER_INSTANCE_ID: LazyLock<Uuid> = LazyLock::new(Uuid::new_v4);
 
+/// Builds a role-prefixed worker name for a specific process instance.
 fn worker_name_for_instance(role: &str, instance_id: &Uuid) -> String {
     format!("{role}-{instance_id}")
 }
 
+/// Builds a worker name scoped to the current process instance.
 fn worker_id(role: &str) -> String {
     worker_name_for_instance(role, &WORKER_INSTANCE_ID)
 }
@@ -1042,13 +1045,11 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_id_uses_process_instance_id() {
-        let name = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
+    fn test_worker_id_is_stable_within_process() {
+        let first = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
+        let second = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
 
-        assert_eq!(
-            name,
-            worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &WORKER_INSTANCE_ID)
-        );
+        assert_eq!(first, second);
     }
 
     #[test]
