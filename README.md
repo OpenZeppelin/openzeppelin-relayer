@@ -409,6 +409,12 @@ Use distributed mode for multi-instance deployments so scheduled workers use Red
 DISTRIBUTED_MODE=true
 ```
 
+Redis queue workers include a unique process identifier in their consumer IDs.
+This allows Redis to distinguish overlapping replicas during rolling deployments
+and return jobs owned by a stopped replica to the queue after the orphan timeout.
+Because recovery provides at-least-once delivery, deployments should still allow
+the relayer time to handle its shutdown signal and drain in-flight work.
+
 For single-instance local development, keep:
 
 ```bash
