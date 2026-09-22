@@ -512,7 +512,8 @@ fn doc_get_relayer_balance() {}
         ("bearer_auth" = [])
     ),
     params(
-        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
+        ("Idempotency-Key" = Option<String>, Header, description = "Optional client-generated unique key (max 255 chars) to make the request idempotent. Repeating a request with the same key returns the original transaction. Keys expire after IDEMPOTENCY_KEY_TTL_SECONDS (default 24h).")
     ),
     request_body = NetworkTransactionRequest,
     responses(
@@ -544,6 +545,26 @@ fn doc_get_relayer_balance() {}
             example = json!({
                 "success": false,
                 "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 409,
+            description = "Conflict",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "A request with this Idempotency-Key is already in progress",
+                "data": null
+            })
+        ),
+        (
+            status = 422,
+            description = "Unprocessable Entity",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "message": "Idempotency-Key reused with a different request payload",
                 "data": null
             })
         ),

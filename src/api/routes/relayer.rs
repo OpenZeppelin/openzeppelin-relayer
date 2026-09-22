@@ -11,7 +11,7 @@ use crate::{
         CreateRelayerRequest, DefaultAppState, PaginationQuery, TransactionListQuery,
     },
 };
-use actix_web::{delete, get, patch, post, put, web, Responder};
+use actix_web::{delete, get, patch, post, put, web, HttpRequest, Responder};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -83,10 +83,29 @@ async fn get_relayer_balance(
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_transaction(
     relayer_id: web::Path<String>,
+    http_req: HttpRequest,
     req: web::Json<serde_json::Value>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+    let idempotency_key = match http_req.headers().get("Idempotency-Key") {
+        Some(value) => match value.to_str() {
+            Ok(value) => Some(value.to_string()),
+            Err(_) => {
+                return Err(crate::models::ApiError::BadRequest(
+                    "Invalid Idempotency-Key header".into(),
+                ))
+            }
+        },
+        None => None,
+    };
+
+    relayer::send_transaction(
+        relayer_id.into_inner(),
+        req.into_inner(),
+        idempotency_key,
+        data,
+    )
+    .await
 }
 
 #[derive(Deserialize, ToSchema)]

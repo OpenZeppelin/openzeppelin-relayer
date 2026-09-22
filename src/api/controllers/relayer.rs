@@ -10,6 +10,7 @@
 //! - Signing messages
 //! - JSON-RPC proxy
 use crate::{
+    config::ServerConfig,
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id,
@@ -38,6 +39,40 @@ use crate::{
 };
 use actix_web::{web, HttpResponse};
 use eyre::Result;
+use sha2::{Digest, Sha256};
+use tracing::{info, warn};
+
+/// Maximum accepted length of an idempotency key after trimming.
+const IDEMPOTENCY_KEY_MAX_LEN: usize = 255;
+/// Error message for an invalid `Idempotency-Key` header.
+const INVALID_IDEMPOTENCY_KEY_MESSAGE: &str = "Invalid Idempotency-Key header";
+
+/// Trims an idempotency key and checks its length.
+///
+/// Returns the normalized key, or a `Bad Request` error when the key is empty
+/// or longer than [`IDEMPOTENCY_KEY_MAX_LEN`] characters.
+fn normalize_idempotency_key(key: &str) -> Result<String, ApiError> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > IDEMPOTENCY_KEY_MAX_LEN {
+        return Err(ApiError::BadRequest(
+            INVALID_IDEMPOTENCY_KEY_MESSAGE.to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Computes the lowercase hex SHA-256 fingerprint of a request body.
+///
+/// `serde_json` stores map keys in a `BTreeMap` (the `preserve_order` feature
+/// is off), so `to_string` already produces canonical JSON with keys sorted
+/// recursively.
+fn transaction_request_fingerprint(request: &serde_json::Value) -> Result<String, ApiError> {
+    let canonical = serde_json::to_string(request)
+        .map_err(|e| ApiError::InternalError(format!("Failed to fingerprint request: {e}")))?;
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.as_bytes());
+    Ok(hex::encode(hasher.finalize()))
+}
 
 /// Lists all relayers with pagination support.
 ///
@@ -413,6 +448,7 @@ where
 ///
 /// * `relayer_id` - The ID of the relayer to send the transaction through.
 /// * `request` - The transaction request data.
+/// * `idempotency_key` - Optional `Idempotency-Key` header value.
 /// * `state` - The application state containing the relayer repository.
 ///
 /// # Returns
@@ -421,6 +457,7 @@ where
 pub async fn send_transaction(
     relayer_id: String,
     request: serde_json::Value,
+    idempotency_key: Option<String>,
     state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
@@ -433,7 +470,96 @@ pub async fn send_transaction(
 
     tx_request.validate(&relayer_repo_model)?;
 
-    let transaction = relayer.process_transaction_request(tx_request).await?;
+    // The key is read only after the relayer, request, and validation checks pass,
+    // so an invalid request never consumes the key.
+    let Some(raw_key) = idempotency_key else {
+        let transaction = relayer.process_transaction_request(tx_request).await?;
+        let transaction_response: TransactionResponse = transaction.into();
+        return Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)));
+    };
+
+    let key = normalize_idempotency_key(&raw_key)?;
+    let fingerprint = transaction_request_fingerprint(&request)?;
+    let ttl_seconds = ServerConfig::get_idempotency_key_ttl_seconds();
+
+    let reserved = state
+        .transaction_repository
+        .reserve_idempotency_key(&relayer_repo_model.id, &key, &fingerprint, ttl_seconds)
+        .await?;
+
+    if !reserved {
+        let record = state
+            .transaction_repository
+            .get_idempotency_record(&relayer_repo_model.id, &key)
+            .await?;
+
+        match record {
+            Some(record) if record.fingerprint != fingerprint => {
+                return Err(ApiError::UnprocessableEntity(
+                    "Idempotency-Key reused with a different request payload".to_string(),
+                ));
+            }
+            Some(record) => match record.tx_id {
+                Some(tx_id) => {
+                    info!(
+                        relayer_id = %relayer_repo_model.id,
+                        tx_id = %tx_id,
+                        "serving idempotent transaction replay"
+                    );
+                    let transaction = get_tx_by_id(tx_id, &state).await?;
+                    let transaction_response: TransactionResponse = transaction.into();
+                    return Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)));
+                }
+                None => {
+                    return Err(ApiError::Conflict(
+                        "A request with this Idempotency-Key is already in progress".to_string(),
+                    ));
+                }
+            },
+            // The key expired between the failed reserve and this read; treat it
+            // as still in progress and let the client retry.
+            None => {
+                return Err(ApiError::Conflict(
+                    "A request with this Idempotency-Key is already in progress".to_string(),
+                ));
+            }
+        }
+    }
+
+    // Key reserved: run the normal create flow.
+    let transaction = match relayer.process_transaction_request(tx_request).await {
+        Ok(transaction) => transaction,
+        Err(e) => {
+            // Release the key so the client can retry with the same key.
+            if let Err(release_error) = state
+                .transaction_repository
+                .release_idempotency_key(&relayer_repo_model.id, &key)
+                .await
+            {
+                warn!(
+                    relayer_id = %relayer_repo_model.id,
+                    error = %release_error,
+                    "failed to release idempotency key after create failure"
+                );
+            }
+            return Err(e.into());
+        }
+    };
+
+    // Mark the key complete. A failure here must not fail the request: the
+    // transaction already exists, so still return 200.
+    if let Err(e) = state
+        .transaction_repository
+        .complete_idempotency_key(&relayer_repo_model.id, &key, &transaction.id, ttl_seconds)
+        .await
+    {
+        warn!(
+            relayer_id = %relayer_repo_model.id,
+            tx_id = %transaction.id,
+            error = %e,
+            "failed to mark idempotency key complete"
+        );
+    }
 
     let transaction_response: TransactionResponse = transaction.into();
 
@@ -2560,5 +2686,58 @@ mod tests {
         } else {
             panic!("Expected ForbiddenError for paused relayer");
         }
+    }
+
+    #[test]
+    fn test_normalize_idempotency_key_valid() {
+        assert_eq!(normalize_idempotency_key("  abc-123  ").unwrap(), "abc-123");
+        assert_eq!(normalize_idempotency_key("k").unwrap(), "k");
+        assert_eq!(
+            normalize_idempotency_key(&"a".repeat(255)).unwrap().len(),
+            255
+        );
+    }
+
+    #[test]
+    fn test_normalize_idempotency_key_empty() {
+        assert!(matches!(
+            normalize_idempotency_key(""),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            normalize_idempotency_key("   "),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_normalize_idempotency_key_too_long() {
+        let long_key = "a".repeat(256);
+        assert!(matches!(
+            normalize_idempotency_key(&long_key),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn test_fingerprint_is_stable_across_key_ordering() {
+        let a: serde_json::Value = serde_json::json!({"a": 1, "b": 2});
+        let b: serde_json::Value = serde_json::json!({"b": 2, "a": 1});
+
+        assert_eq!(
+            transaction_request_fingerprint(&a).unwrap(),
+            transaction_request_fingerprint(&b).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_differs_for_different_bodies() {
+        let a: serde_json::Value = serde_json::json!({"a": 1});
+        let b: serde_json::Value = serde_json::json!({"a": 2});
+
+        assert_ne!(
+            transaction_request_fingerprint(&a).unwrap(),
+            transaction_request_fingerprint(&b).unwrap()
+        );
     }
 }
