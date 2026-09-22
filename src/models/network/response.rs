@@ -10,6 +10,18 @@ use crate::models::{
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Effective EVM transaction status-check settings.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct StatusCheckResponse {
+    /// Delay before the first transaction status check, in seconds.
+    #[schema(minimum = 1, maximum = 100)]
+    pub initial_delay_seconds: u64,
+    /// Delay between healthy checks while the transaction is not final, in seconds.
+    /// The retry backoff starts here and caps at 1.5x this value.
+    #[schema(minimum = 5, maximum = 100)]
+    pub retry_delay_seconds: u64,
+}
+
 /// Network response model for API endpoints.
 ///
 /// This flattens the internal NetworkRepoModel structure for API responses,
@@ -50,6 +62,12 @@ pub struct NetworkResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub required_confirmations: Option<u64>,
+    /// EVM-specific: Effective transaction status-check settings after inheritance
+    /// and defaults are applied. Always present for EVM networks so operators can
+    /// verify the timing in effect, even when nothing was configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub status_check: Option<StatusCheckResponse>,
     /// EVM-specific: Network features (e.g., "eip1559")
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
@@ -85,6 +103,7 @@ impl From<NetworkRepoModel> for NetworkResponse {
             tags: common.tags.clone(),
             chain_id: None,
             required_confirmations: None,
+            status_check: None,
             features: None,
             symbol: None,
             passphrase: None,
@@ -96,6 +115,10 @@ impl From<NetworkRepoModel> for NetworkResponse {
             NetworkConfigData::Evm(evm_config) => {
                 response.chain_id = evm_config.chain_id;
                 response.required_confirmations = evm_config.required_confirmations;
+                response.status_check = Some(StatusCheckResponse {
+                    initial_delay_seconds: evm_config.status_check_initial_delay_seconds(),
+                    retry_delay_seconds: evm_config.status_check_retry_delay_seconds(),
+                });
                 response.features = evm_config.features.clone();
                 response.symbol = evm_config.symbol.clone();
             }
@@ -115,6 +138,10 @@ impl From<NetworkRepoModel> for NetworkResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{
+        DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+        DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+    };
     use crate::models::RpcConfig;
 
     fn create_test_evm_network() -> NetworkRepoModel {
@@ -132,6 +159,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(12),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -148,6 +176,13 @@ mod tests {
         assert_eq!(response.network_type, NetworkType::Evm);
         assert_eq!(response.chain_id, Some(1));
         assert_eq!(response.required_confirmations, Some(12));
+        assert_eq!(
+            response.status_check,
+            Some(StatusCheckResponse {
+                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                retry_delay_seconds: DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+            })
+        );
         assert_eq!(response.symbol, Some("ETH".to_string()));
         assert_eq!(response.features, Some(vec!["eip1559".to_string()]));
     }
@@ -162,5 +197,24 @@ mod tests {
         assert_eq!(response.average_blocktime_ms, Some(12000));
         assert_eq!(response.is_testnet, Some(false));
         assert!(response.tags.is_some());
+    }
+
+    #[test]
+    fn test_from_network_repo_model_exposes_configured_retry_delay() {
+        let mut model = create_test_evm_network();
+        if let NetworkConfigData::Evm(config) = &mut model.config {
+            config.status_check = Some(crate::config::StatusCheckConfig {
+                initial_delay_seconds: None,
+                retry_delay_seconds: Some(5),
+            });
+        }
+
+        assert_eq!(
+            NetworkResponse::from(model).status_check,
+            Some(StatusCheckResponse {
+                initial_delay_seconds: DEFAULT_EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
+                retry_delay_seconds: 5,
+            })
+        );
     }
 }

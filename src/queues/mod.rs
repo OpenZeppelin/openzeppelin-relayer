@@ -51,7 +51,10 @@ pub mod worker_types;
 pub use errors::QueueBackendError;
 pub use queue_type::QueueType;
 pub use redis::queue::Queue;
-pub use retry_config::{backoff_config_for_queue, retry_delay_secs, status_check_retry_delay_secs};
+pub use retry_config::{
+    backoff_config_for_queue, evm_status_check_backoff, retry_delay_secs,
+    status_check_retry_delay_secs,
+};
 pub use swap_filter::filter_relayers_for_swap;
 pub use worker_types::{HandlerError, QueueHealth, WorkerContext, WorkerHandle};
 

@@ -49,7 +49,7 @@ pub struct StatusCheckContext {
     /// Never resets - serves as safety net for flaky RPC connections.
     pub total_failures: u32,
 
-    /// Total number of retries (from Apalis attempt counter).
+    /// Total retry attempts reported by the active queue backend.
     /// Includes both successful and failed attempts.
     pub total_retries: u32,
 
@@ -65,8 +65,7 @@ pub struct StatusCheckContext {
     pub network_type: NetworkType,
 
     /// Optional metadata from the job that triggered this status check.
-    /// Used as a one-shot signal for special handling (e.g., nonce recovery hints).
-    /// Subsequent retries won't carry this metadata — they follow normal flow.
+    /// Queue retries preserve this metadata, so handlers may inspect it on every delivery.
     pub job_metadata: Option<HashMap<String, String>>,
 }
 
@@ -91,7 +90,7 @@ impl StatusCheckContext {
     ///
     /// * `consecutive_failures` - Current count of consecutive failures
     /// * `total_failures` - Total count of all failures
-    /// * `total_retries` - Total Apalis retry attempts (includes successes)
+    /// * `total_retries` - Retry attempts reported by the active queue backend
     /// * `max_consecutive_failures` - Network-specific consecutive max before force-finalization
     /// * `max_total_failures` - Network-specific total max (safety net)
     /// * `network_type` - The blockchain network type
