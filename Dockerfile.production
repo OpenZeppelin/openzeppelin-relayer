@@ -1,7 +1,7 @@
 # Base image
 # Rustc v1.93.0 minimum (MSRV, see rust-version in Cargo.toml)
 # The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.93.0
-FROM cgr.dev/chainguard/rust:latest-dev@sha256:63fe36977879f68bb449c681f1e1e3a60d7368ec2b7a67f21fae3737fe7cc3a4 AS base
+FROM cgr.dev/chainguard/rust:latest-dev@sha256:a01350df21e1e3ec435a13c4ffc44f0dcc12215fce88fe1667e90202914b4fa3 AS base
 
 USER root
 RUN apk update && apk --no-cache add \
@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # Setting up build directories
-FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
+FROM cgr.dev/chainguard/wolfi-base@sha256:65e1acb87a2bf356b92c5f70f3980f03b4bb51dfd483c834e01557525f15c1d9
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
