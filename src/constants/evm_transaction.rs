@@ -38,6 +38,27 @@ pub const GAS_PRICE_CACHE_REFRESH_TIMEOUT_SECS: u64 = 300;
 /// Number of historical blocks to fetch for fee history analysis
 pub const HISTORICAL_BLOCKS: u64 = 4;
 
+/// TTL for the volatile OP-stack GasPriceOracle reads: `l1BaseFee`, `blobBaseFee` and `baseFee`.
+///
+/// `l1BaseFee` and `blobBaseFee` are rewritten by the L1-attributes deposit once per L1 block
+/// (~12s on Ethereum), and `baseFee` is the current L2 base fee. 10s keeps a cached entry at most
+/// about one L1 block behind the oracle.
+///
+/// The values feed `PriceParams::extra_fee`, which is not part of the signed transaction: it is
+/// folded into `total_cost` for the pre-submission balance check only. A slightly stale read can
+/// therefore make that estimate marginally wrong, but it cannot underbid execution gas or change
+/// what the chain charges for data availability (the protocol computes that at inclusion). That is
+/// why the TTL is held under one L1 block rather than pushed to minutes.
+pub const OPTIMISM_VOLATILE_FEE_CACHE_TTL_SECS: u64 = 10;
+
+/// TTL for the quasi-constant OP-stack GasPriceOracle reads: `decimals`, `baseFeeScalar` and
+/// `blobBaseFeeScalar`.
+///
+/// `decimals()` returns a hardcoded constant on the oracle and the two scalars are governance-set,
+/// changing a handful of times in a chain's life — so an hour still re-reads them orders of
+/// magnitude more often than they move.
+pub const OPTIMISM_SCALAR_FEE_CACHE_TTL_SECS: u64 = 3600;
+
 // EVM Status check and timeout constants
 
 /// Default initial delay before the first status check (in seconds).
