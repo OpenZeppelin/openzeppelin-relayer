@@ -72,6 +72,25 @@ pub(super) enum SubmissionErrorKind {
     Other(String),
 }
 
+/// Outcome of broadcasting a re-signed payload during resubmission.
+///
+/// Resubmission re-signs on every attempt, so every attempt produces a distinct
+/// hash. Whether that hash needs to be recorded depends on what the RPC call told
+/// us about the payload that was just put on the wire:
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ResubmitOutcome {
+    /// The new payload was broadcast successfully.
+    Broadcast,
+    /// The RPC confirmed the node already had this *exact* payload (AlreadyKnown /
+    /// ReplacementUnderpriced) - no new payload reached the network, so there is no
+    /// new hash to track.
+    SamePayloadKnown,
+    /// A newly-signed payload was put on the wire, but the RPC call reported an
+    /// error (NonceTooLow / NonceTooHigh). The payload may still be mined, so its
+    /// hash must be tracked even though the call "failed".
+    NewPayloadRejected,
+}
+
 #[allow(dead_code)]
 pub struct EvmRelayerTransaction<P, RR, NR, TR, J, S, TCR, PC>
 where
@@ -302,7 +321,18 @@ where
 
     /// Handles a "nonce too high" error by incrementing the retry counter and
     /// escalating to a nonce health job after the threshold.
-    pub(super) async fn handle_nonce_too_high(&self, tx: &TransactionRepoModel, context: &str) {
+    ///
+    /// `new_hash` is the hash of a payload that was signed and put on the wire
+    /// immediately before this error was received (resubmission re-signs on every
+    /// attempt). It must be recorded even though the RPC call errored, because the
+    /// payload may still be mined - this function returns early and is the only
+    /// place that persists anything for this attempt.
+    pub(super) async fn handle_nonce_too_high(
+        &self,
+        tx: &TransactionRepoModel,
+        new_hash: Option<String>,
+        context: &str,
+    ) {
         let retry_count = tx
             .metadata
             .as_ref()
@@ -311,13 +341,21 @@ where
 
         let new_count = retry_count + 1;
 
-        // Persist incremented counter + status_reason on tx metadata
+        let hashes = new_hash.map(|hash| {
+            let mut hashes = tx.hashes.clone();
+            hashes.push(hash);
+            hashes
+        });
+
+        // Persist incremented counter + status_reason (+ hash, if a new payload was
+        // broadcast) on tx metadata
         let update = TransactionUpdateRequest {
             metadata: Some(TransactionMetadata {
                 nonce_too_high_retries: new_count,
                 ..tx.metadata.clone().unwrap_or_default()
             }),
             status_reason: Some(format!("Nonce too high (attempt {new_count})")),
+            hashes,
             ..Default::default()
         };
         if let Err(update_err) = self
@@ -967,7 +1005,11 @@ where
                     // Could be transient (burst ordering) or persistent (counter drift).
                     // Track retries and escalate to nonce health job after threshold.
                     (_, SubmissionErrorKind::NonceTooHigh) => {
-                        self.handle_nonce_too_high(&tx, "during submission").await;
+                        // No new hash here: submit_transaction broadcasts the payload
+                        // prepare_transaction already signed and recorded - it doesn't
+                        // re-sign, so there's nothing new to track.
+                        self.handle_nonce_too_high(&tx, None, "during submission")
+                            .await;
                         // Return Ok to prevent Dead Queue — status checker handles resubmission
                         return Ok(tx);
                     }
@@ -1115,16 +1157,15 @@ where
         })?;
 
         // Send resubmitted transaction to blockchain - this is the critical operation
-        let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
-            Ok(_) => {
-                // Transaction resubmitted successfully with new pricing
-                false
-            }
+        let outcome = match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => ResubmitOutcome::Broadcast,
             Err(e) => {
                 let error_kind = Self::classify_submission_error(&e);
 
                 match &error_kind {
-                    // AlreadyKnown / ReplacementUnderpriced: existing behavior — keep original hash
+                    // AlreadyKnown / ReplacementUnderpriced: the node recognizes the exact
+                    // same payload already in its mempool - no new payload reached the
+                    // network under this hash, so keep the original hash.
                     SubmissionErrorKind::AlreadyKnown
                     | SubmissionErrorKind::ReplacementUnderpriced => {
                         warn!(
@@ -1133,11 +1174,12 @@ where
                             error_kind = ?error_kind,
                             "resubmission indicates transaction already in mempool/mined - keeping original hash"
                         );
-                        true
+                        ResubmitOutcome::SamePayloadKnown
                     }
-                    // NonceTooLow: nonce was consumed (possibly externally).
-                    // Schedule nonce recovery and treat as already submitted — the
-                    // status checker will determine the actual outcome.
+                    // NonceTooLow: nonce was consumed (possibly externally). A NEW payload
+                    // was just broadcast though (we re-sign on every attempt) and it may
+                    // still be mined, so its hash must be tracked. Schedule nonce recovery
+                    // — the status checker will determine the actual outcome.
                     SubmissionErrorKind::NonceTooLow => {
                         warn!(
                             tx_id = %tx.id,
@@ -1154,11 +1196,17 @@ where
                                 "failed to schedule nonce recovery status check during resubmission"
                             );
                         }
-                        true
+                        ResubmitOutcome::NewPayloadRejected
                     }
-                    // NonceTooHigh: same pattern as submit_transaction — track retries, escalate
+                    // NonceTooHigh: same pattern as submit_transaction — track retries,
+                    // escalate. Also a re-signed payload that must not be dropped.
                     SubmissionErrorKind::NonceTooHigh => {
-                        self.handle_nonce_too_high(&tx, "during resubmission").await;
+                        self.handle_nonce_too_high(
+                            &tx,
+                            final_evm_data.hash.clone(),
+                            "during resubmission",
+                        )
+                        .await;
                         // Return Ok — status checker handles resubmission
                         return Ok(tx);
                     }
@@ -1176,29 +1224,48 @@ where
             .as_ref()
             .and_then(|m| m.with_nonce_retries_reset());
 
-        // If transaction was already submitted, just update status without changing hash
-        let update = if was_already_submitted {
-            // Keep original hash and data - just ensure status is Submitted
-            TransactionUpdateRequest {
-                status: Some(TransactionStatus::Submitted),
-                metadata: metadata_reset,
-                ..Default::default()
+        let update = match outcome {
+            ResubmitOutcome::SamePayloadKnown => {
+                // Keep original hash and data - just ensure status is Submitted
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Submitted),
+                    metadata: metadata_reset,
+                    ..Default::default()
+                }
             }
-        } else {
-            // Transaction resubmitted successfully - update with new hash and pricing
-            let mut hashes = tx.hashes.clone();
-            if let Some(hash) = final_evm_data.hash.clone() {
-                hashes.push(hash);
-            }
+            ResubmitOutcome::NewPayloadRejected => {
+                // A newly-signed payload was put on the wire and may still be mined even
+                // though the RPC call errored. Record its hash so status reconciliation
+                // can find it later - but do NOT promote it to "current" network_data or
+                // pricing, since the node itself told us this attempt was rejected.
+                let mut hashes = tx.hashes.clone();
+                if let Some(hash) = final_evm_data.hash.clone() {
+                    hashes.push(hash);
+                }
 
-            TransactionUpdateRequest {
-                network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-                hashes: Some(hashes),
-                status: Some(TransactionStatus::Submitted),
-                priced_at: Some(Utc::now().to_rfc3339()),
-                sent_at: Some(Utc::now().to_rfc3339()),
-                metadata: metadata_reset,
-                ..Default::default()
+                TransactionUpdateRequest {
+                    hashes: Some(hashes),
+                    status: Some(TransactionStatus::Submitted),
+                    metadata: metadata_reset,
+                    ..Default::default()
+                }
+            }
+            ResubmitOutcome::Broadcast => {
+                // Transaction resubmitted successfully - update with new hash and pricing
+                let mut hashes = tx.hashes.clone();
+                if let Some(hash) = final_evm_data.hash.clone() {
+                    hashes.push(hash);
+                }
+
+                TransactionUpdateRequest {
+                    network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+                    hashes: Some(hashes),
+                    status: Some(TransactionStatus::Submitted),
+                    priced_at: Some(Utc::now().to_rfc3339()),
+                    sent_at: Some(Utc::now().to_rfc3339()),
+                    metadata: metadata_reset,
+                    ..Default::default()
+                }
             }
         };
 
@@ -3985,7 +4052,9 @@ mod tests {
         assert_eq!(returned_tx.status, TransactionStatus::Sent);
     }
 
-    /// Test resubmit_transaction with NonceTooLow schedules recovery and treats as already submitted
+    /// Test resubmit_transaction with NonceTooLow schedules recovery, keeps the
+    /// original hash "current", but still records the newly-signed (and rejected)
+    /// hash in history so it can be recovered if it turns out to have been mined.
     #[tokio::test]
     async fn test_resubmit_transaction_nonce_too_low_schedules_recovery() {
         let mut mock_transaction = MockTransactionRepository::new();
@@ -4076,7 +4145,11 @@ mod tests {
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        // Should update status without changing hash (was_already_submitted = true)
+        // Should update status WITHOUT promoting network_data/pricing (the node
+        // rejected this attempt), but MUST append the newly-signed hash so status
+        // reconciliation can still find it if it gets mined - this is the fix for
+        // the "resubmitted tx mined but marked Failed" bug: previously `hashes` was
+        // left unset here and the new hash was silently discarded.
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
@@ -4084,11 +4157,16 @@ mod tests {
             .withf(|_, update| {
                 update.status == Some(TransactionStatus::Submitted)
                     && update.network_data.is_none()
-                    && update.hashes.is_none()
+                    && update.hashes
+                        == Some(vec![
+                            "0xoriginal_hash".to_string(),
+                            "0xnew_hash".to_string(),
+                        ])
             })
             .returning(move |_, _| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = TransactionStatus::Submitted;
+                updated_tx.hashes.push("0xnew_hash".to_string());
                 Ok(updated_tx)
             });
 
@@ -4107,12 +4185,18 @@ mod tests {
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
-        // Hash should remain unchanged
+        // The "current" hash is unchanged - the node said this attempt was rejected
         if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
             assert_eq!(evm_data.hash, Some(original_hash));
         } else {
             panic!("Expected EVM network data");
         }
+        // But the rejected payload's hash is now tracked in history, so a later
+        // receipt lookup (e.g. reconcile_tx_nonce_state) can still find it.
+        assert_eq!(
+            updated_tx.hashes,
+            vec!["0xoriginal_hash".to_string(), "0xnew_hash".to_string()]
+        );
     }
 
     /// Test submit_transaction with NonceTooHigh increments the retry counter in metadata
@@ -4354,7 +4438,9 @@ mod tests {
                 })
             });
 
-        // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
+        // Should persist incremented counter (nonce_too_high_retries = 1) in metadata,
+        // AND record the newly-signed hash — it was broadcast before this error came
+        // back and may still be mined, even though NonceTooHigh returns early.
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
@@ -4365,6 +4451,11 @@ mod tests {
                     .as_ref()
                     .map(|m| m.nonce_too_high_retries == 1)
                     .unwrap_or(false)
+                    && update.hashes
+                        == Some(vec![
+                            "0xoriginal_hash".to_string(),
+                            "0xnew_hash".to_string(),
+                        ])
             })
             .returning(move |_, _| Ok(test_tx_clone.clone()));
 
