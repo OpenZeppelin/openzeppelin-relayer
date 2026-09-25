@@ -17,13 +17,13 @@ use crate::{
 #[cfg(test)]
 use async_trait::async_trait;
 use chrono::Utc;
-use soroban_rs::xdr::{
+use stellar_strkey::ed25519::PublicKey;
+use stellar_xdr::{
     AccountId, Asset, BytesM, Limits, Memo, MuxedAccount, Operation, OperationBody, PaymentOp,
     Preconditions, PublicKey as XdrPublicKey, SequenceNumber, Signature, SignatureHint,
     Transaction, TransactionEnvelope, TransactionExt, TransactionV0, TransactionV0Envelope,
     TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
-use stellar_strkey::ed25519::PublicKey;
 
 // Common test addresses
 pub const TEST_PK: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -130,7 +130,7 @@ pub fn create_v0_envelope(
         time_bounds: None,
         memo: Memo::None,
         operations: ops,
-        ext: soroban_rs::xdr::TransactionV0Ext::V0,
+        ext: stellar_xdr::TransactionV0Ext::V0,
     };
 
     TransactionEnvelope::TxV0(TransactionV0Envelope {

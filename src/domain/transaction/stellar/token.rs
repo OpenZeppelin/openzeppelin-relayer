@@ -6,12 +6,12 @@ use crate::domain::transaction::stellar::utils::{
 };
 use crate::models::{StellarTokenKind, StellarTokenMetadata};
 use crate::services::provider::StellarProviderTrait;
-use soroban_rs::xdr::{
+use std::str::FromStr;
+use stellar_xdr::{
     AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, ContractId, Hash,
     LedgerEntryData, LedgerKey, ScAddress, ScSymbol, ScVal, TrustLineEntry, TrustLineEntryExt,
     TrustLineEntryV1,
 };
-use std::str::FromStr;
 use tracing::{debug, trace, warn};
 
 // Constants for Stellar address and asset validation
@@ -177,11 +177,11 @@ where
         })
     };
 
-    let ledger_key = LedgerKey::Trustline(soroban_rs::xdr::LedgerKeyTrustLine {
+    let ledger_key = LedgerKey::Trustline(stellar_xdr::LedgerKeyTrustLine {
         account_id: account_xdr,
         asset: match asset {
-            Asset::CreditAlphanum4(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum4(a),
-            Asset::CreditAlphanum12(a) => soroban_rs::xdr::TrustLineAsset::CreditAlphanum12(a),
+            Asset::CreditAlphanum4(a) => stellar_xdr::TrustLineAsset::CreditAlphanum4(a),
+            Asset::CreditAlphanum12(a) => stellar_xdr::TrustLineAsset::CreditAlphanum12(a),
             Asset::Native => return Err(StellarTransactionUtilsError::NativeAssetInTrustlineQuery),
         },
     });
@@ -596,8 +596,8 @@ mod tests {
     use crate::services::provider::MockStellarProviderTrait;
     use futures::future::ready;
     use mockall::predicate::*;
-    use soroban_rs::xdr::{AccountEntry, AccountEntryExt, SequenceNumber, Thresholds};
     use std::str::FromStr;
+    use stellar_xdr::{AccountEntry, AccountEntryExt, SequenceNumber, Thresholds};
 
     // Helper function to create a test provider
     fn create_mock_provider() -> MockStellarProviderTrait {
@@ -966,12 +966,10 @@ mod tests {
         });
 
         provider.expect_get_ledger_entries().returning(|_| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse {
-                    entries: None,
-                    latest_ledger: 0,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLedgerEntriesResponse {
+                entries: None,
+                latest_ledger: 0,
+            })))
         });
 
         let contract_addr = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
@@ -991,10 +989,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_v0_success() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr,
-        };
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr};
 
         let mut provider = create_mock_provider();
 
@@ -1022,7 +1018,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1046,8 +1042,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_v1_with_liabilities() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{
             LedgerEntry, LedgerEntryData, LedgerEntryExt, Liabilities, TrustLineAsset,
             TrustLineEntryV1, TrustLineEntryV1Ext, WriteXdr,
         };
@@ -1084,7 +1080,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1109,8 +1105,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_v1_selling_exceeds_balance() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{
             LedgerEntry, LedgerEntryData, LedgerEntryExt, Liabilities, TrustLineAsset,
             TrustLineEntryV1, TrustLineEntryV1Ext, WriteXdr,
         };
@@ -1147,7 +1143,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1172,7 +1168,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_not_found() {
-        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+        use stellar_rpc_client::GetLedgerEntriesResponse;
 
         let mut provider = create_mock_provider();
 
@@ -1200,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_empty_entries() {
-        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+        use stellar_rpc_client::GetLedgerEntriesResponse;
 
         let mut provider = create_mock_provider();
 
@@ -1228,10 +1224,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_trustline_credit12() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
-            LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr,
-        };
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{LedgerEntry, LedgerEntryData, LedgerEntryExt, TrustLineAsset, WriteXdr};
 
         let mut provider = create_mock_provider();
 
@@ -1259,7 +1253,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1342,7 +1336,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_no_balance_entry() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
@@ -1363,7 +1357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_balance() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
@@ -1382,7 +1376,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_balance_too_large() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
@@ -1410,7 +1404,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_token_balance_contract_token_i128_negative() {
-        use soroban_rs::xdr::Int128Parts;
+        use stellar_xdr::Int128Parts;
 
         let mut provider = create_mock_provider();
 
@@ -1576,8 +1570,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_contract_token_decimals_from_storage_fallback() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{
             ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
             LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
         };
@@ -1611,7 +1605,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1634,7 +1628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_contract_token_decimals_both_methods_fail() {
-        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+        use stellar_rpc_client::GetLedgerEntriesResponse;
 
         let mut provider = create_mock_provider();
 
@@ -1705,8 +1699,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_decimals_from_storage_success() {
-        use soroban_rs::stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
-        use soroban_rs::xdr::{
+        use stellar_rpc_client::{GetLedgerEntriesResponse, LedgerEntryResult};
+        use stellar_xdr::{
             ContractDataDurability, ContractDataEntry, ExtensionPoint, LedgerEntry,
             LedgerEntryData, LedgerEntryExt, ScVal, WriteXdr,
         };
@@ -1732,7 +1726,7 @@ mod tests {
 
             let xdr_base64 = ledger_entry
                 .data
-                .to_xdr_base64(soroban_rs::xdr::Limits::none())
+                .to_xdr_base64(stellar_xdr::Limits::none())
                 .unwrap();
 
             Box::pin(ready(Ok(GetLedgerEntriesResponse {
@@ -1756,7 +1750,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_query_decimals_from_storage_no_entry() {
-        use soroban_rs::stellar_rpc_client::GetLedgerEntriesResponse;
+        use stellar_rpc_client::GetLedgerEntriesResponse;
 
         let mut provider = create_mock_provider();
 

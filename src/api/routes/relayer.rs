@@ -301,6 +301,7 @@ mod tests {
                 },
                 chain_id: Some(1),
                 required_confirmations: Some(12),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,

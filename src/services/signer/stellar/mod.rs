@@ -14,7 +14,7 @@ use local_signer::*;
 use turnkey_signer::*;
 use vault_signer::*;
 
-use soroban_rs::xdr::SignatureHint;
+use stellar_xdr::SignatureHint;
 
 use crate::{
     domain::{SignDataRequest, SignDataResponse, SignTransactionResponse, SignTypedDataRequest},
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn test_derive_signature_hint_valid_stellar_address() {
         let pk = stellar_strkey::ed25519::PublicKey([0u8; 32]);
-        let address = Address::Stellar(pk.to_string());
+        let address = Address::Stellar(format!("{pk}"));
 
         let hint = derive_signature_hint(&address).unwrap();
         // Last 4 bytes of all-zero key
@@ -235,7 +235,7 @@ mod tests {
         key_bytes[30] = 0xCC;
         key_bytes[31] = 0xDD;
         let pk = stellar_strkey::ed25519::PublicKey(key_bytes);
-        let address = Address::Stellar(pk.to_string());
+        let address = Address::Stellar(format!("{pk}"));
 
         let hint = derive_signature_hint(&address).unwrap();
         assert_eq!(hint.0, [0xAA, 0xBB, 0xCC, 0xDD]);

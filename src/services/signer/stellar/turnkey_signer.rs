@@ -5,10 +5,11 @@
 
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
-use soroban_rs::xdr::{
-    self, DecoratedSignature, Hash, Limits, ReadXdr, Transaction, TransactionEnvelope, WriteXdr,
-};
 use stellar_strkey;
+use stellar_xdr::{
+    self as xdr, DecoratedSignature, Hash, Limits, ReadXdr, Transaction, TransactionEnvelope,
+    WriteXdr,
+};
 use tracing::{debug, info};
 
 use crate::{
@@ -265,14 +266,13 @@ mod tests {
         services::{MockTurnkeyServiceTrait, TurnkeyError},
     };
     use mockall::predicate::*;
-    use soroban_rs::xdr::{SequenceNumber, Uint256};
+    use stellar_xdr::{SequenceNumber, Uint256};
 
     fn create_test_address() -> String {
         // Generate a valid Stellar address using stellar_strkey
         let test_key_bytes = [1u8; 32];
-        stellar_strkey::ed25519::PublicKey::from_payload(&test_key_bytes)
-            .unwrap()
-            .to_string()
+        let public_key = stellar_strkey::ed25519::PublicKey::from_payload(&test_key_bytes).unwrap();
+        format!("{public_key}")
     }
 
     fn create_test_operations() -> Vec<OperationSpec> {

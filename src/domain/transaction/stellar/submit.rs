@@ -537,8 +537,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_rs::stellar_rpc_client::SendTransactionResponse;
-    use soroban_rs::xdr::WriteXdr;
+    use stellar_rpc_client::SendTransactionResponse;
+    use stellar_xdr::WriteXdr;
 
     use crate::domain::transaction::stellar::test_helpers::*;
     use crate::models::TransactionMetadata;
@@ -760,9 +760,7 @@ mod tests {
                 data.signatures.push(dummy_signature());
                 // Build and store the signed envelope XDR
                 let envelope = data.get_envelope_for_submission().unwrap();
-                let xdr = envelope
-                    .to_xdr_base64(soroban_rs::xdr::Limits::none())
-                    .unwrap();
+                let xdr = envelope.to_xdr_base64(stellar_xdr::Limits::none()).unwrap();
                 data.signed_envelope_xdr = Some(xdr);
             }
 
@@ -959,11 +957,11 @@ mod tests {
             // Mock get_account for sync_sequence_from_chain
             mocks.provider.expect_get_account().times(1).returning(|_| {
                 Box::pin(async {
-                    use soroban_rs::xdr::{
+                    use stellar_strkey::ed25519;
+                    use stellar_xdr::{
                         AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
                         String32, Thresholds, Uint256,
                     };
-                    use stellar_strkey::ed25519;
 
                     let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
                     let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
@@ -1057,11 +1055,11 @@ mod tests {
             // Mock get_account for sync_sequence_from_chain: chain seq 100 → next usable 101
             mocks.provider.expect_get_account().times(1).returning(|_| {
                 Box::pin(async {
-                    use soroban_rs::xdr::{
+                    use stellar_strkey::ed25519;
+                    use stellar_xdr::{
                         AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
                         String32, Thresholds, Uint256,
                     };
-                    use stellar_strkey::ed25519;
 
                     let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
                     let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));
@@ -1205,11 +1203,11 @@ mod tests {
                 .in_sequence(&mut call_order)
                 .returning(|_| {
                     Box::pin(async {
-                        use soroban_rs::xdr::{
+                        use stellar_strkey::ed25519;
+                        use stellar_xdr::{
                             AccountEntry, AccountEntryExt, AccountId, PublicKey, SequenceNumber,
                             String32, Thresholds, Uint256,
                         };
-                        use stellar_strkey::ed25519;
 
                         let pk = ed25519::PublicKey::from_string(TEST_PK).unwrap();
                         let account_id = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk.0)));

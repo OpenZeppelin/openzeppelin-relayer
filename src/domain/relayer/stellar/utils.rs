@@ -158,13 +158,11 @@ mod tests {
     async fn test_get_expiration_ledger_success() {
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, 300).await;
@@ -177,13 +175,11 @@ mod tests {
     async fn test_get_expiration_ledger_zero_seconds() {
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, 0).await;
@@ -218,13 +214,11 @@ mod tests {
         // 7 seconds / 5 seconds per ledger = 2 ledgers (div_ceil)
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 1000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 1000,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, 7).await;
@@ -237,13 +231,11 @@ mod tests {
     async fn test_get_expiration_ledger_one_second() {
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 500,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 500,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, 1).await;
@@ -257,13 +249,11 @@ mod tests {
         // Test saturating_add behavior near u32::MAX
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: u32::MAX - 1,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: u32::MAX - 1,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, 300).await;
@@ -278,13 +268,11 @@ mod tests {
         // Exactly STELLAR_LEDGER_TIME_SECONDS (5 seconds) = 1 ledger
         let mut provider = MockStellarProviderTrait::new();
         provider.expect_get_latest_ledger().returning(|| {
-            Box::pin(ready(Ok(
-                soroban_rs::stellar_rpc_client::GetLatestLedgerResponse {
-                    id: "test".to_string(),
-                    protocol_version: 20,
-                    sequence: 2000,
-                },
-            )))
+            Box::pin(ready(Ok(stellar_rpc_client::GetLatestLedgerResponse {
+                id: "test".to_string(),
+                protocol_version: 20,
+                sequence: 2000,
+            })))
         });
 
         let result = get_expiration_ledger(&provider, STELLAR_LEDGER_TIME_SECONDS).await;

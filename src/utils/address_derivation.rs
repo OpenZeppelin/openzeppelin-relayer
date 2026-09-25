@@ -77,7 +77,7 @@ pub fn derive_stellar_address_from_der(der: &[u8]) -> Result<String, AddressDeri
         .map_err(|e| AddressDerivationError::ParseError(e.to_string()))?;
 
     use stellar_strkey::ed25519::PublicKey;
-    Ok(PublicKey(pubkey).to_string())
+    Ok(format!("{}", PublicKey(pubkey)))
 }
 
 #[cfg(test)]

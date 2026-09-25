@@ -5,13 +5,13 @@ use crate::models::transaction::stellar::host_function::{ContractSource, WasmSou
 use crate::models::SignerError;
 use crate::utils::{deserialize_i64, serialize_i64};
 use serde::{Deserialize, Serialize};
-use soroban_rs::xdr::{
+use std::convert::TryFrom;
+use stellar_strkey::{ed25519::MuxedAccount, ed25519::PublicKey};
+use stellar_xdr::{
     HostFunction, InvokeHostFunctionOp, MuxedAccount as XdrMuxedAccount, MuxedAccountMed25519,
     Operation, OperationBody, PaymentOp, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
     SorobanAuthorizedInvocation, SorobanCredentials, Uint256, VecM,
 };
-use std::convert::TryFrom;
-use stellar_strkey::{ed25519::MuxedAccount, ed25519::PublicKey};
 use utoipa::ToSchema;
 
 /// Authorization specification for Soroban operations
@@ -104,7 +104,7 @@ fn create_source_account_auth_entry(
 fn decode_xdr_auth_entries(
     xdr_entries: Vec<String>,
 ) -> Result<Vec<SorobanAuthorizationEntry>, SignerError> {
-    use soroban_rs::xdr::{Limits, ReadXdr};
+    use stellar_xdr::{Limits, ReadXdr};
 
     xdr_entries
         .iter()
@@ -307,7 +307,7 @@ impl TryFrom<OperationSpec> for Operation {
 mod tests {
     use super::*;
     use crate::models::transaction::stellar::host_function::ContractSource;
-    use soroban_rs::xdr::{
+    use stellar_xdr::{
         AccountId, ContractExecutable, ContractId, ContractIdPreimage,
         ContractIdPreimageFromAddress, CreateContractArgs, CreateContractArgsV2, Hash,
         PublicKey as XdrPublicKey, ScAddress,
@@ -377,7 +377,7 @@ mod tests {
 
     mod create_source_account_auth_entry_tests {
         use super::*;
-        use soroban_rs::xdr::Uint256;
+        use stellar_xdr::Uint256;
 
         #[test]
         fn test_creates_correct_structure() {
@@ -428,7 +428,7 @@ mod tests {
 
     mod generate_default_auth_entries_tests {
         use super::*;
-        use soroban_rs::xdr::Uint256;
+        use stellar_xdr::Uint256;
 
         #[test]
         fn test_create_contract() {
@@ -467,9 +467,9 @@ mod tests {
 
         #[test]
         fn test_invoke_contract() {
-            let host_function = HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
+            let host_function = HostFunction::InvokeContract(stellar_xdr::InvokeContractArgs {
                 contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                function_name: soroban_rs::xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
+                function_name: stellar_xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
                 args: VecM::default(),
             });
 
@@ -490,7 +490,7 @@ mod tests {
 
     mod build_auth_vector_tests {
         use super::*;
-        use soroban_rs::xdr::Uint256;
+        use stellar_xdr::Uint256;
 
         #[test]
         fn test_simple_auth() {
@@ -551,9 +551,9 @@ mod tests {
 
         #[test]
         fn test_none_default_invoke_contract() {
-            let host_function = HostFunction::InvokeContract(soroban_rs::xdr::InvokeContractArgs {
+            let host_function = HostFunction::InvokeContract(stellar_xdr::InvokeContractArgs {
                 contract_address: ScAddress::Contract(ContractId(Hash([0u8; 32]))),
-                function_name: soroban_rs::xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
+                function_name: stellar_xdr::ScSymbol::try_from(b"test".to_vec()).unwrap(),
                 args: VecM::default(),
             });
 
@@ -578,7 +578,7 @@ mod tests {
             } = result.unwrap()
             {
                 assert_eq!(op.amount, 1000);
-                assert!(matches!(op.asset, soroban_rs::xdr::Asset::Native));
+                assert!(matches!(op.asset, stellar_xdr::Asset::Native));
             } else {
                 panic!("Expected Payment operation");
             }

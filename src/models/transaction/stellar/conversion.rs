@@ -5,13 +5,13 @@ use crate::domain::string_to_muxed_account;
 use crate::models::transaction::repository::StellarTransactionData;
 use crate::models::SignerError;
 use chrono::DateTime;
-use soroban_rs::xdr::{
+use std::convert::TryFrom;
+use stellar_xdr::{
     Limits, Memo, Operation, Preconditions, ReadXdr, SequenceNumber, TimeBounds, TimePoint,
     Transaction, TransactionExt, VecM,
 };
-use std::convert::TryFrom;
 
-pub type DecoratedSignature = soroban_rs::xdr::DecoratedSignature;
+pub type DecoratedSignature = stellar_xdr::DecoratedSignature;
 
 #[derive(Debug, Clone)]
 pub struct TimeBoundsSpec {
@@ -79,7 +79,7 @@ impl TryFrom<StellarTransactionData> for Transaction {
                 // Apply transaction extension data from simulation if available
                 let ext = match &data.simulation_transaction_data {
                     Some(xdr_data) => {
-                        use soroban_rs::xdr::SorobanTransactionData;
+                        use stellar_xdr::SorobanTransactionData;
                         match SorobanTransactionData::from_xdr_base64(xdr_data, Limits::none()) {
                             Ok(tx_data) => {
                                 tracing::info!(

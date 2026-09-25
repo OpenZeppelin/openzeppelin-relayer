@@ -5,7 +5,7 @@
 //! - [`AsyncClientCache`] — for client construction that requires `.await`
 //!   (e.g., AWS KMS via `aws_config::load().await`)
 //! - [`SyncClientCache`] — for synchronous client constructors
-//!   (e.g., `soroban_rs::Client::new(url)`, Solana `RpcClient::new(...)`)
+//!   (e.g., `stellar_rpc_client::Client::new(url)`, Solana `RpcClient::new(...)`)
 //!
 //! Both guarantee at most one in-flight initializer per key. If `init` returns
 //! `Err`, the entry is not cached and subsequent calls will retry initialization.

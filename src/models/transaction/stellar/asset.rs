@@ -2,13 +2,13 @@
 
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
-use soroban_rs::xdr::{
-    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, PublicKey as XdrPublicKey,
-    Uint256,
-};
 use std::convert::TryFrom;
 use std::str::FromStr;
 use stellar_strkey::ed25519::PublicKey;
+use stellar_xdr::{
+    AccountId, AlphaNum12, AlphaNum4, Asset, AssetCode12, AssetCode4, PublicKey as XdrPublicKey,
+    Uint256,
+};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

@@ -19,14 +19,14 @@ use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::Deserialize;
-use soroban_rs::xdr::{
+use std::convert::TryFrom;
+use std::sync::Arc;
+use std::time::Duration;
+use stellar_xdr::{
     Asset, Limits, Memo, Operation, OperationBody, PathPaymentStrictSendOp, Preconditions, ReadXdr,
     SequenceNumber, TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt,
     TransactionV1Envelope, VecM, WriteXdr,
 };
-use std::convert::TryFrom;
-use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, info};
 
 /// Transaction validity window in minutes
@@ -553,7 +553,7 @@ where
         &self,
         xdr: &str,
         network_passphrase: &str,
-    ) -> Result<soroban_rs::xdr::Hash, StellarDexServiceError> {
+    ) -> Result<stellar_xdr::Hash, StellarDexServiceError> {
         // Sign the transaction
         let signed_response = self
             .signer
@@ -879,9 +879,9 @@ mod tests {
             Ok(crate::domain::SignTransactionResponse::Stellar(
                 crate::domain::SignTransactionResponseStellar {
                     signature: crate::models::DecoratedSignature {
-                        hint: soroban_rs::xdr::SignatureHint([0; 4]),
-                        signature: soroban_rs::xdr::Signature(
-                            soroban_rs::xdr::BytesM::try_from(vec![0u8; 64]).unwrap(),
+                        hint: stellar_xdr::SignatureHint([0; 4]),
+                        signature: stellar_xdr::Signature(
+                            stellar_xdr::BytesM::try_from(vec![0u8; 64]).unwrap(),
                         ),
                     },
                 },

@@ -169,12 +169,18 @@ These tags help the relayer:
   them thoroughly on testnets before deploying to production.
 </Callout>
 
-| Field                    | Type          | Required | Description                                                                                                                    |
-| ------------------------ | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `chain_id`               | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited) |
-| `required_confirmations` | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)    |
-| `symbol`                 | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                    |
-| `features`               | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                               |
+| Field                                | Type          | Required | Description                                                                                                                              |
+| ------------------------------------ | ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `chain_id`                           | number        | Yes\*    | Unique chain identifier (e.g., 1 for Ethereum mainnet, 137 for Polygon) (\*Required for base networks, optional for inherited)           |
+| `required_confirmations`             | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)              |
+| `status_check.initial_delay_seconds` | number        | No       | Delay before the first status check, in seconds. Default `8`, range `1`–`100`.                                                           |
+| `status_check.retry_delay_seconds`   | number        | No       | Delay between checks while a transaction is healthy but not final, in seconds. Default `8`, range `5`–`100`. Checks back off from this value to 1.5× it. |
+| `symbol`                             | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                              |
+| `features`                           | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                                         |
+
+Both `status_check` fields inherit independently from a parent network. A larger
+`initial_delay_seconds` also delays the first resubmission and timeout evaluation,
+because both run only during a status check.
 
 #### Example: EVM Network Configuration
 
@@ -186,12 +192,23 @@ Here’s an example showing an EVM network configuration:
   "network": "ethereum-mainnet",
   "chain_id": 1, // Ethereum mainnet chain ID
   "required_confirmations": 12, // High security: 12 confirmations
+  "status_check": {
+    "initial_delay_seconds": 8, // Delays the first status check
+    "retry_delay_seconds": 5 // Faster follow-up checks on fast-finality chains
+  },
   "symbol": "ETH", // Native currency symbol
   "features": ["eip1559"], // Supports EIP-1559 fee market
   "rpc_urls": ["https://mainnet.infura.io/v3/YOUR_KEY"],
   "is_testnet": false
 }
 ```
+
+<Callout type="warning">
+  On SQS FIFO, every non-final check re-receives the same message, so a faster
+  `retry_delay_seconds` raises `ApproximateReceiveCount` for long confirmations.
+  Size the queue's `maxReceiveCount` for roughly `1 + confirmation_time / retry_delay`
+  receives, or SQS can dead-letter the check and the transaction stops being monitored.
+</Callout>
 
 ### Solana-Specific Fields
 

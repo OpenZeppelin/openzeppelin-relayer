@@ -2,12 +2,12 @@
 
 use crate::models::SignerError;
 use serde::{Deserialize, Serialize};
-use soroban_rs::xdr::{
+use std::convert::TryFrom;
+use stellar_xdr::{
     AccountId, ContractExecutable, ContractId, ContractIdPreimage, ContractIdPreimageFromAddress,
     CreateContractArgs, CreateContractArgsV2, Hash, HostFunction, InvokeContractArgs,
     PublicKey as XdrPublicKey, ScAddress, ScSymbol, ScVal, Uint256, VecM,
 };
-use std::convert::TryFrom;
 use utoipa::ToSchema;
 
 /// HACK: Temporary fix for stellar-xdr bug where u64/i64 values are expected as numbers
