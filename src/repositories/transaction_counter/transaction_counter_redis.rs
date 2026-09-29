@@ -78,7 +78,7 @@ impl TransactionCounterTrait for RedisTransactionCounter {
         debug!(relayer_id = %relayer_id, address = %address, "getting counter for relayer and address");
 
         let mut conn = self
-            .get_connection(self.connections.reader(), "get")
+            .get_connection(self.connections.primary(), "get")
             .await?;
 
         let value: Option<u64> = conn
