@@ -33,6 +33,7 @@ impl PriceParamsHandler {
         } else if network.is_optimism() {
             Some(PriceParamsHandler::Optimism(OptimismPriceHandler::new(
                 provider,
+                network.chain_id,
             )))
         } else {
             None
