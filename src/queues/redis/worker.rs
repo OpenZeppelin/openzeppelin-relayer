@@ -327,14 +327,9 @@ const SYSTEM_CLEANUP: &str = "system_cleanup";
 /// orphan recovery.
 static WORKER_INSTANCE_ID: LazyLock<Uuid> = LazyLock::new(Uuid::new_v4);
 
-/// Builds a role-prefixed worker name for a specific process instance.
-fn worker_name_for_instance(role: &str, instance_id: &Uuid) -> String {
-    format!("{role}-{instance_id}")
-}
-
 /// Builds a worker name scoped to the current process instance.
 fn worker_id(role: &str) -> String {
-    worker_name_for_instance(role, &WORKER_INSTANCE_ID)
+    format!("{role}-{}", *WORKER_INSTANCE_ID)
 }
 
 /// Creates an exponential backoff with configurable parameters
@@ -1020,36 +1015,13 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_names_are_unique_across_process_instances() {
-        let first_instance = Uuid::new_v4();
-        let second_instance = Uuid::new_v4();
+    fn test_worker_id_contains_role_and_process_instance() {
+        let id = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
+        let instance_id = id
+            .strip_prefix("transaction_status_checker_evm-")
+            .expect("worker ID should start with its role and a separator");
 
-        let first = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &first_instance);
-        let second = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &second_instance);
-
-        assert_ne!(first, second);
-        assert!(first.starts_with(TRANSACTION_STATUS_CHECKER_EVM));
-        assert!(second.starts_with(TRANSACTION_STATUS_CHECKER_EVM));
-    }
-
-    #[test]
-    fn test_worker_names_share_stable_process_instance_suffix() {
-        let instance_id = Uuid::new_v4();
-        let request = worker_name_for_instance(TRANSACTION_REQUEST, &instance_id);
-        let status = worker_name_for_instance(TRANSACTION_STATUS_CHECKER_EVM, &instance_id);
-        let suffix = instance_id.to_string();
-
-        assert!(request.ends_with(&suffix));
-        assert!(status.ends_with(&suffix));
-        assert_ne!(request, status);
-    }
-
-    #[test]
-    fn test_worker_id_is_stable_within_process() {
-        let first = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
-        let second = worker_id(TRANSACTION_STATUS_CHECKER_EVM);
-
-        assert_eq!(first, second);
+        assert_eq!(Uuid::parse_str(instance_id).unwrap(), *WORKER_INSTANCE_ID);
     }
 
     #[test]
