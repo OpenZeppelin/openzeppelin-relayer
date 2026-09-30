@@ -34,7 +34,7 @@ docker compose -f examples/vault-transit-signer/docker-compose.yaml up vault
 
 ```
 
-Vault will run in dev mode and bind to `0.0.0.0:8200`. You can access its UI by navigating to [http://localhost:8200](http://localhost:8200) in your browser.
+Vault will run in dev mode and bind to `127.0.0.1:8200`. You can access its UI by navigating to [http://localhost:8200](http://localhost:8200) in your browser.
 
 
 ### Step 3: Install and Configure the Vault CLI (Optional)
@@ -44,7 +44,7 @@ If you haven't already, install the Vault CLI by following the instructions in t
 Set the necessary environment variables so that your CLI can communicate with Vault:
 
 ```bash
-export VAULT_ADDR='http://0.0.0.0:8200'
+export VAULT_ADDR='http://127.0.0.1:8200'
 export VAULT_TOKEN='dev-only-token'  # This is the default token for dev mode defined in docker-compose fi;e
 ```
 
