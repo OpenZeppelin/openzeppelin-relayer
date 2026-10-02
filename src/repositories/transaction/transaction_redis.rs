@@ -15,8 +15,8 @@ use crate::models::{
 };
 use crate::repositories::redis_base::RedisRepository;
 use crate::repositories::{
-    BatchDeleteResult, BatchRetrievalResult, PaginatedResult, Repository, TransactionDeleteRequest,
-    TransactionRepository,
+    BatchDeleteResult, BatchRetrievalResult, IdempotencyRecord, PaginatedResult, Repository,
+    TransactionDeleteRequest, TransactionRepository,
 };
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
@@ -32,6 +32,7 @@ const TX_PREFIX: &str = "tx";
 const STATUS_PREFIX: &str = "status";
 const STATUS_SORTED_PREFIX: &str = "status_sorted";
 const NONCE_PREFIX: &str = "nonce";
+const IDEMPOTENCY_PREFIX: &str = "idempotency";
 const TX_TO_RELAYER_PREFIX: &str = "tx_to_relayer";
 const RELAYER_LIST_KEY: &str = "relayer_list";
 const TX_BY_CREATED_AT_PREFIX: &str = "tx_by_created_at";
@@ -134,6 +135,15 @@ impl RedisTransactionRepository {
         format!(
             "{}:{}:{}:{}:{}",
             self.key_prefix, RELAYER_PREFIX, relayer_id, NONCE_PREFIX, nonce
+        )
+    }
+
+    /// Generate key for relayer idempotency entry:
+    /// relayer:{relayer_id}:idempotency:{key}
+    fn relayer_idempotency_key(&self, relayer_id: &str, key: &str) -> String {
+        format!(
+            "{}:{}:{}:{}:{}",
+            self.key_prefix, RELAYER_PREFIX, relayer_id, IDEMPOTENCY_PREFIX, key
         )
     }
 
@@ -2683,6 +2693,125 @@ impl TransactionRepository for RedisTransactionRepository {
             }
         }
     }
+
+    async fn reserve_idempotency_key(
+        &self,
+        relayer_id: &str,
+        key: &str,
+        fingerprint: &str,
+        ttl_seconds: u64,
+    ) -> Result<bool, RepositoryError> {
+        let record = IdempotencyRecord {
+            fingerprint: fingerprint.to_string(),
+            tx_id: None,
+        };
+        let value = serde_json::to_string(&record).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize idempotency record: {e}"))
+        })?;
+
+        let redis_key = self.relayer_idempotency_key(relayer_id, key);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "reserve_idempotency_key")
+            .await?;
+
+        // Single atomic check-and-set: only set the key if it does not exist.
+        let result: Option<String> = redis::cmd("SET")
+            .arg(&redis_key)
+            .arg(&value)
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_seconds)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "reserve_idempotency_key"))?;
+
+        Ok(result.is_some())
+    }
+
+    async fn get_idempotency_record(
+        &self,
+        relayer_id: &str,
+        key: &str,
+    ) -> Result<Option<IdempotencyRecord>, RepositoryError> {
+        let redis_key = self.relayer_idempotency_key(relayer_id, key);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "get_idempotency_record")
+            .await?;
+
+        let value: Option<String> = conn
+            .get(&redis_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_idempotency_record"))?;
+
+        match value {
+            Some(json) => Ok(Some(self.deserialize_entity::<IdempotencyRecord>(
+                &json,
+                &redis_key,
+                "IdempotencyRecord",
+            )?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn complete_idempotency_key(
+        &self,
+        relayer_id: &str,
+        key: &str,
+        tx_id: &str,
+        ttl_seconds: u64,
+    ) -> Result<(), RepositoryError> {
+        let redis_key = self.relayer_idempotency_key(relayer_id, key);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "complete_idempotency_key")
+            .await?;
+
+        let existing: Option<String> = conn
+            .get(&redis_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "complete_idempotency_key"))?;
+
+        let Some(json) = existing else {
+            return Err(RepositoryError::NotFound(
+                "idempotency key not found".to_string(),
+            ));
+        };
+
+        let mut record =
+            self.deserialize_entity::<IdempotencyRecord>(&json, &redis_key, "IdempotencyRecord")?;
+        record.tx_id = Some(tx_id.to_string());
+        let value = serde_json::to_string(&record).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize idempotency record: {e}"))
+        })?;
+
+        let _: () = redis::cmd("SET")
+            .arg(&redis_key)
+            .arg(&value)
+            .arg("EX")
+            .arg(ttl_seconds)
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| self.map_redis_error(e, "complete_idempotency_key"))?;
+
+        Ok(())
+    }
+
+    async fn release_idempotency_key(
+        &self,
+        relayer_id: &str,
+        key: &str,
+    ) -> Result<(), RepositoryError> {
+        let redis_key = self.relayer_idempotency_key(relayer_id, key);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "release_idempotency_key")
+            .await?;
+
+        let _: () = conn
+            .del(&redis_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "release_idempotency_key"))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -5205,5 +5334,90 @@ mod tests {
             "try_again_later_retries must survive insufficient_fee_retry"
         );
         assert_eq!(meta.insufficient_fee_retries, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_reserve_idempotency_key_returns_true_then_false() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let key = Uuid::new_v4().to_string();
+
+        assert!(repo
+            .reserve_idempotency_key(&relayer_id, &key, "fp-1", 3600)
+            .await
+            .unwrap());
+        assert!(!repo
+            .reserve_idempotency_key(&relayer_id, &key, "fp-1", 3600)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_idempotency_record_returns_record() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let key = Uuid::new_v4().to_string();
+
+        repo.reserve_idempotency_key(&relayer_id, &key, "fp-1", 3600)
+            .await
+            .unwrap();
+
+        let record = repo
+            .get_idempotency_record(&relayer_id, &key)
+            .await
+            .unwrap()
+            .expect("record should exist");
+        assert_eq!(record.fingerprint, "fp-1");
+        assert_eq!(record.tx_id, None);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_complete_idempotency_key_sets_tx_id() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let key = Uuid::new_v4().to_string();
+
+        repo.reserve_idempotency_key(&relayer_id, &key, "fp-1", 3600)
+            .await
+            .unwrap();
+        repo.complete_idempotency_key(&relayer_id, &key, "tx-1", 3600)
+            .await
+            .unwrap();
+
+        let record = repo
+            .get_idempotency_record(&relayer_id, &key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.fingerprint, "fp-1");
+        assert_eq!(record.tx_id, Some("tx-1".to_string()));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_release_idempotency_key_allows_reserve_again() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let key = Uuid::new_v4().to_string();
+
+        repo.reserve_idempotency_key(&relayer_id, &key, "fp-1", 3600)
+            .await
+            .unwrap();
+        repo.release_idempotency_key(&relayer_id, &key)
+            .await
+            .unwrap();
+
+        assert!(repo
+            .get_idempotency_record(&relayer_id, &key)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .reserve_idempotency_key(&relayer_id, &key, "fp-2", 3600)
+            .await
+            .unwrap());
     }
 }

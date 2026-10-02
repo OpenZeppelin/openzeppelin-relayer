@@ -2,6 +2,37 @@
 title: Relayer API Reference
 ---
 
+## Idempotent Requests
+
+`POST /api/v1/relayers/{relayer_id}/transactions` accepts an optional `Idempotency-Key` header. Use it to retry a request after a timeout or connection error without the risk of creating a second transaction.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/relayers/my-relayer/transactions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Idempotency-Key: 6f1c2a9e-3b6d-4f2e-9c1a-0d7e5b2f8a41" \
+  -H "Content-Type: application/json" \
+  -d '{ "to": "0x...", "value": 0, "data": "0x", "gas_limit": 21000, "speed": "average" }'
+```
+
+Rules:
+
+- The key is a client-generated string of 1 to 255 characters. A UUID v4 is recommended. Do not put sensitive data in the key.
+- Keys are scoped per relayer. The same key on two relayers refers to two independent requests.
+- The relayer stores a fingerprint of the request body with the key. The key is reserved only after the request passes validation, so a rejected request does not consume the key.
+
+Responses for a repeated key:
+
+| Situation | Response |
+| --- | --- |
+| Same key, same body, original request completed | `200` with the original transaction in its current state. No new transaction is created. |
+| Same key, different body | `422 Unprocessable Entity`. Send a new key for a new request. |
+| Same key while the original request is still being processed | `409 Conflict`. Retry after a short delay with the same key. |
+| Same key, original transaction already removed from storage | `404 Not Found`. The key still blocks a duplicate. |
+
+The replay returns the transaction as it is now, not a saved copy of the first response. The status can be `pending`, `sent`, `submitted`, `confirmed`, or any other lifecycle status.
+
+Expiry: a key is kept for `IDEMPOTENCY_KEY_TTL_SECONDS` (default `86400`, 24 hours). After that, the same key starts a new request. Transactions in a final state are removed after `TRANSACTION_EXPIRATION_HOURS` (default `4`). Keep the key lifetime at least as long as the transaction lifetime so a retry never creates a duplicate while the original is still visible.
+
 ## Relayers
 
 ### [List Relayers](/relayer/api/listRelayers)
