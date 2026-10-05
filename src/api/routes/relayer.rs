@@ -2,6 +2,7 @@
 //! It includes handlers for listing, retrieving, updating, and managing relayer transactions.
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
+    api::controllers::idempotency::idempotency_key_from_headers,
     api::controllers::relayer,
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
     models::{
@@ -87,17 +88,7 @@ async fn send_transaction(
     req: web::Json<serde_json::Value>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    let idempotency_key = match http_req.headers().get("Idempotency-Key") {
-        Some(value) => match value.to_str() {
-            Ok(value) => Some(value.to_string()),
-            Err(_) => {
-                return Err(crate::models::ApiError::BadRequest(
-                    "Invalid Idempotency-Key header".into(),
-                ))
-            }
-        },
-        None => None,
-    };
+    let idempotency_key = idempotency_key_from_headers(http_req.headers())?;
 
     relayer::send_transaction(
         relayer_id.into_inner(),

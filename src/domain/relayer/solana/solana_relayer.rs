@@ -581,9 +581,10 @@ where
             network_type = ?self.relayer.network_type,
         )
     )]
-    async fn process_transaction_request(
+    async fn process_transaction_request_with_id(
         &self,
         network_transaction: crate::models::NetworkTransactionRequest,
+        tx_id: String,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let policy = self.relayer.policies.get_solana_policy();
         let user_pays_fee = matches!(
@@ -616,7 +617,7 @@ where
             let result = self
                 .rpc_handler
                 .rpc_methods()
-                .sign_and_send_transaction(params)
+                .sign_and_send_transaction_with_id(params, tx_id)
                 .await
                 .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
@@ -645,11 +646,12 @@ where
                     ))
                 })?;
 
-            let transaction = TransactionRepoModel::try_from((
+            let mut transaction = TransactionRepoModel::try_from((
                 &network_transaction,
                 &self.relayer,
                 &network_model,
             ))?;
+            transaction.id = tx_id;
 
             self.transaction_repository
                 .create(transaction.clone())

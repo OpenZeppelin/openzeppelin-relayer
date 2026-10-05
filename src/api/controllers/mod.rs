@@ -13,6 +13,7 @@
 
 pub mod api_key;
 pub mod health;
+pub mod idempotency;
 pub mod network;
 pub mod notification;
 pub mod plugin;

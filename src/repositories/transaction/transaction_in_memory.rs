@@ -14,12 +14,14 @@ use async_trait::async_trait;
 use eyre::Result;
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
-    idempotency: Mutex<HashMap<String, IdempotencyRecord>>,
+    /// Idempotency records with their expiry time, keyed by `relayer_id:key`.
+    idempotency: Mutex<HashMap<String, (IdempotencyRecord, Instant)>>,
 }
 
 impl Clone for InMemoryTransactionRepository {
@@ -54,6 +56,12 @@ impl InMemoryTransactionRepository {
     /// Builds the in-memory idempotency map key, scoped per relayer.
     fn idempotency_map_key(relayer_id: &str, key: &str) -> String {
         format!("{relayer_id}:{key}")
+    }
+
+    /// Drops expired idempotency records, matching the Redis TTL behavior.
+    fn purge_expired_idempotency(map: &mut HashMap<String, (IdempotencyRecord, Instant)>) {
+        let now = Instant::now();
+        map.retain(|_, (_, expires_at)| *expires_at > now);
     }
 
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<'_, T>, RepositoryError> {
@@ -610,21 +618,17 @@ impl TransactionRepository for InMemoryTransactionRepository {
         &self,
         relayer_id: &str,
         key: &str,
-        fingerprint: &str,
-        _ttl_seconds: u64,
+        record: &IdempotencyRecord,
+        ttl_seconds: u64,
     ) -> Result<bool, RepositoryError> {
         let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
+        Self::purge_expired_idempotency(&mut idempotency);
         let map_key = Self::idempotency_map_key(relayer_id, key);
         if idempotency.contains_key(&map_key) {
             return Ok(false);
         }
-        idempotency.insert(
-            map_key,
-            IdempotencyRecord {
-                fingerprint: fingerprint.to_string(),
-                tx_id: None,
-            },
-        );
+        let expires_at = Instant::now() + Duration::from_secs(ttl_seconds);
+        idempotency.insert(map_key, (record.clone(), expires_at));
         Ok(true)
     }
 
@@ -633,40 +637,28 @@ impl TransactionRepository for InMemoryTransactionRepository {
         relayer_id: &str,
         key: &str,
     ) -> Result<Option<IdempotencyRecord>, RepositoryError> {
-        let idempotency = Self::acquire_lock(&self.idempotency).await?;
+        let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
+        Self::purge_expired_idempotency(&mut idempotency);
         Ok(idempotency
             .get(&Self::idempotency_map_key(relayer_id, key))
-            .cloned())
+            .map(|(record, _)| record.clone()))
     }
 
-    async fn complete_idempotency_key(
+    async fn release_idempotency_key_if_unused(
         &self,
         relayer_id: &str,
         key: &str,
         tx_id: &str,
-        _ttl_seconds: u64,
-    ) -> Result<(), RepositoryError> {
-        let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
-        let map_key = Self::idempotency_map_key(relayer_id, key);
-        match idempotency.get_mut(&map_key) {
-            Some(record) => {
-                record.tx_id = Some(tx_id.to_string());
-                Ok(())
-            }
-            None => Err(RepositoryError::NotFound(
-                "idempotency key not found".to_string(),
-            )),
+    ) -> Result<bool, RepositoryError> {
+        // Lock order: transaction store first, then idempotency map.
+        let store = Self::acquire_lock(&self.store).await?;
+        if store.contains_key(tx_id) {
+            return Ok(false);
         }
-    }
-
-    async fn release_idempotency_key(
-        &self,
-        relayer_id: &str,
-        key: &str,
-    ) -> Result<(), RepositoryError> {
         let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
-        idempotency.remove(&Self::idempotency_map_key(relayer_id, key));
-        Ok(())
+        Ok(idempotency
+            .remove(&Self::idempotency_map_key(relayer_id, key))
+            .is_some())
     }
 }
 
@@ -2619,26 +2611,33 @@ mod tests {
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
+    fn test_idempotency_record(fingerprint: &str, tx_id: &str) -> IdempotencyRecord {
+        IdempotencyRecord {
+            fingerprint: fingerprint.to_string(),
+            tx_id: tx_id.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
     #[tokio::test]
     async fn test_reserve_idempotency_key_returns_true_then_false() {
         let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
 
-        let first = repo
-            .reserve_idempotency_key("relayer-1", "key-1", "fp-1", 3600)
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
             .await
-            .unwrap();
-        assert!(first);
-
-        let second = repo
-            .reserve_idempotency_key("relayer-1", "key-1", "fp-1", 3600)
+            .unwrap());
+        assert!(!repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
             .await
-            .unwrap();
-        assert!(!second);
+            .unwrap());
     }
 
     #[tokio::test]
     async fn test_get_idempotency_record() {
         let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
 
         assert!(repo
             .get_idempotency_record("relayer-1", "key-1")
@@ -2646,56 +2645,23 @@ mod tests {
             .unwrap()
             .is_none());
 
-        repo.reserve_idempotency_key("relayer-1", "key-1", "fp-1", 3600)
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
             .await
             .unwrap();
 
-        let record = repo
+        let stored = repo
             .get_idempotency_record("relayer-1", "key-1")
             .await
-            .unwrap()
-            .expect("record should exist");
-        assert_eq!(record.fingerprint, "fp-1");
-        assert_eq!(record.tx_id, None);
+            .unwrap();
+        assert_eq!(stored, Some(record));
     }
 
     #[tokio::test]
-    async fn test_complete_idempotency_key_sets_tx_id() {
+    async fn test_idempotency_record_expires_after_ttl() {
         let repo = InMemoryTransactionRepository::new();
-        repo.reserve_idempotency_key("relayer-1", "key-1", "fp-1", 3600)
-            .await
-            .unwrap();
+        let record = test_idempotency_record("fp-1", "tx-1");
 
-        repo.complete_idempotency_key("relayer-1", "key-1", "tx-1", 3600)
-            .await
-            .unwrap();
-
-        let record = repo
-            .get_idempotency_record("relayer-1", "key-1")
-            .await
-            .unwrap()
-            .expect("record should exist");
-        assert_eq!(record.fingerprint, "fp-1");
-        assert_eq!(record.tx_id, Some("tx-1".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_complete_idempotency_key_not_found() {
-        let repo = InMemoryTransactionRepository::new();
-        let result = repo
-            .complete_idempotency_key("relayer-1", "missing", "tx-1", 3600)
-            .await;
-        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
-    }
-
-    #[tokio::test]
-    async fn test_release_idempotency_key_allows_reserve_again() {
-        let repo = InMemoryTransactionRepository::new();
-        repo.reserve_idempotency_key("relayer-1", "key-1", "fp-1", 3600)
-            .await
-            .unwrap();
-
-        repo.release_idempotency_key("relayer-1", "key-1")
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 0)
             .await
             .unwrap();
 
@@ -2704,12 +2670,53 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+        assert_eq!(repo.idempotency.lock().await.len(), 1);
+    }
 
-        let reserved_again = repo
-            .reserve_idempotency_key("relayer-1", "key-1", "fp-2", 3600)
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_deletes_when_tx_absent() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
             .await
             .unwrap();
-        assert!(reserved_again);
+
+        assert!(repo
+            .release_idempotency_key_if_unused("relayer-1", "key-1", "tx-1")
+            .await
+            .unwrap());
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_keeps_key_when_tx_stored() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("tx-1");
+        let relayer_id = tx.relayer_id.clone();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        repo.reserve_idempotency_key(&relayer_id, "key-1", &record, 3600)
+            .await
+            .unwrap();
+        repo.create(tx).await.unwrap();
+
+        assert!(!repo
+            .release_idempotency_key_if_unused(&relayer_id, "key-1", "tx-1")
+            .await
+            .unwrap());
+        assert!(repo
+            .get_idempotency_record(&relayer_id, "key-1")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -2717,12 +2724,21 @@ mod tests {
         let repo = InMemoryTransactionRepository::new();
 
         assert!(repo
-            .reserve_idempotency_key("relayer-1", "shared-key", "fp-1", 3600)
+            .reserve_idempotency_key(
+                "relayer-1",
+                "shared-key",
+                &test_idempotency_record("fp-1", "tx-1"),
+                3600
+            )
             .await
             .unwrap());
-        // Same key on a different relayer is independent.
         assert!(repo
-            .reserve_idempotency_key("relayer-2", "shared-key", "fp-2", 3600)
+            .reserve_idempotency_key(
+                "relayer-2",
+                "shared-key",
+                &test_idempotency_record("fp-2", "tx-2"),
+                3600
+            )
             .await
             .unwrap());
 

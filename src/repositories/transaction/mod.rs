@@ -36,11 +36,18 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Stored idempotency record: request fingerprint and the created transaction id.
+/// Stored idempotency record.
+///
+/// The transaction id is chosen before the key is reserved, so the record
+/// always points at the transaction the request creates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IdempotencyRecord {
+    /// SHA-256 fingerprint of the canonical request body.
     pub fingerprint: String,
-    pub tx_id: Option<String>,
+    /// Id of the transaction this request creates.
+    pub tx_id: String,
+    /// RFC 3339 time when the key was reserved.
+    pub created_at: String,
 }
 
 /// A trait defining transaction repository operations
@@ -244,7 +251,7 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         &self,
         relayer_id: &str,
         key: &str,
-        fingerprint: &str,
+        record: &IdempotencyRecord,
         ttl_seconds: u64,
     ) -> Result<bool, RepositoryError>;
 
@@ -255,21 +262,17 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         key: &str,
     ) -> Result<Option<IdempotencyRecord>, RepositoryError>;
 
-    /// Marks an idempotency key complete with the created transaction id.
-    async fn complete_idempotency_key(
+    /// Deletes an idempotency key only if no transaction with `tx_id` exists.
+    ///
+    /// Reads the primary store. Returns `true` when the key was deleted. A key
+    /// whose transaction was stored stays reserved, so a retry replays that
+    /// transaction instead of creating a second one.
+    async fn release_idempotency_key_if_unused(
         &self,
         relayer_id: &str,
         key: &str,
         tx_id: &str,
-        ttl_seconds: u64,
-    ) -> Result<(), RepositoryError>;
-
-    /// Deletes an idempotency key so the client can retry.
-    async fn release_idempotency_key(
-        &self,
-        relayer_id: &str,
-        key: &str,
-    ) -> Result<(), RepositoryError>;
+    ) -> Result<bool, RepositoryError>;
 }
 
 #[cfg(test)]
@@ -301,10 +304,9 @@ mockall::mock! {
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
-      async fn reserve_idempotency_key(&self, relayer_id: &str, key: &str, fingerprint: &str, ttl_seconds: u64) -> Result<bool, RepositoryError>;
+      async fn reserve_idempotency_key(&self, relayer_id: &str, key: &str, record: &IdempotencyRecord, ttl_seconds: u64) -> Result<bool, RepositoryError>;
       async fn get_idempotency_record(&self, relayer_id: &str, key: &str) -> Result<Option<IdempotencyRecord>, RepositoryError>;
-      async fn complete_idempotency_key(&self, relayer_id: &str, key: &str, tx_id: &str, ttl_seconds: u64) -> Result<(), RepositoryError>;
-      async fn release_idempotency_key(&self, relayer_id: &str, key: &str) -> Result<(), RepositoryError>;
+      async fn release_idempotency_key_if_unused(&self, relayer_id: &str, key: &str, tx_id: &str) -> Result<bool, RepositoryError>;
       async fn update_network_data(&self, tx_id: String, network_data: NetworkTransactionData) -> Result<TransactionRepoModel, RepositoryError>;
       async fn set_sent_at(&self, tx_id: String, sent_at: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn increment_status_check_failures(&self, tx_id: String) -> Result<TransactionRepoModel, RepositoryError>;
@@ -663,16 +665,16 @@ impl TransactionRepository for TransactionRepositoryStorage {
         &self,
         relayer_id: &str,
         key: &str,
-        fingerprint: &str,
+        record: &IdempotencyRecord,
         ttl_seconds: u64,
     ) -> Result<bool, RepositoryError> {
         match self {
             TransactionRepositoryStorage::InMemory(repo) => {
-                repo.reserve_idempotency_key(relayer_id, key, fingerprint, ttl_seconds)
+                repo.reserve_idempotency_key(relayer_id, key, record, ttl_seconds)
                     .await
             }
             TransactionRepositoryStorage::Redis(repo) => {
-                repo.reserve_idempotency_key(relayer_id, key, fingerprint, ttl_seconds)
+                repo.reserve_idempotency_key(relayer_id, key, record, ttl_seconds)
                     .await
             }
         }
@@ -693,36 +695,20 @@ impl TransactionRepository for TransactionRepositoryStorage {
         }
     }
 
-    async fn complete_idempotency_key(
+    async fn release_idempotency_key_if_unused(
         &self,
         relayer_id: &str,
         key: &str,
         tx_id: &str,
-        ttl_seconds: u64,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<bool, RepositoryError> {
         match self {
             TransactionRepositoryStorage::InMemory(repo) => {
-                repo.complete_idempotency_key(relayer_id, key, tx_id, ttl_seconds)
+                repo.release_idempotency_key_if_unused(relayer_id, key, tx_id)
                     .await
             }
             TransactionRepositoryStorage::Redis(repo) => {
-                repo.complete_idempotency_key(relayer_id, key, tx_id, ttl_seconds)
+                repo.release_idempotency_key_if_unused(relayer_id, key, tx_id)
                     .await
-            }
-        }
-    }
-
-    async fn release_idempotency_key(
-        &self,
-        relayer_id: &str,
-        key: &str,
-    ) -> Result<(), RepositoryError> {
-        match self {
-            TransactionRepositoryStorage::InMemory(repo) => {
-                repo.release_idempotency_key(relayer_id, key).await
-            }
-            TransactionRepositoryStorage::Redis(repo) => {
-                repo.release_idempotency_key(relayer_id, key).await
             }
         }
     }

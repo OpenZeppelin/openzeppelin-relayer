@@ -554,7 +554,7 @@ fn doc_get_relayer_balance() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "A request with this Idempotency-Key is already in progress",
+                "error": "A request with this Idempotency-Key is already in progress",
                 "data": null
             })
         ),
@@ -564,7 +564,7 @@ fn doc_get_relayer_balance() {}
             body = ApiResponse<String>,
             example = json!({
                 "success": false,
-                "message": "Idempotency-Key reused with a different request payload",
+                "error": "Idempotency-Key reused with a different request payload",
                 "data": null
             })
         ),

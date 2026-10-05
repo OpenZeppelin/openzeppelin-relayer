@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::instrument;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 #[cfg(test)]
 use mockall::automock;
@@ -75,6 +76,22 @@ pub trait Relayer {
     async fn process_transaction_request(
         &self,
         tx_request: NetworkTransactionRequest,
+    ) -> Result<TransactionRepoModel, RelayerError>
+    where
+        Self: Sync,
+    {
+        self.process_transaction_request_with_id(tx_request, Uuid::new_v4().to_string())
+            .await
+    }
+
+    /// Processes a transaction request and stores the transaction under `tx_id`.
+    ///
+    /// The caller chooses the id so it can refer to the transaction before it is
+    /// stored, for example to bind an idempotency key to it.
+    async fn process_transaction_request_with_id(
+        &self,
+        tx_request: NetworkTransactionRequest,
+        tx_id: String,
     ) -> Result<TransactionRepoModel, RelayerError>;
 
     /// Retrieves the current balance of the relayer.
@@ -280,17 +297,26 @@ impl<
         TCR: TransactionCounterTrait + Send + Sync + 'static,
     > Relayer for NetworkRelayer<J, T, RR, NR, TCR>
 {
-    async fn process_transaction_request(
+    async fn process_transaction_request_with_id(
         &self,
         tx_request: NetworkTransactionRequest,
+        tx_id: String,
     ) -> Result<TransactionRepoModel, RelayerError> {
         match self {
-            NetworkRelayer::Evm(relayer) => relayer.process_transaction_request(tx_request).await,
+            NetworkRelayer::Evm(relayer) => {
+                relayer
+                    .process_transaction_request_with_id(tx_request, tx_id)
+                    .await
+            }
             NetworkRelayer::Solana(relayer) => {
-                relayer.process_transaction_request(tx_request).await
+                relayer
+                    .process_transaction_request_with_id(tx_request, tx_id)
+                    .await
             }
             NetworkRelayer::Stellar(relayer) => {
-                relayer.process_transaction_request(tx_request).await
+                relayer
+                    .process_transaction_request_with_id(tx_request, tx_id)
+                    .await
             }
         }
     }
