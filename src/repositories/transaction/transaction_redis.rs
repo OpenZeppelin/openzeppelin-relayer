@@ -178,6 +178,61 @@ impl RedisTransactionRepository {
         (lookup_key, key_prefix, key_suffix)
     }
 
+    /// Like [`Repository::get_by_id`], but reading through the given pool.
+    /// Callers that need read-your-writes consistency pass the primary pool.
+    async fn get_by_id_on(
+        &self,
+        pool: &Arc<deadpool_redis::Pool>,
+        id: String,
+        context: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        if id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Transaction ID cannot be empty".to_string(),
+            ));
+        }
+
+        let mut conn = self.get_connection(pool, context).await?;
+        debug!(tx_id = %id, "fetching transaction");
+
+        let reverse_key = self.tx_to_relayer_key(&id);
+        let relayer_id: Option<String> = conn
+            .get(&reverse_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_transaction_reverse_lookup"))?;
+
+        let relayer_id = match relayer_id {
+            Some(relayer_id) => relayer_id,
+            None => {
+                debug!(tx_id = %id, "transaction not found (no reverse lookup)");
+                return Err(RepositoryError::NotFound(format!(
+                    "Transaction with ID {id} not found"
+                )));
+            }
+        };
+
+        let key = self.tx_key(&relayer_id, &id);
+        let value: Option<String> = conn
+            .get(&key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "get_transaction_by_id"))?;
+
+        match value {
+            Some(json) => {
+                let tx =
+                    self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
+                debug!(tx_id = %id, "successfully fetched transaction");
+                Ok(tx)
+            }
+            None => {
+                debug!(tx_id = %id, "transaction not found");
+                Err(RepositoryError::NotFound(format!(
+                    "Transaction with ID {id} not found"
+                )))
+            }
+        }
+    }
+
     /// Executes an atomic Lua script with retry/backoff for transient Redis failures.
     ///
     /// Every script receives `KEYS[1]` = tx_to_relayer lookup key and
@@ -1161,54 +1216,8 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
     }
 
     async fn get_by_id(&self, id: String) -> Result<TransactionRepoModel, RepositoryError> {
-        if id.is_empty() {
-            return Err(RepositoryError::InvalidData(
-                "Transaction ID cannot be empty".to_string(),
-            ));
-        }
-
-        let mut conn = self
-            .get_connection(self.connections.reader(), "get_by_id")
-            .await?;
-
-        debug!(tx_id = %id, "fetching transaction");
-
-        let reverse_key = self.tx_to_relayer_key(&id);
-        let relayer_id: Option<String> = conn
-            .get(&reverse_key)
+        self.get_by_id_on(self.connections.reader(), id, "get_by_id")
             .await
-            .map_err(|e| self.map_redis_error(e, "get_transaction_reverse_lookup"))?;
-
-        let relayer_id = match relayer_id {
-            Some(relayer_id) => relayer_id,
-            None => {
-                debug!(tx_id = %id, "transaction not found (no reverse lookup)");
-                return Err(RepositoryError::NotFound(format!(
-                    "Transaction with ID {id} not found"
-                )));
-            }
-        };
-
-        let key = self.tx_key(&relayer_id, &id);
-        let value: Option<String> = conn
-            .get(&key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "get_transaction_by_id"))?;
-
-        match value {
-            Some(json) => {
-                let tx =
-                    self.deserialize_entity::<TransactionRepoModel>(&json, &id, "transaction")?;
-                debug!(tx_id = %id, "successfully fetched transaction");
-                Ok(tx)
-            }
-            None => {
-                debug!(tx_id = %id, "transaction not found");
-                Err(RepositoryError::NotFound(format!(
-                    "Transaction with ID {id} not found"
-                )))
-            }
-        }
     }
 
     // Unoptimized implementation of list_paginated. Rarely used. find_by_relayer_id is preferred.
@@ -1554,6 +1563,14 @@ impl Repository<TransactionRepoModel, String> for RedisTransactionRepository {
 
 #[async_trait]
 impl TransactionRepository for RedisTransactionRepository {
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.get_by_id_on(self.connections.primary(), id, "get_by_id_on_primary")
+            .await
+    }
+
     async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
@@ -2764,10 +2781,14 @@ impl TransactionRepository for RedisTransactionRepository {
             )
             .await?;
 
-        // Atomic on the primary: delete the key only when the transaction was
-        // never stored. `create` writes the reverse lookup key with the record.
+        // Atomic on the primary: delete the key only when it still holds this
+        // request's reservation and the transaction was never stored. `create`
+        // writes the reverse lookup key with the record.
         let script = Script::new(
             r#"
+            local current = redis.call('GET', KEYS[1])
+            if not current then return 0 end
+            if cjson.decode(current).tx_id ~= ARGV[1] then return 0 end
             if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
             return redis.call('DEL', KEYS[1])
             "#,
@@ -2775,6 +2796,7 @@ impl TransactionRepository for RedisTransactionRepository {
         let deleted: i64 = script
             .key(&redis_key)
             .key(&reverse_key)
+            .arg(tx_id)
             .invoke_async(&mut conn)
             .await
             .map_err(|e| self.map_redis_error(e, "release_idempotency_key_if_unused"))?;
@@ -5305,6 +5327,23 @@ mod tests {
         assert_eq!(meta.insufficient_fee_retries, 1);
     }
 
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_get_transaction_on_primary() {
+        let repo = setup_test_repo().await;
+        let random_id = Uuid::new_v4().to_string();
+        let tx = create_test_transaction(&random_id);
+
+        repo.create(tx.clone()).await.unwrap();
+        let stored = repo
+            .get_by_id_on_primary(random_id.to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(stored.id, tx.id);
+        assert_eq!(stored.relayer_id, tx.relayer_id);
+    }
+
     fn test_idempotency_record(fingerprint: &str, tx_id: &str) -> IdempotencyRecord {
         IdempotencyRecord {
             fingerprint: fingerprint.to_string(),
@@ -5377,6 +5416,33 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_release_idempotency_key_if_unused_keeps_other_reservation() {
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let key = Uuid::new_v4().to_string();
+
+        repo.reserve_idempotency_key(
+            &relayer_id,
+            &key,
+            &test_idempotency_record("fp-1", "tx-new"),
+            3600,
+        )
+        .await
+        .unwrap();
+
+        assert!(!repo
+            .release_idempotency_key_if_unused(&relayer_id, &key, "tx-old")
+            .await
+            .unwrap());
+        assert!(repo
+            .get_idempotency_record(&relayer_id, &key)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]

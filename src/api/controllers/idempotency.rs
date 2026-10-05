@@ -3,7 +3,10 @@
 //! A client may send an `Idempotency-Key` header with a create request. The
 //! transaction id is chosen before the key is reserved and stored in the key
 //! record, so a repeat request can always find the transaction it created.
-use std::future::Future;
+use std::{
+    future::Future,
+    sync::{Arc, Once},
+};
 
 use actix_web::http::header::HeaderMap;
 use chrono::{DateTime, Utc};
@@ -33,7 +36,9 @@ const IN_FLIGHT_WINDOW_MARGIN_SECONDS: i64 = 10;
 const IN_PROGRESS_MESSAGE: &str = "A request with this Idempotency-Key is already in progress";
 const PAYLOAD_MISMATCH_MESSAGE: &str = "Idempotency-Key reused with a different request payload";
 const TRANSACTION_GONE_MESSAGE: &str =
-    "No transaction exists for this Idempotency-Key. Use a new key to send a new request";
+    "No transaction found for this Idempotency-Key. It may have \
+     completed and been removed from storage. Confirm whether the original request was \
+     processed before you send it again with a new key";
 
 /// Reads the optional `Idempotency-Key` header.
 ///
@@ -76,6 +81,60 @@ pub fn transaction_request_fingerprint(request: &serde_json::Value) -> Result<St
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Runs [`create_idempotent`] in a detached task and waits for its result.
+///
+/// The timeout middleware drops the handler future when a request times out.
+/// The detached task keeps running, so the transaction is still stored and
+/// its jobs are still queued. A retry with the same key then returns it.
+pub async fn create_idempotent_detached<TR, F, Fut>(
+    repo: Arc<TR>,
+    relayer_id: String,
+    key: String,
+    fingerprint: String,
+    ttl_seconds: u64,
+    create: F,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    TR: TransactionRepository + Sync + 'static,
+    F: FnOnce(String) -> Fut + 'static,
+    Fut: Future<Output = Result<TransactionRepoModel, RelayerError>> + 'static,
+{
+    actix_web::rt::spawn(async move {
+        create_idempotent(
+            repo.as_ref(),
+            &relayer_id,
+            &key,
+            fingerprint,
+            ttl_seconds,
+            create,
+        )
+        .await
+    })
+    .await
+    .map_err(|e| ApiError::InternalError(format!("Idempotent create task failed: {e}")))?
+}
+
+/// Returns the TTL to use for a reservation.
+///
+/// A key must outlive the in-flight window. Otherwise it can expire while the
+/// first request is still running, and a retry would create a second
+/// transaction. A configured value below the window is raised to the window.
+fn effective_ttl_seconds(configured_seconds: u64, window_seconds: i64) -> u64 {
+    let window = u64::try_from(window_seconds).unwrap_or(0);
+    if configured_seconds < window {
+        static WARN_ONCE: Once = Once::new();
+        WARN_ONCE.call_once(|| {
+            warn!(
+                configured_seconds,
+                window_seconds = window,
+                "IDEMPOTENCY_KEY_TTL_SECONDS is below the in-flight window; using the window"
+            );
+        });
+        return window;
+    }
+    configured_seconds
+}
+
 /// Creates a transaction at most once per relayer and idempotency key.
 ///
 /// `create` receives the transaction id to use. Outcomes:
@@ -96,10 +155,12 @@ pub async fn create_idempotent<TR, F, Fut>(
     create: F,
 ) -> Result<TransactionRepoModel, ApiError>
 where
-    TR: TransactionRepository + ?Sized,
+    TR: TransactionRepository + Sync + ?Sized,
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = Result<TransactionRepoModel, RelayerError>>,
 {
+    let window = in_flight_window_seconds(ServerConfig::get_request_timeout_seconds());
+    let ttl_seconds = effective_ttl_seconds(ttl_seconds, window);
     let record = IdempotencyRecord {
         fingerprint,
         tx_id: Uuid::new_v4().to_string(),
@@ -110,7 +171,7 @@ where
         .reserve_idempotency_key(relayer_id, key, &record, ttl_seconds)
         .await?
     {
-        return replay(repo, relayer_id, key, &record.fingerprint).await;
+        return replay(repo, relayer_id, key, &record.fingerprint, window).await;
     }
 
     match create(record.tx_id.clone()).await {
@@ -144,9 +205,10 @@ async fn replay<TR>(
     relayer_id: &str,
     key: &str,
     fingerprint: &str,
+    window_seconds: i64,
 ) -> Result<TransactionRepoModel, ApiError>
 where
-    TR: TransactionRepository + ?Sized,
+    TR: TransactionRepository + Sync + ?Sized,
 {
     // The key expired between the failed reserve and this read. Ask the client
     // to retry; the retry reserves the key normally.
@@ -160,7 +222,9 @@ where
         ));
     }
 
-    match repo.get_by_id(existing.tx_id.clone()).await {
+    // Read the primary: a lagging replica could hide a stored transaction and
+    // turn a valid replay into a 404.
+    match repo.get_by_id_on_primary(existing.tx_id.clone()).await {
         Ok(transaction) => {
             info!(
                 relayer_id,
@@ -169,12 +233,7 @@ where
             );
             Ok(transaction)
         }
-        Err(RepositoryError::NotFound(_))
-            if is_in_flight(
-                &existing.created_at,
-                in_flight_window_seconds(ServerConfig::get_request_timeout_seconds()),
-            ) =>
-        {
+        Err(RepositoryError::NotFound(_)) if is_in_flight(&existing.created_at, window_seconds) => {
             Err(ApiError::Conflict(IN_PROGRESS_MESSAGE.to_string()))
         }
         Err(RepositoryError::NotFound(_)) => {
@@ -411,6 +470,80 @@ mod tests {
         .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(repo.get_by_id(replay.id).await.is_ok());
+    }
+
+    #[actix_web::test]
+    async fn test_detached_create_completes_after_caller_is_dropped() {
+        let repo = Arc::new(InMemoryTransactionRepository::new());
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let create = {
+            let repo = repo.clone();
+            let gate = gate.clone();
+            move |tx_id: String| async move {
+                let _ = started_tx.send(());
+                gate.notified().await;
+                let mut tx = create_mock_transaction();
+                tx.id = tx_id;
+                tx.relayer_id = RELAYER.to_string();
+                repo.create(tx.clone())
+                    .await
+                    .map_err(|e| RelayerError::Internal(e.to_string()))?;
+                let _ = done_tx.send(());
+                Ok(tx)
+            }
+        };
+
+        {
+            // Drop the caller while `create` is running, like a request timeout.
+            let caller = create_idempotent_detached(
+                repo.clone(),
+                RELAYER.to_string(),
+                KEY.to_string(),
+                "fp".into(),
+                TTL,
+                create,
+            );
+            tokio::pin!(caller);
+            tokio::select! {
+                _ = &mut caller => panic!("create must still be waiting on the gate"),
+                _ = started_rx => {}
+            }
+        }
+        gate.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(5), done_rx)
+            .await
+            .expect("detached create did not store the transaction after the caller was dropped")
+            .expect("detached create task ended before storing the transaction");
+
+        let record = repo
+            .get_idempotency_record(RELAYER, KEY)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let calls = AtomicUsize::new(0);
+        let replay = create_idempotent(
+            repo.as_ref(),
+            RELAYER,
+            KEY,
+            "fp".into(),
+            TTL,
+            storing_create(&repo, &calls),
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.id, record.tx_id);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_effective_ttl_is_at_least_the_window() {
+        assert_eq!(effective_ttl_seconds(86400, 60), 86400);
+        assert_eq!(effective_ttl_seconds(30, 60), 60);
+        assert_eq!(effective_ttl_seconds(0, 130), 130);
     }
 
     #[test]

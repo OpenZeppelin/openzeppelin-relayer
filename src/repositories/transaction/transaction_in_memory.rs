@@ -656,9 +656,13 @@ impl TransactionRepository for InMemoryTransactionRepository {
             return Ok(false);
         }
         let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
-        Ok(idempotency
-            .remove(&Self::idempotency_map_key(relayer_id, key))
-            .is_some())
+        let map_key = Self::idempotency_map_key(relayer_id, key);
+        // Delete only this request's reservation, never a newer one.
+        let owned = matches!(idempotency.get(&map_key), Some((record, _)) if record.tx_id == tx_id);
+        if owned {
+            idempotency.remove(&map_key);
+        }
+        Ok(owned)
     }
 }
 
@@ -778,6 +782,21 @@ mod tests {
                 assert_eq!(stored_data.hash, tx_data.hash);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_on_primary_uses_default_repository_read() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-primary-read");
+
+        repo.create(tx.clone()).await.unwrap();
+        let stored = repo
+            .get_by_id_on_primary("test-primary-read".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(stored.id, tx.id);
+        assert_eq!(stored.relayer_id, tx.relayer_id);
     }
 
     #[tokio::test]
@@ -2694,6 +2713,27 @@ mod tests {
             .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_keeps_other_reservation() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-new");
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap();
+
+        assert!(!repo
+            .release_idempotency_key_if_unused("relayer-1", "key-1", "tx-old")
+            .await
+            .unwrap());
+        assert_eq!(
+            repo.get_idempotency_record("relayer-1", "key-1")
+                .await
+                .unwrap(),
+            Some(record)
+        );
     }
 
     #[tokio::test]

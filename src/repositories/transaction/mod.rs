@@ -60,6 +60,16 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         None
     }
 
+    /// Retrieves a transaction from the primary data source.
+    ///
+    /// Backends without read replicas use the standard repository read.
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        Repository::get_by_id(self, id).await
+    }
+
     /// Find transactions by relayer ID with pagination
     async fn find_by_relayer_id(
         &self,
@@ -295,6 +305,7 @@ mockall::mock! {
   #[async_trait]
   impl TransactionRepository for TransactionRepository {
       fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)>;
+      async fn get_by_id_on_primary(&self, id: String) -> Result<TransactionRepoModel, RepositoryError>;
       async fn find_by_relayer_id(&self, relayer_id: &str, query: PaginationQuery) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status(&self, relayer_id: &str, statuses: &[TransactionStatus]) -> Result<Vec<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
@@ -372,6 +383,16 @@ impl TransactionRepository for TransactionRepositoryStorage {
     fn connection_info(&self) -> Option<(Arc<RedisConnections>, String)> {
         TransactionRepositoryStorage::connection_info(self)
             .map(|(connections, key_prefix)| (connections, key_prefix.to_string()))
+    }
+
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => repo.get_by_id_on_primary(id).await,
+            TransactionRepositoryStorage::Redis(repo) => repo.get_by_id_on_primary(id).await,
+        }
     }
 
     async fn find_by_relayer_id(

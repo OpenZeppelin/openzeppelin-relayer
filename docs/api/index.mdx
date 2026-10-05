@@ -29,13 +29,13 @@ Responses for a repeated key:
 | Same key, same body, transaction stored | `200` with that transaction in its current state. No new transaction is created. |
 | Same key, different body | `422 Unprocessable Entity`. Send a new key for a new request. |
 | Same key, first request still being processed | `409 Conflict`. Retry after a short delay with the same key. |
-| Same key, no transaction found after the in-flight window: 60 seconds, or `REQUEST_TIMEOUT_SECONDS` plus 10 seconds if that is longer | `404 Not Found`. The first request never stored a transaction, or the transaction was removed from storage. Use a new key. |
+| Same key, no transaction found after the in-flight window: 60 seconds, or `REQUEST_TIMEOUT_SECONDS` plus 10 seconds if that is longer | `404 Not Found`. Either the first request never stored a transaction, or the transaction completed and was removed from storage after `TRANSACTION_EXPIRATION_HOURS`. The relayer can't tell these apart, so check whether the original was processed (for example on-chain) before retrying with a new key. |
 
 "Still being processed" means the create step only: store the transaction and queue its jobs. It does not mean the transaction is waiting for on-chain confirmation. A replay returns the transaction in any lifecycle status, such as `pending`, `submitted`, or `confirmed`.
 
-If the first request fails before the transaction is stored, the key is released and you can retry with the same key. If it fails after the transaction is stored, the key stays bound to that transaction and a retry returns it.
+If the first request fails before the transaction is stored, the key is released and you can retry with the same key. If it fails after the transaction is stored, the key stays bound to that transaction and a retry returns it. If the first request times out, the relayer still finishes creating the transaction in the background, and a retry with the same key returns it.
 
-Expiry: a key is kept for `IDEMPOTENCY_KEY_TTL_SECONDS` (default `86400`, 24 hours). After that, the same key starts a new request. Set it to cover your client's retry window. Transactions in a final state are removed after `TRANSACTION_EXPIRATION_HOURS` (default `4`). A replay after that returns `404`, but the key still prevents a duplicate until it expires.
+Expiry: a key is kept for `IDEMPOTENCY_KEY_TTL_SECONDS` (default `86400`, 24 hours). After that, the same key starts a new request. Set it to cover your client's retry window. A value below the in-flight window is raised to the window. Transactions in a final state are removed after `TRANSACTION_EXPIRATION_HOURS` (default `4`). A replay after that returns `404`, but the key still prevents a duplicate until it expires.
 
 ## Relayers
 

@@ -11,7 +11,7 @@
 //! - JSON-RPC proxy
 use crate::{
     api::controllers::idempotency::{
-        create_idempotent, normalize_idempotency_key, transaction_request_fingerprint,
+        create_idempotent_detached, normalize_idempotency_key, transaction_request_fingerprint,
     },
     config::ServerConfig,
     domain::{
@@ -450,14 +450,17 @@ pub async fn send_transaction(
     let key = normalize_idempotency_key(&raw_key)?;
 
     let fingerprint = transaction_request_fingerprint(&request)?;
-    let relayer_ref = &relayer;
-    let transaction = create_idempotent(
-        state.transaction_repository.as_ref(),
-        &relayer_repo_model.id,
-        &key,
+    let transaction = create_idempotent_detached(
+        state.transaction_repository.clone(),
+        relayer_repo_model.id.clone(),
+        key,
         fingerprint,
         ServerConfig::get_idempotency_key_ttl_seconds(),
-        move |tx_id| relayer_ref.process_transaction_request_with_id(tx_request, tx_id),
+        move |tx_id| async move {
+            relayer
+                .process_transaction_request_with_id(tx_request, tx_id)
+                .await
+        },
     )
     .await?;
 
