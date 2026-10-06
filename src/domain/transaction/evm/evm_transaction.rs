@@ -1139,18 +1139,24 @@ where
 
         // Record the new hash before broadcast, as prepare_transaction does. The send
         // retries on timeouts, so a payload can land even when the call reports an error.
-        let mut hashes = tx.hashes.clone();
-        hashes.extend(final_evm_data.hash.clone());
-        let tx = self
-            .transaction_repository
-            .partial_update(
-                tx.id.clone(),
-                TransactionUpdateRequest {
-                    hashes: Some(hashes),
-                    ..Default::default()
-                },
-            )
-            .await?;
+        let tx = match &final_evm_data.hash {
+            Some(hash) if !tx.hashes.contains(hash) => {
+                let mut hashes = tx.hashes.clone();
+                hashes.push(hash.clone());
+                self.transaction_repository
+                    .partial_update(
+                        tx.id.clone(),
+                        TransactionUpdateRequest {
+                            hashes: Some(hashes),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+            }
+            // Already recorded: an earlier failed send signed the same payload. A duplicate
+            // would inflate hashes.len(), which drives backoff and the attempt limit.
+            _ => tx,
+        };
 
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
@@ -4700,6 +4706,45 @@ mod tests {
 
         let result = evm_transaction.resubmit_transaction(test_tx).await;
         assert!(result.is_err(), "Expected Err on timeout, got: {result:?}");
+    }
+
+    /// A re-signed payload whose hash is already recorded is not appended again.
+    #[tokio::test]
+    async fn test_resubmit_transaction_does_not_duplicate_recorded_hash() {
+        let (mut test_tx, mock_price_calculator, mut mock_provider, mock_signer) =
+            resubmit_fixture();
+        test_tx.hashes = vec!["0xoriginal_hash".to_string(), "0xnew_hash".to_string()];
+
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xnew_hash".to_string()) }));
+
+        // Only the post-broadcast update; no pre-broadcast hashes write
+        let mut mock_transaction = MockTransactionRepository::new();
+        let tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| {
+                update.status == Some(TransactionStatus::Submitted) && update.hashes.is_none()
+            })
+            .returning(move |_, _| Ok(tx_clone.clone()));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
     /// If the new hash cannot be recorded, the payload must not be broadcast.
