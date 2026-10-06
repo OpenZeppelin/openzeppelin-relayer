@@ -14,11 +14,14 @@ use async_trait::async_trait;
 use eyre::Result;
 use itertools::Itertools;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
+    /// Idempotency records with their expiry time, keyed by `relayer_id:key`.
+    idempotency: Mutex<HashMap<String, (IdempotencyRecord, Instant)>>,
 }
 
 impl Clone for InMemoryTransactionRepository {
@@ -29,9 +32,15 @@ impl Clone for InMemoryTransactionRepository {
             .try_lock()
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| HashMap::new());
+        let idempotency = self
+            .idempotency
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
 
         Self {
             store: Mutex::new(data),
+            idempotency: Mutex::new(idempotency),
         }
     }
 }
@@ -40,7 +49,19 @@ impl InMemoryTransactionRepository {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
+            idempotency: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Builds the in-memory idempotency map key, scoped per relayer.
+    fn idempotency_map_key(relayer_id: &str, key: &str) -> String {
+        format!("{relayer_id}:{key}")
+    }
+
+    /// Drops expired idempotency records, matching the Redis TTL behavior.
+    fn purge_expired_idempotency(map: &mut HashMap<String, (IdempotencyRecord, Instant)>) {
+        let now = Instant::now();
+        map.retain(|_, (_, expires_at)| *expires_at > now);
     }
 
     async fn acquire_lock<T>(lock: &Mutex<T>) -> Result<MutexGuard<'_, T>, RepositoryError> {
@@ -592,6 +613,57 @@ impl TransactionRepository for InMemoryTransactionRepository {
         let ids: Vec<String> = requests.into_iter().map(|r| r.id).collect();
         self.delete_by_ids(ids).await
     }
+
+    async fn reserve_idempotency_key(
+        &self,
+        relayer_id: &str,
+        key: &str,
+        record: &IdempotencyRecord,
+        ttl_seconds: u64,
+    ) -> Result<bool, RepositoryError> {
+        let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
+        Self::purge_expired_idempotency(&mut idempotency);
+        let map_key = Self::idempotency_map_key(relayer_id, key);
+        if idempotency.contains_key(&map_key) {
+            return Ok(false);
+        }
+        let expires_at = Instant::now() + Duration::from_secs(ttl_seconds);
+        idempotency.insert(map_key, (record.clone(), expires_at));
+        Ok(true)
+    }
+
+    async fn get_idempotency_record(
+        &self,
+        relayer_id: &str,
+        key: &str,
+    ) -> Result<Option<IdempotencyRecord>, RepositoryError> {
+        let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
+        Self::purge_expired_idempotency(&mut idempotency);
+        Ok(idempotency
+            .get(&Self::idempotency_map_key(relayer_id, key))
+            .map(|(record, _)| record.clone()))
+    }
+
+    async fn release_idempotency_key_if_unused(
+        &self,
+        relayer_id: &str,
+        key: &str,
+        tx_id: &str,
+    ) -> Result<bool, RepositoryError> {
+        // Lock order: transaction store first, then idempotency map.
+        let store = Self::acquire_lock(&self.store).await?;
+        if store.contains_key(tx_id) {
+            return Ok(false);
+        }
+        let mut idempotency = Self::acquire_lock(&self.idempotency).await?;
+        let map_key = Self::idempotency_map_key(relayer_id, key);
+        // Delete only this request's reservation, never a newer one.
+        let owned = matches!(idempotency.get(&map_key), Some((record, _)) if record.tx_id == tx_id);
+        if owned {
+            idempotency.remove(&map_key);
+        }
+        Ok(owned)
+    }
 }
 
 impl Default for InMemoryTransactionRepository {
@@ -710,6 +782,21 @@ mod tests {
                 assert_eq!(stored_data.hash, tx_data.hash);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_on_primary_uses_default_repository_read() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("test-primary-read");
+
+        repo.create(tx.clone()).await.unwrap();
+        let stored = repo
+            .get_by_id_on_primary("test-primary-read".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(stored.id, tx.id);
+        assert_eq!(stored.relayer_id, tx.relayer_id);
     }
 
     #[tokio::test]
@@ -2541,5 +2628,171 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    fn test_idempotency_record(fingerprint: &str, tx_id: &str) -> IdempotencyRecord {
+        IdempotencyRecord {
+            fingerprint: fingerprint.to_string(),
+            tx_id: tx_id.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reserve_idempotency_key_returns_true_then_false() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+        assert!(!repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_idempotency_record() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        assert!(repo
+            .get_idempotency_record("relayer-1", "key-1")
+            .await
+            .unwrap()
+            .is_none());
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap();
+
+        let stored = repo
+            .get_idempotency_record("relayer-1", "key-1")
+            .await
+            .unwrap();
+        assert_eq!(stored, Some(record));
+    }
+
+    #[tokio::test]
+    async fn test_idempotency_record_expires_after_ttl() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 0)
+            .await
+            .unwrap();
+
+        assert!(repo
+            .get_idempotency_record("relayer-1", "key-1")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+        assert_eq!(repo.idempotency.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_deletes_when_tx_absent() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap();
+
+        assert!(repo
+            .release_idempotency_key_if_unused("relayer-1", "key-1", "tx-1")
+            .await
+            .unwrap());
+        assert!(repo
+            .reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_keeps_other_reservation() {
+        let repo = InMemoryTransactionRepository::new();
+        let record = test_idempotency_record("fp-1", "tx-new");
+
+        repo.reserve_idempotency_key("relayer-1", "key-1", &record, 3600)
+            .await
+            .unwrap();
+
+        assert!(!repo
+            .release_idempotency_key_if_unused("relayer-1", "key-1", "tx-old")
+            .await
+            .unwrap());
+        assert_eq!(
+            repo.get_idempotency_record("relayer-1", "key-1")
+                .await
+                .unwrap(),
+            Some(record)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_release_idempotency_key_if_unused_keeps_key_when_tx_stored() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction("tx-1");
+        let relayer_id = tx.relayer_id.clone();
+        let record = test_idempotency_record("fp-1", "tx-1");
+
+        repo.reserve_idempotency_key(&relayer_id, "key-1", &record, 3600)
+            .await
+            .unwrap();
+        repo.create(tx).await.unwrap();
+
+        assert!(!repo
+            .release_idempotency_key_if_unused(&relayer_id, "key-1", "tx-1")
+            .await
+            .unwrap());
+        assert!(repo
+            .get_idempotency_record(&relayer_id, "key-1")
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn test_idempotency_keys_are_scoped_per_relayer() {
+        let repo = InMemoryTransactionRepository::new();
+
+        assert!(repo
+            .reserve_idempotency_key(
+                "relayer-1",
+                "shared-key",
+                &test_idempotency_record("fp-1", "tx-1"),
+                3600
+            )
+            .await
+            .unwrap());
+        assert!(repo
+            .reserve_idempotency_key(
+                "relayer-2",
+                "shared-key",
+                &test_idempotency_record("fp-2", "tx-2"),
+                3600
+            )
+            .await
+            .unwrap());
+
+        let record_1 = repo
+            .get_idempotency_record("relayer-1", "shared-key")
+            .await
+            .unwrap()
+            .unwrap();
+        let record_2 = repo
+            .get_idempotency_record("relayer-2", "shared-key")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record_1.fingerprint, "fp-1");
+        assert_eq!(record_2.fingerprint, "fp-2");
     }
 }

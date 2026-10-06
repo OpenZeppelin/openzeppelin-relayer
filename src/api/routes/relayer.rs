@@ -2,6 +2,7 @@
 //! It includes handlers for listing, retrieving, updating, and managing relayer transactions.
 //! The routes are integrated with the Actix-web framework and interact with the relayer controller.
 use crate::{
+    api::controllers::idempotency::idempotency_key_from_headers,
     api::controllers::relayer,
     domain::{SignDataRequest, SignTransactionRequest, SignTypedDataRequest},
     models::{
@@ -11,7 +12,7 @@ use crate::{
         CreateRelayerRequest, DefaultAppState, PaginationQuery, TransactionListQuery,
     },
 };
-use actix_web::{delete, get, patch, post, put, web, Responder};
+use actix_web::{delete, get, patch, post, put, web, HttpRequest, Responder};
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -83,10 +84,19 @@ async fn get_relayer_balance(
 #[post("/relayers/{relayer_id}/transactions")]
 async fn send_transaction(
     relayer_id: web::Path<String>,
+    http_req: HttpRequest,
     req: web::Json<serde_json::Value>,
     data: web::ThinData<DefaultAppState>,
 ) -> impl Responder {
-    relayer::send_transaction(relayer_id.into_inner(), req.into_inner(), data).await
+    let idempotency_key = idempotency_key_from_headers(http_req.headers())?;
+
+    relayer::send_transaction(
+        relayer_id.into_inner(),
+        req.into_inner(),
+        idempotency_key,
+        data,
+    )
+    .await
 }
 
 #[derive(Deserialize, ToSchema)]

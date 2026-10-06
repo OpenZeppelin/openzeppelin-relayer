@@ -82,6 +82,12 @@ pub trait SolanaRpcMethods: Send + Sync {
         &self,
         request: SolanaSignAndSendTransactionRequestParams,
     ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError>;
+    /// Same as `sign_and_send_transaction`, but stores the transaction under `tx_id`.
+    async fn sign_and_send_transaction_with_id(
+        &self,
+        request: SolanaSignAndSendTransactionRequestParams,
+        tx_id: String,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError>;
     async fn get_supported_tokens(
         &self,
         request: SolanaGetSupportedTokensRequestParams,
@@ -218,6 +224,15 @@ where
         params: SolanaSignAndSendTransactionRequestParams,
     ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
         self.sign_and_send_transaction_impl(params).await
+    }
+
+    async fn sign_and_send_transaction_with_id(
+        &self,
+        params: SolanaSignAndSendTransactionRequestParams,
+        tx_id: String,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
+        self.sign_and_send_transaction_with_id_impl(params, Some(tx_id))
+            .await
     }
 
     async fn transfer_transaction(

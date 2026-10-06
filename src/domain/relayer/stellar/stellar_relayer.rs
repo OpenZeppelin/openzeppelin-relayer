@@ -465,9 +465,10 @@ where
             network_type = ?self.relayer.network_type,
         )
     )]
-    async fn process_transaction_request(
+    async fn process_transaction_request_with_id(
         &self,
         network_transaction: NetworkTransactionRequest,
+        tx_id: String,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let network_model = self
             .network_repository
@@ -479,8 +480,9 @@ where
                     self.relayer.network
                 ))
             })?;
-        let transaction =
+        let mut transaction =
             TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
+        transaction.id = tx_id;
 
         self.transaction_repository
             .create(transaction.clone())
