@@ -79,7 +79,7 @@ pub const EVM_PENDING_RECOVERY_TRIGGER_SECONDS: i64 = 20;
 pub const EVM_MIN_AGE_FOR_HASH_RECOVERY_MINUTES: i64 = 2;
 
 /// Minimum number of hashes required before attempting hash recovery
-pub const EVM_MIN_HASHES_FOR_RECOVERY: usize = 3;
+pub const EVM_MIN_HASHES_FOR_RECOVERY: usize = 2;
 
 /// Get preparation timeout duration
 pub fn get_evm_prepare_timeout() -> Duration {

@@ -52,6 +52,17 @@ const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt stat
 /// is persisted to avoid an oversized DB write or notification payload.
 const MAX_REVERT_DATA_HEX_LEN: usize = 4096;
 
+/// Outcome of checking a transaction's historical hashes for a mined receipt.
+#[derive(Debug)]
+enum HistoricalHashRecovery {
+    /// A historical hash was mined; the transaction was updated to use it.
+    Recovered(Box<TransactionRepoModel>),
+    /// Every historical hash was checked and none was mined.
+    NotFound,
+    /// No hash was found, but at least one receipt lookup failed.
+    Incomplete,
+}
+
 /// Caps an overlong revert-data hex string to [`MAX_REVERT_DATA_HEX_LEN`], appending a marker so
 /// consumers can tell the payload was clipped. The hex is ASCII, so slicing on a byte index is safe.
 fn truncate_revert_hex(hex: &str) -> String {
@@ -283,16 +294,20 @@ where
             // Only do this for transactions that have multiple resubmission attempts
             // and have been stuck in Submitted for a while
             if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
-                match self.try_recover_with_historical_hashes(tx, &evm_data).await {
+                match self
+                    .try_recover_with_historical_hashes(tx, &evm_data)
+                    .await?
+                {
                     // Return the status from the recovered (updated) transaction
-                    Ok(Some(recovered_tx)) => return Ok(recovered_tx.status),
-                    Ok(None) => {}
+                    HistoricalHashRecovery::Recovered(recovered_tx) => {
+                        return Ok(recovered_tx.status)
+                    }
+                    HistoricalHashRecovery::NotFound => {}
                     // Best-effort fallback: a lookup error leaves the tx Submitted
-                    Err(e) => {
+                    HistoricalHashRecovery::Incomplete => {
                         warn!(
                             tx_id = %tx.id,
                             relayer_id = %tx.relayer_id,
-                            error = %e,
                             "historical hash recovery incomplete due to RPC errors"
                         );
                     }
@@ -871,15 +886,19 @@ where
         // 2. Try historical hash recovery (reuse existing method)
         if tx.hashes.len() > 1 {
             match self.try_recover_with_historical_hashes(tx, &evm_data).await {
-                Ok(Some(recovered_tx)) => {
+                Ok(HistoricalHashRecovery::Recovered(recovered_tx)) => {
                     debug!(
                         tx_id = %tx.id,
                         "nonce recovery: recovered transaction via historical hash"
                     );
-                    return Ok(Some(recovered_tx));
+                    return Ok(Some(*recovered_tx));
                 }
-                Ok(None) => {
+                Ok(HistoricalHashRecovery::NotFound) => {
                     // No historical hash found — continue
+                }
+                Ok(HistoricalHashRecovery::Incomplete) => {
+                    // A lookup failed: the mined hash may be one we could not check
+                    had_rpc_errors = true;
                 }
                 Err(e) => {
                     warn!(
@@ -1433,7 +1452,7 @@ where
     ///
     /// This is an expensive operation, so we only do it when:
     /// - Transaction has been in Submitted status for a while (> 2 minutes)
-    /// - Transaction has had at least 2 resubmission attempts (hashes.len() > 1)
+    /// - Transaction has had at least 1 resubmission attempt (hashes.len() > 1)
     /// - Haven't tried recovery too recently (to avoid repeated attempts)
     fn should_try_hash_recovery(
         &self,
@@ -1458,7 +1477,7 @@ where
         }
 
         // Check if we've had enough resubmission attempts (more attempts = more likely to have wrong hash)
-        // Only try recovery if we have at least 3 hashes (2 resubmissions)
+        // Only try recovery if we have at least 2 hashes (1 resubmission)
         if tx.hashes.len() < EVM_MIN_HASHES_FOR_RECOVERY {
             return Ok(false);
         }
@@ -1473,12 +1492,13 @@ where
     /// be the one that actually got mined. This method checks all historical hashes
     /// to find if any were mined, and updates the database with the correct one.
     ///
-    /// Returns the updated transaction model if recovery was successful, None otherwise.
+    /// Returns `Recovered` with the updated transaction model if a historical hash was mined.
+    /// Receipt lookup errors give `Incomplete`; only repository errors are returned as `Err`.
     async fn try_recover_with_historical_hashes(
         &self,
         tx: &TransactionRepoModel,
         evm_data: &crate::models::EvmTransactionData,
-    ) -> Result<Option<TransactionRepoModel>, TransactionError> {
+    ) -> Result<HistoricalHashRecovery, TransactionError> {
         warn!(
             tx_id = %tx.id,
             relayer_id = %tx.relayer_id,
@@ -1487,7 +1507,7 @@ where
             "attempting hash recovery - checking historical hashes"
         );
 
-        let mut last_err = None;
+        let mut had_lookup_error = false;
 
         // Check each historical hash (most recent first, since it's more likely)
         for (idx, historical_hash) in tx.hashes.iter().rev().enumerate() {
@@ -1531,7 +1551,7 @@ where
                         )
                         .await?;
 
-                    return Ok(Some(updated_tx));
+                    return Ok(HistoricalHashRecovery::Recovered(Box::new(updated_tx)));
                 }
                 Ok(None) => {
                     // This hash not found either, continue to next
@@ -1546,7 +1566,7 @@ where
                         error = %e,
                         "error checking historical hash, continuing to next"
                     );
-                    last_err = Some(e);
+                    had_lookup_error = true;
                     continue;
                 }
             }
@@ -1554,8 +1574,8 @@ where
 
         // The mined hash may be one we failed to check, so callers must not treat
         // the nonce as consumed externally.
-        if let Some(e) = last_err {
-            return Err(e.into());
+        if had_lookup_error {
+            return Ok(HistoricalHashRecovery::Incomplete);
         }
 
         // None of the historical hashes found on-chain
@@ -1564,7 +1584,7 @@ where
             relayer_id = %tx.relayer_id,
             "hash recovery completed - no historical hashes found on-chain"
         );
-        Ok(None)
+        Ok(HistoricalHashRecovery::NotFound)
     }
 
     /// Updates transaction with the corrected hash and status
@@ -1935,6 +1955,45 @@ mod tests {
 
             let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
             assert_eq!(status, TransactionStatus::Submitted);
+        }
+
+        /// A failed write of the recovered hash must fail the status check so it is retried,
+        /// not look like a lookup error. Two hashes (one resubmission) are enough to recover.
+        #[tokio::test]
+        async fn test_not_mined_recovered_hash_write_error_propagates() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.hashes = vec!["0xHash1".to_string(), "0xHash2".to_string()];
+            tx.sent_at = Some((Utc::now() - Duration::minutes(3)).to_rfc3339());
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xHash1".to_string());
+            }
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|hash| {
+                    if hash == "0xHash2" {
+                        Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) })
+                    } else {
+                        Box::pin(async { Ok(None) })
+                    }
+                });
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .times(1)
+                .returning(|_, _| {
+                    Err(crate::models::RepositoryError::ConnectionError(
+                        "redis down".to_string(),
+                    ))
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let result = evm_transaction.check_transaction_status(&tx).await;
+            assert!(result.is_err(), "Expected Err, got: {result:?}");
         }
 
         #[tokio::test]
@@ -4357,6 +4416,7 @@ mod tests {
 
     // Tests for hash recovery functions
     mod hash_recovery_tests {
+        use super::super::HistoricalHashRecovery;
         use super::*;
 
         #[tokio::test]
@@ -4472,13 +4532,13 @@ mod tests {
                 .unwrap();
 
             assert!(
-                result.is_none(),
-                "Should return None when no historical hash is found"
+                matches!(result, HistoricalHashRecovery::NotFound),
+                "Should return NotFound when no historical hash is found"
             );
         }
 
         #[tokio::test]
-        async fn test_try_recover_lookup_error_without_match_returns_err() {
+        async fn test_try_recover_lookup_error_without_match_is_incomplete() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
 
@@ -4510,8 +4570,8 @@ mod tests {
                 .await;
 
             assert!(
-                result.is_err(),
-                "Should report the lookup error when no historical hash is found"
+                matches!(result, Ok(HistoricalHashRecovery::Incomplete)),
+                "Should report Incomplete when a lookup failed and no hash was found, got: {result:?}"
             );
         }
 
@@ -4576,8 +4636,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert!(result.is_some(), "Should recover the transaction");
-            let recovered_tx = result.unwrap();
+            let HistoricalHashRecovery::Recovered(recovered_tx) = result else {
+                panic!("Should recover the transaction, got: {result:?}");
+            };
             assert_eq!(recovered_tx.status, TransactionStatus::Mined);
         }
 
@@ -4638,7 +4699,7 @@ mod tests {
                 .unwrap();
 
             assert!(
-                result.is_some(),
+                matches!(result, HistoricalHashRecovery::Recovered(_)),
                 "Should continue checking after network error and find mined hash"
             );
         }
