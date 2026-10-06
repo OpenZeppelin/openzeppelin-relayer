@@ -725,10 +725,21 @@ where
                 status_reason: reason.map(|r| format!("{r} Marked as Failed.")),
                 ..Default::default()
             };
-            let updated_tx = self
+            // Compare-and-set: submit may have moved the tx on since it was read.
+            // Failing it then would let gap fill NOOP a nonce that is in use.
+            let (updated_tx, applied) = self
                 .transaction_repository()
-                .partial_update(tx.id.clone(), update)
+                .partial_update_if_status(tx.id.clone(), TransactionStatus::Pending, update)
                 .await?;
+            if !applied {
+                info!(
+                    tx_id = %updated_tx.id,
+                    relayer_id = %updated_tx.relayer_id,
+                    status = ?updated_tx.status,
+                    "transaction left Pending concurrently, not marking as Failed"
+                );
+                return Ok(updated_tx);
+            }
 
             self.schedule_nonce_health_if_assigned(&updated_tx, "pending timeout")
                 .await;
@@ -784,11 +795,15 @@ where
     }
 
     /// Marks a transaction as Failed with a given reason.
+    ///
+    /// The write applies only if the stored status still equals `tx.status`
+    /// (compare-and-set), so a tx that another worker moved on is not
+    /// overwritten. Returns the stored transaction and whether the write applied.
     async fn mark_as_failed(
         &self,
         tx: TransactionRepoModel,
         reason: String,
-    ) -> Result<TransactionRepoModel, TransactionError> {
+    ) -> Result<(TransactionRepoModel, bool), TransactionError> {
         warn!(
             tx_id = %tx.id,
             relayer_id = %tx.relayer_id,
@@ -802,10 +817,20 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
+        let (updated_tx, applied) = self
             .transaction_repository()
-            .partial_update(tx.id.clone(), update)
+            .partial_update_if_status(tx.id.clone(), tx.status.clone(), update)
             .await?;
+        if !applied {
+            info!(
+                tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
+                expected_status = ?tx.status,
+                status = ?updated_tx.status,
+                "transaction changed status concurrently, not force-failing"
+            );
+            return Ok((updated_tx, false));
+        }
 
         // Send notification (best effort)
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
@@ -817,7 +842,7 @@ where
             );
         }
 
-        Ok(updated_tx)
+        Ok((updated_tx, true))
     }
 
     /// Reconciles a single transaction's nonce state against on-chain reality.
@@ -995,10 +1020,12 @@ where
                     nonce = ?tx.network_data.evm_nonce(),
                     "circuit breaker: marking Pending transaction as Failed"
                 );
-                let updated_tx = self.mark_as_failed(tx, reason).await?;
+                let (updated_tx, applied) = self.mark_as_failed(tx, reason).await?;
 
-                self.schedule_nonce_health_if_assigned(&updated_tx, "circuit breaker")
-                    .await;
+                if applied {
+                    self.schedule_nonce_health_if_assigned(&updated_tx, "circuit breaker")
+                        .await;
+                }
 
                 Ok(updated_tx)
             }
@@ -1034,7 +1061,8 @@ where
                         relayer_id = %tx.relayer_id,
                         "circuit breaker: Sent transaction without nonce - safe to mark as Failed"
                     );
-                    self.mark_as_failed(tx, reason).await
+                    let (updated_tx, _applied) = self.mark_as_failed(tx, reason).await?;
+                    Ok(updated_tx)
                 }
             }
             TransactionStatus::Submitted => {
@@ -3278,17 +3306,18 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(move |id, update| {
+                .expect_partial_update_if_status()
+                .withf(move |id, expected, update| {
                     id == "test-tx-id"
+                        && *expected == TransactionStatus::Pending
                         && update.status == Some(TransactionStatus::Failed)
                         && update.status_reason.is_some()
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
             // Expect that a notification is produced (no submit job needed for Failed status)
             mocks
@@ -3339,17 +3368,18 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|id, update| {
+                .expect_partial_update_if_status()
+                .withf(|id, expected, update| {
                     id == "test-tx-id"
+                        && *expected == TransactionStatus::Pending
                         && update.status == Some(TransactionStatus::Failed)
                         && update.status_reason.is_some()
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
             mocks
                 .job_producer
@@ -3375,6 +3405,55 @@ mod tests {
             assert_eq!(result.status, TransactionStatus::Failed);
             assert!(result.status_reason.is_some());
             assert!(result.status_reason.unwrap().contains("Pending state"));
+        }
+
+        #[tokio::test]
+        async fn test_pending_state_timeout_lost_race_leaves_tx_and_skips_health_job() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Pending);
+            tx.created_at = (Utc::now() - Duration::minutes(2)).to_rfc3339();
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.nonce = Some(42);
+            }
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            mocks.provider.expect_get_block_by_number().returning(|| {
+                Box::pin(async {
+                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                    let mut block: Block = Block::default();
+                    block.header.gas_limit = 30_000_000u64;
+                    Ok(AnyRpcBlock::from(block))
+                })
+            });
+
+            // Submit moved the tx to Sent after the status check read it as Pending.
+            let mut stored_tx = tx.clone();
+            stored_tx.status = TransactionStatus::Sent;
+            mocks
+                .tx_repo
+                .expect_partial_update_if_status()
+                .withf(|_, expected, _| *expected == TransactionStatus::Pending)
+                .times(1)
+                .returning(move |_, _, _| Ok((stored_tx.clone(), false)));
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(0);
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(0);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_pending_state(tx).await.unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Sent);
+            assert_eq!(result.status_reason, None);
         }
     }
 
@@ -4075,13 +4154,16 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Pending
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             // Mock notification (best effort, may or may not be called)
@@ -4115,13 +4197,16 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(move |_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Pending
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             // The abandoned nonce must be handed to gap fill.
@@ -4154,6 +4239,44 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_circuit_breaker_pending_lost_race_skips_health_job() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Pending);
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.nonce = Some(42);
+            }
+
+            // Submit moved the tx to Submitted after the status check read it as Pending.
+            let mut stored_tx = tx.clone();
+            stored_tx.status = TransactionStatus::Submitted;
+            mocks
+                .tx_repo
+                .expect_partial_update_if_status()
+                .withf(|_, expected, _| *expected == TransactionStatus::Pending)
+                .times(1)
+                .returning(move |_, _, _| Ok((stored_tx.clone(), false)));
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(0);
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .times(0);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let ctx = create_triggered_context();
+
+            let result = evm_transaction
+                .handle_status_impl(tx, Some(ctx))
+                .await
+                .unwrap();
+
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
         async fn test_circuit_breaker_sent_marks_as_failed() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
@@ -4162,13 +4285,16 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Sent
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Sent);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             // Mock notification
@@ -4299,13 +4425,16 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Pending
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             mocks
@@ -5130,12 +5259,15 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(move |_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Sent
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
@@ -5161,12 +5293,15 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(move |_, update| {
+                .expect_partial_update_if_status()
+                .withf(|_, expected, update| {
+                    *expected == TransactionStatus::Pending
+                        && update.status == Some(TransactionStatus::Failed)
+                })
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
-                    Ok(updated_tx)
+                    Ok((updated_tx, true))
                 });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);

@@ -408,6 +408,15 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(filtered.into_iter().next())
     }
 
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        // No read replicas in memory; the standard read is the primary read.
+        self.find_by_nonce(relayer_id, nonce).await
+    }
+
     async fn get_nonce_occupancy(
         &self,
         relayer_id: &str,
@@ -473,6 +482,28 @@ impl TransactionRepository for InMemoryTransactionRepository {
             NetworkTransactionData::Evm(evm_data) if evm_data.nonce.is_none()
         );
         if Self::is_final_state(&tx.status) || !nonce_is_unset {
+            return Ok((tx.clone(), false));
+        }
+
+        tx.apply_partial_update(update);
+        Ok((tx.clone(), true))
+    }
+
+    async fn partial_update_if_status(
+        &self,
+        tx_id: String,
+        expected: TransactionStatus,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let tx = store.get_mut(&tx_id).ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        // Same refusals as the Redis script: a status mismatch, or a status
+        // change on a finalized record.
+        let final_status_change = Self::is_final_state(&tx.status) && update.status.is_some();
+        if tx.status != expected || final_status_change {
             return Ok((tx.clone(), false));
         }
 
@@ -1087,6 +1118,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partial_update_if_status_applies_only_on_match() {
+        let repo = InMemoryTransactionRepository::new();
+        repo.create(create_test_transaction_pending_state("test-cas"))
+            .await
+            .unwrap();
+        let fail = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            ..Default::default()
+        };
+
+        // Another writer moves the tx on first: the stale Pending→Failed loses.
+        repo.update_status("test-cas".to_string(), TransactionStatus::Sent)
+            .await
+            .unwrap();
+        let (stored, applied) = repo
+            .partial_update_if_status(
+                "test-cas".to_string(),
+                TransactionStatus::Pending,
+                fail.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(!applied);
+        assert_eq!(stored.status, TransactionStatus::Sent);
+
+        let (updated, applied) = repo
+            .partial_update_if_status("test-cas".to_string(), TransactionStatus::Sent, fail)
+            .await
+            .unwrap();
+        assert!(applied);
+        assert_eq!(updated.status, TransactionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_if_status_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .partial_update_if_status(
+                "missing".to_string(),
+                TransactionStatus::Pending,
+                TransactionUpdateRequest::default(),
+            )
+            .await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
     async fn test_update_status() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -1214,6 +1292,15 @@ mod tests {
 
         // Test finding transaction that doesn't exist
         let result = repo.find_by_nonce("relayer-1", 99).await.unwrap();
+        assert!(result.is_none());
+
+        // The primary lookup sees the same data (no replicas in memory)
+        let result = repo.find_by_nonce_on_primary("relayer-1", 2).await.unwrap();
+        assert_eq!(result.unwrap().id, "test-2");
+        let result = repo
+            .find_by_nonce_on_primary("relayer-1", 99)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
