@@ -283,12 +283,19 @@ where
             // Only do this for transactions that have multiple resubmission attempts
             // and have been stuck in Submitted for a while
             if tx.hashes.len() > 1 && self.should_try_hash_recovery(tx)? {
-                if let Some(recovered_tx) = self
-                    .try_recover_with_historical_hashes(tx, &evm_data)
-                    .await?
-                {
+                match self.try_recover_with_historical_hashes(tx, &evm_data).await {
                     // Return the status from the recovered (updated) transaction
-                    return Ok(recovered_tx.status);
+                    Ok(Some(recovered_tx)) => return Ok(recovered_tx.status),
+                    Ok(None) => {}
+                    // Best-effort fallback: a lookup error leaves the tx Submitted
+                    Err(e) => {
+                        warn!(
+                            tx_id = %tx.id,
+                            relayer_id = %tx.relayer_id,
+                            error = %e,
+                            "historical hash recovery incomplete due to RPC errors"
+                        );
+                    }
                 }
             }
 
@@ -1480,6 +1487,8 @@ where
             "attempting hash recovery - checking historical hashes"
         );
 
+        let mut last_err = None;
+
         // Check each historical hash (most recent first, since it's more likely)
         for (idx, historical_hash) in tx.hashes.iter().rev().enumerate() {
             // Skip if this is the current hash (already checked)
@@ -1537,9 +1546,16 @@ where
                         error = %e,
                         "error checking historical hash, continuing to next"
                     );
+                    last_err = Some(e);
                     continue;
                 }
             }
+        }
+
+        // The mined hash may be one we failed to check, so callers must not treat
+        // the nonce as consumed externally.
+        if let Some(e) = last_err {
+            return Err(e.into());
         }
 
         // None of the historical hashes found on-chain
@@ -1881,6 +1897,39 @@ mod tests {
                 .provider
                 .expect_get_transaction_receipt()
                 .returning(|_| Box::pin(async { Ok(None) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            let status = evm_transaction.check_transaction_status(&tx).await.unwrap();
+            assert_eq!(status, TransactionStatus::Submitted);
+        }
+
+        /// A failed historical lookup must not fail the status check; the tx stays Submitted.
+        #[tokio::test]
+        async fn test_not_mined_historical_lookup_error_stays_submitted() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.hashes = vec![
+                "0xHash1".to_string(),
+                "0xHash2".to_string(),
+                "0xHash3".to_string(),
+            ];
+            tx.sent_at = Some((Utc::now() - Duration::minutes(3)).to_rfc3339());
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xHash3".to_string());
+            }
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|hash| {
+                    if hash == "0xHash2" {
+                        Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                    } else {
+                        Box::pin(async { Ok(None) })
+                    }
+                });
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
 
@@ -4429,6 +4478,44 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_try_recover_lookup_error_without_match_returns_err() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.hashes = vec![
+                "0xHash1".to_string(),
+                "0xHash2".to_string(),
+                "0xHash3".to_string(),
+            ];
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xHash3".to_string());
+            }
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|hash| {
+                    if hash == "0xHash2" {
+                        Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                    } else {
+                        Box::pin(async { Ok(None) })
+                    }
+                });
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let evm_data = tx.network_data.get_evm_transaction_data().unwrap();
+            let result = evm_transaction
+                .try_recover_with_historical_hashes(&tx, &evm_data)
+                .await;
+
+            assert!(
+                result.is_err(),
+                "Should report the lookup error when no historical hash is found"
+            );
+        }
+
+        #[tokio::test]
         async fn test_try_recover_finds_mined_historical_hash() {
             let mut mocks = default_test_mocks();
             let relayer = create_test_relayer();
@@ -4752,6 +4839,45 @@ mod tests {
             let recovered = result.unwrap();
             assert!(recovered.is_some(), "Expected Some(tx) for consumed nonce");
             assert_eq!(recovered.unwrap().status, TransactionStatus::Failed);
+        }
+
+        /// A historical-hash lookup error must block the "consumed externally" Failed path:
+        /// the mined payload may be the one we failed to check.
+        #[tokio::test]
+        async fn test_nonce_recovery_historical_lookup_error_prevents_force_fail() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                nonce: Some(5),
+                hash: Some("0xhash".to_string()),
+                raw: Some(vec![1, 2, 3]),
+                ..tx.network_data.get_evm_transaction_data().unwrap()
+            });
+            tx.hashes = vec!["0xresubmitted".to_string(), "0xhash".to_string()];
+
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|hash| {
+                    if hash == "0xresubmitted" {
+                        Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                    } else {
+                        Box::pin(async { Ok(None) })
+                    }
+                });
+            // On-chain nonce would say "consumed", but it must not be consulted
+            mocks.provider.expect_get_transaction_count().times(0);
+            mocks.tx_repo.expect_partial_update().times(0);
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.reconcile_tx_nonce_state(&tx).await;
+
+            assert!(
+                matches!(result, Ok(None)),
+                "Expected Ok(None), got: {result:?}"
+            );
         }
 
         /// Test reconcile_tx_nonce_state with on_chain_nonce <= tx_nonce → returns None
