@@ -1,0 +1,8 @@
+---
+# Ignore High findings that cannot be cleared without raising MSRV or dropping
+# transitive AWS SDK / rustls 0.21 paths. Prefer dependency bumps when available.
+ignore:
+  # Patched only in rustls-webpki >= 0.103.13; AWS SDK still pulls rustls 0.21 → 0.101.7.
+  - vulnerability: GHSA-82j2-j2ch-gfr8
+  # Patched in aws-smithy-json >= 0.62.7; that release needs aws-smithy-types with rustc 1.94+ (MSRV 1.93).
+  - vulnerability: GHSA-8ffr-xgwf-xj56
