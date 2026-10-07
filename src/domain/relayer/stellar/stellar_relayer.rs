@@ -3478,6 +3478,64 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_rpc_provider_rpc_error_preserves_data() {
+            let ctx = TestCtx::default();
+            ctx.setup_network().await;
+            let relayer_model = ctx.relayer_model.clone();
+            let error_data = serde_json::json!({
+                "status": "FAILED",
+                "errorResultXdr": "AAAAAA=="
+            });
+
+            let mut provider = MockStellarProviderTrait::new();
+            provider.expect_raw_request_dyn().returning({
+                let error_data = error_data.clone();
+                move |_, _, _| {
+                    let error_data = error_data.clone();
+                    Box::pin(async move {
+                        Err(ProviderError::RpcErrorCode {
+                            code: -32000,
+                            message: "transaction submission failed".to_string(),
+                            data: Some(error_data),
+                        })
+                    })
+                }
+            });
+
+            let signer = Arc::new(MockStellarSignTrait::new());
+            let dex_service = create_mock_dex_service();
+
+            let relayer = StellarRelayer::new(
+                relayer_model.clone(),
+                signer,
+                provider,
+                StellarRelayerDependencies::new(
+                    Arc::new(MockRelayerRepository::new()),
+                    ctx.network_repository.clone(),
+                    Arc::new(MockTransactionRepository::new()),
+                    Arc::new(MockTransactionCounterServiceTrait::new()),
+                    Arc::new(MockJobProducerTrait::new()),
+                ),
+                dex_service,
+            )
+            .await
+            .unwrap();
+
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(JsonRpcId::Number(42)),
+                params: NetworkRpcRequest::Stellar(StellarRpcRequest::RawRpcRequest {
+                    method: "sendTransaction".to_string(),
+                    params: serde_json::Value::Null,
+                }),
+            };
+
+            let response = relayer.rpc(request).await.unwrap();
+            let error = response.error.expect("expected RPC error");
+            assert_eq!(error.data, Some(error_data));
+        }
+
+        #[tokio::test]
         async fn test_rpc_success() {
             let ctx = TestCtx::default();
             ctx.setup_network().await;

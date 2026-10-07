@@ -1,6 +1,8 @@
 import '@jest/globals';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import { createRequire } from 'node:module';
 
 /**
  * Regression: compiler-externalized `@openzeppelin/relayer-sdk` must resolve
@@ -11,11 +13,26 @@ import * as fs from 'node:fs';
  * at `plugins/package.json` (cwd-relative) so SDK resolution still works.
  */
 describe('executePlugin SDK require resolution', () => {
-  it('resolves @openzeppelin/relayer-sdk from plugins/node_modules', async () => {
+  it('fails to resolve the SDK via ambient require from a temp worker path', () => {
+    // Simulates Piscina's on-the-fly worker file under os.tmpdir().
+    const tempWorker = path.join(os.tmpdir(), `pool-executor-${Date.now()}.js`);
+    const tempRequire = createRequire(tempWorker);
+    expect(() => tempRequire('@openzeppelin/relayer-sdk')).toThrow(/Cannot find module/);
+  });
+
+  it('resolves the SDK from plugins/package.json (pluginsRequire root)', () => {
     const pluginsPkg = path.resolve(process.cwd(), 'package.json');
     expect(fs.existsSync(pluginsPkg)).toBe(true);
     expect(JSON.parse(fs.readFileSync(pluginsPkg, 'utf8')).name).toBe('plugins');
 
+    const pluginsRequire = createRequire(pluginsPkg);
+    const sdk = pluginsRequire('@openzeppelin/relayer-sdk') as {
+      pluginError: unknown;
+    };
+    expect(typeof sdk.pluginError).toBe('function');
+  });
+
+  it('resolves @openzeppelin/relayer-sdk through executePlugin factory require', async () => {
     const { default: executePlugin } = await import('../../lib/pool-executor');
 
     // Mirrors compiler output: SDK left external, required at plugin load time.
