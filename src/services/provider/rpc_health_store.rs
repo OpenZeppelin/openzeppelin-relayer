@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use tracing::{debug, warn};
 
+use crate::utils::mask_url;
+
 /// Metadata for tracking RPC endpoint health.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RpcConfigMetadata {
@@ -140,7 +142,7 @@ impl RpcHealthStore {
             if !was_paused {
                 // Provider just got paused
                 debug!(
-                    provider_url = %url,
+                    provider_url = %mask_url(url),
                     failure_count = %recent_failures,
                     threshold = %threshold,
                     paused_until = %paused_until,
@@ -150,7 +152,7 @@ impl RpcHealthStore {
             } else {
                 // Provider was already paused, but pause duration extended
                 debug!(
-                    provider_url = %url,
+                    provider_url = %mask_url(url),
                     failure_count = %recent_failures,
                     threshold = %threshold,
                     paused_until = %paused_until,
@@ -281,7 +283,7 @@ impl RpcHealthStore {
             if now >= paused_until {
                 // Pause expired - clear pause (but keep failure timestamps for tracking)
                 debug!(
-                    provider_url = %url,
+                    provider_url = %mask_url(url),
                     paused_until = %paused_until,
                     current_time = %now,
                     remaining_failures = %meta.failure_timestamps.len(),
