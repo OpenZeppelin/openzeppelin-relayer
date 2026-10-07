@@ -12,3 +12,7 @@ noop = "noop"
 extend-ignore-identifiers-re = [
     "[a-f0-9]{7,40}",
 ]
+
+[files]
+# Historical release notes keep original wording; do not auto-correct them.
+extend-exclude = ["CHANGELOG.md"]
