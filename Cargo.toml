@@ -144,6 +144,7 @@ lru = "0.16"
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
 ctor = "0.2"
+jsonrpsee-types = "0.26.0"
 mockall = { version = "0.13" }
 mockito = "1.7.1"
 proptest = "1.6.0"

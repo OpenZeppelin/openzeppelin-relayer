@@ -1016,6 +1016,49 @@ mod tests {
     }
 
     #[test]
+    fn test_rpc_error_code_serialization_omits_none_data() {
+        let error = ProviderError::RpcErrorCode {
+            code: -32000,
+            message: "insufficient funds".to_string(),
+            data: None,
+        };
+        let value = serde_json::to_value(&error).expect("serialize");
+        let body = value
+            .get("RpcErrorCode")
+            .expect("externally tagged RpcErrorCode");
+        assert_eq!(body.get("code"), Some(&serde_json::json!(-32000)));
+        assert!(
+            body.get("data").is_none(),
+            "data must be omitted when None: {body}"
+        );
+    }
+
+    #[test]
+    fn test_rpc_error_code_serialization_includes_data() {
+        let data = serde_json::json!({"revert": "0x08c379a0"});
+        let error = ProviderError::RpcErrorCode {
+            code: 3,
+            message: "execution reverted".to_string(),
+            data: Some(data.clone()),
+        };
+        let value = serde_json::to_value(&error).expect("serialize");
+        let body = value
+            .get("RpcErrorCode")
+            .expect("externally tagged RpcErrorCode");
+        assert_eq!(body.get("data"), Some(&data));
+    }
+
+    #[test]
+    fn test_is_retriable_rpc_error_code_ignores_data_payload() {
+        let error = ProviderError::RpcErrorCode {
+            code: -32005,
+            message: "limit exceeded".to_string(),
+            data: Some(serde_json::json!({"retry_after": 1})),
+        };
+        assert!(is_retriable_error(&error));
+    }
+
+    #[test]
     fn test_get_stellar_network_provider_invalid_custom_url_scheme() {
         let _lock = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         setup_test_env();

@@ -6537,6 +6537,7 @@ dependencies = [
  "itertools 0.14.0",
  "json-patch",
  "jsonrpsee-core",
+ "jsonrpsee-types",
  "k256",
  "lapin",
  "lazy_static",
