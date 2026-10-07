@@ -7,6 +7,8 @@
 
 import * as v8 from 'node:v8';
 import * as net from 'node:net';
+import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { v4 as uuidv4 } from 'uuid';
 import { DefaultPluginKVStore } from './kv';
 import type { PluginAPI, PluginContext, PluginHeaders, Relayer } from './plugin';
@@ -22,6 +24,16 @@ import {
   pluginError,
 } from '@openzeppelin/relayer-sdk';
 import { SOCKET_REQUEST_TIMEOUT_MS } from './constants';
+
+/**
+ * Resolve packages left external by the plugin compiler (notably
+ * `@openzeppelin/relayer-sdk`) from the Relayer `plugins/` tree.
+ *
+ * Piscina may load this worker from a temp copy under `os.tmpdir()`, so the
+ * default `require` cannot see `plugins/node_modules`. Always resolve from
+ * `plugins/package.json` relative to the Relayer process cwd.
+ */
+const pluginsRequire = createRequire(path.resolve(process.cwd(), 'plugins', 'package.json'));
 
 /**
  * Function Cache - Caches compiled plugin factory functions.
@@ -652,8 +664,16 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
     }
 
     // Execute the factory to populate module.exports
-    // Pass our custom console to capture logs
-    factory(moduleExports, require, moduleObject, `plugin-${task.pluginId}.js`, '/plugins', pluginConsole);
+    // Pass pluginsRequire so externalized packages resolve under plugins/node_modules
+    // even when this worker file lives in a Piscina temp path.
+    factory(
+      moduleExports,
+      pluginsRequire,
+      moduleObject,
+      `plugin-${task.pluginId}.js`,
+      path.resolve(process.cwd(), 'plugins'),
+      pluginConsole
+    );
 
     // Get the handler from exports
     const handler = moduleObject.exports.handler || moduleExports.handler;
