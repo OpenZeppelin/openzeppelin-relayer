@@ -753,6 +753,9 @@ where
                 );
                 let (error_code, error_message) = map_provider_error(&provider_error);
                 let sanitized_description = sanitize_error_description(&provider_error);
+                // Forward upstream `data` (capped in create_error_response_with_data).
+                // Message/description stay sanitized; data is intentionally not, so
+                // authenticated clients can use provider diagnostics / structured payloads.
                 let data = match &provider_error {
                     ProviderError::RpcErrorCode { data, .. } => data.clone(),
                     _ => None,

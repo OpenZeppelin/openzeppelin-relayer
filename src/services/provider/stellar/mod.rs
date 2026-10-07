@@ -647,7 +647,9 @@ fn json_rpc_error_to_provider_error(error: &serde_json::Value) -> ProviderError 
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error")
                 .to_string(),
-            data: error.get("data").cloned(),
+            // Drop JSON null so clients don't see `"data": null` (Alloy/jsonrpsee
+            // parse null into `None`; keep the raw-JSON path aligned).
+            data: error.get("data").filter(|v| !v.is_null()).cloned(),
         };
     }
     ProviderError::Other(format!("JSON-RPC error: {error}"))
@@ -2286,6 +2288,43 @@ mod stellar_rpc_tests {
                 assert_eq!(data, Some(error_data));
             }
             other => panic!("expected RpcErrorCode with data, got {other:?}"),
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_raw_path_null_error_data_becomes_none() {
+        let _env_guard = setup_test_env();
+
+        let mut mock_server = mockito::Server::new_async().await;
+        let mock = mock_server
+            .mock("POST", "/")
+            .with_body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "transaction submission failed",
+                        "data": null
+                    }
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(mock_server.url())],
+            5,
+        ))
+        .unwrap();
+
+        let err = provider.get_transaction(&dummy_hash()).await.unwrap_err();
+        match err {
+            ProviderError::RpcErrorCode { data, .. } => assert!(data.is_none()),
+            other => panic!("expected RpcErrorCode with data=None, got {other:?}"),
         }
         mock.assert_async().await;
     }

@@ -37,6 +37,15 @@ pub fn create_error_response(
     create_error_response_with_data(id, code, message, description, None)
 }
 
+/// Max serialized size for upstream JSON-RPC `data` forwarded to API clients.
+///
+/// Message/description are sanitized, but `data` is forwarded so plugins can
+/// decode revert / `FailedOp` payloads (and Stellar diagnostic objects). That
+/// exemption is intentional for authenticated RPC callers; this cap bounds
+/// free-form provider payloads without hex-only filtering (which would drop
+/// valid Stellar / structured data).
+const MAX_FORWARDED_RPC_ERROR_DATA_BYTES: usize = 16 * 1024;
+
 /// Creates an error response that optionally includes upstream JSON-RPC `data`.
 ///
 /// Use this when proxying provider errors that carry revert / custom error
@@ -48,6 +57,7 @@ pub fn create_error_response_with_data(
     description: &str,
     data: Option<serde_json::Value>,
 ) -> JsonRpcResponse<NetworkRpcResult> {
+    let data = cap_forwarded_rpc_error_data(data);
     JsonRpcResponse {
         id,
         jsonrpc: "2.0".to_string(),
@@ -58,6 +68,29 @@ pub fn create_error_response_with_data(
             description: description.to_string(),
             data,
         }),
+    }
+}
+
+/// Drops null/`None` and oversized upstream `data` before client serialization.
+fn cap_forwarded_rpc_error_data(data: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let value = data.filter(|v| !v.is_null())?;
+    match serde_json::to_vec(&value) {
+        Ok(bytes) if bytes.len() <= MAX_FORWARDED_RPC_ERROR_DATA_BYTES => Some(value),
+        Ok(bytes) => {
+            tracing::warn!(
+                data_bytes = bytes.len(),
+                max_bytes = MAX_FORWARDED_RPC_ERROR_DATA_BYTES,
+                "Dropping oversized upstream JSON-RPC error data from client response"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "Dropping upstream JSON-RPC error data that failed to serialize"
+            );
+            None
+        }
     }
 }
 
@@ -141,6 +174,34 @@ mod tests {
         let serialized_without =
             serde_json::to_value(&without_data.error.expect("expected error")).unwrap();
         assert!(serialized_without.get("data").is_none());
+    }
+
+    #[test]
+    fn test_create_error_response_with_data_drops_null() {
+        let response = create_error_response_with_data(
+            Some(JsonRpcId::Number(1)),
+            -32000,
+            "Internal error",
+            "RPC error occurred (code: -32000)",
+            Some(json!(null)),
+        );
+        let error = response.error.expect("expected error");
+        assert!(error.data.is_none());
+        let serialized = serde_json::to_value(&error).unwrap();
+        assert!(serialized.get("data").is_none());
+    }
+
+    #[test]
+    fn test_create_error_response_with_data_drops_oversized_payload() {
+        let oversized = json!("x".repeat(MAX_FORWARDED_RPC_ERROR_DATA_BYTES + 1));
+        let response = create_error_response_with_data(
+            Some(JsonRpcId::Number(1)),
+            -32000,
+            "Internal error",
+            "RPC error occurred (code: -32000)",
+            Some(oversized),
+        );
+        assert!(response.error.expect("expected error").data.is_none());
     }
 
     #[test]

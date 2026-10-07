@@ -39,6 +39,8 @@ dotenvy = "0.15"
 thiserror = "2"
 async-trait = "0.1"
 actix-rt = "2.0.0"
+# `json-rpc` is only needed so unit tests can construct `ErrorPayload`; alloy-json-rpc
+# is already pulled in via alloy-provider, so this does not change the prod dependency set.
 alloy = { version = "1.0.24", features = ["full", "json-rpc"] }
 serde_json = "1"
 json-patch = "4.0"
@@ -144,6 +146,8 @@ lru = "0.16"
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
 ctor = "0.2"
+# Keep in lockstep with the Soroban client's `jsonrpsee-core` major/minor (ErrorObject
+# layout); a mismatch surfaces as confusing type errors in Stellar provider tests.
 jsonrpsee-types = "0.26.0"
 mockall = { version = "0.13" }
 mockito = "1.7.1"

@@ -46,6 +46,8 @@
 ### 🐛 Bug Fixes
 
 * **evm:** Preserve upstream JSON-RPC error `data` on plugin/raw RPC responses so clients (e.g. ERC-4337 plugins) can decode revert / `FailedOp` payloads instead of seeing opaque simulation failures.
+* **stellar:** Preserve upstream JSON-RPC error `data` on plugin/raw RPC responses (same pass-through as EVM), omitting JSON `null`.
+* **plugins:** Resolve `@openzeppelin/relayer-sdk` from the Relayer `plugins/` tree when the Piscina worker is loaded from an on-the-fly temp build (missing `plugins/lib/pool-executor.js`). Production images compile `pool-executor.js` at install time and were not affected.
 
 ### 🚀 Features
 

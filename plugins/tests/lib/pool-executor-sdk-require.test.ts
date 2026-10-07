@@ -2,38 +2,53 @@ import '@jest/globals';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { createRequire } from 'node:module';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 /**
- * Regression: compiler-externalized `@openzeppelin/relayer-sdk` must resolve
- * when the pool worker passes `require` into the plugin factory.
+ * Regression: when Piscina loads the worker from a temp path (on-the-fly
+ * compile), ambient `require` cannot see `plugins/node_modules`. executePlugin
+ * must root resolution at `<relayer-cwd>/plugins/package.json`.
  *
- * Piscina may load pool-executor from a temp path; ambient `require` then
- * cannot see `plugins/node_modules`. executePlugin must use a require rooted
- * at `plugins/package.json` (cwd-relative) so SDK resolution still works.
+ * Jest runs with cwd=`plugins/`, so an in-process import of `plugins/lib/`
+ * would still resolve the SDK via directory walking and would not catch a
+ * revert to ambient `require`. Compile the worker into `os.tmpdir()` the same
+ * way `compileExecutorOnTheFly` does, then spawn it with cwd set to the
+ * Relayer root (parent of `plugins/`).
  */
 describe('executePlugin SDK require resolution', () => {
-  it('fails to resolve the SDK via ambient require from a temp worker path', () => {
-    // Simulates Piscina's on-the-fly worker file under os.tmpdir().
-    const tempWorker = path.join(os.tmpdir(), `pool-executor-${Date.now()}.js`);
-    const tempRequire = createRequire(tempWorker);
-    expect(() => tempRequire('@openzeppelin/relayer-sdk')).toThrow(/Cannot find module/);
+  const pluginsDir = path.resolve(__dirname, '../..');
+  const repoRoot = path.resolve(pluginsDir, '..');
+  let tempWorkerPath: string | undefined;
+
+  afterEach(() => {
+    if (tempWorkerPath && fs.existsSync(tempWorkerPath)) {
+      fs.unlinkSync(tempWorkerPath);
+      tempWorkerPath = undefined;
+    }
   });
 
-  it('resolves the SDK from plugins/package.json (pluginsRequire root)', () => {
-    const pluginsPkg = path.resolve(process.cwd(), 'package.json');
-    expect(fs.existsSync(pluginsPkg)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(pluginsPkg, 'utf8')).name).toBe('plugins');
+  it('resolves @openzeppelin/relayer-sdk from a temp worker with Relayer cwd', async () => {
+    expect(JSON.parse(fs.readFileSync(path.join(pluginsDir, 'package.json'), 'utf8')).name).toBe(
+      'plugins'
+    );
+    expect(fs.existsSync(path.join(repoRoot, 'plugins', 'package.json'))).toBe(true);
 
-    const pluginsRequire = createRequire(pluginsPkg);
-    const sdk = pluginsRequire('@openzeppelin/relayer-sdk') as {
-      pluginError: unknown;
-    };
-    expect(typeof sdk.pluginError).toBe('function');
-  });
+    const esbuild = await import('esbuild');
+    const buildResult = await esbuild.build({
+      entryPoints: [path.join(pluginsDir, 'lib', 'pool-executor.ts')],
+      bundle: true,
+      platform: 'node',
+      target: 'node18',
+      format: 'cjs',
+      sourcemap: false,
+      write: false,
+      loader: { '.ts': 'ts' },
+      external: ['node:*'],
+    });
 
-  it('resolves @openzeppelin/relayer-sdk through executePlugin factory require', async () => {
-    const { default: executePlugin } = await import('../../lib/pool-executor');
+    tempWorkerPath = path.join(os.tmpdir(), `pool-executor-sdk-require-${randomUUID()}.js`);
+    fs.writeFileSync(tempWorkerPath, buildResult.outputFiles[0].text);
 
     // Mirrors compiler output: SDK left external, required at plugin load time.
     const pluginCode = `
@@ -46,17 +61,55 @@ describe('executePlugin SDK require resolution', () => {
       };
     `;
 
-    const result = await executePlugin({
-      taskId: 'sdk-require-test',
-      pluginId: 'sdk-require',
-      compiledCode: pluginCode,
-      params: {},
-      socketPath: path.join(process.cwd(), 'nonexistent-for-sdk-require.sock'),
-      timeout: 5000,
+    const childScript = `
+      const executePlugin = require(${JSON.stringify(tempWorkerPath)}).default;
+      (async () => {
+        const result = await executePlugin({
+          taskId: 'sdk-require-test',
+          pluginId: 'sdk-require',
+          compiledCode: ${JSON.stringify(pluginCode)},
+          params: {},
+          socketPath: ${JSON.stringify(path.join(repoRoot, 'nonexistent-for-sdk-require.sock'))},
+          timeout: 5000,
+        });
+        process.stdout.write(JSON.stringify(result));
+      })().catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+    `;
+
+    const { stdout, stderr, code } = await new Promise<{
+      stdout: string;
+      stderr: string;
+      code: number | null;
+    }>((resolve, reject) => {
+      const child = spawn(process.execPath, ['-e', childScript], {
+        cwd: repoRoot,
+        env: process.env,
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on('error', reject);
+      child.on('close', (exitCode) => resolve({ stdout, stderr, code: exitCode }));
     });
 
-    expect(result.success).toBe(true);
-    expect(result.error).toBeUndefined();
-    expect(result.result).toEqual({ ok: true, hasPluginError: true });
-  });
+    expect(code).toBe(0);
+    // Node may emit DeprecationWarning on stderr from transitive deps; fail only on real errors.
+    expect(stderr).not.toMatch(/Cannot find module|Error:/);
+    const pluginResult = JSON.parse(stdout) as {
+      success: boolean;
+      error?: string;
+      result?: { ok: boolean; hasPluginError: boolean };
+    };
+    expect(pluginResult.success).toBe(true);
+    expect(pluginResult.error).toBeUndefined();
+    expect(pluginResult.result).toEqual({ ok: true, hasPluginError: true });
+  }, 30000);
 });

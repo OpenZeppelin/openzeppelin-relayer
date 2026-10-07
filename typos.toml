@@ -6,15 +6,15 @@ NOOPs = "NOOPs"
 # Technical term for "no operation" transactions
 NOOP = "NOOP"
 noop = "noop"
-# Historical CHANGELOG wording (keep original release notes; do not "fix")
-intristic = "intristic"
-exectution = "exectution"
-concurency = "concurency"
-transfering = "transfering"
-persistance = "persistance"
 
 [default]
 # Ignore short and long SHA commit hashes (7-40 hex characters)
 extend-ignore-identifiers-re = [
     "[a-f0-9]{7,40}",
 ]
+
+# Historical release notes keep original wording; do not "fix" them.
+# Scoped to CHANGELOG.md only (basename glob) so new code is still checked.
+[type.changelog]
+extend-glob = ["CHANGELOG.md"]
+extend-words = { intristic = "intristic", exectution = "exectution", concurency = "concurency", transfering = "transfering", persistance = "persistance" }

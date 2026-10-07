@@ -593,6 +593,8 @@ where
                 let sanitized_description = sanitize_error_description(&provider_error);
                 // Preserve upstream JSON-RPC `data` (e.g. FailedOp / revert payloads) so
                 // plugins can decode simulation failures instead of treating them as opaque.
+                // Message/description stay sanitized; data is intentionally not (size-capped
+                // in create_error_response_with_data) for authenticated RPC callers.
                 let data = match &provider_error {
                     ProviderError::RpcErrorCode { data, .. } => data.clone(),
                     _ => None,
