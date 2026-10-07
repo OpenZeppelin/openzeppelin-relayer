@@ -4,8 +4,7 @@
 allowBuilds:
   esbuild: true
 overrides:
-  axios: '>=1.20.0'
-  http-cache-semantics: '>=4.3.0'
+  axios: '>=1.18.0'
   esbuild: '>=0.28.2'
   follow-redirects: '>=1.16.0'
   js-yaml: ^3.14.2
