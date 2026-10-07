@@ -1,5 +1,5 @@
 use crate::constants::get_stellar_sponsored_transaction_validity_duration;
-use crate::domain::relayer::evm::create_error_response;
+use crate::domain::relayer::evm::{create_error_response, create_error_response_with_data};
 use crate::services::stellar_dex::StellarDexService;
 use crate::utils::{map_provider_error, sanitize_error_description};
 /// This module defines the `StellarRelayer` struct and its associated functionality for
@@ -44,7 +44,7 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        provider::{StellarProvider, StellarProviderTrait},
+        provider::{ProviderError, StellarProvider, StellarProviderTrait},
         signer::{StellarSignTrait, StellarSigner},
         stellar_dex::StellarDexServiceTrait,
         TransactionCounterService, TransactionCounterServiceTrait,
@@ -753,11 +753,16 @@ where
                 );
                 let (error_code, error_message) = map_provider_error(&provider_error);
                 let sanitized_description = sanitize_error_description(&provider_error);
-                Ok(create_error_response(
+                let data = match &provider_error {
+                    ProviderError::RpcErrorCode { data, .. } => data.clone(),
+                    _ => None,
+                };
+                Ok(create_error_response_with_data(
                     id.clone(),
                     error_code,
                     error_message,
                     &sanitized_description,
+                    data,
                 ))
             }
         }

@@ -150,7 +150,14 @@ fn categorize_stellar_error_with_context(
                 jsonrpsee_core::ClientError::Call(err_obj) => {
                     let code = err_obj.code() as i64;
                     let message = add_context(err_obj.message().to_string());
-                    ProviderError::RpcErrorCode { code, message }
+                    let data = err_obj
+                        .data()
+                        .and_then(|raw| serde_json::from_str(raw.get()).ok());
+                    ProviderError::RpcErrorCode {
+                        code,
+                        message,
+                        data,
+                    }
                 }
 
                 // Handle request timeouts
@@ -640,6 +647,7 @@ fn json_rpc_error_to_provider_error(error: &serde_json::Value) -> ProviderError 
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error")
                 .to_string(),
+            data: error.get("data").cloned(),
         };
     }
     ProviderError::Other(format!("JSON-RPC error: {error}"))

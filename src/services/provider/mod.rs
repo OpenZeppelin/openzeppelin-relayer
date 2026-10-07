@@ -174,7 +174,14 @@ pub enum ProviderError {
     #[error("Request error (HTTP {status_code}): {error}")]
     RequestError { error: String, status_code: u16 },
     #[error("JSON-RPC error (code {code}): {message}")]
-    RpcErrorCode { code: i64, message: String },
+    RpcErrorCode {
+        code: i64,
+        message: String,
+        /// Optional JSON-RPC error `data` (e.g. EVM revert / FailedOp payload).
+        /// Preserved from the upstream response so plugin RPC clients can decode it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
+    },
     #[error("Transport error: {0}")]
     TransportError(String),
     #[error("Other provider error: {0}")]
@@ -291,10 +298,19 @@ where
 
                 ProviderError::TransportError(transport_err.to_string())
             }
-            RpcError::ErrorResp(json_rpc_err) => ProviderError::RpcErrorCode {
-                code: json_rpc_err.code,
-                message: json_rpc_err.message.to_string(),
-            },
+            RpcError::ErrorResp(json_rpc_err) => {
+                // Preserve JSON-RPC `data` (revert / FailedOp payloads). The previous mapping
+                // dropped it, which forced AA plugins into OPAQUE_REVERT on failed simulations.
+                let data = json_rpc_err
+                    .data
+                    .as_ref()
+                    .and_then(|raw| serde_json::from_str(raw.get()).ok());
+                ProviderError::RpcErrorCode {
+                    code: json_rpc_err.code,
+                    message: json_rpc_err.message.to_string(),
+                    data,
+                }
+            }
             _ => ProviderError::Other(format!("Other RPC error: {err}")),
         }
     }
@@ -479,7 +495,7 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
         }
 
         // JSON-RPC error codes (EIP-1474)
-        ProviderError::RpcErrorCode { code, message } => {
+        ProviderError::RpcErrorCode { code, message, .. } => {
             match code {
                 // -32002: Resource unavailable — retriable unless the message indicates a
                 // transaction-level rejection (some providers wrap nonce/tx errors here)
@@ -946,10 +962,57 @@ mod tests {
         let error = ProviderError::RpcErrorCode {
             code: -32000,
             message: "insufficient funds".to_string(),
+            data: None,
         };
         let error_string = format!("{error}");
         assert!(error_string.contains("-32000"));
         assert!(error_string.contains("insufficient funds"));
+    }
+
+    #[test]
+    fn test_from_rpc_error_preserves_error_data() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::RpcError;
+        use serde_json::value::to_raw_value;
+
+        let revert_hex = "0x08c379a0";
+        let payload = ErrorPayload {
+            code: 3,
+            message: "execution reverted".into(),
+            data: Some(to_raw_value(&serde_json::json!(revert_hex)).unwrap()),
+        };
+        let provider_error = ProviderError::from(RpcError::<String>::ErrorResp(payload));
+
+        match provider_error {
+            ProviderError::RpcErrorCode {
+                code,
+                message,
+                data,
+            } => {
+                assert_eq!(code, 3);
+                assert_eq!(message, "execution reverted");
+                assert_eq!(data, Some(serde_json::json!(revert_hex)));
+            }
+            other => panic!("expected RpcErrorCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_rpc_error_without_data_keeps_none() {
+        use alloy::rpc::json_rpc::ErrorPayload;
+        use alloy::transports::RpcError;
+
+        let payload = ErrorPayload {
+            code: -32601,
+            message: "Method not found".into(),
+            data: None,
+        };
+        let provider_error = ProviderError::from(RpcError::<String>::ErrorResp(payload));
+
+        match provider_error {
+            ProviderError::RpcErrorCode { data, .. } => assert!(data.is_none()),
+            other => panic!("expected RpcErrorCode, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1438,6 +1501,7 @@ mod tests {
                 let error = ProviderError::RpcErrorCode {
                     code,
                     message: message.to_string(),
+                    data: None,
                 };
                 assert!(
                     !is_retriable_error(&error),
@@ -1449,6 +1513,7 @@ mod tests {
                 let error = ProviderError::RpcErrorCode {
                     code,
                     message: message.to_string(),
+                    data: None,
                 };
                 assert!(
                     is_retriable_error(&error),

@@ -43,7 +43,7 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        provider::{EvmProvider, EvmProviderTrait},
+        provider::{EvmProvider, EvmProviderTrait, ProviderError},
         signer::{DataSignerTrait, EvmSigner},
         TransactionCounterService, TransactionCounterServiceTrait,
     },
@@ -53,7 +53,10 @@ use async_trait::async_trait;
 use eyre::Result;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::{create_error_response, create_success_response, EvmTransactionValidator};
+use super::{
+    create_error_response, create_error_response_with_data, create_success_response,
+    EvmTransactionValidator,
+};
 use crate::utils::{map_provider_error, sanitize_error_description};
 
 #[allow(dead_code)]
@@ -588,11 +591,18 @@ where
                 );
                 let (error_code, error_message) = map_provider_error(&provider_error);
                 let sanitized_description = sanitize_error_description(&provider_error);
-                Ok(create_error_response(
+                // Preserve upstream JSON-RPC `data` (e.g. FailedOp / revert payloads) so
+                // plugins can decode simulation failures instead of treating them as opaque.
+                let data = match &provider_error {
+                    ProviderError::RpcErrorCode { data, .. } => data.clone(),
+                    _ => None,
+                };
+                Ok(create_error_response_with_data(
                     request.id,
                     error_code,
                     error_message,
                     &sanitized_description,
+                    data,
                 ))
             }
         }
@@ -2665,6 +2675,56 @@ mod tests {
 
         let error = response.error.unwrap();
         assert_eq!(error.code, -32603); // RpcErrorCodes::INTERNAL_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_rpc_error_preserves_data() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+        let revert_data = serde_json::json!(
+            "0x220466a80000000000000000000000000000000000000000000000000000000000000000"
+        );
+
+        provider.expect_raw_request_dyn().returning({
+            let revert_data = revert_data.clone();
+            move |_, _| {
+                let revert_data = revert_data.clone();
+                Box::pin(async move {
+                    Err(ProviderError::RpcErrorCode {
+                        code: 3,
+                        message: "execution reverted".to_string(),
+                        data: Some(revert_data),
+                    })
+                })
+            }
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_call".to_string(),
+                params: serde_json::json!([{"to": "0x0000000071727De22E5E9d8BAf0edAc6f37da032"}, "latest"]),
+            }),
+            id: Some(JsonRpcId::Number(42)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        let error = response.error.expect("expected RPC error");
+        assert_eq!(error.data, Some(revert_data));
     }
 
     #[tokio::test]

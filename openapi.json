@@ -6769,7 +6769,7 @@
       },
       "JsonRpcError": {
         "type": "object",
-        "description": "JSON-RPC 2.0 Error structure.\n\nRepresents an error in a JSON-RPC response.",
+        "description": "JSON-RPC 2.0 Error structure.\n\nRepresents an error in a JSON-RPC response.\n\nThe optional `data` field carries upstream JSON-RPC error data (for example\nEVM revert / ERC-4337 `FailedOp` payloads) when the Relayer is proxying an\nRPC call. It is omitted from the serialized response when absent.",
         "required": [
           "code",
           "message",
@@ -6785,6 +6785,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "data": {
+            "description": "Upstream JSON-RPC error `data`, when available (hex revert string, object, etc)."
           }
         }
       },

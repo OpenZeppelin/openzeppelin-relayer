@@ -1175,6 +1175,7 @@ mod tests {
             let error = ProviderError::RpcErrorCode {
                 code,
                 message: message.to_string(),
+                data: None,
             };
             assert!(
                 is_retriable_error(&error),
@@ -1205,6 +1206,7 @@ mod tests {
             let error = ProviderError::RpcErrorCode {
                 code,
                 message: message.to_string(),
+                data: None,
             };
             assert!(
                 !is_retriable_error(&error),
@@ -1244,6 +1246,7 @@ mod tests {
             let error = ProviderError::RpcErrorCode {
                 code: -32000,
                 message: message.to_string(),
+                data: None,
             };
             assert_eq!(
                 is_retriable_error(&error),

@@ -398,6 +398,7 @@ mod tests {
                     Err(ProviderError::RpcErrorCode {
                         code: StandardJsonRpcError::MethodNotFound.code(),
                         message: "Method not found".to_string(),
+                        data: None,
                     })
                 })
             });
@@ -462,6 +463,7 @@ mod tests {
                     Err(ProviderError::RpcErrorCode {
                         code: EthereumJsonRpcError::MethodNotSupported.code(),
                         message: "Method not supported".to_string(),
+                        data: None,
                     })
                 })
             });

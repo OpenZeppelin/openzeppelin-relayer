@@ -1981,6 +1981,7 @@ mod tests {
                 Err::<i32, ProviderError>(ProviderError::RpcErrorCode {
                     code: -32603,
                     message: "nonce too low".to_string(),
+                    data: None,
                 })
             }
         };

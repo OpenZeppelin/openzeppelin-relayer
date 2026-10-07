@@ -34,6 +34,20 @@ pub fn create_error_response(
     message: &str,
     description: &str,
 ) -> JsonRpcResponse<NetworkRpcResult> {
+    create_error_response_with_data(id, code, message, description, None)
+}
+
+/// Creates an error response that optionally includes upstream JSON-RPC `data`.
+///
+/// Use this when proxying provider errors that carry revert / custom error
+/// payloads that callers (e.g. ERC-4337 plugins) need to decode.
+pub fn create_error_response_with_data(
+    id: Option<JsonRpcId>,
+    code: i32,
+    message: &str,
+    description: &str,
+    data: Option<serde_json::Value>,
+) -> JsonRpcResponse<NetworkRpcResult> {
     JsonRpcResponse {
         id,
         jsonrpc: "2.0".to_string(),
@@ -42,6 +56,7 @@ pub fn create_error_response(
             code,
             message: message.to_string(),
             description: description.to_string(),
+            data,
         }),
     }
 }
@@ -97,6 +112,35 @@ mod tests {
         assert_eq!(error.code, -32602);
         assert!(!error.message.is_empty());
         assert!(!error.description.is_empty());
+        assert!(error.data.is_none());
+    }
+
+    #[test]
+    fn test_create_error_response_with_data_preserves_payload() {
+        let revert_data = json!("0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000b48656c6c6f20576f726c640000000000000000000000000000000000000000");
+        let response = create_error_response_with_data(
+            Some(JsonRpcId::Number(1)),
+            -32000,
+            "Internal error",
+            "RPC error occurred (code: -32000)",
+            Some(revert_data.clone()),
+        );
+
+        let error = response.error.expect("expected error");
+        assert_eq!(error.data, Some(revert_data.clone()));
+
+        let serialized = serde_json::to_value(&error).unwrap();
+        assert_eq!(serialized["data"], revert_data);
+
+        let without_data = create_error_response(
+            Some(JsonRpcId::Number(1)),
+            -32000,
+            "Internal error",
+            "RPC error occurred (code: -32000)",
+        );
+        let serialized_without =
+            serde_json::to_value(&without_data.error.expect("expected error")).unwrap();
+        assert!(serialized_without.get("data").is_none());
     }
 
     #[test]
