@@ -13,6 +13,8 @@ import { Speed, PluginContext, pluginError } from '@openzeppelin/relayer-sdk';
 
 type Params = {
   destinationAddress: string;
+  /** Stable id for this logical send; reuse only when retrying the same payload. */
+  operationId: string;
 };
 
 type Result = {
@@ -32,7 +34,8 @@ export async function handler(context: PluginContext): Promise<Result> {
       gas_limit: 21000,
       speed: Speed.FAST,
     },
-    { idempotencyKey: 'my-unique-key' },
+    // Scope the key to one logical transaction (e.g. caller-provided operation id).
+    { idempotencyKey: params.operationId },
   );
 
   // Optional: persist last transaction id

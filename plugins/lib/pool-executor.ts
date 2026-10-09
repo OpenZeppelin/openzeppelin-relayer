@@ -11,7 +11,14 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { v4 as uuidv4 } from 'uuid';
 import { DefaultPluginKVStore } from './kv';
-import type { PluginAPI, PluginContext, PluginHeaders, Relayer, SendTransactionOptions } from './plugin';
+import {
+  attachIdempotencyKey,
+  type PluginAPI,
+  type PluginContext,
+  type PluginHeaders,
+  type Relayer,
+  type SendTransactionOptions,
+} from './plugin';
 import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
@@ -490,7 +497,7 @@ class PluginAPIImpl implements PluginAPI {
   ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };
-    if (options?.idempotencyKey) msg.idempotencyKey = options.idempotencyKey;
+    attachIdempotencyKey(msg, options, 'idempotencyKey');
     if (this.httpRequestId) {
       msg.httpRequestId = this.httpRequestId;
     }

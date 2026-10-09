@@ -146,6 +146,22 @@ export type SendTransactionOptions = {
 };
 
 /**
+ * Attach an explicitly supplied idempotency key to a socket message.
+ * Uses presence (`!== undefined`), not truthiness, so `''` reaches the host
+ * and can be rejected by Relayer `#893` validation instead of becoming a
+ * non-idempotent create.
+ */
+export function attachIdempotencyKey(
+  msg: Record<string, unknown>,
+  options: SendTransactionOptions | undefined,
+  field: 'idempotency_key' | 'idempotencyKey',
+): void {
+  if (options?.idempotencyKey !== undefined) {
+    msg[field] = options.idempotencyKey;
+  }
+}
+
+/**
  * The relayer API.
  * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  *
@@ -661,14 +677,12 @@ export class DefaultPluginAPI implements PluginAPI {
         relayer_id: relayerId,
         method,
         payload,
-        ...(options?.idempotencyKey
-          ? { idempotency_key: options.idempotencyKey }
-          : {}),
       };
+      attachIdempotencyKey(msg, options, 'idempotency_key');
     } else {
       // Legacy protocol format (for backward compatibility when httpRequestId is missing)
       msg = { requestId, relayerId, method, payload };
-      if (options?.idempotencyKey) msg.idempotencyKey = options.idempotencyKey;
+      attachIdempotencyKey(msg, options, 'idempotencyKey');
       if (this._httpRequestId) {
         msg.httpRequestId = this._httpRequestId;
       }
