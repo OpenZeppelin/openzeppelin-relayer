@@ -948,7 +948,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::mocks::mockutils::create_mock_app_state;
+    use crate::utils::mocks::mockutils::{
+        create_mock_app_state, create_mock_network, create_mock_relayer, create_mock_signer,
+    };
     use actix_web::web;
     use tempfile::tempdir;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1012,6 +1014,96 @@ mod tests {
                 assert_eq!(request_id, "req-1");
             }
             _ => panic!("Expected ApiResponse, got {response:?}"),
+        }
+
+        drop(reader);
+        drop(_w);
+        service.shutdown().await;
+    }
+
+    #[test]
+    fn api_request_round_trips_idempotency_key() {
+        let msg = PluginMessage::ApiRequest {
+            request_id: "req-idem".into(),
+            relayer_id: "relayer-1".into(),
+            method: crate::services::plugins::relayer_api::PluginMethod::SendTransaction,
+            payload: serde_json::json!({ "to": "0x1" }),
+            idempotency_key: Some("aa:0xabc".into()),
+        };
+        let encoded = serde_json::to_value(&msg).unwrap();
+        assert_eq!(encoded["idempotency_key"], "aa:0xabc");
+        let decoded: PluginMessage = serde_json::from_value(encoded).unwrap();
+        match decoded {
+            PluginMessage::ApiRequest {
+                idempotency_key, ..
+            } => assert_eq!(idempotency_key.as_deref(), Some("aa:0xabc")),
+            other => panic!("expected ApiRequest, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_api_request_forwards_idempotency_key_to_handler() {
+        let temp_dir = tempdir().unwrap();
+        let socket_path = temp_dir.path().join("shared_idempotency.sock");
+
+        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("relayer-1".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+
+        service
+            .clone()
+            .start(Arc::new(web::ThinData(state)))
+            .await
+            .unwrap();
+
+        let execution_id = "test-exec-idem".to_string();
+        let _guard = service.register_execution(execution_id.clone(), true).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let register_msg = PluginMessage::Register {
+            execution_id: execution_id.clone(),
+        };
+        client
+            .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+
+        // Non-send method still exercises ApiRequest → Request.idempotency_key mapping.
+        let api_request = PluginMessage::ApiRequest {
+            request_id: "req-idem-1".to_string(),
+            relayer_id: "relayer-1".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayer,
+            payload: serde_json::json!({}),
+            idempotency_key: Some("forwarded-key".into()),
+        };
+        client
+            .write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+
+        let (r, _w) = client.into_split();
+        let mut reader = BufReader::new(r);
+        let mut response_line = String::new();
+        reader.read_line(&mut response_line).await.unwrap();
+
+        let response: PluginMessage = serde_json::from_str(&response_line).unwrap();
+        match response {
+            PluginMessage::ApiResponse { request_id, .. } => {
+                assert_eq!(request_id, "req-idem-1");
+            }
+            other => panic!("Expected ApiResponse, got {other:?}"),
         }
 
         drop(reader);

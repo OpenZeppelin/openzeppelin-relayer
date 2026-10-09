@@ -1723,4 +1723,47 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[actix_web::test]
+    async fn handle_send_transaction_rejects_empty_idempotency_key() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+        let state = web::ThinData(state);
+        let relayer_api = RelayerApi;
+
+        let request = Request {
+            request_id: "idem-empty".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: serde_json::json!(create_mock_evm_transaction_request()),
+            http_request_id: None,
+            idempotency_key: Some(String::new()),
+        };
+        let err = RelayerApiTrait::handle_send_transaction(&relayer_api, request, &state)
+            .await
+            .expect_err("empty key must be rejected");
+        assert!(
+            err.to_string().contains("Invalid Idempotency-Key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_error_from_api_preserves_client_facing_message() {
+        let err = plugin_error_from_api(ApiError::BadRequest(
+            "Invalid Idempotency-Key header".into(),
+        ));
+        assert!(
+            err.to_string().contains("Invalid Idempotency-Key header"),
+            "unexpected error: {err}"
+        );
+    }
 }
