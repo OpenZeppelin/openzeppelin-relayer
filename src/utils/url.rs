@@ -12,6 +12,7 @@
 /// - `https://eth-mainnet.g.alchemy.com/v2/abc123` → `https://eth-mainnet.g.alchemy.com/***`
 /// - `https://mainnet.infura.io/v3/PROJECT_ID` → `https://mainnet.infura.io/***`
 /// - `http://localhost:8545` → `http://localhost:8545` (no path to mask)
+/// - `https://user:pass@rpc.example.com/v1` → `https://***@rpc.example.com/***` (userinfo is always hidden)
 /// - `invalid-url` → `***` (fallback for unparsable URLs)
 pub fn mask_url(url: &str) -> String {
     // Find the scheme separator "://"
@@ -22,6 +23,20 @@ pub fn mask_url(url: &str) -> String {
 
     // Find where the host ends (first "/" after "://")
     let host_start = scheme_end + 3; // Skip "://"
+
+    // Userinfo ("user:password@") carries credentials, so it is never shown
+    let authority_end = url[host_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| host_start + i);
+    let without_userinfo;
+    let url = match url[host_start..authority_end].rfind('@') {
+        Some(at) => {
+            without_userinfo = format!("{}***@{}", &url[..host_start], &url[host_start + at + 1..]);
+            without_userinfo.as_str()
+        }
+        None => url,
+    };
+
     let rest = &url[host_start..];
 
     // Find the first "/" which marks the start of the path
@@ -128,5 +143,35 @@ mod tests {
         let url = "https://rpc.ankr.com/eth/my-api-key-here";
         let masked = mask_url(url);
         assert_eq!(masked, "https://rpc.ankr.com/***");
+    }
+
+    #[test]
+    fn test_mask_url_hides_userinfo_with_path() {
+        let url = "https://user:SECRET@rpc.example.com/rpc";
+        let masked = mask_url(url);
+        assert_eq!(masked, "https://***@rpc.example.com/***");
+    }
+
+    #[test]
+    fn test_mask_url_hides_userinfo_without_path() {
+        assert_eq!(
+            mask_url("https://user:SECRET@rpc.example.com"),
+            "https://***@rpc.example.com"
+        );
+        assert_eq!(
+            mask_url("https://user:SECRET@rpc.example.com:8545/"),
+            "https://***@rpc.example.com:8545/"
+        );
+        assert_eq!(
+            mask_url("https://user:SECRET@rpc.example.com?key=abc"),
+            "https://***@rpc.example.com?***"
+        );
+    }
+
+    #[test]
+    fn test_mask_url_at_sign_in_path_is_not_userinfo() {
+        let url = "https://rpc.example.com/v1/user@example.org";
+        let masked = mask_url(url);
+        assert_eq!(masked, "https://rpc.example.com/***");
     }
 }

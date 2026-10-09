@@ -15,7 +15,7 @@ use crate::constants::{
     DEFAULT_HTTP_CLIENT_TCP_KEEPALIVE_SECONDS, NONCE_TOO_HIGH_PATTERNS,
 };
 use crate::models::{EvmNetwork, RpcConfig, SolanaNetwork, StellarNetwork};
-use crate::utils::create_secure_redirect_policy;
+use crate::utils::{create_secure_redirect_policy, mask_url};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -229,6 +229,18 @@ impl From<ParseIntError> for ProviderError {
 /// # Returns
 ///
 /// The appropriate `ProviderError` variant based on the error type
+/// Returns the error text with the request URL masked.
+///
+/// reqwest appends the full request URL to its messages (`... for url (...)`), so an API
+/// key in the path or query of an RPC URL would otherwise reach logs and error reasons.
+fn reqwest_error_text(err: &reqwest::Error) -> String {
+    let text = err.to_string();
+    match err.url() {
+        Some(url) => text.replace(url.as_str(), &mask_url(url.as_str())),
+        None => text,
+    }
+}
+
 fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
     if err.is_timeout() {
         return ProviderError::Timeout;
@@ -240,14 +252,14 @@ fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
             502 => return ProviderError::BadGateway,
             _ => {
                 return ProviderError::RequestError {
-                    error: err.to_string(),
+                    error: reqwest_error_text(err),
                     status_code: status.as_u16(),
                 }
             }
         }
     }
 
-    ProviderError::Other(err.to_string())
+    ProviderError::Other(reqwest_error_text(err))
 }
 
 impl From<reqwest::Error> for ProviderError {
@@ -720,6 +732,56 @@ mod tests {
 
         let provider_error = categorize_reqwest_error(&err);
         assert!(matches!(provider_error, ProviderError::Other(_)));
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_masks_url_in_message() {
+        // Nothing listens on port 9, so the request fails to connect
+        let client = reqwest::Client::new();
+        let err = client
+            .get("http://127.0.0.1:9/v2/SECRET_KEY_PATH?apikey=SECRET_KEY_QUERY")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SECRET_KEY_PATH"));
+
+        let provider_error = categorize_reqwest_error(&err);
+        assert!(matches!(provider_error, ProviderError::Other(_)));
+        let message = provider_error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(message.contains("http://127.0.0.1:9/***"), "{message}");
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_status_masks_url_in_message() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let _mock = mock_server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+
+        let client = reqwest::Client::new();
+        let err = client
+            .get(format!("{}/v3/SECRET_KEY", mock_server.url()))
+            .send()
+            .await
+            .expect("Failed to get response")
+            .error_for_status()
+            .expect_err("Expected error for status 500");
+        assert!(err.to_string().contains("SECRET_KEY"));
+
+        let provider_error = categorize_reqwest_error(&err);
+        assert!(matches!(
+            provider_error,
+            ProviderError::RequestError {
+                status_code: 500,
+                ..
+            }
+        ));
+        let message = provider_error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
     }
 
     #[actix_rt::test]
