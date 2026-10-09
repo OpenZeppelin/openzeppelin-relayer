@@ -24,13 +24,16 @@ export async function handler(context: PluginContext): Promise<Result> {
   console.info('Plugin started...');
 
   const relayer = api.useRelayer('sepolia-example');
-  const result = await relayer.sendTransaction({
-    to: params.destinationAddress,
-    value: 1,
-    data: '0x',
-    gas_limit: 21000,
-    speed: Speed.FAST,
-  });
+  const result = await relayer.sendTransaction(
+    {
+      to: params.destinationAddress,
+      value: 1,
+      data: '0x',
+      gas_limit: 21000,
+      speed: Speed.FAST,
+    },
+    { idempotencyKey: 'my-unique-key' },
+  );
 
   // Optional: persist last transaction id
   await kv.set('last_tx_id', result.id);

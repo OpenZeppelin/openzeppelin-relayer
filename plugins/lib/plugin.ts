@@ -138,6 +138,14 @@ type GetTransactionRequest = {
 };
 
 /**
+ * Optional metadata for sendTransaction.
+ * When set, the idempotency key is forwarded on the socket ApiRequest as `idempotency_key`.
+ */
+export type SendTransactionOptions = {
+  idempotencyKey?: string;
+};
+
+/**
  * The relayer API.
  * We are defining this interface here and in SDK. When changes are made to the interface, we need to update both places.
  *
@@ -151,9 +159,13 @@ export type Relayer = {
   /**
    * Sends a transaction to the relayer.
    * @param payload - The transaction request payload.
+   * @param options - Optional send options (e.g. idempotencyKey).
    * @returns The transaction result.
    */
-  sendTransaction: (payload: NetworkTransactionRequest) => Promise<SendTransactionResult>;
+  sendTransaction: (
+    payload: NetworkTransactionRequest,
+    options?: SendTransactionOptions,
+  ) => Promise<SendTransactionResult>;
 
   /**
    * Fetches a transaction from the relayer.
@@ -551,12 +563,17 @@ export class DefaultPluginAPI implements PluginAPI {
    */
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: async (payload: NetworkTransactionRequest) => {
-        const result = await this._send<SendTransactionResult>(relayerId, 'sendTransaction', payload);
+      sendTransaction: async (payload, options) => {
+        const result = await this._send<SendTransactionResult>(
+          relayerId,
+          'sendTransaction',
+          payload,
+          options,
+        );
         // Add the wait method to the result
         return {
           ...result,
-          wait: (options?: TransactionWaitOptions) => this.transactionWait(result, options),
+          wait: (waitOpts) => this.transactionWait(result, waitOpts),
         };
       },
       getTransaction: (payload: GetTransactionRequest) =>
@@ -615,7 +632,12 @@ export class DefaultPluginAPI implements PluginAPI {
     });
   }
 
-  async _send<T>(relayerId: string, method: string, payload: any): Promise<T> {
+  async _send<T>(
+    relayerId: string,
+    method: string,
+    payload: any,
+    options?: { idempotencyKey?: string },
+  ): Promise<T> {
     const requestId = uuidv4();
 
     // Ensure connection and registration are complete
@@ -637,12 +659,16 @@ export class DefaultPluginAPI implements PluginAPI {
         type: 'api_request',
         request_id: requestId,
         relayer_id: relayerId,
-        method: method,
-        payload: payload,
+        method,
+        payload,
+        ...(options?.idempotencyKey
+          ? { idempotency_key: options.idempotencyKey }
+          : {}),
       };
     } else {
       // Legacy protocol format (for backward compatibility when httpRequestId is missing)
       msg = { requestId, relayerId, method, payload };
+      if (options?.idempotencyKey) msg.idempotencyKey = options.idempotencyKey;
       if (this._httpRequestId) {
         msg.httpRequestId = this._httpRequestId;
       }

@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { v4 as uuidv4 } from 'uuid';
 import { DefaultPluginKVStore } from './kv';
-import type { PluginAPI, PluginContext, PluginHeaders, Relayer } from './plugin';
+import type { PluginAPI, PluginContext, PluginHeaders, Relayer, SendTransactionOptions } from './plugin';
 import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
@@ -411,12 +411,17 @@ class PluginAPIImpl implements PluginAPI {
 
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: async (payload: NetworkTransactionRequest) => {
-        const result = await this.send<{ id: string; relayer_id: string }>(relayerId, 'sendTransaction', payload);
+      sendTransaction: async (payload: NetworkTransactionRequest, options?: SendTransactionOptions) => {
+        const result = await this.send<{ id: string; relayer_id: string }>(
+          relayerId,
+          'sendTransaction',
+          payload,
+          options,
+        );
         return {
           ...result,
-          wait: (options?: { interval?: number; timeout?: number }) =>
-            this.transactionWait(result, options),
+          wait: (waitOpts?: { interval?: number; timeout?: number }) =>
+            this.transactionWait(result, waitOpts),
         } as any;
       },
       getTransaction: (payload: { transactionId: string }) =>
@@ -477,9 +482,15 @@ class PluginAPIImpl implements PluginAPI {
    * If the socket was lost between calls (error/close handler nullified it),
    * transparently reconnects once before sending.
    */
-  private async send<T>(relayerId: string, method: string, payload: any): Promise<T> {
+  private async send<T>(
+    relayerId: string,
+    method: string,
+    payload: any,
+    options?: { idempotencyKey?: string },
+  ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };
+    if (options?.idempotencyKey) msg.idempotencyKey = options.idempotencyKey;
     if (this.httpRequestId) {
       msg.httpRequestId = this.httpRequestId;
     }

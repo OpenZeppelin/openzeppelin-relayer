@@ -281,6 +281,37 @@ describe('PluginAPI', () => {
         expect.any(Function)
       );
     });
+
+    it('forwards idempotencyKey on sendTransaction', async () => {
+      (pluginAPI as any)._httpRequestId = 'http-req-1';
+      (pluginAPI as any)._registered = true;
+
+      const relayer = pluginAPI.useRelayer('test-relayer');
+      const promise = relayer.sendTransaction(
+        { to: '0x1', value: 0, data: '0x', gas_limit: 21000, speed: Speed.FAST },
+        { idempotencyKey: 'aa:0xabc' },
+      );
+
+      const writtenMessage = mockWrite.mock.calls[0][0];
+      const messageObj = JSON.parse(writtenMessage);
+      expect(messageObj.idempotency_key).toBe('aa:0xabc');
+
+      const requestId = messageObj.request_id;
+      const response = {
+        type: 'api_response',
+        request_id: requestId,
+        result: { id: 'tx-123', relayer_id: 'test-relayer', status: 'pending' },
+        error: null,
+      };
+
+      // @ts-expect-error: test code, type mismatch is not relevant
+      const dataHandler = mockSocket.on.mock.calls.find(call => call[0] === 'data')?.[1];
+      if (dataHandler) {
+        (dataHandler as (buf: Buffer) => void)(Buffer.from(JSON.stringify(response) + '\n'));
+      }
+
+      await promise;
+    });
   });
 });
 
