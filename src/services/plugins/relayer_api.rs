@@ -5,15 +5,19 @@
 //! Supported methods:
 //! - `sendTransaction` - sends a transaction to the relayer.
 //!
+use crate::api::controllers::idempotency::{
+    create_idempotent_detached, normalize_idempotency_key, transaction_request_fingerprint,
+};
+use crate::config::ServerConfig;
 use crate::domain::{
     get_network_relayer, get_network_relayer_by_model, get_relayer_by_id, get_transaction_by_id,
     Relayer, SignTransactionRequest,
 };
 use crate::jobs::JobProducerTrait;
 use crate::models::{
-    convert_to_internal_rpc_request, AppState, JsonRpcRequest, NetworkRepoModel, NetworkRpcRequest,
-    NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel, SignerRepoModel,
-    ThinDataAppState, TransactionRepoModel, TransactionResponse,
+    convert_to_internal_rpc_request, ApiError, AppState, JsonRpcRequest, NetworkRepoModel,
+    NetworkRpcRequest, NetworkTransactionRequest, NotificationRepoModel, RelayerRepoModel,
+    SignerRepoModel, ThinDataAppState, TransactionRepoModel, TransactionResponse,
 };
 use crate::observability::request_id::set_request_id;
 use crate::repositories::{
@@ -54,12 +58,33 @@ pub struct Request {
     pub method: PluginMethod,
     pub payload: serde_json::Value,
     pub http_request_id: Option<String>,
+    /// Optional idempotency key. Wire names: `idempotencyKey` (legacy camelCase) and
+    /// `idempotency_key` (alias for ApiRequest / mixed payloads).
+    #[serde(default, alias = "idempotency_key")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTransactionRequest {
     pub transaction_id: String,
+}
+
+/// Maps HTTP API errors into plugin errors using the same client-facing message
+/// body that `#893` returns (without the status-code Display prefix).
+fn plugin_error_from_api(err: ApiError) -> PluginError {
+    let message = match err {
+        ApiError::BadRequest(m)
+        | ApiError::Conflict(m)
+        | ApiError::UnprocessableEntity(m)
+        | ApiError::NotFound(m)
+        | ApiError::InternalError(m)
+        | ApiError::Unauthorized(m)
+        | ApiError::NotSupported(m)
+        | ApiError::ForbiddenError(m) => m,
+        ApiError::InternalEyreError(report) => report.to_string(),
+    };
+    PluginError::RelayerError(message)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -263,10 +288,32 @@ impl RelayerApi {
             .validate(&relayer_repo_model)
             .map_err(|e| PluginError::RelayerError(e.to_string()))?;
 
-        let transaction = network_relayer
-            .process_transaction_request(tx_request)
-            .await
-            .map_err(|e| PluginError::RelayerError(e.to_string()))?;
+        // Mirror HTTP send_transaction (#893): only consume the key after validation.
+        let transaction = match request.idempotency_key {
+            None => network_relayer
+                .process_transaction_request(tx_request)
+                .await
+                .map_err(|e| PluginError::RelayerError(e.to_string()))?,
+            Some(raw_key) => {
+                let key = normalize_idempotency_key(&raw_key).map_err(plugin_error_from_api)?;
+                let fingerprint = transaction_request_fingerprint(&request.payload)
+                    .map_err(plugin_error_from_api)?;
+                create_idempotent_detached(
+                    state.transaction_repository.clone(),
+                    relayer_repo_model.id.clone(),
+                    key,
+                    fingerprint,
+                    ServerConfig::get_idempotency_key_ttl_seconds(),
+                    move |tx_id| async move {
+                        network_relayer
+                            .process_transaction_request_with_id(tx_request, tx_id)
+                            .await
+                    },
+                )
+                .await
+                .map_err(plugin_error_from_api)?
+            }
+        };
 
         tracing::Span::current().record("tx_id", transaction.id.as_str());
         debug!(
@@ -666,6 +713,7 @@ mod tests {
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -697,6 +745,7 @@ mod tests {
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -728,6 +777,7 @@ mod tests {
             method: PluginMethod::SendTransaction,
             payload: serde_json::json!(create_mock_evm_transaction_request()),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -771,6 +821,7 @@ mod tests {
                 transaction_id: "test".to_string(),
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -803,6 +854,7 @@ mod tests {
                 transaction_id: "test".to_string(),
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -836,6 +888,7 @@ mod tests {
                 transaction_id: "test".to_string(),
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -867,6 +920,7 @@ mod tests {
             method: PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -900,6 +954,7 @@ mod tests {
                 "unsigned_xdr": "test_xdr"
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -931,6 +986,7 @@ mod tests {
             method: PluginMethod::SignTransaction,
             payload: serde_json::json!({"invalid": "payload"}),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -964,6 +1020,7 @@ mod tests {
                 "unsigned_xdr": "test_xdr"
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -995,6 +1052,7 @@ mod tests {
             method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1031,6 +1089,7 @@ mod tests {
             method: PluginMethod::GetRelayer,
             payload: serde_json::json!({}),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1067,6 +1126,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1101,6 +1161,7 @@ mod tests {
                 "invalid": "payload"
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1137,6 +1198,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1174,6 +1236,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1210,6 +1273,7 @@ mod tests {
                 "id": "custom-string-id"
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1247,6 +1311,7 @@ mod tests {
                 "id": null
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1282,6 +1347,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1320,6 +1386,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1354,6 +1421,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1390,6 +1458,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1430,6 +1499,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: Some("http-req-123".to_string()),
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1465,6 +1535,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1507,6 +1578,7 @@ mod tests {
                 "id": 1
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1542,6 +1614,7 @@ mod tests {
                 "id": 42
             }),
             http_request_id: None,
+            idempotency_key: None,
         };
 
         let relayer_api = RelayerApi;
@@ -1558,5 +1631,96 @@ mod tests {
         assert!(result.get("id").is_some());
         // Should have either result or error field
         assert!(result.get("result").is_some() || result.get("error").is_some());
+    }
+
+    #[test]
+    fn request_deserializes_idempotency_key_snake_and_camel() {
+        let snake = serde_json::json!({
+            "requestId": "r1",
+            "relayerId": "relayer-1",
+            "method": "sendTransaction",
+            "payload": {},
+            "idempotency_key": "k-snake"
+        });
+        let camel = serde_json::json!({
+            "requestId": "r2",
+            "relayerId": "relayer-1",
+            "method": "sendTransaction",
+            "payload": {},
+            "idempotencyKey": "k-camel"
+        });
+        let from_snake: Request = serde_json::from_value(snake).unwrap();
+        let from_camel: Request = serde_json::from_value(camel).unwrap();
+        assert_eq!(from_snake.idempotency_key.as_deref(), Some("k-snake"));
+        assert_eq!(from_camel.idempotency_key.as_deref(), Some("k-camel"));
+    }
+
+    #[actix_web::test]
+    async fn handle_send_transaction_with_idempotency_key_returns_same_tx_on_replay() {
+        setup_test_env();
+        let state = create_mock_app_state(
+            None,
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
+            Some(vec![create_mock_signer()]),
+            Some(vec![create_mock_network()]),
+            None,
+            None,
+        )
+        .await;
+        let state = web::ThinData(state);
+        let relayer_api = RelayerApi;
+        let payload = serde_json::json!(create_mock_evm_transaction_request());
+
+        let first = Request {
+            request_id: "idem-1".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: payload.clone(),
+            http_request_id: None,
+            idempotency_key: Some("k1".into()),
+        };
+        let first_resp = RelayerApiTrait::handle_send_transaction(&relayer_api, first, &state)
+            .await
+            .expect("first send should succeed");
+        let first_id = first_resp.result.as_ref().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let second = Request {
+            request_id: "idem-2".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: payload.clone(),
+            http_request_id: None,
+            idempotency_key: Some("k1".into()),
+        };
+        let second_resp = RelayerApiTrait::handle_send_transaction(&relayer_api, second, &state)
+            .await
+            .expect("replay should succeed");
+        let second_id = second_resp.result.as_ref().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(first_id, second_id, "same key + payload must reuse tx id");
+
+        let mut other_payload = payload;
+        other_payload["to"] = serde_json::json!("0x0000000000000000000000000000000000000001");
+        let third = Request {
+            request_id: "idem-3".to_string(),
+            relayer_id: "test".to_string(),
+            method: PluginMethod::SendTransaction,
+            payload: other_payload,
+            http_request_id: None,
+            idempotency_key: Some("k1".into()),
+        };
+        let third_resp =
+            RelayerApiTrait::handle_send_transaction(&relayer_api, third, &state).await;
+        let err = third_resp.expect_err("payload mismatch must error");
+        assert!(
+            err.to_string()
+                .contains("Idempotency-Key reused with a different request payload"),
+            "unexpected error: {err}"
+        );
     }
 }

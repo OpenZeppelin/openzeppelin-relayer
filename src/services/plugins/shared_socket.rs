@@ -174,6 +174,8 @@ pub enum PluginMessage {
         relayer_id: String,
         method: crate::services::plugins::relayer_api::PluginMethod,
         payload: serde_json::Value,
+        #[serde(default)]
+        idempotency_key: Option<String>,
     },
     /// Host responds to an API request
     ApiResponse {
@@ -718,6 +720,7 @@ impl SharedSocketService {
                         relayer_id,
                         method,
                         payload,
+                        idempotency_key,
                     } => {
                         // Must be registered first
                         let exec_id = match &bound_execution_id {
@@ -735,6 +738,7 @@ impl SharedSocketService {
                             method,
                             payload,
                             http_request_id: Some(exec_id.clone()),
+                            idempotency_key,
                         };
 
                         // Handle the request
@@ -990,6 +994,7 @@ mod tests {
             relayer_id: "relayer-1".to_string(),
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
+            idempotency_key: None,
         };
         let req_json = serde_json::to_string(&api_request).unwrap() + "\n";
         client.write_all(req_json.as_bytes()).await.unwrap();
@@ -1099,6 +1104,7 @@ mod tests {
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
             http_request_id: Some(execution_id.clone()),
+            idempotency_key: None,
         };
         let legacy_json = serde_json::to_string(&legacy_request).unwrap() + "\n";
         client.write_all(legacy_json.as_bytes()).await.unwrap();
@@ -1243,6 +1249,7 @@ mod tests {
             relayer_id: "relayer-1".to_string(),
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
+            idempotency_key: None,
         };
         let req_json = serde_json::to_string(&api_request).unwrap() + "\n";
         client.write_all(req_json.as_bytes()).await.unwrap();
@@ -1478,6 +1485,7 @@ mod tests {
                 relayer_id: "relayer-1".to_string(),
                 method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
                 payload: serde_json::json!({}),
+                idempotency_key: None,
             };
             w.write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
                 .await
@@ -1953,6 +1961,7 @@ mod tests {
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
             http_request_id: None,
+            idempotency_key: None,
         };
         let legacy_json = serde_json::to_string(&legacy_request).unwrap() + "\n";
         client.write_all(legacy_json.as_bytes()).await.unwrap();
@@ -2004,6 +2013,7 @@ mod tests {
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
             http_request_id: Some("nonexistent-exec-id".to_string()),
+            idempotency_key: None,
         };
         let legacy_json = serde_json::to_string(&legacy_request).unwrap() + "\n";
         client.write_all(legacy_json.as_bytes()).await.unwrap();
@@ -2125,6 +2135,7 @@ mod tests {
             relayer_id: "relayer-1".to_string(),
             method: crate::services::plugins::relayer_api::PluginMethod::GetRelayerStatus,
             payload: serde_json::json!({}),
+            idempotency_key: None,
         };
         client
             .write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
