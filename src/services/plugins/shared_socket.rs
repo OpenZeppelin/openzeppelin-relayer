@@ -949,7 +949,8 @@ where
 mod tests {
     use super::*;
     use crate::utils::mocks::mockutils::{
-        create_mock_app_state, create_mock_network, create_mock_relayer, create_mock_signer,
+        create_mock_app_state, create_mock_evm_transaction_request, create_mock_network,
+        create_mock_relayer, create_mock_signer,
     };
     use actix_web::web;
     use tempfile::tempdir;
@@ -1043,13 +1044,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_api_request_forwards_idempotency_key_to_handler() {
+        // Same env the relayer_api send tests set. Connection tasks are
+        // `tokio::spawn`ed (PIPELINE_HANDLE is unset here), so this is the
+        // runtime where `spawn_local` panics.
+        std::env::set_var("API_KEY", "7EF1CB7C-5003-4696-B384-C72AF8C3E15D"); // noboost
+        std::env::set_var("REDIS_URL", "redis://localhost:6379");
+        std::env::set_var("RPC_TIMEOUT_MS", "5000");
+
         let temp_dir = tempdir().unwrap();
         let socket_path = temp_dir.path().join("shared_idempotency.sock");
 
         let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
         let state = create_mock_app_state(
             None,
-            Some(vec![create_mock_relayer("relayer-1".to_string(), false)]),
+            Some(vec![create_mock_relayer("test".to_string(), false)]),
             Some(vec![create_mock_signer()]),
             Some(vec![create_mock_network()]),
             None,
@@ -1067,47 +1075,96 @@ mod tests {
         let _guard = service.register_execution(execution_id.clone(), true).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let mut client = UnixStream::connect(socket_path.to_str().unwrap())
+        let client = UnixStream::connect(socket_path.to_str().unwrap())
             .await
             .unwrap();
+        let (read_half, mut write_half) = tokio::io::split(client);
+        let mut reader = BufReader::new(read_half);
 
         let register_msg = PluginMessage::Register {
             execution_id: execution_id.clone(),
         };
-        client
+        write_half
             .write_all((serde_json::to_string(&register_msg).unwrap() + "\n").as_bytes())
             .await
             .unwrap();
 
-        // Non-send method still exercises ApiRequest → Request.idempotency_key mapping.
+        // Same payload as handle_send_transaction_with_idempotency_key_returns_same_tx_on_replay.
+        // An empty payload fails validation before create_idempotent_detached and never spawns.
+        let payload = serde_json::json!(create_mock_evm_transaction_request());
         let api_request = PluginMessage::ApiRequest {
             request_id: "req-idem-1".to_string(),
-            relayer_id: "relayer-1".to_string(),
-            method: crate::services::plugins::relayer_api::PluginMethod::GetRelayer,
-            payload: serde_json::json!({}),
-            idempotency_key: Some("forwarded-key".into()),
+            relayer_id: "test".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::SendTransaction,
+            payload: payload.clone(),
+            idempotency_key: Some("k1".into()),
         };
-        client
+        write_half
             .write_all((serde_json::to_string(&api_request).unwrap() + "\n").as_bytes())
             .await
             .unwrap();
-        client.flush().await.unwrap();
+        write_half.flush().await.unwrap();
 
-        let (r, _w) = client.into_split();
-        let mut reader = BufReader::new(r);
         let mut response_line = String::new();
         reader.read_line(&mut response_line).await.unwrap();
-
-        let response: PluginMessage = serde_json::from_str(&response_line).unwrap();
-        match response {
-            PluginMessage::ApiResponse { request_id, .. } => {
+        let first_id = match serde_json::from_str::<PluginMessage>(&response_line).unwrap() {
+            PluginMessage::ApiResponse {
+                request_id,
+                result,
+                error,
+            } => {
                 assert_eq!(request_id, "req-idem-1");
+                assert!(error.is_none(), "send failed: {error:?}");
+                result
+                    .as_ref()
+                    .and_then(|v| v.get("id"))
+                    .and_then(|id| id.as_str())
+                    .expect("transaction id")
+                    .to_string()
             }
             other => panic!("Expected ApiResponse, got {other:?}"),
-        }
+        };
+        assert!(!first_id.is_empty());
+
+        let replay = PluginMessage::ApiRequest {
+            request_id: "req-idem-2".to_string(),
+            relayer_id: "test".to_string(),
+            method: crate::services::plugins::relayer_api::PluginMethod::SendTransaction,
+            payload,
+            idempotency_key: Some("k1".into()),
+        };
+        write_half
+            .write_all((serde_json::to_string(&replay).unwrap() + "\n").as_bytes())
+            .await
+            .unwrap();
+        write_half.flush().await.unwrap();
+
+        response_line.clear();
+        reader.read_line(&mut response_line).await.unwrap();
+        let second_id = match serde_json::from_str::<PluginMessage>(&response_line).unwrap() {
+            PluginMessage::ApiResponse {
+                request_id,
+                result,
+                error,
+            } => {
+                assert_eq!(request_id, "req-idem-2");
+                assert!(error.is_none(), "replay failed: {error:?}");
+                result
+                    .as_ref()
+                    .and_then(|v| v.get("id"))
+                    .and_then(|id| id.as_str())
+                    .expect("replay transaction id")
+                    .to_string()
+            }
+            other => panic!("Expected ApiResponse, got {other:?}"),
+        };
+        assert_eq!(
+            first_id, second_id,
+            "forwarded key must reuse the transaction"
+        );
 
         drop(reader);
-        drop(_w);
+        drop(write_half);
         service.shutdown().await;
     }
 

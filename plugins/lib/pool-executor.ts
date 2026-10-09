@@ -222,7 +222,7 @@ export interface LogEntry {
  * **See also**: `DefaultPluginAPI` in `plugin.ts` for the legacy ts-node execution implementation
  * (fallback mode, enabled only when `PLUGIN_USE_POOL=false`).
  */
-class PluginAPIImpl implements PluginAPI {
+export class PluginAPIImpl implements PluginAPI {
   private socket: net.Socket | null = null;
   private pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private connectionPromise: Promise<void> | null = null;
@@ -493,7 +493,7 @@ class PluginAPIImpl implements PluginAPI {
     relayerId: string,
     method: string,
     payload: any,
-    options?: { idempotencyKey?: string },
+    options?: SendTransactionOptions,
   ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };

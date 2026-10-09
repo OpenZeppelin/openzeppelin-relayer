@@ -652,7 +652,7 @@ export class DefaultPluginAPI implements PluginAPI {
     relayerId: string,
     method: string,
     payload: any,
-    options?: { idempotencyKey?: string },
+    options?: SendTransactionOptions,
   ): Promise<T> {
     const requestId = uuidv4();
 

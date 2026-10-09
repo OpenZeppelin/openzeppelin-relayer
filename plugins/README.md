@@ -35,6 +35,7 @@ export async function handler(context: PluginContext): Promise<Result> {
       speed: Speed.FAST,
     },
     // Scope the key to one logical transaction (e.g. caller-provided operation id).
+    // Plugin and HTTP clients share one key space, `(relayer_id, key)`.
     { idempotencyKey: params.operationId },
   );
 
