@@ -63,12 +63,13 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
     /// Retrieves a transaction from the primary data source.
     ///
     /// Backends without read replicas use the standard repository read.
+    /// Required (no default body) so every implementation — including
+    /// wrappers — must dispatch it explicitly and cannot silently fall
+    /// back to a replica read.
     async fn get_by_id_on_primary(
         &self,
         id: String,
-    ) -> Result<TransactionRepoModel, RepositoryError> {
-        Repository::get_by_id(self, id).await
-    }
+    ) -> Result<TransactionRepoModel, RepositoryError>;
 
     /// Find transactions by relayer ID with pagination
     async fn find_by_relayer_id(
@@ -129,6 +130,18 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
 
+    /// Like [`find_by_nonce`](Self::find_by_nonce), but reads the nonce index
+    /// and the transaction from the primary data source.
+    ///
+    /// Use it when a decision depends on a nonce claim that was just written,
+    /// so replica lag cannot hide the claim. Required (no default body) for
+    /// the same reason as `get_by_id_on_primary`.
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+
     /// Returns the transaction status for each nonce in `[from_nonce, to_nonce)`.
     ///
     /// For each nonce, returns `Some(status)` if a transaction exists at that slot,
@@ -154,6 +167,31 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Applies a presign patch only when the stored EVM nonce is unset.
+    ///
+    /// Returns the stored transaction and whether the patch was applied.
+    /// The update must not contain `status` or `hashes` (presign patches
+    /// never do; both are rejected as invalid). Non-EVM records are never
+    /// patched: the claim returns the stored record with `applied == false`.
+    async fn partial_update_if_evm_nonce_unset(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError>;
+
+    /// Applies a patch only when the stored status equals `expected`
+    /// (compare-and-set).
+    ///
+    /// Returns the stored transaction and whether the patch was applied.
+    /// When another writer changed the status first, the patch is refused and
+    /// the current record is returned with `applied == false`.
+    async fn partial_update_if_status(
+        &self,
+        tx_id: String,
+        expected: TransactionStatus,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError>;
 
     /// Repairs stale Redis status-index entries whose indexed status diverged from
     /// the persisted transaction body.
@@ -311,9 +349,12 @@ mockall::mock! {
       async fn find_by_status_paginated(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_status_paginated_filtered(&self, relayer_id: &str, statuses: &[TransactionStatus], query: PaginationQuery, oldest_first: bool, exclude_canceled: bool) -> Result<PaginatedResult<TransactionRepoModel>, RepositoryError>;
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+      async fn find_by_nonce_on_primary(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn partial_update_if_evm_nonce_unset(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<(TransactionRepoModel, bool), RepositoryError>;
+      async fn partial_update_if_status(&self, tx_id: String, expected: TransactionStatus, update: TransactionUpdateRequest) -> Result<(TransactionRepoModel, bool), RepositoryError>;
       async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
       async fn reserve_idempotency_key(&self, relayer_id: &str, key: &str, record: &IdempotencyRecord, ttl_seconds: u64) -> Result<bool, RepositoryError>;
       async fn get_idempotency_record(&self, relayer_id: &str, key: &str) -> Result<Option<IdempotencyRecord>, RepositoryError>;
@@ -491,6 +532,21 @@ impl TransactionRepository for TransactionRepositoryStorage {
         }
     }
 
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.find_by_nonce_on_primary(relayer_id, nonce).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.find_by_nonce_on_primary(relayer_id, nonce).await
+            }
+        }
+    }
+
     async fn get_nonce_occupancy(
         &self,
         relayer_id: &str,
@@ -530,6 +586,37 @@ impl TransactionRepository for TransactionRepositoryStorage {
                 repo.partial_update(tx_id, update).await
             }
             TransactionRepositoryStorage::Redis(repo) => repo.partial_update(tx_id, update).await,
+        }
+    }
+
+    async fn partial_update_if_evm_nonce_unset(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.partial_update_if_evm_nonce_unset(tx_id, update).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.partial_update_if_evm_nonce_unset(tx_id, update).await
+            }
+        }
+    }
+
+    async fn partial_update_if_status(
+        &self,
+        tx_id: String,
+        expected: TransactionStatus,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        match self {
+            TransactionRepositoryStorage::InMemory(repo) => {
+                repo.partial_update_if_status(tx_id, expected, update).await
+            }
+            TransactionRepositoryStorage::Redis(repo) => {
+                repo.partial_update_if_status(tx_id, expected, update).await
+            }
         }
     }
 
