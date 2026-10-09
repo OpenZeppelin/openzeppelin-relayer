@@ -95,11 +95,14 @@ pub async fn create_idempotent_detached<TR, F, Fut>(
     create: F,
 ) -> Result<TransactionRepoModel, ApiError>
 where
-    TR: TransactionRepository + Sync + 'static,
-    F: FnOnce(String) -> Fut + 'static,
-    Fut: Future<Output = Result<TransactionRepoModel, RelayerError>> + 'static,
+    TR: TransactionRepository + Send + Sync + 'static,
+    F: FnOnce(String) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<TransactionRepoModel, RelayerError>> + Send + 'static,
 {
-    actix_web::rt::spawn(async move {
+    // Plugin socket tasks run on the multi-thread runtime, not an Actix
+    // LocalSet, so spawn_local panics there. tokio::spawn is Send-safe on
+    // both that runtime and Actix's current-thread runtime.
+    tokio::spawn(async move {
         create_idempotent(
             repo.as_ref(),
             &relayer_id,
