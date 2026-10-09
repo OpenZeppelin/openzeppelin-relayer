@@ -1758,12 +1758,26 @@ mod tests {
 
     #[test]
     fn plugin_error_from_api_preserves_client_facing_message() {
-        let err = plugin_error_from_api(ApiError::BadRequest(
-            "Invalid Idempotency-Key header".into(),
-        ));
-        assert!(
-            err.to_string().contains("Invalid Idempotency-Key header"),
-            "unexpected error: {err}"
-        );
+        let cases = [
+            ApiError::BadRequest("Invalid Idempotency-Key header".into()),
+            ApiError::Conflict("already in progress".into()),
+            ApiError::UnprocessableEntity("payload mismatch".into()),
+            ApiError::NotFound("transaction gone".into()),
+            ApiError::InternalError("storage down".into()),
+            ApiError::Unauthorized("bad token".into()),
+            ApiError::NotSupported("not supported".into()),
+            ApiError::ForbiddenError("forbidden".into()),
+            ApiError::InternalEyreError(eyre::eyre!("backend failed")),
+        ];
+        for err in cases {
+            let message = err.to_string();
+            let mapped = plugin_error_from_api(err);
+            assert!(
+                mapped
+                    .to_string()
+                    .contains(message.split(": ").nth(1).unwrap_or(&message)),
+                "mapped error lost the message: {mapped}"
+            );
+        }
     }
 }

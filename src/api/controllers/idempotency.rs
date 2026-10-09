@@ -542,6 +542,37 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
+    /// Plugin socket tasks run on the multi-thread pipeline runtime, not an
+    /// Actix `LocalSet`. `spawn_local` panics there. This is the case the
+    /// Actix-only tests cannot see.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_detached_create_runs_outside_actix_local_set() {
+        let repo = std::sync::Arc::new(InMemoryTransactionRepository::new());
+        let repo_for_create = repo.clone();
+        let tx = create_idempotent_detached(
+            repo.clone(),
+            RELAYER.to_string(),
+            "outside-actix".to_string(),
+            "fp".into(),
+            TTL,
+            move |tx_id| {
+                let repo = repo_for_create.clone();
+                async move {
+                    let mut tx = create_mock_transaction();
+                    tx.id = tx_id;
+                    tx.relayer_id = RELAYER.to_string();
+                    repo.create(tx.clone())
+                        .await
+                        .map_err(|e| RelayerError::Internal(e.to_string()))?;
+                    Ok(tx)
+                }
+            },
+        )
+        .await
+        .expect("detached create must run without an Actix LocalSet");
+        assert!(repo.get_by_id(tx.id).await.is_ok());
+    }
+
     #[test]
     fn test_effective_ttl_is_at_least_the_window() {
         assert_eq!(effective_ttl_seconds(86400, 60), 86400);
