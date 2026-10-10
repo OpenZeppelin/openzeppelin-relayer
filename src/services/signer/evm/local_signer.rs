@@ -40,7 +40,7 @@ use crate::{
     services::signer::{evm::construct_eip712_message_hash, Signer},
 };
 
-use super::{validate_and_format_signature, DataSignerTrait};
+use super::{resolve_message_bytes, validate_and_format_signature, DataSignerTrait};
 
 use alloy::rpc::types::TransactionRequest;
 
@@ -146,11 +146,11 @@ impl Signer for LocalSigner {
 #[async_trait]
 impl DataSignerTrait for LocalSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        let message = request.message.as_bytes();
+        let message = resolve_message_bytes(&request)?;
 
         let signature = self
             .local_signer_client
-            .sign_message(message)
+            .sign_message(&message)
             .await
             .map_err(|e| SignerError::SigningError(format!("Failed to sign message: {e}")))?;
 
@@ -242,6 +242,7 @@ mod tests {
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let request = SignDataRequest {
             message: "Test message".to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await.unwrap();
@@ -262,6 +263,7 @@ mod tests {
         let signer = LocalSigner::new(&create_test_signer_model()).unwrap();
         let request = SignDataRequest {
             message: "".to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;

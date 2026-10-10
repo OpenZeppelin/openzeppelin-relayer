@@ -17,7 +17,9 @@ use crate::{
     },
     services::{
         signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            evm::{
+                construct_eip712_message_hash, resolve_message_bytes, validate_and_format_signature,
+            },
             DataSignerTrait, Signer,
         },
         AzureKeyVaultEvmService, AzureKeyVaultService,
@@ -123,7 +125,7 @@ impl Signer for AzureKeyVaultSigner {
 #[async_trait]
 impl DataSignerTrait for AzureKeyVaultSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        let eip191_message = eip191_message(&request.message);
+        let eip191_message = eip191_message(&resolve_message_bytes(&request)?);
         let signature_bytes = self
             .azure_key_vault_service
             .sign_payload_evm(&eip191_message)
