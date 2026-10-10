@@ -5,7 +5,7 @@ FROM cgr.dev/chainguard/rust:latest-dev@sha256:63fe36977879f68bb449c681f1e1e3a60
 
 USER root
 RUN apk update && apk --no-cache add \
-    openssl-dev \
+    openssl-3.6-dev \
     perl \
     libsodium-dev
 
