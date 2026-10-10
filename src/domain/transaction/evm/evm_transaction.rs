@@ -1137,6 +1137,27 @@ where
 
         let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
+        // Record the new hash before broadcast, as prepare_transaction does. The send
+        // retries on timeouts, so a payload can land even when the call reports an error.
+        let tx = match &final_evm_data.hash {
+            Some(hash) if !tx.hashes.contains(hash) => {
+                let mut hashes = tx.hashes.clone();
+                hashes.push(hash.clone());
+                self.transaction_repository
+                    .partial_update(
+                        tx.id.clone(),
+                        TransactionUpdateRequest {
+                            hashes: Some(hashes),
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+            }
+            // Already recorded: an earlier failed send signed the same payload. A duplicate
+            // would inflate hashes.len(), which drives backoff and the attempt limit.
+            _ => tx,
+        };
+
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
@@ -1212,15 +1233,10 @@ where
                 ..Default::default()
             }
         } else {
-            // Transaction resubmitted successfully - update with new hash and pricing
-            let mut hashes = tx.hashes.clone();
-            if let Some(hash) = final_evm_data.hash.clone() {
-                hashes.push(hash);
-            }
-
+            // Transaction resubmitted successfully - update with new pricing
+            // (the new hash was recorded before broadcast)
             TransactionUpdateRequest {
                 network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-                hashes: Some(hashes),
                 status: Some(TransactionStatus::Submitted),
                 priced_at: Some(Utc::now().to_rfc3339()),
                 sent_at: Some(Utc::now().to_rfc3339()),
@@ -3383,7 +3399,7 @@ mod tests {
     }
 
     /// Test resubmit_transaction when transaction is already submitted
-    /// Should NOT update hash, only status
+    /// Should NOT update the current hash, only status; the new hash is kept in history
     #[tokio::test]
     async fn test_resubmit_transaction_already_submitted_preserves_hash() {
         let mut mock_transaction = MockTransactionRepository::new();
@@ -3437,7 +3453,7 @@ mod tests {
                 Box::pin(ready(Ok(
                     crate::domain::relayer::SignTransactionResponse::Evm(
                         crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xnew_hash_that_should_not_be_saved".to_string(),
+                            hash: "0xnew_hash".to_string(),
                             signature: crate::models::EvmTransactionDataSignature {
                                 r: "r".to_string(),
                                 s: "s".to_string(),
@@ -3461,6 +3477,8 @@ mod tests {
                     ))
                 })
             });
+
+        expect_pre_broadcast_hash_write(&mut mock_transaction, &test_tx, "0xnew_hash");
 
         // Verify that partial_update is called with NO network_data (preserving original hash)
         let test_tx_clone = test_tx.clone();
@@ -3821,6 +3839,8 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok("0xnew_hash".to_string()) }));
 
+        expect_pre_broadcast_hash_write(&mut mock_transaction, &test_tx, "0xnew_hash");
+
         // Should update to Submitted status with new hash
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -3830,7 +3850,7 @@ mod tests {
                 update.status == Some(TransactionStatus::Submitted)
                     && update.sent_at.is_some()
                     && update.priced_at.is_some()
-                    && update.hashes.is_some()
+                    && update.hashes.is_none()
             })
             .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
@@ -4238,6 +4258,8 @@ mod tests {
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
+        expect_pre_broadcast_hash_write(&mut mock_transaction, &test_tx, "0xnew_hash");
+
         // Should update status without changing hash (was_already_submitted = true)
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -4516,6 +4538,8 @@ mod tests {
                 })
             });
 
+        expect_pre_broadcast_hash_write(&mut mock_transaction, &test_tx, "0xnew_hash");
+
         // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -4551,5 +4575,209 @@ mod tests {
         let returned_tx = result.unwrap();
         // Status should remain Submitted (unchanged)
         assert_eq!(returned_tx.status, TransactionStatus::Submitted);
+    }
+
+    /// Expects the hash write that resubmit_transaction makes before broadcast:
+    /// only `hashes`, extended with the newly signed hash.
+    fn expect_pre_broadcast_hash_write(
+        mock_transaction: &mut MockTransactionRepository,
+        tx: &TransactionRepoModel,
+        new_hash: &str,
+    ) {
+        let mut expected = tx.hashes.clone();
+        expected.push(new_hash.to_string());
+        let tx = tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(move |_, update| {
+                update.hashes.as_ref() == Some(&expected)
+                    && update.status.is_none()
+                    && update.network_data.is_none()
+                    && update.metadata.is_none()
+            })
+            .returning(move |_, update| {
+                let mut updated_tx = tx.clone();
+                updated_tx.hashes = update.hashes.unwrap();
+                Ok(updated_tx)
+            });
+    }
+
+    /// Builds a resubmittable tx plus price, balance and signer mocks that
+    /// produce a signed payload with hash `0xnew_hash`.
+    fn resubmit_fixture() -> (
+        TransactionRepoModel,
+        MockPriceCalculator,
+        MockEvmProviderTrait,
+        MockSigner,
+    ) {
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xoriginal_hash".to_string()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        test_tx.hashes = vec!["0xoriginal_hash".to_string()];
+
+        let mut mock_price_calculator = MockPriceCalculator::new();
+        mock_price_calculator
+            .expect_calculate_bumped_gas_price()
+            .returning(|_, _, _| {
+                Ok(PriceParams {
+                    gas_price: Some(25000000000),
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: Some(true),
+                    extra_fee: None,
+                    total_cost: U256::from(525000000000000u64),
+                })
+            });
+
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
+
+        let mut mock_signer = MockSigner::new();
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xnew_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![4, 5, 6],
+                    },
+                ),
+            )))
+        });
+
+        (test_tx, mock_price_calculator, mock_provider, mock_signer)
+    }
+
+    /// A send error that is not classified (e.g. timeout after retries) still
+    /// leaves the new hash recorded, since the payload may have landed.
+    #[tokio::test]
+    async fn test_resubmit_transaction_send_error_keeps_new_hash() {
+        let (test_tx, mock_price_calculator, mut mock_provider, mock_signer) = resubmit_fixture();
+        let mut mock_transaction = MockTransactionRepository::new();
+        // The hash write must happen before the send
+        let mut seq = mockall::Sequence::new();
+        let tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .in_sequence(&mut seq)
+            .withf(|_, update| {
+                update.hashes
+                    == Some(vec![
+                        "0xoriginal_hash".to_string(),
+                        "0xnew_hash".to_string(),
+                    ])
+            })
+            .returning(move |_, _| Ok(tx_clone.clone()));
+
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| {
+                Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+            });
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(result.is_err(), "Expected Err on timeout, got: {result:?}");
+    }
+
+    /// A re-signed payload whose hash is already recorded is not appended again.
+    #[tokio::test]
+    async fn test_resubmit_transaction_does_not_duplicate_recorded_hash() {
+        let (mut test_tx, mock_price_calculator, mut mock_provider, mock_signer) =
+            resubmit_fixture();
+        test_tx.hashes = vec!["0xoriginal_hash".to_string(), "0xnew_hash".to_string()];
+
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xnew_hash".to_string()) }));
+
+        // Only the post-broadcast update; no pre-broadcast hashes write
+        let mut mock_transaction = MockTransactionRepository::new();
+        let tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .withf(|_, update| {
+                update.status == Some(TransactionStatus::Submitted) && update.hashes.is_none()
+            })
+            .returning(move |_, _| Ok(tx_clone.clone()));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+    }
+
+    /// If the new hash cannot be recorded, the payload must not be broadcast.
+    #[tokio::test]
+    async fn test_resubmit_transaction_hash_write_failure_skips_broadcast() {
+        let (test_tx, mock_price_calculator, mut mock_provider, mock_signer) = resubmit_fixture();
+        let mut mock_transaction = MockTransactionRepository::new();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(|_, _| {
+                Err(crate::models::RepositoryError::ConnectionError(
+                    "redis down".to_string(),
+                ))
+            });
+        mock_provider.expect_send_raw_transaction().times(0);
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(MockNetworkRepository::new()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.resubmit_transaction(test_tx).await;
+        assert!(
+            result.is_err(),
+            "Expected Err on DB failure, got: {result:?}"
+        );
     }
 }
