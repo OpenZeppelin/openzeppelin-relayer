@@ -38,7 +38,7 @@ COPY tests ./tests
 # This avoids the triple compilation issue (normal build, test build, coverage build)
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/app/target \
+    --mount=type=cache,id=relayer-integration-target-openssl3,target=/app/target \
     RUSTFLAGS="-C instrument-coverage" \
     cargo test --features integration-tests --test integration --release --no-run && \
     TEST_BINARY=$(find target/release/deps -name 'integration-*' -type f -executable | head -n 1) && \
