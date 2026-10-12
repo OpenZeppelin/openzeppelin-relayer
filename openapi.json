@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.5.0"
+    "version": "1.8.0"
   },
   "paths": {
     "/api/v1/health": {
@@ -2907,6 +2907,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional client-generated unique key (max 255 chars) to make the request idempotent. Repeating a request with the same key returns the original transaction. Keys expire after IDEMPOTENCY_KEY_TTL_SECONDS (default 24h).",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "requestBody": {
@@ -2970,6 +2982,36 @@
                 "example": {
                   "data": null,
                   "message": "Relayer with ID relayer_id not found",
+                  "success": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "A request with this Idempotency-Key is already in progress",
+                  "success": false
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse_String"
+                },
+                "example": {
+                  "data": null,
+                  "error": "Idempotency-Key reused with a different request payload",
                   "success": false
                 }
               }
@@ -3048,6 +3090,15 @@
             "schema": {
               "type": "integer",
               "minimum": 0
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Optional status filter, accepted case-insensitively (e.g. pending, submitted, confirmed, canceled). Cancelled-in-progress transactions are excluded from active-status results until their replacement mines.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionStatus"
             }
           }
         ],
@@ -4776,7 +4827,7 @@
               },
               "status_check": {
                 "$ref": "#/components/schemas/StatusCheckResponse",
-                "description": "EVM-specific: Transaction status-check configuration"
+                "description": "EVM-specific: Effective transaction status-check settings after inheritance\nand defaults are applied. Always present for EVM networks so operators can\nverify the timing in effect, even when nothing was configured."
               },
               "symbol": {
                 "type": "string",
@@ -5618,7 +5669,7 @@
                 },
                 "status_check": {
                   "$ref": "#/components/schemas/StatusCheckResponse",
-                  "description": "EVM-specific: Transaction status-check configuration"
+                  "description": "EVM-specific: Effective transaction status-check settings after inheritance\nand defaults are applied. Always present for EVM networks so operators can\nverify the timing in effect, even when nothing was configured."
                 },
                 "symbol": {
                   "type": "string",
@@ -6008,6 +6059,69 @@
             "type": "string"
           },
           "region": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AzureKeyVaultAuthType": {
+        "type": "string",
+        "description": "Azure Key Vault authentication mode",
+        "enum": [
+          "client_secret",
+          "managed_identity",
+          "workload_identity"
+        ]
+      },
+      "AzureKeyVaultSignerRequestConfig": {
+        "type": "object",
+        "description": "Azure Key Vault signer configuration for API requests",
+        "required": [
+          "vault_url",
+          "key_name"
+        ],
+        "properties": {
+          "auth_type": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AzureKeyVaultAuthType"
+              }
+            ]
+          },
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "federated_token_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_name": {
+            "type": "string"
+          },
+          "key_version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault_url": {
             "type": "string"
           }
         },
@@ -6494,6 +6608,10 @@
           "id": {
             "type": "string"
           },
+          "is_canceled": {
+            "type": "boolean",
+            "description": "Whether this transaction was cancelled by the user. While true and still in a\nnon-terminal status, it is being replaced on-chain by a NOOP that consumes its\nnonce; it terminates as `canceled` once that NOOP mines."
+          },
           "max_fee_per_gas": {
             "type": "string"
           },
@@ -6769,7 +6887,7 @@
       },
       "JsonRpcError": {
         "type": "object",
-        "description": "JSON-RPC 2.0 Error structure.\n\nRepresents an error in a JSON-RPC response.\n\nThe optional `data` field carries upstream JSON-RPC error data (for example\nEVM revert / ERC-4337 `FailedOp` payloads) when the Relayer is proxying an\nRPC call. It is omitted from the serialized response when absent.",
+        "description": "JSON-RPC 2.0 Error structure.\n\nRepresents an error in a JSON-RPC response.\n\nThe optional `data` field carries upstream JSON-RPC error data (for example\nEVM revert / ERC-4337 `FailedOp` payloads, or Stellar diagnostic objects) when\nthe Relayer is proxying an RPC call. Unlike `message`/`description`, `data` is\nnot content-sanitized (authenticated callers need it for decoding); oversized\nvalues are dropped. It is omitted from the serialized response when absent.",
         "required": [
           "code",
           "message",
@@ -6780,14 +6898,14 @@
             "type": "integer",
             "format": "int32"
           },
+          "data": {
+            "description": "Upstream JSON-RPC error `data`, when available (hex revert string, object, etc.)."
+          },
           "description": {
             "type": "string"
           },
           "message": {
             "type": "string"
-          },
-          "data": {
-            "description": "Upstream JSON-RPC error `data`, when available (hex revert string, object, etc)."
           }
         }
       },
@@ -7143,7 +7261,7 @@
           },
           "status_check": {
             "$ref": "#/components/schemas/StatusCheckResponse",
-            "description": "EVM-specific: Transaction status-check configuration"
+            "description": "EVM-specific: Effective transaction status-check settings after inheritance\nand defaults are applied. Always present for EVM networks so operators can\nverify the timing in effect, even when nothing was configured."
           },
           "symbol": {
             "type": "string",
@@ -8522,6 +8640,9 @@
             "$ref": "#/components/schemas/AwsKmsSignerRequestConfig"
           },
           {
+            "$ref": "#/components/schemas/AzureKeyVaultSignerRequestConfig"
+          },
+          {
             "$ref": "#/components/schemas/VaultSignerRequestConfig"
           },
           {
@@ -8613,6 +8734,43 @@
                   "string",
                   "null"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "auth_type",
+              "vault_url",
+              "key_name"
+            ],
+            "properties": {
+              "auth_type": {
+                "$ref": "#/components/schemas/AzureKeyVaultAuthType"
+              },
+              "client_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "key_name": {
+                "type": "string"
+              },
+              "key_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tenant_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "vault_url": {
+                "type": "string"
               }
             }
           },
@@ -8726,6 +8884,7 @@
         "enum": [
           "local",
           "aws_kms",
+          "azure_key_vault",
           "google_cloud_kms",
           "vault",
           "vault_transit",
@@ -8739,6 +8898,7 @@
         "enum": [
           "plain",
           "aws_kms",
+          "azure_key_vault",
           "vault",
           "vault_transit",
           "turnkey",
