@@ -213,6 +213,57 @@ impl From<ParseIntError> for ProviderError {
     }
 }
 
+/// Returns the error text with the request URL masked.
+///
+/// reqwest appends the full request URL to its messages (`... for url (...)`), so an API
+/// key in the path or query of an RPC URL would otherwise reach logs and error reasons.
+fn reqwest_error_text(err: &reqwest::Error) -> String {
+    let text = err.to_string();
+    match err.url() {
+        Some(url) => text.replace(url.as_str(), &mask_url(url.as_str())),
+        None => text,
+    }
+}
+
+/// Masks the URL in every `for url (...)` part of an error message.
+///
+/// This is for messages that only reach us as text, such as a reqwest error wrapped by
+/// alloy or the Solana client. It does not depend on downcasting, so it still works when a
+/// dependency's reqwest version drifts from ours. A serialized URL contains no whitespace,
+/// so the URL runs to the next whitespace; the `)` and any punctuation after it are kept.
+fn mask_request_urls_in_text(text: &str) -> String {
+    const MARKER: &str = "for url (";
+    let mut masked = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(marker_at) = rest.find(MARKER) {
+        let url_start = marker_at + MARKER.len();
+        masked.push_str(&rest[..url_start]);
+        let after = &rest[url_start..];
+        let token_end = after.find(char::is_whitespace).unwrap_or(after.len());
+        let url_end = after[..token_end]
+            .trim_end_matches([')', ':', ',', '.', ';'])
+            .len();
+        masked.push_str(&mask_url(&after[..url_end]));
+        rest = &after[url_end..];
+    }
+    masked.push_str(rest);
+    masked
+}
+
+/// Returns the first `reqwest::Error` in an error's source chain, starting with the error itself.
+fn find_reqwest_error<'a>(
+    err: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a reqwest::Error> {
+    let mut current = Some(err);
+    while let Some(e) = current {
+        if let Some(reqwest_err) = e.downcast_ref::<reqwest::Error>() {
+            return Some(reqwest_err);
+        }
+        current = e.source();
+    }
+    None
+}
+
 /// Categorizes a reqwest error into an appropriate `ProviderError` variant.
 ///
 /// This function analyzes the given reqwest error and maps it to a specific
@@ -229,18 +280,6 @@ impl From<ParseIntError> for ProviderError {
 /// # Returns
 ///
 /// The appropriate `ProviderError` variant based on the error type
-/// Returns the error text with the request URL masked.
-///
-/// reqwest appends the full request URL to its messages (`... for url (...)`), so an API
-/// key in the path or query of an RPC URL would otherwise reach logs and error reasons.
-fn reqwest_error_text(err: &reqwest::Error) -> String {
-    let text = err.to_string();
-    match err.url() {
-        Some(url) => text.replace(url.as_str(), &mask_url(url.as_str())),
-        None => text,
-    }
-}
-
 fn categorize_reqwest_error(err: &reqwest::Error) -> ProviderError {
     if err.is_timeout() {
         return ProviderError::Timeout;
@@ -296,19 +335,25 @@ impl From<String> for ProviderError {
 // Generic implementation for all RpcError types
 impl<E> From<RpcError<E>> for ProviderError
 where
-    E: std::fmt::Display + std::any::Any + 'static,
+    E: std::error::Error + 'static,
 {
     fn from(err: RpcError<E>) -> Self {
         match err {
             RpcError::Transport(transport_err) => {
-                // First check if it's a reqwest::Error using downcasting
-                if let Some(reqwest_err) =
-                    (&transport_err as &dyn std::any::Any).downcast_ref::<reqwest::Error>()
-                {
-                    return categorize_reqwest_error(reqwest_err);
+                // alloy's HTTP transport wraps `send()` and `bytes()` failures as
+                // `TransportErrorKind::Custom`, so the reqwest::Error is one `source()` down
+                if let Some(reqwest_err) = find_reqwest_error(&transport_err) {
+                    return match categorize_reqwest_error(reqwest_err) {
+                        // Connection failures stay transport errors, which are retried and
+                        // fail over to the next provider
+                        ProviderError::Other(message) => ProviderError::TransportError(message),
+                        categorized => categorized,
+                    };
                 }
 
-                ProviderError::TransportError(transport_err.to_string())
+                // The downcast stops matching if alloy's reqwest and ours drift apart, so the
+                // URL is also masked in the text
+                ProviderError::TransportError(mask_request_urls_in_text(&transport_err.to_string()))
             }
             RpcError::ErrorResp(json_rpc_err) => {
                 // Preserve JSON-RPC `data` (revert / FailedOp payloads). The previous mapping
@@ -554,6 +599,7 @@ pub fn is_retriable_error(error: &ProviderError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::transports::TransportErrorKind;
     use lazy_static::lazy_static;
     use std::env;
     use std::sync::Mutex;
@@ -734,22 +780,41 @@ mod tests {
         assert!(matches!(provider_error, ProviderError::Other(_)));
     }
 
-    #[actix_rt::test]
-    async fn test_categorize_reqwest_error_masks_url_in_message() {
-        // Nothing listens on port 9, so the request fails to connect
-        let client = reqwest::Client::new();
+    /// A connection error to `http://127.0.0.1:9/v2/SECRET_KEY_PATH?apikey=SECRET_KEY_QUERY`.
+    async fn connection_refused_reqwest_error() -> reqwest::Error {
+        // Nothing listens on port 9. No proxy, so a proxy in the environment cannot answer.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let err = client
             .get("http://127.0.0.1:9/v2/SECRET_KEY_PATH?apikey=SECRET_KEY_QUERY")
             .send()
             .await
             .unwrap_err();
         assert!(err.to_string().contains("SECRET_KEY_PATH"));
+        err
+    }
+
+    #[actix_rt::test]
+    async fn test_categorize_reqwest_error_masks_url_in_message() {
+        let err = connection_refused_reqwest_error().await;
 
         let provider_error = categorize_reqwest_error(&err);
         assert!(matches!(provider_error, ProviderError::Other(_)));
         let message = provider_error.to_string();
         assert!(!message.contains("SECRET_KEY"), "{message}");
         assert!(message.contains("http://127.0.0.1:9/***"), "{message}");
+    }
+
+    #[test]
+    fn test_categorize_reqwest_error_without_url_keeps_text() {
+        // An unparsable URL fails in the builder, before reqwest has a URL to attach
+        let err = reqwest::Client::new().get("not a url").build().unwrap_err();
+        assert!(err.url().is_none());
+
+        let provider_error = categorize_reqwest_error(&err);
+        match provider_error {
+            ProviderError::Other(message) => assert_eq!(message, err.to_string()),
+            other => panic!("expected Other, got {other:?}"),
+        }
     }
 
     #[actix_rt::test]
@@ -762,7 +827,8 @@ mod tests {
             .create_async()
             .await;
 
-        let client = reqwest::Client::new();
+        // No proxy, so a proxy in the environment cannot answer instead of the mock
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let err = client
             .get(format!("{}/v3/SECRET_KEY", mock_server.url()))
             .send()
@@ -782,6 +848,86 @@ mod tests {
         ));
         let message = provider_error.to_string();
         assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(
+            message.contains(&format!("{}/***", mock_server.url())),
+            "{message}"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn test_from_alloy_transport_error_masks_reqwest_url() {
+        // alloy-transport-http wraps `send()` failures this way
+        let err = connection_refused_reqwest_error().await;
+        let provider_error = ProviderError::from(TransportErrorKind::custom(err));
+
+        // Still a transport error, so it is retried and fails over as before
+        assert!(matches!(provider_error, ProviderError::TransportError(_)));
+        assert!(is_retriable_error(&provider_error));
+        let message = provider_error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(message.contains("http://127.0.0.1:9/***"), "{message}");
+    }
+
+    #[actix_rt::test]
+    async fn test_from_alloy_transport_error_finds_reqwest_timeout() {
+        // Accepts the connection but never answers
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/v2/SECRET_KEY_PATH",
+            listener.local_addr().unwrap()
+        );
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let err = client.get(url).send().await.unwrap_err();
+        assert!(err.is_timeout());
+
+        let provider_error = ProviderError::from(TransportErrorKind::custom(err));
+        assert!(
+            matches!(provider_error, ProviderError::Timeout),
+            "{provider_error:?}"
+        );
+    }
+
+    #[test]
+    fn test_from_alloy_transport_error_masks_url_in_text() {
+        // An error that is not our reqwest::Error, e.g. from a different reqwest version
+        let provider_error = ProviderError::from(TransportErrorKind::custom_str(
+            "error sending request for url (https://rpc.example.com/v2/SECRET_KEY?apikey=SECRET_KEY)",
+        ));
+
+        assert!(matches!(provider_error, ProviderError::TransportError(_)));
+        let message = provider_error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(
+            message.contains("for url (https://rpc.example.com/***)"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_mask_request_urls_in_text() {
+        assert_eq!(
+            mask_request_urls_in_text(
+                "error sending request for url (https://rpc.example.com/v2/KEY) and \
+                 error decoding response body for url (http://127.0.0.1:9?apikey=KEY): eof"
+            ),
+            "error sending request for url (https://rpc.example.com/***) and \
+             error decoding response body for url (http://127.0.0.1:9?***): eof"
+        );
+        // Already masked text and text without a URL stay as they are
+        assert_eq!(
+            mask_request_urls_in_text(
+                "error sending request for url (https://rpc.example.com/***)"
+            ),
+            "error sending request for url (https://rpc.example.com/***)"
+        );
+        assert_eq!(
+            mask_request_urls_in_text("connection reset"),
+            "connection reset"
+        );
     }
 
     #[actix_rt::test]
@@ -1043,7 +1189,8 @@ mod tests {
             message: "execution reverted".into(),
             data: Some(to_raw_value(&serde_json::json!(revert_hex)).unwrap()),
         };
-        let provider_error = ProviderError::from(RpcError::<String>::ErrorResp(payload));
+        let provider_error =
+            ProviderError::from(RpcError::<TransportErrorKind>::ErrorResp(payload));
 
         match provider_error {
             ProviderError::RpcErrorCode {
@@ -1069,7 +1216,8 @@ mod tests {
             message: "Method not found".into(),
             data: None,
         };
-        let provider_error = ProviderError::from(RpcError::<String>::ErrorResp(payload));
+        let provider_error =
+            ProviderError::from(RpcError::<TransportErrorKind>::ErrorResp(payload));
 
         match provider_error {
             ProviderError::RpcErrorCode { data, .. } => assert!(data.is_none()),
