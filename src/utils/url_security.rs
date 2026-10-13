@@ -9,6 +9,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use reqwest::redirect::{Attempt, Policy};
 use tracing::{error, warn};
 
+use crate::utils::mask_url;
+
 /// Validates an RPC URL against security policies
 ///
 /// # Arguments
@@ -355,8 +357,8 @@ pub fn evaluate_redirect_decision(
     let target_scheme = target_url.scheme();
     if original_scheme == "http" && target_scheme == "https" {
         tracing::debug!(
-            original = %original_url,
-            target = %target_url,
+            original = %mask_url(original_url.as_str()),
+            target = %mask_url(target_url.as_str()),
             "Allowing HTTP to HTTPS redirect"
         );
         RedirectDecision::Follow

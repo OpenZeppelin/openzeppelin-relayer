@@ -29,6 +29,7 @@ use super::rpc_selector::RpcSelector;
 use crate::config::ServerConfig;
 use crate::constants::RETRY_JITTER_PERCENT;
 use crate::metrics::RPC_CALL_LATENCY;
+use crate::utils::mask_url;
 use std::time::Instant;
 
 /// Calculate the retry delay using exponential backoff with jitter
@@ -249,7 +250,7 @@ where
             };
 
         tracing::debug!(
-            provider_url = %provider_url,
+            provider_url = %mask_url(&provider_url),
             operation_name = %operation_name,
             tried_providers = %tried_urls.len(),
             "selected provider"
@@ -270,7 +271,7 @@ where
             Ok(result) => {
                 tracing::debug!(
                     operation_name = %operation_name,
-                    provider_url = %provider_url,
+                    provider_url = %mask_url(&provider_url),
                     total_attempts = %total_attempts,
                     "rpc call succeeded"
                 );
@@ -283,7 +284,7 @@ where
                         if should_mark_provider_failed(&original_err) {
                             tracing::warn!(
                                 error = %original_err,
-                                provider_url = %provider_url,
+                                provider_url = %mask_url(&provider_url),
                                 operation_name = %operation_name,
                                 "non-retriable error should mark provider as failed, marking as failed and switching to next provider"
                             );
@@ -297,7 +298,7 @@ where
                         // If retries are exhausted, mark the provider as failed
                         tracing::warn!(
                             max_retries = %config.max_retries,
-                            provider_url = %provider_url,
+                            provider_url = %mask_url(&provider_url),
                             operation_name = %operation_name,
                             error = %last_error.as_ref().unwrap(),
                             failover_count = %(failover_count + 1),
@@ -368,7 +369,7 @@ where
     // Initialize the provider
     let provider = provider_initializer(&provider_url).map_err(|e| {
         tracing::warn!(
-            provider_url = %provider_url,
+            provider_url = %mask_url(&provider_url),
             operation_name = %operation_name,
             error = %e,
             "failed to initialize provider"
@@ -430,7 +431,7 @@ where
 
                 tracing::debug!(
                     operation_name = %operation_name,
-                    provider_url = %provider_url,
+                    provider_url = %mask_url(provider_url),
                     attempt = %(current_attempt_idx + 1),
                     max_retries = %config.max_retries,
                     total_attempts = %*total_attempts,
@@ -445,7 +446,7 @@ where
 
                 tracing::warn!(
                     operation_name = %operation_name,
-                    provider_url = %provider_url,
+                    provider_url = %mask_url(provider_url),
                     attempt = %(current_attempt_idx + 1),
                     max_retries = %config.max_retries,
                     error = %e,
@@ -461,7 +462,7 @@ where
                     tracing::warn!(
                         max_retries = %config.max_retries,
                         operation_name = %operation_name,
-                        provider_url = %provider_url,
+                        provider_url = %mask_url(provider_url),
                         error = %e,
                         "all retries exhausted"
                     );
@@ -477,7 +478,7 @@ where
 
                 tracing::debug!(
                     operation_name = %operation_name,
-                    provider_url = %provider_url,
+                    provider_url = %mask_url(provider_url),
                     delay = ?delay,
                     next_attempt = %(current_attempt_idx + 2),
                     max_retries = %config.max_retries,
@@ -2020,5 +2021,128 @@ mod tests {
             "Provider 2 should have 0 failures, got: {}",
             meta2.failure_timestamps.len()
         );
+    }
+
+    /// Collects formatted tracing output so a test can inspect what reached the logs.
+    #[derive(Clone)]
+    struct LogCapture(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// RPC URLs often carry an API key in the path or query. Every log line on the
+    /// retry and failover path must show them masked.
+    #[tokio::test]
+    #[serial]
+    async fn test_retry_logs_mask_provider_urls() {
+        let _guard = setup_test_env();
+        RpcHealthStore::instance().clear_all();
+
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = LogCapture(captured.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+        // Retriable failures on the first provider, then failover to the second.
+        let selector = RpcSelector::new_with_defaults(vec![
+            RpcConfig::new("https://eth-mainnet.example.com/v2/SECRET_KEY_A1".to_string()),
+            RpcConfig::new("https://rpc-a.example.org/rpc?apikey=SECRET_KEY_A2".to_string()),
+        ])
+        .expect("Failed to create selector");
+        let first_provider = Arc::new(Mutex::new(None::<String>));
+        let operation = move |provider: String| {
+            let first_provider = first_provider.clone();
+            async move {
+                let mut first = first_provider.lock().unwrap();
+                if *first.get_or_insert_with(|| provider.clone()) == provider {
+                    Err(TestError("connection reset".to_string()))
+                } else {
+                    Ok(42)
+                }
+            }
+        };
+        let result = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| true,
+            |_| true,
+            |url: &str| Ok::<_, TestError>(url.to_string()),
+            operation,
+            Some(RetryConfig::new(2, 1, 0, 0)),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 42);
+
+        // A provider that fails to initialize, then a non-retriable error that marks the
+        // next provider as failed.
+        let selector = RpcSelector::new_with_defaults(vec![
+            RpcConfig::new("https://node-b.example.net/SECRET_KEY_B1/".to_string()),
+            RpcConfig::new("https://rpc-b.example.io?token=SECRET_KEY_B2".to_string()),
+        ])
+        .expect("Failed to create selector");
+        let init_calls = Arc::new(AtomicU8::new(0));
+        let provider_initializer = move |url: &str| -> Result<String, TestError> {
+            if init_calls.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
+                Err(TestError("init failed".to_string()))
+            } else {
+                Ok(url.to_string())
+            }
+        };
+        let result: Result<i32, TestError> = retry_rpc_call(
+            &selector,
+            "test_operation",
+            |_| false,
+            |_| true,
+            provider_initializer,
+            |_provider: String| async { Err(TestError("unauthorized".to_string())) },
+            Some(RetryConfig::new(2, 1, 0, 0)),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let logs = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        for message in [
+            "selected provider",
+            "rpc call failed (will retry if retriable)",
+            "retrying rpc call after delay",
+            "all retries exhausted",
+            "all retry attempts failed",
+            "rpc call succeeded",
+            "failed to initialize provider",
+            "non-retriable error should mark provider as failed",
+            "RPC provider paused due to failures",
+        ] {
+            assert!(
+                logs.contains(message),
+                "missing log line {message:?}:\n{logs}"
+            );
+        }
+        assert!(
+            !logs.contains("SECRET_KEY"),
+            "RPC URL key leaked into logs:\n{logs}"
+        );
+        for masked in [
+            "https://eth-mainnet.example.com/***",
+            "https://rpc-a.example.org/***",
+            "https://node-b.example.net/***",
+            "https://rpc-b.example.io?***",
+        ] {
+            assert!(
+                logs.contains(masked),
+                "missing masked URL {masked}:\n{logs}"
+            );
+        }
     }
 }
