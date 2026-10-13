@@ -2897,6 +2897,7 @@
           "Relayers"
         ],
         "summary": "Sends a transaction through the specified relayer.",
+        "description": "Accepts an optional `Idempotency-Key` header: a client-generated unique key (max 255 chars)\nthat makes the request idempotent. Repeating a request with the same key returns the original\ntransaction. Keys expire after IDEMPOTENCY_KEY_TTL_SECONDS (default 24h).",
         "operationId": "sendTransaction",
         "parameters": [
           {
@@ -2906,18 +2907,6 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "Optional client-generated unique key (max 255 chars) to make the request idempotent. Repeating a request with the same key returns the original transaction. Keys expire after IDEMPOTENCY_KEY_TTL_SECONDS (default 24h).",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
             }
           }
         ],
