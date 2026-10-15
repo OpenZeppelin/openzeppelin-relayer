@@ -207,6 +207,14 @@ impl Repository<TransactionRepoModel, String> for InMemoryTransactionRepository 
 
 #[async_trait]
 impl TransactionRepository for InMemoryTransactionRepository {
+    async fn get_by_id_on_primary(
+        &self,
+        id: String,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        // No read replicas in memory; the standard read is the primary read.
+        Repository::get_by_id(self, id).await
+    }
+
     async fn find_by_relayer_id(
         &self,
         relayer_id: &str,
@@ -400,6 +408,15 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(filtered.into_iter().next())
     }
 
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        // No read replicas in memory; the standard read is the primary read.
+        self.find_by_nonce(relayer_id, nonce).await
+    }
+
     async fn get_nonce_occupancy(
         &self,
         relayer_id: &str,
@@ -442,6 +459,56 @@ impl TransactionRepository for InMemoryTransactionRepository {
                 "Transaction with ID {tx_id} not found"
             )))
         }
+    }
+
+    async fn partial_update_if_evm_nonce_unset(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        if update.status.is_some() || update.hashes.is_some() {
+            return Err(RepositoryError::InvalidData(
+                "Nonce claim update must not contain status or hashes".to_string(),
+            ));
+        }
+
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let tx = store.get_mut(&tx_id).ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        let nonce_is_unset = matches!(
+            &tx.network_data,
+            NetworkTransactionData::Evm(evm_data) if evm_data.nonce.is_none()
+        );
+        if Self::is_final_state(&tx.status) || !nonce_is_unset {
+            return Ok((tx.clone(), false));
+        }
+
+        tx.apply_partial_update(update);
+        Ok((tx.clone(), true))
+    }
+
+    async fn partial_update_if_status(
+        &self,
+        tx_id: String,
+        expected: TransactionStatus,
+        update: TransactionUpdateRequest,
+    ) -> Result<(TransactionRepoModel, bool), RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let tx = store.get_mut(&tx_id).ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        // Same refusals as the Redis script: a status mismatch, or a status
+        // change on a finalized record.
+        let final_status_change = Self::is_final_state(&tx.status) && update.status.is_some();
+        if tx.status != expected || final_status_change {
+            return Ok((tx.clone(), false));
+        }
+
+        tx.apply_partial_update(update);
+        Ok((tx.clone(), true))
     }
 
     async fn update_network_data(
@@ -760,6 +827,15 @@ mod tests {
         }
     }
 
+    fn nonce_claim_update(evm_data: &EvmTransactionData, nonce: u64) -> TransactionUpdateRequest {
+        let mut claimed_data = evm_data.clone();
+        claimed_data.nonce = Some(nonce);
+        TransactionUpdateRequest {
+            network_data: Some(NetworkTransactionData::Evm(claimed_data)),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_create_transaction() {
         let repo = InMemoryTransactionRepository::new();
@@ -785,7 +861,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_by_id_on_primary_uses_default_repository_read() {
+    async fn test_get_by_id_on_primary_delegates_to_repository_read() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-primary-read");
 
@@ -953,6 +1029,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partial_update_if_evm_nonce_unset_applies_only_first_claim() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("test-nonce-claim");
+        let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data else {
+            panic!("Expected EVM transaction data");
+        };
+        evm_data.nonce = None;
+        let base_evm_data = evm_data.clone();
+        repo.create(tx).await.unwrap();
+
+        let (first, first_applied) = repo
+            .partial_update_if_evm_nonce_unset(
+                "test-nonce-claim".to_string(),
+                nonce_claim_update(&base_evm_data, 11),
+            )
+            .await
+            .unwrap();
+        let (second, second_applied) = repo
+            .partial_update_if_evm_nonce_unset(
+                "test-nonce-claim".to_string(),
+                nonce_claim_update(&base_evm_data, 12),
+            )
+            .await
+            .unwrap();
+
+        assert!(first_applied);
+        assert!(!second_applied);
+        assert_eq!(
+            first.network_data.get_evm_transaction_data().unwrap().nonce,
+            Some(11)
+        );
+        assert_eq!(
+            second
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .nonce,
+            Some(11)
+        );
+        assert_eq!(
+            repo.get_by_id("test-nonce-claim".to_string())
+                .await
+                .unwrap()
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .nonce,
+            Some(11)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_if_evm_nonce_unset_rejects_status_and_hashes() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("test-claim-reject");
+        let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data else {
+            panic!("Expected EVM transaction data");
+        };
+        evm_data.nonce = None;
+        let base_evm_data = evm_data.clone();
+        repo.create(tx).await.unwrap();
+
+        let with_status = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Sent),
+            ..nonce_claim_update(&base_evm_data, 11)
+        };
+        let result = repo
+            .partial_update_if_evm_nonce_unset("test-claim-reject".to_string(), with_status)
+            .await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+
+        let with_hashes = TransactionUpdateRequest {
+            hashes: Some(vec!["0xhash".to_string()]),
+            ..nonce_claim_update(&base_evm_data, 11)
+        };
+        let result = repo
+            .partial_update_if_evm_nonce_unset("test-claim-reject".to_string(), with_hashes)
+            .await;
+        assert!(matches!(result, Err(RepositoryError::InvalidData(_))));
+
+        // The record is untouched by rejected patches.
+        let stored = repo
+            .get_by_id("test-claim-reject".to_string())
+            .await
+            .unwrap();
+        assert_eq!(stored.network_data.evm_nonce(), None);
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_if_status_applies_only_on_match() {
+        let repo = InMemoryTransactionRepository::new();
+        repo.create(create_test_transaction_pending_state("test-cas"))
+            .await
+            .unwrap();
+        let fail = TransactionUpdateRequest {
+            status: Some(TransactionStatus::Failed),
+            ..Default::default()
+        };
+
+        // Another writer moves the tx on first: the stale Pending→Failed loses.
+        repo.update_status("test-cas".to_string(), TransactionStatus::Sent)
+            .await
+            .unwrap();
+        let (stored, applied) = repo
+            .partial_update_if_status(
+                "test-cas".to_string(),
+                TransactionStatus::Pending,
+                fail.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(!applied);
+        assert_eq!(stored.status, TransactionStatus::Sent);
+
+        let (updated, applied) = repo
+            .partial_update_if_status("test-cas".to_string(), TransactionStatus::Sent, fail)
+            .await
+            .unwrap();
+        assert!(applied);
+        assert_eq!(updated.status, TransactionStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_partial_update_if_status_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let result = repo
+            .partial_update_if_status(
+                "missing".to_string(),
+                TransactionStatus::Pending,
+                TransactionUpdateRequest::default(),
+            )
+            .await;
+        assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    #[tokio::test]
     async fn test_update_status() {
         let repo = InMemoryTransactionRepository::new();
         let tx = create_test_transaction("test-1");
@@ -1080,6 +1292,15 @@ mod tests {
 
         // Test finding transaction that doesn't exist
         let result = repo.find_by_nonce("relayer-1", 99).await.unwrap();
+        assert!(result.is_none());
+
+        // The primary lookup sees the same data (no replicas in memory)
+        let result = repo.find_by_nonce_on_primary("relayer-1", 2).await.unwrap();
+        assert_eq!(result.unwrap().id, "test-2");
+        let result = repo
+            .find_by_nonce_on_primary("relayer-1", 99)
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
