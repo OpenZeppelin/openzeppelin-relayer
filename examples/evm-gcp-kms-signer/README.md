@@ -43,7 +43,7 @@ cd openzeppelin-relayer
 2. Create a new service account or use an existing one
 3. Grant the following roles:
    - Cloud KMS CryptoKey Signer
-   - Cloud KMS Viewer (for public key retrieval)
+   - Cloud KMS CryptoKey Public Key Viewer (for public key retrieval)
 4. Create and download a JSON key file for the service account
 5. Extract the following values from the JSON file:
    - `project_id`
