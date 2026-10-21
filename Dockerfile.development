@@ -1,3 +1,8 @@
+# Floor for the system trust store. 20260909-r3 distrusts the compromised
+# eMudhra intermediates (https://emudhra.we-have-a-problem.com). apk fails the
+# build if it cannot satisfy the floor, and changing it invalidates cached layers.
+ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION=20260909-r3
+
 # Base image
 # Rustc v1.93.0 minimum (MSRV, see rust-version in Cargo.toml)
 # The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.93.0
@@ -42,8 +47,9 @@ ARG TARGETARCH
 ARG NODE_VERSION=20.19
 
 # Install Node.js
+ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION
 USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+RUN apk add --no-cache "ca-certificates-bundle>=${MIN_CA_CERTIFICATES_BUNDLE_VERSION}" nodejs=~${NODE_VERSION} npm
 
 ENV PATH="/usr/local/bin:$PATH"
 
