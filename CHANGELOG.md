@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.9.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.8.0...v1.9.0) (2026-10-22)
+
+
+### 🚀 Features
+
+* Add docs for 1.6.x, 1.7.x and 1.8.x ([#895](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/895)) ([531edb1](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/531edb1742ef20bd2f77f39831cf597791782887))
+* **api:** Add Idempotency-Key header support ([#893](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/893)) ([cedd586](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/cedd5863f4c2c63f0e916fa32444daf6e44ae994))
+* **evm:** make initial status-check delay configurable ([#847](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/847)) ([2255fb4](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/2255fb47ae925cd0e00c4de6bda6822ebb876a1f))
+* **plugins:** forward Idempotency-Key through plugin sendTransaction ([#917](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/917)) ([d7f151f](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/d7f151f371a2fd75839f98c7525523bd286926f0))
+* **stellar:** Upgrade to Protocol 28 XDR and RPC client ([#873](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/873)) ([52ecfd6](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/52ecfd6f31bcdb286841e60461a73e2c181f9154))
+
+
+### 🐛 Bug Fixes
+
+* Distrust compromised eMudhra intermediates in TLS trust stores ([#937](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/937)) ([b9f8858](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b9f8858b4fa6543f9e1d7070028e316e9659ebe9))
+* **evm:** Preserve JSON-RPC error data on plugin RPC responses ([#915](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/915)) ([1d0c332](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/1d0c3321f7f44a02010861155085301180baa3f1))
+* Mask provider URLs in RPC retry logs ([#916](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/916)) ([cec2ec4](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/cec2ec460bebf6f514acac054d4e5460e8194d64))
+* use unique IDs for Redis workers ([#892](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/892)) ([b790686](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b790686deafed19a1b682462cf83b1fcd58e8345))
+
 ## [1.8.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.7.0...v1.8.0) (2026-08-19)
 
 
