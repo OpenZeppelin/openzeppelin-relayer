@@ -132,6 +132,8 @@ mod tests {
             tags: vec![POLYGON_ZKEVM_TAG.to_string()],
             chain_id: 1101,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -176,6 +178,7 @@ mod tests {
                     Err(ProviderError::RpcErrorCode {
                         code: -32601,
                         message: "Method not found".to_string(),
+                        data: None,
                     })
                 }
                 .boxed()

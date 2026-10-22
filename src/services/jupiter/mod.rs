@@ -584,47 +584,98 @@ mod tests {
     use super::*;
     use mockito;
 
+    fn sample_quote(input_mint: &str, output_mint: &str, amount: u64) -> QuoteResponse {
+        QuoteResponse {
+            input_mint: input_mint.to_string(),
+            output_mint: output_mint.to_string(),
+            in_amount: amount,
+            out_amount: 24_860_952,
+            other_amount_threshold: 24_362_733,
+            price_impact_pct: 0.1,
+            swap_mode: "ExactIn".to_string(),
+            slippage_bps: 50,
+            route_plan: vec![RoutePlan {
+                percent: 100,
+                swap_info: SwapInfo {
+                    amm_key: "test_amm_key".to_string(),
+                    label: "test_label".to_string(),
+                    input_mint: input_mint.to_string(),
+                    output_mint: output_mint.to_string(),
+                    in_amount: amount.to_string(),
+                    out_amount: "24860952".to_string(),
+                    fee_amount: Some("1000".to_string()),
+                    fee_mint: Some(input_mint.to_string()),
+                },
+            }],
+        }
+    }
+
     #[tokio::test]
     async fn test_get_quote() {
-        let service = MainnetJupiterService::new();
+        let mut mock_server = mockito::Server::new_async().await;
+        let expected = sample_quote(
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "So11111111111111111111111111111111111111112",
+            1_000_000,
+        );
+        let _mock = mock_server
+            .mock("GET", "/swap/v1/quote")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&expected).unwrap())
+            .create_async()
+            .await;
 
-        // USDC -> SOL quote request
-        let request = QuoteRequest {
-            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // noboost
-            output_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL
-            amount: 1000000,                                                        // 1 USDC
-            slippage: 0.5,                                                          // 0.5%
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.url(),
         };
 
-        let result = service.get_quote(request).await;
-        assert!(result.is_ok());
+        let request = QuoteRequest {
+            input_mint: expected.input_mint.clone(),
+            output_mint: expected.output_mint.clone(),
+            amount: expected.in_amount,
+            slippage: 0.5,
+        };
 
-        let quote = result.unwrap();
-        assert_eq!(
-            quote.input_mint,
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-        );
-        assert_eq!(
-            quote.output_mint,
-            "So11111111111111111111111111111111111111112"
-        );
+        let quote = service.get_quote(request).await.unwrap();
+        assert_eq!(quote.input_mint, expected.input_mint);
+        assert_eq!(quote.output_mint, expected.output_mint);
         assert!(quote.out_amount > 0);
     }
 
     #[tokio::test]
     async fn test_get_sol_to_token_quote() {
-        let service = MainnetJupiterService::new();
-
-        let result = service
-            .get_sol_to_token_quote("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", 1000000, 0.5)
-            .await;
-        assert!(result.is_ok());
-
-        let quote = result.unwrap();
-        assert_eq!(
-            quote.input_mint,
-            "So11111111111111111111111111111111111111112"
+        let mut mock_server = mockito::Server::new_async().await;
+        let expected = sample_quote(
+            WRAPPED_SOL_MINT,
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            1_000_000,
         );
+        let _mock = mock_server
+            .mock("GET", "/swap/v1/quote")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(serde_json::to_string(&expected).unwrap())
+            .create_async()
+            .await;
+
+        let service = MainnetJupiterService {
+            client: Client::new(),
+            base_url: mock_server.url(),
+        };
+
+        let quote = service
+            .get_sol_to_token_quote(
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                1_000_000,
+                0.5,
+            )
+            .await
+            .unwrap();
+        assert_eq!(quote.input_mint, WRAPPED_SOL_MINT);
         assert_eq!(
             quote.output_mint,
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -634,20 +685,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_get_quote() {
-        let service = MainnetJupiterService::new();
+        let service = MockJupiterService::new();
 
-        // USDC -> SOL quote request
         let request = QuoteRequest {
-            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-            output_mint: "So11111111111111111111111111111111111111112".to_string(), // SOL
-            amount: 1000000,                                                        // 1 USDC
-            slippage: 0.5,                                                          // 0.5%
+            input_mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(),
+            output_mint: "So11111111111111111111111111111111111111112".to_string(),
+            amount: 1_000_000,
+            slippage: 0.5,
         };
 
-        let result = service.get_quote(request).await;
-        assert!(result.is_ok());
-
-        let quote = result.unwrap();
+        let quote = service.get_quote(request).await.unwrap();
         assert_eq!(
             quote.input_mint,
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -656,7 +703,7 @@ mod tests {
             quote.output_mint,
             "So11111111111111111111111111111111111111112"
         );
-        assert!(quote.out_amount > 0);
+        assert_eq!(quote.out_amount, 1_000_000);
     }
 
     #[tokio::test]

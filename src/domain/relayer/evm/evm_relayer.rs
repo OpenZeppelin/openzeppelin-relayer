@@ -27,19 +27,13 @@
 use std::sync::Arc;
 
 use crate::{
-    constants::{
-        transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME,
-        EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-    },
+    constants::{transactions::PENDING_TRANSACTION_STATUSES, EVM_SMALLEST_UNIT_NAME},
     domain::{
         relayer::{Relayer, RelayerError},
         BalanceResponse, SignDataRequest, SignDataResponse, SignTransactionExternalResponse,
         SignTransactionRequest, SignTypedDataRequest,
     },
-    jobs::{
-        JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionSend,
-        TransactionStatusCheck,
-    },
+    jobs::{JobProducerTrait, RelayerHealthCheck, TransactionRequest, TransactionSend},
     models::{
         produce_relayer_disabled_payload, DeletePendingTransactionsResponse, DisabledReason,
         EvmNetwork, HealthCheckFailure, JsonRpcRequest, JsonRpcResponse, NetworkRepoModel,
@@ -49,7 +43,7 @@ use crate::{
     },
     repositories::{NetworkRepository, RelayerRepository, Repository, TransactionRepository},
     services::{
-        provider::{EvmProvider, EvmProviderTrait},
+        provider::{EvmProvider, EvmProviderTrait, ProviderError},
         signer::{DataSignerTrait, EvmSigner},
         TransactionCounterService, TransactionCounterServiceTrait,
     },
@@ -59,7 +53,10 @@ use async_trait::async_trait;
 use eyre::Result;
 use tracing::{debug, error, info, instrument, warn};
 
-use super::{create_error_response, create_success_response, EvmTransactionValidator};
+use super::{
+    create_error_response, create_error_response_with_data, create_success_response,
+    EvmTransactionValidator,
+};
 use crate::utils::{map_provider_error, sanitize_error_description};
 
 #[allow(dead_code)]
@@ -226,9 +223,10 @@ where
             network_type = ?self.relayer.network_type,
         )
     )]
-    async fn process_transaction_request(
+    async fn process_transaction_request_with_id(
         &self,
         network_transaction: NetworkTransactionRequest,
+        tx_id: String,
     ) -> Result<TransactionRepoModel, RelayerError> {
         let network_model = self
             .network_repository
@@ -240,35 +238,32 @@ where
                     self.relayer.network
                 ))
             })?;
-        let transaction =
+        let mut transaction =
             TransactionRepoModel::try_from((&network_transaction, &self.relayer, &network_model))?;
+        transaction.id = tx_id;
 
         self.transaction_repository
             .create(transaction.clone())
             .await
             .map_err(|e| RepositoryError::TransactionFailure(e.to_string()))?;
 
+        let initial_delay_seconds = self.network.status_check_initial_delay_seconds();
+
         // Status check FIRST - this is our safety net for monitoring.
         // If this fails, mark transaction as failed and don't proceed.
         // This ensures we never have an unmonitored transaction.
-        if let Err(e) = self
-            .job_producer
-            .produce_check_transaction_status_job(
-                TransactionStatusCheck::new(
-                    transaction.id.clone(),
-                    transaction.relayer_id.clone(),
-                    crate::models::NetworkType::Evm,
-                ),
-                Some(calculate_scheduled_timestamp(
-                    EVM_STATUS_CHECK_INITIAL_DELAY_SECONDS,
-                )),
-            )
-            .await
+        if let Err(e) = super::schedule_initial_status_check(
+            self.job_producer.as_ref(),
+            &transaction,
+            &self.network,
+        )
+        .await
         {
             // Status queue failed - mark transaction as failed to prevent orphaned tx
             error!(
                 relayer_id = %self.relayer.id,
                 transaction_id = %transaction.id,
+                initial_delay_seconds,
                 error = %e,
                 "Status check queue push failed - marking transaction as failed"
             );
@@ -293,6 +288,12 @@ where
             }
             return Err(e.into());
         }
+        debug!(
+            relayer_id = %self.relayer.id,
+            transaction_id = %transaction.id,
+            initial_delay_seconds,
+            "Initial transaction status check scheduled"
+        );
 
         // Now safe to push transaction request.
         // Even if this fails, status check will monitor and detect the stuck transaction.
@@ -590,11 +591,20 @@ where
                 );
                 let (error_code, error_message) = map_provider_error(&provider_error);
                 let sanitized_description = sanitize_error_description(&provider_error);
-                Ok(create_error_response(
+                // Preserve upstream JSON-RPC `data` (e.g. FailedOp / revert payloads) so
+                // plugins can decode simulation failures instead of treating them as opaque.
+                // Message/description stay sanitized; data is intentionally not (size-capped
+                // in create_error_response_with_data) for authenticated RPC callers.
+                let data = match &provider_error {
+                    ProviderError::RpcErrorCode { data, .. } => data.clone(),
+                    _ => None,
+                };
+                Ok(create_error_response_with_data(
                     request.id,
                     error_code,
                     error_message,
                     &sanitized_description,
+                    data,
                 ))
             }
         }
@@ -793,6 +803,8 @@ mod tests {
             tags: vec!["mainnet".to_string()],
             chain_id: 1,
             required_confirmations: 1,
+            status_check_initial_delay_seconds: 8,
+            status_check_retry_delay_seconds: 8,
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
@@ -815,6 +827,7 @@ mod tests {
             },
             chain_id: Some(1),
             required_confirmations: Some(1),
+            status_check: None,
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -932,15 +945,24 @@ mod tests {
         job_producer
             .expect_produce_transaction_request_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
+        let scheduled_check = Arc::new(std::sync::Mutex::new(None));
+        let captured_check = Arc::clone(&scheduled_check);
         job_producer
             .expect_produce_check_transaction_status_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
+            .returning(move |job, value| {
+                *captured_check.lock().unwrap() =
+                    Some((value, job.status_check_retry_delay_seconds));
+                Box::pin(ready(Ok(())))
+            });
 
+        let mut network = create_test_evm_network();
+        network.status_check_initial_delay_seconds = 1;
+        network.status_check_retry_delay_seconds = 5;
         let relayer = EvmRelayer::new(
             relayer_model,
             signer,
             provider,
-            create_test_evm_network(),
+            network,
             Arc::new(relayer_repo),
             Arc::new(network_repo),
             Arc::new(tx_repo),
@@ -949,8 +971,15 @@ mod tests {
         )
         .unwrap();
 
+        let before = chrono::Utc::now().timestamp();
         let result = relayer.process_transaction_request(network_tx).await;
+        let after = chrono::Utc::now().timestamp();
         assert!(result.is_ok());
+        let (scheduled_at, retry_delay) = scheduled_check.lock().unwrap().unwrap();
+        let scheduled_at = scheduled_at.unwrap();
+        assert!(scheduled_at >= before + 1);
+        assert!(scheduled_at <= after + 1);
+        assert_eq!(retry_delay, 5);
     }
 
     #[tokio::test]
@@ -2650,6 +2679,56 @@ mod tests {
 
         let error = response.error.unwrap();
         assert_eq!(error.code, -32603); // RpcErrorCodes::INTERNAL_ERROR
+    }
+
+    #[tokio::test]
+    async fn test_rpc_provider_rpc_error_preserves_data() {
+        let (mut provider, relayer_repo, network_repo, tx_repo, job_producer, signer, counter) =
+            setup_mocks();
+        let relayer_model = create_test_relayer();
+        let revert_data = serde_json::json!(
+            "0x220466a80000000000000000000000000000000000000000000000000000000000000000"
+        );
+
+        provider.expect_raw_request_dyn().returning({
+            let revert_data = revert_data.clone();
+            move |_, _| {
+                let revert_data = revert_data.clone();
+                Box::pin(async move {
+                    Err(ProviderError::RpcErrorCode {
+                        code: 3,
+                        message: "execution reverted".to_string(),
+                        data: Some(revert_data),
+                    })
+                })
+            }
+        });
+
+        let relayer = EvmRelayer::new(
+            relayer_model,
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            params: NetworkRpcRequest::Evm(EvmRpcRequest::RawRpcRequest {
+                method: "eth_call".to_string(),
+                params: serde_json::json!([{"to": "0x0000000071727De22E5E9d8BAf0edAc6f37da032"}, "latest"]),
+            }),
+            id: Some(JsonRpcId::Number(42)),
+        };
+
+        let response = relayer.rpc(request).await.unwrap();
+        let error = response.error.expect("expected RPC error");
+        assert_eq!(error.data, Some(revert_data));
     }
 
     #[tokio::test]

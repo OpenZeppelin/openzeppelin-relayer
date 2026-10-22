@@ -26,6 +26,12 @@ pub enum ApiError {
 
     #[error("Forbidden: {0}")]
     ForbiddenError(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
+    #[error("Unprocessable Entity: {0}")]
+    UnprocessableEntity(String),
 }
 
 impl ResponseError for ApiError {
@@ -49,6 +55,10 @@ impl ResponseError for ApiError {
             }
             ApiError::ForbiddenError(msg) => {
                 HttpResponse::Forbidden().json(ApiResponse::<()>::error(msg))
+            }
+            ApiError::Conflict(msg) => HttpResponse::Conflict().json(ApiResponse::<()>::error(msg)),
+            ApiError::UnprocessableEntity(msg) => {
+                HttpResponse::UnprocessableEntity().json(ApiResponse::<()>::error(msg))
             }
         }
     }
@@ -86,6 +96,15 @@ mod tests {
         let forbidden = ApiError::ForbiddenError("Access denied".to_string());
         assert_eq!(forbidden.to_string(), "Forbidden: Access denied");
 
+        let conflict = ApiError::Conflict("Already in progress".to_string());
+        assert_eq!(conflict.to_string(), "Conflict: Already in progress");
+
+        let unprocessable = ApiError::UnprocessableEntity("Invalid payload".to_string());
+        assert_eq!(
+            unprocessable.to_string(),
+            "Unprocessable Entity: Invalid payload"
+        );
+
         // Test Report conversion
         let report = Report::msg("Something went wrong");
         let internal_eyre_error = ApiError::InternalEyreError(report);
@@ -120,6 +139,14 @@ mod tests {
         let forbidden = ApiError::ForbiddenError("Permission denied".to_string());
         let response = forbidden.error_response();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let conflict = ApiError::Conflict("Already in progress".to_string());
+        let response = conflict.error_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let unprocessable = ApiError::UnprocessableEntity("Invalid payload".to_string());
+        let response = unprocessable.error_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let report = Report::msg("Internal error");
         let internal_eyre_error = ApiError::InternalEyreError(report);

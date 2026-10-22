@@ -603,6 +603,14 @@ impl ServerConfig {
             .unwrap_or(4.0)
     }
 
+    /// Gets the idempotency key TTL in seconds from environment variable or default (86400).
+    pub fn get_idempotency_key_ttl_seconds() -> u64 {
+        env::var("IDEMPOTENCY_KEY_TTL_SECONDS")
+            .unwrap_or_else(|_| "86400".to_string())
+            .parse()
+            .unwrap_or(86400)
+    }
+
     /// Gets the allowed RPC hosts from environment variable or default (empty list)
     pub fn get_rpc_allowed_hosts() -> Vec<String> {
         env::var("RPC_ALLOWED_HOSTS")
@@ -1417,6 +1425,30 @@ mod tests {
 
         // Cleanup
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
+    }
+
+    #[test]
+    fn test_idempotency_key_ttl_default() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::remove_var("IDEMPOTENCY_KEY_TTL_SECONDS");
+        assert_eq!(ServerConfig::get_idempotency_key_ttl_seconds(), 86400);
+    }
+
+    #[test]
+    fn test_idempotency_key_ttl_override() {
+        let _lock = match ENV_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        env::set_var("IDEMPOTENCY_KEY_TTL_SECONDS", "60");
+        assert_eq!(ServerConfig::get_idempotency_key_ttl_seconds(), 60);
+
+        env::remove_var("IDEMPOTENCY_KEY_TTL_SECONDS");
     }
 
     #[test]

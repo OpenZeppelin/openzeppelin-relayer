@@ -1,4 +1,5 @@
 use crate::config::ServerConfig;
+use crate::constants::DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS;
 use crate::models::NetworkType;
 
 use super::QueueType;
@@ -32,12 +33,23 @@ pub const STATUS_GENERIC_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     max_ms: 8000,
     jitter: 0.99,
 };
-/// Backoff profile for EVM status-check retries.
-pub const STATUS_EVM_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
-    initial_ms: 8000,
-    max_ms: 12000,
-    jitter: 0.99,
-};
+/// Jitter factor for EVM status-check retries.
+const STATUS_EVM_JITTER: f64 = 0.99;
+/// Backoff profile for EVM status-check retries (8->12s).
+pub const STATUS_EVM_BACKOFF: RetryBackoffConfig =
+    evm_status_check_backoff(DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS);
+
+/// Backoff profile for healthy, non-final EVM status checks on a network with
+/// `status_check.retry_delay_seconds` set: starts at that delay and caps at 1.5x it.
+/// The default delay yields [`STATUS_EVM_BACKOFF`].
+pub const fn evm_status_check_backoff(retry_delay_seconds: u64) -> RetryBackoffConfig {
+    let initial_ms = retry_delay_seconds.saturating_mul(1000);
+    RetryBackoffConfig {
+        initial_ms,
+        max_ms: initial_ms.saturating_mul(3) / 2,
+        jitter: STATUS_EVM_JITTER,
+    }
+}
 /// Backoff profile for Stellar status-check retries.
 pub const STATUS_STELLAR_BACKOFF: RetryBackoffConfig = RetryBackoffConfig {
     initial_ms: 2000,

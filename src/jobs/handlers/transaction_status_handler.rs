@@ -118,11 +118,7 @@ where
                 }
             }
 
-            // Return error to trigger retry
-            Err(HandlerError::Retry(format!(
-                "transaction status: {:?} - not in final state, retrying",
-                tx.status
-            )))
+            Err(HandlerError::NotYetFinal(tx.status))
         }
         Err(e) => {
             if e.downcast_ref::<TransactionError>()
@@ -309,7 +305,7 @@ mod tests {
     use super::*;
     use crate::{
         models::{NetworkType, TransactionStatus},
-        repositories::MockTransactionRepository,
+        repositories::{MockTransactionRepository, Repository, TransactionRepositoryStorage},
     };
     use std::collections::HashMap;
 
@@ -456,19 +452,52 @@ mod tests {
             assert_eq!(new_total, 11);
         }
 
-        /// Tests that consecutive counter resets to 0 on success (non-final)
-        #[test]
-        fn test_consecutive_reset_on_success() {
-            // When status check succeeds but tx is not final,
-            // consecutive should reset to 0, total stays unchanged
-            let total: u32 = 20;
+        #[tokio::test]
+        async fn test_non_final_success_resets_consecutive_counter() {
+            let tx_repo = TransactionRepositoryStorage::new_in_memory();
+            let tx_id = "tx-noop-poll".to_string();
+            let metadata = TransactionMetadata {
+                consecutive_failures: 3,
+                total_failures: 20,
+                ..Default::default()
+            };
+            let tx = TransactionRepoModel {
+                id: tx_id.clone(),
+                status: TransactionStatus::Submitted,
+                metadata: Some(metadata.clone()),
+                ..Default::default()
+            };
+            tx_repo.create(tx.clone()).await.unwrap();
 
-            // On success, consecutive resets
-            let new_consecutive = 0;
-            let new_total = total; // unchanged
+            let result = handle_result(Ok(tx), &tx_repo, &tx_id, Some(metadata), true).await;
 
-            assert_eq!(new_consecutive, 0);
-            assert_eq!(new_total, 20);
+            assert!(matches!(
+                result,
+                Err(HandlerError::NotYetFinal(TransactionStatus::Submitted))
+            ));
+            let updated = tx_repo.get_by_id(tx_id).await.unwrap();
+            let updated_metadata = updated.metadata.unwrap();
+            assert_eq!(updated_metadata.consecutive_failures, 0);
+            assert_eq!(updated_metadata.total_failures, 20);
+        }
+
+        /// An RPC or repository error must stay an ordinary retry, never `NotYetFinal`,
+        /// so it keeps the failure backoff instead of the configured interval.
+        #[tokio::test]
+        async fn test_transient_failure_remains_ordinary_retry() {
+            let tx_repo = MockTransactionRepository::new();
+            let result = handle_result(
+                Err(eyre::eyre!("rpc unavailable")),
+                &tx_repo,
+                "tx-1",
+                None,
+                true,
+            )
+            .await;
+
+            assert!(
+                matches!(result, Err(HandlerError::Retry(message)) if message == "rpc unavailable")
+            );
         }
 
         /// Tests that final states are correctly identified for cleanup

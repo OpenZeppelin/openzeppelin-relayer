@@ -2,6 +2,41 @@
 title: Relayer API Reference
 ---
 
+## Idempotent Requests
+
+`POST /api/v1/relayers/{relayer_id}/transactions` accepts an optional `Idempotency-Key` header. Use it to retry a request after a timeout or connection error without the risk of creating a second transaction.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/relayers/my-relayer/transactions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Idempotency-Key: 6f1c2a9e-3b6d-4f2e-9c1a-0d7e5b2f8a41" \
+  -H "Content-Type: application/json" \
+  -d '{ "to": "0x...", "value": 0, "data": "0x", "gas_limit": 21000, "speed": "average" }'
+```
+
+Rules:
+
+- The key is a client-generated string of 1 to 255 characters. A UUID v4 is recommended. Do not put sensitive data in the key.
+- Keys are scoped per relayer. The same key on two relayers refers to two independent requests.
+- The relayer stores a fingerprint of the request body with the key. The key is reserved only after the request passes validation, so a rejected request does not consume the key.
+
+The relayer chooses the transaction id before it reserves the key and stores the id with the key. A repeated request therefore always resolves to the transaction the first request created.
+
+Responses for a repeated key:
+
+| Situation | Response |
+| --- | --- |
+| Same key, same body, transaction stored | `200` with that transaction in its current state. No new transaction is created. |
+| Same key, different body | `422 Unprocessable Entity`. Send a new key for a new request. |
+| Same key, first request still being processed | `409 Conflict`. Retry after a short delay with the same key. |
+| Same key, no transaction found after the in-flight window: 60 seconds, or `REQUEST_TIMEOUT_SECONDS` plus 10 seconds if that is longer | `404 Not Found`. Either the first request never stored a transaction, or the transaction completed and was removed from storage after `TRANSACTION_EXPIRATION_HOURS`. The relayer can't tell these apart, so check whether the original was processed (for example on-chain) before retrying with a new key. |
+
+"Still being processed" means the create step only: store the transaction and queue its jobs. It does not mean the transaction is waiting for on-chain confirmation. A replay returns the transaction in any lifecycle status, such as `pending`, `submitted`, or `confirmed`.
+
+If the first request fails before the transaction is stored, the key is released and you can retry with the same key. If it fails after the transaction is stored, the key stays bound to that transaction and a retry returns it. If the first request times out, the relayer still finishes creating the transaction in the background, and a retry with the same key returns it.
+
+Expiry: a key is kept for `IDEMPOTENCY_KEY_TTL_SECONDS` (default `86400`, 24 hours). After that, the same key starts a new request. Set it to cover your client's retry window. A value below the in-flight window is raised to the window. Transactions in a final state are removed after `TRANSACTION_EXPIRATION_HOURS` (default `4`). A replay after that returns `404`, but the key still prevents a duplicate until it expires.
+
 ## Relayers
 
 ### [List Relayers](/relayer/api/listRelayers)

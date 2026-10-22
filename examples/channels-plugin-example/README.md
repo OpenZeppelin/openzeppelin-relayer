@@ -18,7 +18,7 @@ cd openzeppelin-relayer/examples/channels-plugin-example
 
 - Docker and Docker Compose
 - Rust (for generating keys and IDs)
-- Node.js >= 18 and pnpm >= 10
+- Node.js >= 24 and pnpm >= 10
 
 ## Setup
 

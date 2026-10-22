@@ -7,6 +7,7 @@ pub use crate::queues::{
 pub mod backend;
 pub mod queue;
 pub mod refreshing_connection;
+mod status_retry_policy;
 pub mod worker;
 
 pub use worker as redis_worker;

@@ -135,6 +135,7 @@ impl<T> JsonRpcResponse<T> {
                 code,
                 message: message.to_string(),
                 description: description.to_string(),
+                data: None,
             }),
             id: None,
         }
@@ -144,11 +145,20 @@ impl<T> JsonRpcResponse<T> {
 /// JSON-RPC 2.0 Error structure.
 ///
 /// Represents an error in a JSON-RPC response.
+///
+/// The optional `data` field carries upstream JSON-RPC error data (for example
+/// EVM revert / ERC-4337 `FailedOp` payloads, or Stellar diagnostic objects) when
+/// the Relayer is proxying an RPC call. Unlike `message`/`description`, `data` is
+/// not content-sanitized (authenticated callers need it for decoding); oversized
+/// values are dropped. It is omitted from the serialized response when absent.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     pub description: String,
+    /// Upstream JSON-RPC error `data`, when available (hex revert string, object, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

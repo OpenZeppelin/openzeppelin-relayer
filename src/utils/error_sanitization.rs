@@ -345,6 +345,7 @@ mod tests {
         let error = ProviderError::RpcErrorCode {
             code: -32000,
             message: "Server error: Invalid API key".to_string(),
+            data: None,
         };
         let description = sanitize_error_description(&error);
         assert_eq!(description, "RPC error occurred (code: -32000)");

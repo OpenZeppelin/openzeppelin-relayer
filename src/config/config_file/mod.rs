@@ -41,7 +41,8 @@ pub use plugin::*;
 pub mod network;
 pub use network::{
     EvmNetworkConfig, GasPriceCacheConfig, NetworkConfigCommon, NetworkFileConfig,
-    NetworksFileConfig, OptimismFeeCacheConfig, SolanaNetworkConfig, StellarNetworkConfig,
+    NetworksFileConfig, OptimismFeeCacheConfig, SolanaNetworkConfig, StatusCheckConfig,
+    StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -236,6 +237,7 @@ mod tests {
                 },
                 chain_id: Some(31337),
                 required_confirmations: Some(1),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
@@ -282,6 +284,7 @@ mod tests {
                 },
                 chain_id: Some(31337),
                 required_confirmations: Some(1),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
@@ -313,6 +316,7 @@ mod tests {
                 },
                 chain_id: Some(31337),
                 required_confirmations: Some(1),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
@@ -882,6 +886,7 @@ mod tests {
             },
             chain_id: Some(31337),
             required_confirmations: Some(1),
+            status_check: None,
             features: None,
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
@@ -1238,6 +1243,7 @@ mod tests {
                 },
                 chain_id: Some(31337),
                 required_confirmations: Some(1),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
@@ -1276,6 +1282,7 @@ mod tests {
                 },
                 chain_id: Some(31337),
                 required_confirmations: Some(1),
+                status_check: None,
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,

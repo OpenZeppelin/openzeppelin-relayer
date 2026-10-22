@@ -3,7 +3,25 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
 
+use crate::models::TransactionStatus;
 use crate::queues::QueueType;
+
+/// Marks a successful status check whose transaction has not reached a final state.
+///
+/// Crate-internal apalis error marker: the Redis retry policy downcasts to it to
+/// pick the configured interval instead of the failure backoff.
+#[derive(Debug, thiserror::Error)]
+#[error("transaction status: {status:?} - not in final state")]
+pub(crate) struct NotYetFinal {
+    pub(crate) status: TransactionStatus,
+}
+
+/// Retry classification used by queue backends when selecting a delay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryKind {
+    NotYetFinal,
+    Other,
+}
 
 /// Handle to a running worker task.
 #[derive(Debug)]
@@ -43,6 +61,7 @@ impl WorkerContext {
 #[derive(Debug)]
 pub enum HandlerError {
     Retry(String),
+    NotYetFinal(TransactionStatus),
     Abort(String),
 }
 
@@ -50,6 +69,12 @@ impl fmt::Display for HandlerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Retry(msg) => write!(f, "Retry: {msg}"),
+            Self::NotYetFinal(status) => {
+                write!(
+                    f,
+                    "NotYetFinal: transaction status: {status:?} - not in final state"
+                )
+            }
             Self::Abort(msg) => write!(f, "Abort: {msg}"),
         }
     }
@@ -61,6 +86,9 @@ impl From<HandlerError> for apalis::prelude::Error {
     fn from(err: HandlerError) -> Self {
         match err {
             HandlerError::Retry(msg) => apalis::prelude::Error::Failed(Arc::new(msg.into())),
+            HandlerError::NotYetFinal(status) => {
+                apalis::prelude::Error::Failed(Arc::new(Box::new(NotYetFinal { status })))
+            }
             HandlerError::Abort(msg) => apalis::prelude::Error::Abort(Arc::new(msg.into())),
         }
     }
@@ -90,6 +118,14 @@ mod tests {
     }
 
     #[test]
+    fn test_handler_error_not_yet_final_display() {
+        assert_eq!(
+            HandlerError::NotYetFinal(TransactionStatus::Submitted).to_string(),
+            "NotYetFinal: transaction status: Submitted - not in final state"
+        );
+    }
+
+    #[test]
     fn test_handler_error_retry_into_apalis_failed() {
         let err = HandlerError::Retry("temp failure".to_string());
         let apalis_err: apalis::prelude::Error = err.into();
@@ -107,5 +143,22 @@ mod tests {
             matches!(apalis_err, apalis::prelude::Error::Abort(_)),
             "Abort should map to Abort"
         );
+    }
+
+    #[test]
+    fn test_not_yet_final_marker_survives_apalis_conversion() {
+        let apalis_err: apalis::prelude::Error =
+            HandlerError::NotYetFinal(TransactionStatus::Submitted).into();
+        match apalis_err {
+            apalis::prelude::Error::Failed(inner) => {
+                let marker = inner
+                    .as_ref()
+                    .as_ref()
+                    .downcast_ref::<NotYetFinal>()
+                    .expect("NotYetFinal marker must survive the conversion");
+                assert_eq!(marker.status, TransactionStatus::Submitted);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }

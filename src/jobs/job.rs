@@ -4,10 +4,11 @@
 //! - Transaction processing
 //! - Status monitoring
 //! - Notifications
+use crate::constants::DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS;
 use crate::constants::{
     HEALTH_CHECK_ACTION_KEY, HEALTH_CHECK_ACTION_NONCE_HEALTH, HEALTH_CHECK_NONCE_HINT_KEY,
 };
-use crate::models::{NetworkType, WebhookNotification};
+use crate::models::{EvmNetwork, NetworkType, WebhookNotification};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -197,7 +198,16 @@ pub struct TransactionStatusCheck {
     /// Optional for backward compatibility with older queued messages.
     #[serde(default)]
     pub network_type: Option<NetworkType>,
+    /// Delay between healthy, non-final EVM status checks, in seconds. The
+    /// retry backoff starts here and caps at 1.5x. Defaults for messages queued
+    /// before the field existed.
+    #[serde(default = "default_status_check_retry_delay_seconds")]
+    pub status_check_retry_delay_seconds: u64,
     pub metadata: Option<HashMap<String, String>>,
+}
+
+fn default_status_check_retry_delay_seconds() -> u64 {
+    DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
 }
 
 impl TransactionStatusCheck {
@@ -211,8 +221,25 @@ impl TransactionStatusCheck {
             transaction_id: transaction_id.into(),
             relayer_id: relayer_id.into(),
             network_type: Some(network_type),
+            status_check_retry_delay_seconds: DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
             metadata: None,
         }
+    }
+
+    /// Status check for an EVM transaction, carrying the network's retry delay.
+    pub fn for_evm_network(
+        transaction_id: impl Into<String>,
+        relayer_id: impl Into<String>,
+        network: &EvmNetwork,
+    ) -> Self {
+        Self::new(transaction_id, relayer_id, NetworkType::Evm)
+            .with_status_check_retry_delay_seconds(network.status_check_retry_delay_seconds())
+    }
+
+    /// Sets the delay that healthy, non-final status checks back off from.
+    pub fn with_status_check_retry_delay_seconds(mut self, delay_seconds: u64) -> Self {
+        self.status_check_retry_delay_seconds = delay_seconds;
+        self
     }
 
     // Set the metadata for this transaction status check
@@ -382,7 +409,15 @@ mod tests {
         assert_eq!(tx_status.transaction_id, "tx123");
         assert_eq!(tx_status.relayer_id, "relayer-1");
         assert_eq!(tx_status.network_type, Some(NetworkType::Evm));
+        assert_eq!(
+            tx_status.status_check_retry_delay_seconds,
+            DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
+        );
         assert!(tx_status.metadata.is_none());
+
+        let fast_status = TransactionStatusCheck::new("tx-fast", "relayer-1", NetworkType::Evm)
+            .with_status_check_retry_delay_seconds(5);
+        assert_eq!(fast_status.status_check_retry_delay_seconds, 5);
 
         let mut metadata = HashMap::new();
         metadata.insert("retries".to_string(), "3".to_string());
@@ -409,6 +444,10 @@ mod tests {
         assert_eq!(deserialized.transaction_id, "tx456");
         assert_eq!(deserialized.relayer_id, "relayer-2");
         assert_eq!(deserialized.network_type, None);
+        assert_eq!(
+            deserialized.status_check_retry_delay_seconds,
+            DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS
+        );
         assert!(deserialized.metadata.is_none());
 
         // New messages should include network_type
