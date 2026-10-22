@@ -2,6 +2,8 @@
 # eMudhra intermediates (https://emudhra.we-have-a-problem.com). apk fails the
 # build if it cannot satisfy the floor, and changing it invalidates cached layers.
 ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION=20260909-r3
+# Node.js 24.22.1 is the first 24.x that rejects the compromised eMudhra intermediates.
+ARG MIN_NODEJS_VERSION=24.22.1
 
 # Base image
 # Rustc v1.93.0 minimum (MSRV, see rust-version in Cargo.toml)
@@ -37,10 +39,10 @@ COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-ARG NODE_VERSION=24
+ARG MIN_NODEJS_VERSION
 ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION
 USER root
-RUN apk add --no-cache "ca-certificates-bundle>=${MIN_CA_CERTIFICATES_BUNDLE_VERSION}" nodejs=~${NODE_VERSION} npm
+RUN apk add --no-cache "ca-certificates-bundle>=${MIN_CA_CERTIFICATES_BUNDLE_VERSION}" "nodejs-24>=${MIN_NODEJS_VERSION}" npm
 ENV PATH="/usr/local/bin:$PATH"
 
 # Pin the pnpm major: pnpm 12 ships a preinstall script that newer npm blocks by
