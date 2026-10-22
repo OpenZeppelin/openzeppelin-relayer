@@ -304,6 +304,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             }),
         };
         network_repo.create(test_network).await.unwrap();

@@ -112,6 +112,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 
@@ -130,6 +131,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 

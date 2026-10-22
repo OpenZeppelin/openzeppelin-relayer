@@ -561,6 +561,7 @@ mod tests {
             features: vec![],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 

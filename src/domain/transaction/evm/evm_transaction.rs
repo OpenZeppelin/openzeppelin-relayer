@@ -2210,6 +2210,7 @@ mod tests {
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
                         gas_price_cache: None,
+                        optimism_fee_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),
@@ -2396,6 +2397,7 @@ mod tests {
                         features: Some(vec!["eip1559".to_string()]),
                         symbol: Some("ETH".to_string()),
                         gas_price_cache: None,
+                        optimism_fee_cache: None,
                     };
                     Ok(Some(NetworkRepoModel {
                         id: "evm:mainnet".to_string(),

@@ -159,6 +159,7 @@ mod tests {
             features: None,
             symbol: None, // Will inherit from parent
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -205,6 +206,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         networks.insert(
             "parent".to_string(),
@@ -230,6 +232,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -502,6 +505,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         networks.insert(
             "grandparent".to_string(),
@@ -523,6 +527,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         networks.insert("parent".to_string(), NetworkFileConfig::Evm(parent_config));
 
@@ -546,6 +551,7 @@ mod tests {
             features: None,
             symbol: Some("CUSTOM".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");
@@ -682,6 +688,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string(), "london".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         networks.insert("parent".to_string(), NetworkFileConfig::Evm(parent_config));
 
@@ -706,6 +713,7 @@ mod tests {
             features: Some(vec!["berlin".to_string()]), // Override (merge behavior depends on implementation)
             symbol: None,                               // Inherit
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = resolver.resolve_evm_inheritance(&child_config, "child", "parent");

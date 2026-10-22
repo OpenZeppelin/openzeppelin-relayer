@@ -728,6 +728,7 @@ mod tests {
             symbol: "ETH".to_string(),
             explorer_urls: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 
@@ -797,6 +798,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         NetworkRepoModel::new_evm(config)
     }
@@ -1126,6 +1128,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         let network_model = NetworkRepoModel::new_evm(config);
 
@@ -1235,6 +1238,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
         let network_model = NetworkRepoModel::new_evm(config);
         network_repo

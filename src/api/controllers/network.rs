@@ -193,6 +193,7 @@ where
             features: evm_config.features,
             symbol: evm_config.symbol,
             gas_price_cache: evm_config.gas_price_cache,
+            optimism_fee_cache: evm_config.optimism_fee_cache,
         }),
         NetworkConfigData::Solana(_) => NetworkConfigData::Solana(SolanaNetworkConfig {
             common: updated_common,

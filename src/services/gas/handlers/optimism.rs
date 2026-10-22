@@ -22,8 +22,6 @@ use tracing::debug;
 #[derive(Debug, Clone)]
 pub struct OptimismFeeData {
     pub l1_base_fee: U256,
-    pub base_fee: U256,
-    pub decimals: U256,
     pub blob_base_fee: U256,
     pub base_fee_scalar: U256,
     pub blob_base_fee_scalar: U256,
@@ -33,7 +31,6 @@ pub struct OptimismFeeData {
 #[derive(Debug, Clone, Copy)]
 struct VolatileFees {
     l1_base_fee: U256,
-    base_fee: U256,
     blob_base_fee: U256,
     fetched_at: Instant,
 }
@@ -41,7 +38,6 @@ struct VolatileFees {
 /// The quasi-constant half of an oracle read, stamped with when it was fetched.
 #[derive(Debug, Clone, Copy)]
 struct ScalarFees {
-    decimals: U256,
     base_fee_scalar: U256,
     blob_base_fee_scalar: U256,
     fetched_at: Instant,
@@ -81,13 +77,13 @@ pub struct OptimismFeeCache {
 
 impl OptimismFeeCache {
     /// The single instance every handler in this process shares.
-    pub fn global() -> &'static Arc<Self> {
-        static GLOBAL_CACHE: OnceLock<Arc<OptimismFeeCache>> = OnceLock::new();
+    pub fn global() -> &'static Self {
+        static GLOBAL_CACHE: OnceLock<OptimismFeeCache> = OnceLock::new();
         GLOBAL_CACHE.get_or_init(|| {
-            Arc::new(Self::new(
+            Self::new(
                 Duration::from_secs(OPTIMISM_VOLATILE_FEE_CACHE_TTL_SECS),
                 Duration::from_secs(OPTIMISM_SCALAR_FEE_CACHE_TTL_SECS),
-            ))
+            )
         })
     }
 
@@ -116,24 +112,23 @@ pub struct OptimismPriceHandler<P> {
     oracle_address: Address,
     /// Chain the `provider` is bound to, and therefore the key its oracle reads are cached under.
     chain_id: u64,
+    /// The network's `optimism_fee_cache.enabled`; `false` reads the oracle on every call.
+    cache_enabled: bool,
 }
 
 impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
-    pub fn new(provider: P, chain_id: u64) -> Self {
+    pub fn new(provider: P, chain_id: u64, cache_enabled: bool) -> Self {
         Self {
             provider,
             oracle_address: OPTIMISM_GAS_PRICE_ORACLE_ADDRESS.parse().unwrap(),
             chain_id,
+            cache_enabled,
         }
     }
 
     // Function selectors for Optimism GasPriceOracle
     // bytes4(keccak256("l1BaseFee()"))
     const FN_SELECTOR_L1_BASE_FEE: [u8; 4] = [81, 155, 75, 211];
-    // bytes4(keccak256("baseFee()"))
-    const FN_SELECTOR_BASE_FEE: [u8; 4] = [110, 242, 92, 58];
-    // bytes4(keccak256("decimals()"))
-    const FN_SELECTOR_DECIMALS: [u8; 4] = [49, 60, 229, 103];
     // bytes4(keccak256("blobBaseFee()"))
     const FN_SELECTOR_BLOB_BASE_FEE: [u8; 4] = [248, 32, 97, 64];
     // bytes4(keccak256("baseFeeScalar()"))
@@ -175,9 +170,8 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
     }
 
     async fn read_volatile_fees(&self) -> Result<VolatileFees, TransactionError> {
-        let (l1_base_fee, base_fee, blob_base_fee) = tokio::try_join!(
+        let (l1_base_fee, blob_base_fee) = tokio::try_join!(
             self.read_u256(Self::FN_SELECTOR_L1_BASE_FEE),
-            self.read_u256(Self::FN_SELECTOR_BASE_FEE),
             self.read_u256(Self::FN_SELECTOR_BLOB_BASE_FEE)
         )
         .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?;
@@ -188,15 +182,13 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
         );
         Ok(VolatileFees {
             l1_base_fee,
-            base_fee,
             blob_base_fee,
             fetched_at: Instant::now(),
         })
     }
 
     async fn read_scalar_fees(&self) -> Result<ScalarFees, TransactionError> {
-        let (decimals, base_fee_scalar, blob_base_fee_scalar) = tokio::try_join!(
-            self.read_u256(Self::FN_SELECTOR_DECIMALS),
+        let (base_fee_scalar, blob_base_fee_scalar) = tokio::try_join!(
             self.read_u256(Self::FN_SELECTOR_BASE_FEE_SCALAR),
             self.read_u256(Self::FN_SELECTOR_BLOB_BASE_FEE_SCALAR)
         )
@@ -207,7 +199,6 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
             "fetched optimism gas oracle scalars"
         );
         Ok(ScalarFees {
-            decimals,
             base_fee_scalar,
             blob_base_fee_scalar,
             fetched_at: Instant::now(),
@@ -217,8 +208,6 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
     fn assemble_fee_data(volatile: VolatileFees, scalars: ScalarFees) -> OptimismFeeData {
         OptimismFeeData {
             l1_base_fee: volatile.l1_base_fee,
-            base_fee: volatile.base_fee,
-            decimals: scalars.decimals,
             blob_base_fee: volatile.blob_base_fee,
             base_fee_scalar: scalars.base_fee_scalar,
             blob_base_fee_scalar: scalars.blob_base_fee_scalar,
@@ -226,12 +215,23 @@ impl<P: EvmProviderTrait> OptimismPriceHandler<P> {
     }
 
     /// Reads the GasPriceOracle values needed to price L1 data availability, serving them from the
-    /// process-wide cache when they are still fresh.
+    /// process-wide cache when they are still fresh — unless the network turned the cache off, in
+    /// which case every call reads the oracle.
     pub async fn fetch_fee_data(&self) -> Result<OptimismFeeData, TransactionError> {
+        if !self.cache_enabled {
+            return self.fetch_fee_data_uncached().await;
+        }
         self.fetch_fee_data_from(OptimismFeeCache::global()).await
     }
 
-    /// Cache-aware oracle read. Every one of the six values moves far more slowly than the
+    /// Reads all four oracle values, bypassing (and never writing) the cache.
+    async fn fetch_fee_data_uncached(&self) -> Result<OptimismFeeData, TransactionError> {
+        let scalars = self.read_scalar_fees().await?;
+        let volatile = self.read_volatile_fees().await?;
+        Ok(Self::assemble_fee_data(volatile, scalars))
+    }
+
+    /// Cache-aware oracle read. Every one of the four values moves far more slowly than the
     /// transaction rate that reads them, so the warm path issues no `eth_call` at all.
     ///
     /// Single-flight: the per-chain write lock IS the gate. A burst of N cold jobs queues on it, the
@@ -363,6 +363,9 @@ mod tests {
 
     const BASE_CHAIN_ID: u64 = 8453;
     const OPTIMISM_CHAIN_ID: u64 = 10;
+    /// Chain ids reserved for the tests that go through the process-wide cache, one per test.
+    const PRICE_HANDLER_TEST_CHAIN_ID: u64 = 990_001;
+    const CACHE_DISABLED_TEST_CHAIN_ID: u64 = 990_002;
 
     fn volatile_ttl() -> Duration {
         Duration::from_secs(OPTIMISM_VOLATILE_FEE_CACHE_TTL_SECS)
@@ -372,13 +375,11 @@ mod tests {
         Duration::from_secs(OPTIMISM_SCALAR_FEE_CACHE_TTL_SECS)
     }
 
-    /// The six oracle selectors in the order the fields appear on `OptimismFeeData`. A read of the
+    /// The four oracle selectors in the order the fields appear on `OptimismFeeData`. A read of the
     /// selector at index `i` answers `i + 1`, so a test can assert both how many reads reached the
     /// RPC and that each one lands in the right field.
-    const ORACLE_SELECTORS: [[u8; 4]; 6] = [
+    const ORACLE_SELECTORS: [[u8; 4]; 4] = [
         TestHandler::FN_SELECTOR_L1_BASE_FEE,
-        TestHandler::FN_SELECTOR_BASE_FEE,
-        TestHandler::FN_SELECTOR_DECIMALS,
         TestHandler::FN_SELECTOR_BLOB_BASE_FEE,
         TestHandler::FN_SELECTOR_BASE_FEE_SCALAR,
         TestHandler::FN_SELECTOR_BLOB_BASE_FEE_SCALAR,
@@ -406,12 +407,11 @@ mod tests {
         provider
     }
 
-    /// Answers the three scalar selectors normally and rate-limits the three volatile ones, so the
+    /// Answers the two scalar selectors normally and rate-limits the two volatile ones, so the
     /// write-lock body takes its mixed path: the half it reads first succeeds, the second fails.
     fn volatile_failing_provider(calls: Arc<AtomicUsize>) -> MockEvmProviderTrait {
-        const VOLATILE_SELECTORS: [[u8; 4]; 3] = [
+        const VOLATILE_SELECTORS: [[u8; 4]; 2] = [
             TestHandler::FN_SELECTOR_L1_BASE_FEE,
-            TestHandler::FN_SELECTOR_BASE_FEE,
             TestHandler::FN_SELECTOR_BLOB_BASE_FEE,
         ];
         let mut provider = MockEvmProviderTrait::new();
@@ -474,17 +474,16 @@ mod tests {
     /// the point of the test: each value must land in the field its selector answers for.
     fn assert_matches_oracle(fee_data: &OptimismFeeData) {
         assert_eq!(fee_data.l1_base_fee, U256::from(1u64));
-        assert_eq!(fee_data.base_fee, U256::from(2u64));
-        assert_eq!(fee_data.decimals, U256::from(3u64));
-        assert_eq!(fee_data.blob_base_fee, U256::from(4u64));
-        assert_eq!(fee_data.base_fee_scalar, U256::from(5u64));
-        assert_eq!(fee_data.blob_base_fee_scalar, U256::from(6u64));
+        assert_eq!(fee_data.blob_base_fee, U256::from(2u64));
+        assert_eq!(fee_data.base_fee_scalar, U256::from(3u64));
+        assert_eq!(fee_data.blob_base_fee_scalar, U256::from(4u64));
     }
 
     #[tokio::test]
-    async fn test_fee_cache_cold_miss_reads_all_six_oracle_values() {
+    async fn test_fee_cache_cold_miss_reads_all_four_oracle_values() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler = OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID);
+        let handler =
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         let fee_data = handler
@@ -492,14 +491,15 @@ mod tests {
             .await
             .expect("cold fetch should succeed");
 
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
         assert_matches_oracle(&fee_data);
     }
 
     #[tokio::test]
     async fn test_fee_cache_warm_hit_reads_nothing() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler = OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID);
+        let handler =
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         handler
@@ -511,15 +511,16 @@ mod tests {
             .await
             .expect("warm fetch should succeed");
 
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
         assert_matches_oracle(&fee_data);
     }
 
     #[tokio::test]
     async fn test_fee_cache_expired_volatile_does_not_re_read_fresh_scalars() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler = OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID);
-        // A zero volatile TTL expires the trio the instant it is written; the scalars stay fresh.
+        let handler =
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID, true);
+        // A zero volatile TTL expires the pair the instant it is written; the scalars stay fresh.
         let cache = OptimismFeeCache::new(Duration::ZERO, scalar_ttl());
 
         handler
@@ -531,14 +532,16 @@ mod tests {
             .await
             .expect("volatile refresh should succeed");
 
-        assert_eq!(calls.load(Ordering::SeqCst), 9);
+        // Four on the cold miss, then only the two volatile reads again.
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
         assert_matches_oracle(&fee_data);
     }
 
     #[tokio::test]
     async fn test_fee_cache_concurrent_cold_callers_fetch_once() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler = OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID);
+        let handler =
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         let (first, second, third) = tokio::join!(
@@ -547,7 +550,7 @@ mod tests {
             handler.fetch_fee_data_from(&cache)
         );
 
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
         assert_matches_oracle(&first.expect("first concurrent fetch should succeed"));
         assert_matches_oracle(&second.expect("second concurrent fetch should succeed"));
         assert_matches_oracle(&third.expect("third concurrent fetch should succeed"));
@@ -555,7 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fee_cache_is_not_populated_by_a_failed_read() {
-        let handler = OptimismPriceHandler::new(failing_provider(), BASE_CHAIN_ID);
+        let handler = OptimismPriceHandler::new(failing_provider(), BASE_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         let result = handler.fetch_fee_data_from(&cache).await;
@@ -578,8 +581,11 @@ mod tests {
     #[tokio::test]
     async fn test_fee_cache_is_not_half_populated_when_only_the_volatile_reads_fail() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let handler =
-            OptimismPriceHandler::new(volatile_failing_provider(calls.clone()), BASE_CHAIN_ID);
+        let handler = OptimismPriceHandler::new(
+            volatile_failing_provider(calls.clone()),
+            BASE_CHAIN_ID,
+            true,
+        );
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         let result = handler.fetch_fee_data_from(&cache).await;
@@ -606,7 +612,8 @@ mod tests {
     #[tokio::test]
     async fn test_fee_cache_reads_the_scalars_before_the_volatile_values() {
         let order = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let handler = OptimismPriceHandler::new(recording_provider(order.clone()), BASE_CHAIN_ID);
+        let handler =
+            OptimismPriceHandler::new(recording_provider(order.clone()), BASE_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         handler
@@ -616,7 +623,6 @@ mod tests {
 
         let order = order.lock().expect("order mutex should not be poisoned");
         let scalars = [
-            TestHandler::FN_SELECTOR_DECIMALS,
             TestHandler::FN_SELECTOR_BASE_FEE_SCALAR,
             TestHandler::FN_SELECTOR_BLOB_BASE_FEE_SCALAR,
         ];
@@ -628,7 +634,7 @@ mod tests {
             .iter()
             .position(|selector| !scalars.contains(selector))
             .expect("the volatile values must have been read");
-        assert_eq!(order.len(), 6);
+        assert_eq!(order.len(), 4);
         assert!(
             last_scalar < first_volatile,
             "every scalar read must precede the first volatile read, got {order:?}"
@@ -640,30 +646,63 @@ mod tests {
     #[tokio::test]
     async fn test_fee_cache_is_keyed_by_chain_id() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let base_handler = OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID);
+        let base_handler =
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), BASE_CHAIN_ID, true);
         let optimism_handler =
-            OptimismPriceHandler::new(oracle_provider(calls.clone()), OPTIMISM_CHAIN_ID);
+            OptimismPriceHandler::new(oracle_provider(calls.clone()), OPTIMISM_CHAIN_ID, true);
         let cache = OptimismFeeCache::new(volatile_ttl(), scalar_ttl());
 
         base_handler
             .fetch_fee_data_from(&cache)
             .await
             .expect("base cold fetch should succeed");
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
 
         // A different chain is a cold miss of its own, not a hit on the first chain's entry.
         optimism_handler
             .fetch_fee_data_from(&cache)
             .await
             .expect("optimism cold fetch should succeed");
-        assert_eq!(calls.load(Ordering::SeqCst), 12);
+        assert_eq!(calls.load(Ordering::SeqCst), 8);
 
         // ...and filling the second chain did not evict or disturb the first.
         base_handler
             .fetch_fee_data_from(&cache)
             .await
             .expect("base warm fetch should succeed");
-        assert_eq!(calls.load(Ordering::SeqCst), 12);
+        assert_eq!(calls.load(Ordering::SeqCst), 8);
+    }
+
+    /// The opt-out: with the cache disabled every call reads the oracle, and nothing is written to
+    /// the process-wide cache for that chain.
+    #[tokio::test]
+    async fn test_fee_cache_disabled_reads_the_oracle_on_every_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let handler = OptimismPriceHandler::new(
+            oracle_provider(calls.clone()),
+            CACHE_DISABLED_TEST_CHAIN_ID,
+            false,
+        );
+
+        let first = handler
+            .fetch_fee_data()
+            .await
+            .expect("first uncached fetch should succeed");
+        let second = handler
+            .fetch_fee_data()
+            .await
+            .expect("second uncached fetch should succeed");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 8);
+        assert_matches_oracle(&first);
+        assert_matches_oracle(&second);
+        assert!(
+            OptimismFeeCache::global()
+                .entries
+                .get(&CACHE_DISABLED_TEST_CHAIN_ID)
+                .is_none(),
+            "a disabled cache must not create or fill an entry"
+        );
     }
 
     #[tokio::test]
@@ -676,7 +715,10 @@ mod tests {
             Box::pin(async { Ok(vec![0u8; 32].into()) })
         });
 
-        let handler = OptimismPriceHandler::new(mock_provider, OPTIMISM_CHAIN_ID);
+        // Goes through the public path and therefore the process-wide cache, so it uses a chain id
+        // no other test touches: the all-zero mock values it stores must not leak into a test that
+        // reads a real chain id through the global cache.
+        let handler = OptimismPriceHandler::new(mock_provider, PRICE_HANDLER_TEST_CHAIN_ID, true);
 
         let tx = EvmTransactionData {
             from: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string(),
@@ -759,12 +801,10 @@ mod tests {
     #[test]
     fn test_calculate_fee_with_specific_data_and_fee_data() {
         let mock_provider = MockEvmProviderTrait::new();
-        let handler = OptimismPriceHandler::new(mock_provider, OPTIMISM_CHAIN_ID);
+        let handler = OptimismPriceHandler::new(mock_provider, OPTIMISM_CHAIN_ID, true);
 
         let fee_data = OptimismFeeData {
             l1_base_fee: U256::from(422079632u64),
-            base_fee: U256::from(138u64),
-            decimals: U256::from(6u64),
             blob_base_fee: U256::from(2u64),
             base_fee_scalar: U256::from(5227u64),
             blob_base_fee_scalar: U256::from(1014213u64),

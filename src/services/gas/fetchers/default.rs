@@ -55,6 +55,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = fetcher.fetch_gas_price(&mock_provider, &network).await;
@@ -85,6 +86,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = fetcher.fetch_gas_price(&mock_provider, &network).await;
@@ -114,6 +116,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "MATIC".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = fetcher.fetch_gas_price(&mock_provider, &network).await;
@@ -144,6 +147,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = fetcher.fetch_gas_price(&mock_provider, &network).await;
@@ -174,6 +178,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "MATIC".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = fetcher.fetch_gas_price(&mock_provider, &network).await;

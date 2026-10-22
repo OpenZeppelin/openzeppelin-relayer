@@ -1,4 +1,4 @@
-use crate::config::GasPriceCacheConfig;
+use crate::config::{GasPriceCacheConfig, OptimismFeeCacheConfig};
 use crate::constants::{
     ARBITRUM_BASED_TAG, LACKS_MEMPOOL_TAGS, OPTIMISM_BASED_TAG, OPTIMISM_TAG, POLYGON_ZKEVM_TAG,
     ROLLUP_TAG,
@@ -31,6 +31,8 @@ pub struct EvmNetwork {
     pub symbol: String,
     /// Gas price cache configuration
     pub gas_price_cache: Option<GasPriceCacheConfig>,
+    /// OP-stack GasPriceOracle read cache configuration (enabled when absent)
+    pub optimism_fee_cache: Option<OptimismFeeCacheConfig>,
 }
 
 impl TryFrom<NetworkRepoModel> for EvmNetwork {
@@ -89,6 +91,7 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
                     features: evm_config.features.clone().unwrap_or_default(),
                     symbol,
                     gas_price_cache: evm_config.gas_price_cache.clone(),
+                    optimism_fee_cache: evm_config.optimism_fee_cache.clone(),
                 })
             }
             _ => Err(RepositoryError::InvalidData(format!(
@@ -100,6 +103,14 @@ impl TryFrom<NetworkRepoModel> for EvmNetwork {
 }
 
 impl EvmNetwork {
+    /// Whether the OP-stack GasPriceOracle reads may be served from the process-wide cache.
+    /// Absent configuration means enabled.
+    pub fn optimism_fee_cache_enabled(&self) -> bool {
+        self.optimism_fee_cache
+            .as_ref()
+            .is_none_or(|config| config.enabled)
+    }
+
     pub fn is_optimism(&self) -> bool {
         self.tags
             .iter()
@@ -173,6 +184,21 @@ mod tests {
     use crate::constants::{NO_MEMPOOL_TAG, OPTIMISM_TAG};
     use crate::models::{NetworkConfigData, NetworkRepoModel, NetworkType};
 
+    #[test]
+    fn test_optimism_fee_cache_enabled_defaults_to_true() {
+        let mut network = create_test_evm_network_with_tags(vec![OPTIMISM_TAG]);
+        assert!(
+            network.optimism_fee_cache_enabled(),
+            "absent config means enabled"
+        );
+
+        network.optimism_fee_cache = Some(OptimismFeeCacheConfig { enabled: false });
+        assert!(!network.optimism_fee_cache_enabled());
+
+        network.optimism_fee_cache = Some(OptimismFeeCacheConfig { enabled: true });
+        assert!(network.optimism_fee_cache_enabled());
+    }
+
     fn create_test_evm_network_with_tags(tags: Vec<&str>) -> EvmNetwork {
         use crate::models::RpcConfig;
         EvmNetwork {
@@ -187,6 +213,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 
@@ -299,6 +326,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let repo_model = NetworkRepoModel {

@@ -175,6 +175,7 @@ These tags help the relayer:
 | `required_confirmations` | number        | Yes\*    | Number of block confirmations before considering a transaction final (\*Required for base networks, optional for inherited)    |
 | `symbol`                 | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                    |
 | `features`               | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                               |
+| `optimism_fee_cache`     | object        | No       | `{"enabled": false}` stops caching GasPriceOracle reads on `optimism-based` / `optimism` networks. Enabled when absent         |
 
 #### Example: EVM Network Configuration
 
