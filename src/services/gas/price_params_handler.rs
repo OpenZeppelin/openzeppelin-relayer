@@ -33,6 +33,8 @@ impl PriceParamsHandler {
         } else if network.is_optimism() {
             Some(PriceParamsHandler::Optimism(OptimismPriceHandler::new(
                 provider,
+                network.chain_id,
+                network.optimism_fee_cache_enabled(),
             )))
         } else {
             None
@@ -90,6 +92,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 

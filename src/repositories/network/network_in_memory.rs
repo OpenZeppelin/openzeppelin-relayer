@@ -222,6 +222,7 @@ mod tests {
                     features: None,
                     symbol: Some("ETH".to_string()),
                     gas_price_cache: None,
+                    optimism_fee_cache: None,
                 };
                 NetworkRepoModel::new_evm(evm_config)
             }

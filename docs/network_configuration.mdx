@@ -177,6 +177,7 @@ These tags help the relayer:
 | `status_check.retry_delay_seconds`   | number        | No       | Delay between checks while a transaction is healthy but not final, in seconds. Default `8`, range `5`–`100`. Checks back off from this value to 1.5× it. |
 | `symbol`                             | string        | Yes\*    | Native currency symbol (e.g., "ETH", "MATIC", "BNB") (\*Required for base networks, optional for inherited)                              |
 | `features`                           | array[string] | No       | Supported features (e.g., ["eip1559", "london"])                                                                                         |
+| `optimism_fee_cache`                 | object        | No       | `{"enabled": false}` stops caching GasPriceOracle reads on `optimism-based` / `optimism` networks. Enabled when absent                   |
 
 Both `status_check` fields inherit independently from a parent network. A larger
 `initial_delay_seconds` also delays the first resubmission and timeout evaluation,
