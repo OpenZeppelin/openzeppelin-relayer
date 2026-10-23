@@ -29,7 +29,7 @@
   },
   "overrides": {
     "axios": ">=1.18.0",
-    "follow-redirects": ">=1.16.0",
+    "follow-redirects": ">=1.16.1",
     "picomatch": "^2.3.2"
   }
 }
