@@ -363,7 +363,7 @@ Once networks are defined, reference them in your relayer configurations:
 
 ### 2. RPC URLs
 
-- Always configure multiple RPC URLs for redundancy
+- Always configure multiple RPC URLs for redundancy, or point `rpc_urls` at a self-hosted RPC proxy such as [eRPC](https://github.com/erpc/erpc) that retries and fails over across several providers (e.g. `http://erpc:4000/main/evm/1` or `http://erpc:4000/main/svm/mainnet-beta`)
 - Use private/dedicated RPC endpoints for production
 - Ensure URLs are secure (HTTPS) when accessing over public networks
 - Configure `RPC_ALLOWED_HOSTS` and `RPC_BLOCK_PRIVATE_IPS` environment variables for SSRF protection in production. See [Configuration → RPC URL Security](/relayer/configuration#rpc-url-security) for details.
