@@ -234,7 +234,7 @@ impl Drop for ExecutionGuard {
         // This prevents double-decrement: if a long-running execution is GC'd by the
         // stale entry cleanup task (which decrements the counter), and then the guard
         // drops later, we must NOT decrement again.
-        if self.registered && self.executions.remove(&self.execution_id).is_some() {
+        if self.registered && self.executions.remove_sync(&self.execution_id).is_some() {
             self.active_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
@@ -317,7 +317,7 @@ impl SharedSocketService {
                 let now = Instant::now();
                 // scc::HashMap retain is lock-free per entry
                 let mut removed = 0usize;
-                executions_clone.retain(|_, ctx| {
+                executions_clone.retain_sync(|_, ctx| {
                     let keep = now.duration_since(ctx.created_at) < Duration::from_secs(300);
                     if !keep {
                         removed += 1;
@@ -370,7 +370,7 @@ impl SharedSocketService {
         };
 
         // scc::HashMap insert - returns Ok if new, Err if key existed (duplicate)
-        let registered = match self.executions.insert(execution_id.clone(), ctx) {
+        let registered = match self.executions.insert_sync(execution_id.clone(), ctx) {
             Ok(_) => {
                 self.active_count.fetch_add(1, Ordering::AcqRel);
                 true
@@ -697,9 +697,9 @@ impl SharedSocketService {
                         }
 
                         // Validate execution_id exists in registry and check if tracing is enabled
-                        // scc::HashMap read() is lock-free
+                        // scc::HashMap read_sync() is lock-free
                         if let Some(has_traces) =
-                            executions.read(&execution_id, |_, ctx| ctx.traces_tx.is_some())
+                            executions.read_sync(&execution_id, |_, ctx| ctx.traces_tx.is_some())
                         {
                             traces_enabled = has_traces;
                         } else {
@@ -802,10 +802,10 @@ impl SharedSocketService {
                             .or_else(|| Some(request.request_id.clone()));
 
                         // Validate execution_id exists (same as new protocol)
-                        // scc::HashMap read() is lock-free
+                        // scc::HashMap read_sync() is lock-free
                         if let Some(ref id) = candidate_id {
                             if let Some(has_traces) =
-                                executions.read(id, |_, ctx| ctx.traces_tx.is_some())
+                                executions.read_sync(id, |_, ctx| ctx.traces_tx.is_some())
                             {
                                 traces_enabled = has_traces;
                                 bound_execution_id = candidate_id;
@@ -841,7 +841,7 @@ impl SharedSocketService {
             if let Some(exec_id) = bound_execution_id {
                 // Get the sender from execution context (lock-free read)
                 let traces_tx = executions
-                    .read(&exec_id, |_, ctx| ctx.traces_tx.clone())
+                    .read_sync(&exec_id, |_, ctx| ctx.traces_tx.clone())
                     .flatten();
 
                 if let Some(tx) = traces_tx {
@@ -1815,7 +1815,7 @@ mod tests {
         let execution_id = "stale-exec".to_string();
         let (tx, _rx) = mpsc::channel(1);
         // scc::HashMap insert
-        let _ = service.executions.insert(
+        let _ = service.executions.insert_sync(
             execution_id.clone(),
             ExecutionContext {
                 traces_tx: Some(tx),
@@ -1824,8 +1824,8 @@ mod tests {
             },
         );
 
-        // Verify it's registered using scc's contains()
-        assert!(service.executions.contains(&execution_id));
+        // Verify it's registered using scc's contains_sync()
+        assert!(service.executions.contains_sync(&execution_id));
 
         // Wait for cleanup task to run (it runs every 60 seconds, but we can't wait that long)
         // Instead, we verify the cleanup logic by checking the code in new()
