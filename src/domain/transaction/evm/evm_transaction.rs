@@ -624,6 +624,41 @@ where
 
         Ok(estimated_gas * GAS_LIMIT_BUFFER_MULTIPLIER / 100)
     }
+
+    /// Estimates the gas limit for a transaction, falling back to the default gas limit
+    /// for its shape when estimation is disabled or fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `evm_data` - The EVM transaction data.
+    /// * `tx_id` - The transaction id, used for logging.
+    /// * `relayer_policy` - The relayer policy.
+    async fn estimate_gas_limit_or_default(
+        &self,
+        evm_data: &EvmTransactionData,
+        tx_id: &str,
+        relayer_policy: &RelayerEvmPolicy,
+    ) -> u64 {
+        match self.estimate_tx_gas_limit(evm_data, relayer_policy).await {
+            Ok(estimated_gas_limit) => estimated_gas_limit,
+            Err(estimation_error) => {
+                error!(
+                    tx_id = %tx_id,
+                    relayer_id = %self.relayer().id,
+                    error = ?estimation_error,
+                    "failed to estimate gas limit"
+                );
+
+                let default_gas_limit = get_evm_default_gas_limit_for_tx(evm_data);
+                debug!(
+                    tx_id = %tx_id,
+                    gas_limit = %default_gas_limit,
+                    "fallback to default gas limit"
+                );
+                default_gas_limit
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -676,30 +711,14 @@ where
         let relayer = self.relayer();
 
         if evm_data.gas_limit.is_none() {
-            match self
-                .estimate_tx_gas_limit(&evm_data, &relayer.policies.get_evm_policy())
-                .await
-            {
-                Ok(estimated_gas_limit) => {
-                    evm_data.gas_limit = Some(estimated_gas_limit);
-                }
-                Err(estimation_error) => {
-                    error!(
-                        tx_id = %tx.id,
-                        relayer_id = %tx.relayer_id,
-                        error = ?estimation_error,
-                        "failed to estimate gas limit"
-                    );
-
-                    let default_gas_limit = get_evm_default_gas_limit_for_tx(&evm_data);
-                    debug!(
-                        tx_id = %tx.id,
-                        gas_limit = %default_gas_limit,
-                        "fallback to default gas limit"
-                    );
-                    evm_data.gas_limit = Some(default_gas_limit);
-                }
-            }
+            let gas_limit = self
+                .estimate_gas_limit_or_default(
+                    &evm_data,
+                    &tx.id,
+                    &relayer.policies.get_evm_policy(),
+                )
+                .await;
+            evm_data.gas_limit = Some(gas_limit);
         } else {
             // do user gas limit validation against block gas limit
             let block = self.provider.get_block_by_number().await;
@@ -1383,7 +1402,21 @@ where
         })?;
 
         // First, create updated EVM data without price parameters
-        let updated_evm_data = EvmTransactionData::for_replacement(&old_evm_data, &new_evm_request);
+        let mut updated_evm_data =
+            EvmTransactionData::for_replacement(&old_evm_data, &new_evm_request);
+
+        // Without a gas limit in the request, estimate one the same way `prepare_transaction`
+        // does, instead of signing the replacement with `DEFAULT_GAS_LIMIT` (21000).
+        if updated_evm_data.gas_limit.is_none() {
+            let gas_limit = self
+                .estimate_gas_limit_or_default(
+                    &updated_evm_data,
+                    &old_tx.id,
+                    &self.relayer().policies.get_evm_policy(),
+                )
+                .await;
+            updated_evm_data.gas_limit = Some(gas_limit);
+        }
 
         // Then determine pricing strategy and calculate price parameters using the updated data
         let price_params = super::replacement::determine_replacement_pricing(
@@ -2654,6 +2687,207 @@ mod tests {
                 panic!("Expected ValidationError");
             }
         }
+    }
+
+    /// Builds an `EvmRelayerTransaction` that can replace a submitted transaction, using the
+    /// given provider mock (which must allow `get_balance`) and relayer.
+    fn build_replacement_transaction(
+        relayer: RelayerRepoModel,
+        test_tx: TransactionRepoModel,
+        mock_provider: MockEvmProviderTrait,
+    ) -> EvmRelayerTransaction<
+        MockEvmProviderTrait,
+        MockRelayerRepository,
+        MockNetworkRepository,
+        MockTransactionRepository,
+        MockJobProducerTrait,
+        MockSigner,
+        MockTransactionCounterTrait,
+        MockPriceCalculator,
+    > {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mut mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mut mock_price_calculator = MockPriceCalculator::new();
+
+        mock_price_calculator
+            .expect_get_transaction_price_params()
+            .return_once(move |_, _| {
+                Ok(PriceParams {
+                    gas_price: Some(40000000000),
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    is_min_bumped: Some(true),
+                    extra_fee: Some(U256::ZERO),
+                    total_cost: U256::from(2001000000000000000u64),
+                })
+            });
+
+        mock_signer.expect_sign_transaction().returning(|_| {
+            Box::pin(ready(Ok(
+                crate::domain::relayer::SignTransactionResponse::Evm(
+                    crate::domain::relayer::SignTransactionResponseEvm {
+                        hash: "0xreplacement_hash".to_string(),
+                        signature: crate::models::EvmTransactionDataSignature {
+                            r: "r".to_string(),
+                            s: "s".to_string(),
+                            v: 1,
+                            sig: "0xsignature".to_string(),
+                        },
+                        raw: vec![1, 2, 3],
+                    },
+                ),
+            )))
+        });
+
+        mock_transaction
+            .expect_update_network_data()
+            .returning(move |tx_id, network_data| {
+                let mut updated_tx = test_tx.clone();
+                updated_tx.id = tx_id;
+                updated_tx.network_data = network_data;
+                Ok(updated_tx)
+            });
+
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network
+            .expect_get_by_chain_id()
+            .with(eq(NetworkType::Evm), eq(1))
+            .returning(|_, _| {
+                use crate::config::{EvmNetworkConfig, NetworkConfigCommon};
+                use crate::models::{NetworkConfigData, NetworkRepoModel};
+
+                let config = EvmNetworkConfig {
+                    common: NetworkConfigCommon {
+                        network: "mainnet".to_string(),
+                        from: None,
+                        rpc_urls: Some(vec![crate::models::RpcConfig::new(
+                            "https://rpc.example.com".to_string(),
+                        )]),
+                        explorer_urls: None,
+                        average_blocktime_ms: Some(12000),
+                        is_testnet: Some(false),
+                        tags: Some(vec!["mainnet".to_string()]),
+                    },
+                    chain_id: Some(1),
+                    required_confirmations: Some(12),
+                    status_check: None,
+                    features: Some(vec!["eip1559".to_string()]),
+                    symbol: Some("ETH".to_string()),
+                    gas_price_cache: None,
+                };
+                Ok(Some(NetworkRepoModel {
+                    id: "evm:mainnet".to_string(),
+                    name: "mainnet".to_string(),
+                    network_type: NetworkType::Evm,
+                    config: NetworkConfigData::Evm(config),
+                }))
+            });
+
+        EvmRelayerTransaction {
+            relayer,
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        }
+    }
+
+    fn replacement_request_without_gas_limit() -> NetworkTransactionRequest {
+        NetworkTransactionRequest::Evm(EvmTransactionRequest {
+            to: Some("0xNewRecipient".to_string()),
+            value: U256::from(1u64),
+            data: None,
+            gas_limit: None,
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            speed: Some(Speed::Fast),
+            valid_until: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_replace_transaction_without_gas_limit_estimates_gas() {
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(3000000000000000000u64)))));
+        // A value transfer to a new account, which costs more than 21000 gas.
+        mock_provider
+            .expect_estimate_gas()
+            .times(1)
+            .returning(|_| Box::pin(ready(Ok(207_391u64))));
+
+        let evm_transaction =
+            build_replacement_transaction(relayer, test_tx.clone(), mock_provider);
+        let replaced_tx = evm_transaction
+            .replace_transaction(test_tx, replacement_request_without_gas_limit())
+            .await
+            .unwrap();
+
+        let evm_data = replaced_tx.network_data.get_evm_transaction_data().unwrap();
+        assert_eq!(
+            evm_data.gas_limit,
+            Some(207_391 * GAS_LIMIT_BUFFER_MULTIPLIER / 100)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_transaction_without_gas_limit_falls_back_to_default() {
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Submitted;
+
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider
+            .expect_get_balance()
+            .returning(|_| Box::pin(ready(Ok(U256::from(3000000000000000000u64)))));
+        mock_provider.expect_estimate_gas().times(1).returning(|_| {
+            Box::pin(ready(Err(
+                crate::services::provider::ProviderError::RateLimited,
+            )))
+        });
+
+        let request = NetworkTransactionRequest::Evm(EvmTransactionRequest {
+            data: Some("0xa9059cbb".to_string()),
+            ..match replacement_request_without_gas_limit() {
+                NetworkTransactionRequest::Evm(req) => req,
+                _ => unreachable!(),
+            }
+        });
+
+        let evm_transaction =
+            build_replacement_transaction(relayer, test_tx.clone(), mock_provider);
+        let replaced_tx = evm_transaction
+            .replace_transaction(test_tx, request)
+            .await
+            .unwrap();
+
+        let evm_data = replaced_tx.network_data.get_evm_transaction_data().unwrap();
+        assert_eq!(
+            evm_data.gas_limit,
+            Some(get_evm_default_gas_limit_for_tx(&evm_data))
+        );
+        assert_ne!(
+            evm_data.gas_limit,
+            Some(crate::constants::DEFAULT_GAS_LIMIT)
+        );
     }
 
     #[tokio::test]
