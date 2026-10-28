@@ -167,6 +167,12 @@ Restrict transactions to specific contract addresses:
 }
 ```
 
+<Callout>
+
+`whitelist_receivers`, `gas_price_cap`, and `min_balance` apply to **transaction** submissions only (`POST .../transactions`). They are **not** checked on `POST .../sign` or `POST .../sign-typed-data`. Anyone holding the Relayer API key can obtain EIP-191 or EIP-712 signatures from the relayer address without those policy checks. Keep only gas (and no EIP-3009 / Permit2 / Safe-owner / EIP-7702-delegate exposure) on a signing-enabled relayer address, or avoid enabling the sign endpoints for transaction-only deployments. See [#912](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/912).
+
+</Callout>
+
 ## API Reference
 
 The EVM API provides comprehensive transaction management capabilities.
