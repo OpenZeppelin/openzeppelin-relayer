@@ -1,6 +1,7 @@
 use crate::constants::{
     COMPLEX_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, ERC20_TRANSFER_GAS_LIMIT,
-    ERC721_TRANSFER_GAS_LIMIT, GAS_TX_CREATE_CONTRACT, GAS_TX_DATA_NONZERO, GAS_TX_DATA_ZERO,
+    ERC721_TRANSFER_GAS_LIMIT, FALLBACK_NATIVE_TRANSFER_GAS_LIMIT, GAS_TX_CREATE_CONTRACT,
+    GAS_TX_DATA_NONZERO, GAS_TX_DATA_ZERO,
 };
 use crate::models::evm::Speed;
 use crate::models::{EvmTransactionData, EvmTransactionRequest};
@@ -49,7 +50,7 @@ pub fn get_resubmit_timeout_with_backoff(timeout: i64, attempts: usize) -> i64 {
 /// The default gas limit for the transaction
 pub fn get_evm_default_gas_limit_for_tx(tx: &EvmTransactionData) -> u64 {
     match tx.data.as_deref() {
-        None => DEFAULT_GAS_LIMIT,
+        None => FALLBACK_NATIVE_TRANSFER_GAS_LIMIT,
         Some(data) if data.starts_with("0xa9059cbb") => ERC20_TRANSFER_GAS_LIMIT,
         Some(data) if data.starts_with("0x23b872dd") => ERC721_TRANSFER_GAS_LIMIT,
         Some(_) => COMPLEX_GAS_LIMIT,
@@ -105,8 +106,8 @@ fn calculate_data_gas(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::evm::Speed;
     use crate::models::EvmTransactionData;
+    use crate::models::evm::Speed;
 
     #[test]
     fn test_get_resubmit_timeout_for_speed() {
@@ -174,7 +175,10 @@ mod tests {
             raw: None,
         };
 
-        assert_eq!(get_evm_default_gas_limit_for_tx(&tx), DEFAULT_GAS_LIMIT);
+        assert_eq!(
+            get_evm_default_gas_limit_for_tx(&tx),
+            FALLBACK_NATIVE_TRANSFER_GAS_LIMIT
+        );
     }
 
     #[test]

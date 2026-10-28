@@ -5,10 +5,22 @@ pub const DEFAULT_TX_VALID_TIMESPAN: i64 = 8 * 60 * 60 * 1000; // 8 hours in mil
 
 pub const DEFAULT_TRANSACTION_SPEED: Speed = Speed::Fast;
 
+/// Intrinsic gas for a simple value transfer (EIP-2028). Also used as the
+/// protocol base when calculating intrinsic gas for calldata.
 pub const DEFAULT_GAS_LIMIT: u64 = 21000;
-pub const ERC20_TRANSFER_GAS_LIMIT: u64 = 65_000;
-pub const ERC721_TRANSFER_GAS_LIMIT: u64 = 80_000;
-pub const COMPLEX_GAS_LIMIT: u64 = 200_000;
+/// Fallback gas limit when estimation fails for a value transfer with no
+/// calldata. After Glamsterdam (EIP-2780 / EIP-8037), creating a new account
+/// costs 204_600 gas; 21_000 is no longer enough. See #949.
+pub const FALLBACK_NATIVE_TRANSFER_GAS_LIMIT: u64 = 230_000;
+/// Fallback for `transfer(address,uint256)` when estimation fails. Covers a
+/// first-time recipient after Glamsterdam (~154k observed for USDC).
+pub const ERC20_TRANSFER_GAS_LIMIT: u64 = 170_000;
+/// Fallback for `transferFrom(address,address,uint256)` when estimation fails.
+/// Covers a first-time recipient after Glamsterdam (~142k observed for WETH9).
+pub const ERC721_TRANSFER_GAS_LIMIT: u64 = 160_000;
+/// Fallback for any other calldata when estimation fails. Must clear the
+/// Glamsterdam new-account floor (and the previous 200_000 `"0x"` case).
+pub const COMPLEX_GAS_LIMIT: u64 = 250_000;
 pub const GAS_TX_CREATE_CONTRACT: u64 = 53000;
 
 pub const GAS_TX_DATA_ZERO: u64 = 4; // Cost per zero byte in data
