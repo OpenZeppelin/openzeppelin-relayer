@@ -1,0 +1,46 @@
+Invariant CancelHonest is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. prepare job reads tx
+       busy P1:alloc
+       counter=0 statusJob=alive lock=P1
+  3. prepare: take nonce (evm_transaction.rs:797)
+       busy P1:presign nonce=0
+       counter=1 statusJob=alive lock=P1
+  4. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy P1:sign nonce=0
+  5. API: cancel called
+       busy C:read, P1:sign nonce=0
+  6. prepare: sign (evm_transaction.rs:829)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1
+  7. status job reads tx
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1, T:act
+  8. status job acts (status.rs:1062)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1; queued P2
+  9. lease TTL expires while holder still runs
+       counter=1 statusJob=alive
+ 10. prepare job reads tx
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1, P2:alloc
+       counter=1 statusJob=alive lock=P2
+ 11. prepare: take nonce (evm_transaction.rs:797)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1, P2:sign nonce=0
+ 12. prepare: sign (evm_transaction.rs:829)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1, P2:postsign nonce=0 payload=n0/orig#2
+ 13. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#2 hashes={n0/orig#2}]
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1; queued S
+       counter=1 statusJob=alive
+ 14. cancel: read tx
+       busy C:cnoop, P1:postsign nonce=0 payload=n0/orig#1; queued S
+       counter=1 statusJob=alive lock=C
+ 15. cancel: write NOOP + is_canceled, queue resubmit (evm_transaction.rs:1305)
+       tx[sent nonce=0 ver=0 kind=noop canceled cur=n0/orig#2 hashes={n0/orig#2}]
+       busy P1:postsign nonce=0 payload=n0/orig#1; queued R,S
+       counter=1 statusJob=alive cancelAccepted
+ 16. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig canceled cur=n0/orig#1 hashes={n0/orig#1}]
+       busy none; queued R,S

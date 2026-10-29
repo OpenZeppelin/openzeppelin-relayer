@@ -1,0 +1,31 @@
+Invariant NoNonceGap is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. prepare job reads tx
+       busy P1:alloc
+       counter=0 statusJob=alive lock=P1
+  3. prepare: take nonce (evm_transaction.rs:797)
+       busy P1:presign nonce=0
+       counter=1 statusJob=alive lock=P1
+  4. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy P1:sign nonce=0
+  5. prepare: sign (evm_transaction.rs:829)
+       busy P1:postsign nonce=0 payload=n0/orig#1
+  6. lease TTL expires while holder still runs
+       counter=1 statusJob=alive
+  7. API: cancel called
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1
+  8. cancel: read tx
+       busy C:cpend, P1:postsign nonce=0 payload=n0/orig#1
+       counter=1 statusJob=alive lock=C
+  9. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy C:cpend; queued S
+ 10. cancel: Pending -> Canceled (evm_transaction.rs:1282)
+       tx[canceled nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy none; queued S
+       counter=1 statusJob=alive cancelAccepted

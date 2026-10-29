@@ -1,0 +1,39 @@
+Invariant NoLostHash is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. prepare job reads tx
+       busy P1:alloc
+       counter=0 statusJob=alive lock=P1
+  3. prepare: take nonce (evm_transaction.rs:797)
+       busy P1:presign nonce=0
+       counter=1 statusJob=alive lock=P1
+  4. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy P1:sign nonce=0
+  5. API: cancel called
+       busy C:read, P1:sign nonce=0
+  6. prepare: sign (evm_transaction.rs:829)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1
+  7. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy C:read; queued S
+       counter=1 statusJob=alive
+  8. cancel: read tx
+       busy C:cnoop; queued S
+       counter=1 statusJob=alive lock=C
+  9. cancel: write NOOP + is_canceled, queue resubmit (evm_transaction.rs:1305)
+       tx[sent nonce=0 ver=0 kind=noop canceled cur=n0/orig#1 hashes={n0/orig#1}]
+       busy none; queued R,S
+       counter=1 statusJob=alive cancelAccepted
+ 10. resubmit job reads tx
+       busy R:sign; queued S
+       counter=1 statusJob=alive cancelAccepted lock=R
+ 11. resubmit: reprice + sign (evm_transaction.rs:1106-1135)
+       busy R:send payload=n0/noop#2; queued S
+ 12. resubmit: send_raw_transaction (evm_transaction.rs:1145)
+       chain[nonce=0 pool={n0/noop#2} mined={}]
+       busy none; queued R,S
+       counter=1 statusJob=alive cancelAccepted

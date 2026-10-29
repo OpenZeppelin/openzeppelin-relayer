@@ -1,0 +1,21 @@
+Invariant NoNonceGap is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. API: cancel called
+       busy C:read; queued P1
+  3. cancel: read tx
+       busy C:cpend; queued P1
+  4. prepare job reads tx
+       busy C:cpend, P1:alloc
+  5. prepare: take nonce (evm_transaction.rs:797)
+       busy C:cpend, P1:presign nonce=0
+       counter=1 statusJob=alive
+  6. cancel: Pending -> Canceled (evm_transaction.rs:1282)
+       tx[canceled nonce=None ver=1 kind=orig cur=- hashes={}]
+       busy P1:presign nonce=0
+       counter=1 statusJob=alive cancelAccepted
+  7. prepare: save nonce (evm_transaction.rs:816)
+       busy none

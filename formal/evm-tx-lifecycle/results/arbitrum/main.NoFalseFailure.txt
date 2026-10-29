@@ -1,0 +1,45 @@
+Invariant NoFalseFailure is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. prepare job reads tx
+       busy P1:alloc
+  3. API: cancel called
+       busy C:read, P1:alloc
+  4. prepare: take nonce (evm_transaction.rs:797)
+       busy C:read, P1:presign nonce=0
+       counter=1 statusJob=alive
+  5. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy C:read, P1:sign nonce=0
+  6. prepare: sign (evm_transaction.rs:829)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1
+  7. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy C:read; queued S
+  8. submit job reads tx
+       busy C:read, S:send
+  9. submit: send_raw_transaction (evm_transaction.rs:925)
+       chain[nonce=0 pool={n0/orig#1} mined={}]
+       busy C:read; queued S
+ 10. cancel: read tx
+       busy C:cnoop; queued S
+ 11. cancel: write NOOP + is_canceled, queue resubmit (evm_transaction.rs:1305)
+       tx[sent nonce=0 ver=0 kind=noop canceled cur=n0/orig#1 hashes={n0/orig#1}]
+       busy none; queued R,S
+       counter=1 statusJob=alive cancelAccepted
+ 12. resubmit job reads tx
+       busy R:sign; queued S
+ 13. chain mines a payload
+       chain[nonce=1 pool={} mined={n0/orig#1}]
+ 14. resubmit: reprice + sign (evm_transaction.rs:1106-1135)
+       busy R:send payload=n0/noop#2; queued S
+ 15. resubmit: send_raw_transaction (evm_transaction.rs:1145)
+       busy R:write payload=n0/noop#2; queued N,S
+ 16. nonce-recovery check reads tx
+       busy N:act, R:write payload=n0/noop#2; queued S
+ 17. nonce-recovery verdict (status.rs:827)
+       tx[failed nonce=0 ver=0 kind=noop canceled cur=n0/orig#1 hashes={n0/orig#1}]
+       busy R:write payload=n0/noop#2; queued S

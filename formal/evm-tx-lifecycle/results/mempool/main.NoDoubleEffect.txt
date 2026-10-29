@@ -1,0 +1,50 @@
+Invariant NoDoubleEffect is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. status job reads tx
+       busy T:act; queued P1
+  3. prepare job reads tx
+       busy P1:alloc, T:act
+  4. prepare: take nonce (evm_transaction.rs:797)
+       busy P1:presign nonce=0, T:act
+       counter=1 statusJob=alive
+  5. status job acts (status.rs:1062)
+       busy P1:presign nonce=0; queued P2
+  6. prepare job reads tx
+       busy P1:presign nonce=0, P2:alloc
+  7. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy P1:sign nonce=0, P2:alloc
+  8. prepare: sign (evm_transaction.rs:829)
+       busy P1:postsign nonce=0 payload=n0/orig#1, P2:alloc
+  9. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy P2:alloc; queued S
+ 10. prepare: take nonce (evm_transaction.rs:797)
+       busy P2:presign nonce=1; queued S
+       counter=2 statusJob=alive
+ 11. prepare: save nonce (evm_transaction.rs:816)
+       tx[sent nonce=1 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy P2:sign nonce=1; queued S
+ 12. prepare: sign (evm_transaction.rs:829)
+       busy P2:postsign nonce=1 payload=n1/orig#2; queued S
+ 13. submit job reads tx
+       busy P2:postsign nonce=1 payload=n1/orig#2, S:send
+ 14. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=1 ver=0 kind=orig cur=n1/orig#2 hashes={n0/orig#1, n1/orig#2}]
+       busy S:send; queued S
+ 15. submit: send_raw_transaction (evm_transaction.rs:925)
+       chain[nonce=0 pool={n0/orig#1} mined={}]
+       busy none; queued S
+ 16. submit job reads tx
+       busy S:send
+ 17. submit: send_raw_transaction (evm_transaction.rs:925)
+       chain[nonce=0 pool={n0/orig#1, n1/orig#2} mined={}]
+       busy S:mark
+ 18. chain mines a payload
+       chain[nonce=1 pool={n1/orig#2} mined={n0/orig#1}]
+ 19. chain mines a payload
+       chain[nonce=2 pool={} mined={n0/orig#1, n1/orig#2}]

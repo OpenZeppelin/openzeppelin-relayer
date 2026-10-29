@@ -1,0 +1,40 @@
+Invariant CancelHonest is violated
+  1. start
+       tx[pending nonce=None ver=0 kind=orig cur=- hashes={}]
+       chain[nonce=0 pool={} mined={}]
+       busy none; queued P1
+       counter=0 statusJob=alive
+  2. prepare job reads tx
+       busy P1:alloc
+  3. prepare: take nonce (evm_transaction.rs:797)
+       busy P1:presign nonce=0
+       counter=1 statusJob=alive
+  4. status job reads tx
+       busy P1:presign nonce=0, T:act
+  5. API: cancel called
+       busy C:read, P1:presign nonce=0, T:act
+  6. prepare: save nonce (evm_transaction.rs:816)
+       tx[pending nonce=0 ver=0 kind=orig cur=- hashes={}]
+       busy C:read, P1:sign nonce=0, T:act
+  7. status job acts (status.rs:1062)
+       busy C:read, P1:sign nonce=0; queued P2
+  8. prepare job reads tx
+       busy C:read, P1:sign nonce=0, P2:alloc
+  9. prepare: sign (evm_transaction.rs:829)
+       busy C:read, P1:postsign nonce=0 payload=n0/orig#1, P2:alloc
+ 10. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig cur=n0/orig#1 hashes={n0/orig#1}]
+       busy C:read, P2:alloc; queued S
+ 11. prepare: take nonce (evm_transaction.rs:797)
+       busy C:read, P2:sign nonce=0; queued S
+ 12. cancel: read tx
+       busy C:cnoop, P2:sign nonce=0; queued S
+ 13. prepare: sign (evm_transaction.rs:829)
+       busy C:cnoop, P2:postsign nonce=0 payload=n0/orig#2; queued S
+ 14. cancel: write NOOP + is_canceled, queue resubmit (evm_transaction.rs:1305)
+       tx[sent nonce=0 ver=0 kind=noop canceled cur=n0/orig#1 hashes={n0/orig#1}]
+       busy P2:postsign nonce=0 payload=n0/orig#2; queued R,S
+       counter=1 statusJob=alive cancelAccepted
+ 15. prepare: write Sent + hashes, queue submit (evm_transaction.rs:851)
+       tx[sent nonce=0 ver=0 kind=orig canceled cur=n0/orig#2 hashes={n0/orig#2}]
+       busy none; queued R,S
