@@ -491,7 +491,8 @@ impl StellarTransactionValidator {
     ///
     /// Plain and muxed accounts both resolve to their underlying ed25519 key (a muxed
     /// address is just an account plus an id, so it is signed by the same key).
-    /// Contract, claimable balance and liquidity pool addresses are not signer accounts.
+    /// Contract (plain or muxed, CAP-84), claimable balance and liquidity pool
+    /// addresses are not signer accounts.
     fn auth_address_account(
         address: &ScAddress,
     ) -> Result<Option<String>, StellarTransactionValidationError> {
@@ -502,6 +503,7 @@ impl StellarTransactionValidator {
                 Ok(Some(format!("{pk}")))
             }
             ScAddress::Contract(_)
+            | ScAddress::MuxedContract(_)
             | ScAddress::ClaimableBalance(_)
             | ScAddress::LiquidityPool(_) => Ok(None),
         }
@@ -573,6 +575,7 @@ impl StellarTransactionValidator {
                         Ok(false)
                     }
                     ScAddress::MuxedAccount(_)
+                    | ScAddress::MuxedContract(_)
                     | ScAddress::ClaimableBalance(_)
                     | ScAddress::LiquidityPool(_) => {
                         // These are not account addresses, so they're safe
@@ -2971,6 +2974,23 @@ mod tests {
                 create_account_id(TEST_PK_2),
             )));
             assert!(validate_with_relayer(creds, TEST_PK).is_ok());
+        }
+
+        #[test]
+        fn test_muxed_contract_in_auth_accepted() {
+            // Protocol 30 (CAP-84): a W... muxed contract address is a contract, not a
+            // signer account, so it can never be the relayer.
+            let muxed_contract = ScAddress::MuxedContract(stellar_xdr::MuxedContract {
+                id: 7,
+                contract_id: stellar_xdr::ContractId(stellar_xdr::Hash([9u8; 32])),
+            });
+            for make in [
+                SorobanCredentials::Address as fn(_) -> _,
+                SorobanCredentials::AddressV2 as fn(_) -> _,
+            ] {
+                let creds = make(address_creds(muxed_contract.clone()));
+                assert!(validate_with_relayer(creds, TEST_PK).is_ok());
+            }
         }
 
         #[test]

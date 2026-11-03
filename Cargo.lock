@@ -2417,7 +2417,7 @@ version = "3.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89ec27229c38ed0eb3c0feee3d2c1d6a4379ae44f418a29a658890e062d8f365"
 dependencies = [
- "darling 0.21.3",
+ "darling 0.23.0",
  "ident_case",
  "prettyplease",
  "proc-macro2",
@@ -5112,7 +5112,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6578,7 +6578,7 @@ dependencies = [
  "spl-token-2022-interface",
  "spl-token-interface",
  "stellar-rpc-client",
- "stellar-strkey 0.0.18",
+ "stellar-strkey 1.0.0",
  "stellar-xdr",
  "strum",
  "strum_macros",
@@ -7294,7 +7294,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.36",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7334,7 +7334,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -11566,9 +11566,9 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "stellar-rpc-client"
-version = "28.0.0-rc.1"
+version = "30.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f06a05befef7b6ddb92d28f09880a801e34fc3ab671c04d0e88ec4de6b1d4d"
+checksum = "a97e2088ac568e83bbd7db82c70f225d712903a366c287a6cdfc5f78aa67ebe5"
 dependencies = [
  "clap",
  "hex",
@@ -11581,7 +11581,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
- "stellar-strkey 0.0.18",
+ "stellar-strkey 1.0.0",
  "stellar-xdr",
  "termcolor",
  "termcolor_output",
@@ -11602,19 +11602,9 @@ dependencies = [
 
 [[package]]
 name = "stellar-strkey"
-version = "0.0.13"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee1832fb50c651ad10f734aaf5d31ca5acdfb197a6ecda64d93fcdb8885af913"
-dependencies = [
- "crate-git-revision 0.0.6",
- "data-encoding",
-]
-
-[[package]]
-name = "stellar-strkey"
-version = "0.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f34ff61c0ca6f1c2b4169e8d1633417bd9225f58b6175e4e317204565d16277"
+checksum = "5038ed2bf4e11842210d118f65791d8ca4747622daddd222338b3d06b6051bc1"
 dependencies = [
  "crate-git-revision 0.0.9",
  "data-encoding",
@@ -11624,9 +11614,9 @@ dependencies = [
 
 [[package]]
 name = "stellar-xdr"
-version = "28.0.0"
+version = "30.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f93d09ff8b9f919b084f664003c4c546ac66a76affd5429460dbe29f4b326f8e"
+checksum = "56f2fb2008b42fc746c0f6b46e375600068dd91f07748e9f1737c6341a2255f2"
 dependencies = [
  "base64 0.22.1",
  "cfg_eval",
@@ -11638,7 +11628,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
- "stellar-strkey 0.0.13",
+ "stellar-strkey 1.0.0",
 ]
 
 [[package]]
