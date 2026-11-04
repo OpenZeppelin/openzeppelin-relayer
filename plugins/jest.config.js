@@ -1,6 +1,8 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
+  // Prefer TypeScript sources over the generated pool-executor.js bundle.
+  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   roots: ['<rootDir>/tests'],
   testMatch: [
     '**/__tests__/**/*.ts',

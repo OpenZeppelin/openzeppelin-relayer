@@ -16,7 +16,7 @@ cd openzeppelin-relayer/examples/x402-facilitator-plugin
 
 - Docker and Docker Compose
 - Rust (for generating keys and IDs)
-- Node.js >= 18 and pnpm >= 10
+- Node.js >= 24 and pnpm >= 10
 
 ## Overview
 

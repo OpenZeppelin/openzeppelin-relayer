@@ -503,6 +503,12 @@ fn doc_get_relayer_status() {}
 fn doc_get_relayer_balance() {}
 
 /// Sends a transaction through the specified relayer.
+///
+/// Accepts an optional `Idempotency-Key` header: a client-generated unique key (max 255 chars)
+/// that makes the request idempotent. Repeating a request with the same key returns the original
+/// transaction. Keys expire after IDEMPOTENCY_KEY_TTL_SECONDS (default 24h).
+// The header is described above instead of declared in `params` so generated SDK clients keep
+// their signature: callers send it through request options rather than a positional argument.
 #[utoipa::path(
     post,
     path = "/api/v1/relayers/{relayer_id}/transactions",
@@ -512,7 +518,7 @@ fn doc_get_relayer_balance() {}
         ("bearer_auth" = [])
     ),
     params(
-        ("relayer_id" = String, Path, description = "The unique identifier of the relayer")
+        ("relayer_id" = String, Path, description = "The unique identifier of the relayer"),
     ),
     request_body = NetworkTransactionRequest,
     responses(
@@ -544,6 +550,26 @@ fn doc_get_relayer_balance() {}
             example = json!({
                 "success": false,
                 "message": "Relayer with ID relayer_id not found",
+                "data": null
+            })
+        ),
+        (
+            status = 409,
+            description = "Conflict",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "A request with this Idempotency-Key is already in progress",
+                "data": null
+            })
+        ),
+        (
+            status = 422,
+            description = "Unprocessable Entity",
+            body = ApiResponse<String>,
+            example = json!({
+                "success": false,
+                "error": "Idempotency-Key reused with a different request payload",
                 "data": null
             })
         ),

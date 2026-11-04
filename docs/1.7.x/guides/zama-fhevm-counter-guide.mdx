@@ -1,0 +1,405 @@
+---
+title: Zama FHEVM Counter Guide
+---
+
+## Overview
+
+This guide walks through an end-to-end integration between the OpenZeppelin Relayer and a Zama FHEVM contract, using the counter example shipped with the [OpenZeppelin Relayer SDK](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk). The counter contract is deployed from [Zama's fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template) and demonstrates the two OpenZeppelin Relayer responsibilities in an FHEVM flow:
+
+- **Transaction submission**: sending an encrypted `increment()` call on-chain.
+- **EIP-712 signing**: signing the typed-data payload that authorizes user decryption of the counter's encrypted state.
+
+This guide uses Zama's officially released top-level SDK, [`@zama-fhe/sdk`](https://www.npmjs.com/package/@zama-fhe/sdk) (v3.x). The OpenZeppelin Relayer is plugged in as a Zama `GenericSigner`, so your application code works against the high-level `ZamaSDK` API and never re-implements the relayer glue.
+
+<Callout type="info">
+
+**Two examples ship in the SDK repository.** Both drive the same counter contract from the same `.env`:
+
+- [`examples/relayers/zama/zama-sdk/`](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/zama-sdk) — **recommended.** Uses `@zama-fhe/sdk` (v3.x) with an `OpenZeppelinRelayerSigner` adapter. This is the path covered below.
+- [`examples/relayers/zama/relayer-sdk/`](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/relayer-sdk) — **lower-level.** Uses `@zama-fhe/relayer-sdk` (v0.4.x) directly, hand-rolling EIP-712 hashing, transaction submission, and confirmation polling in user code. Reach for it if you want to see the raw relayer API calls an FHEVM flow needs, or you are already on `@zama-fhe/relayer-sdk`.
+
+</Callout>
+
+<Callout type="info">
+
+**Terminology.** In this guide:
+
+- **OpenZeppelin Relayer** (or "OZ Relayer") — this service. It holds an EVM signer, submits on-chain transactions, and signs EIP-712 payloads.
+- **Zama Relayer** — the Zama-operated service that `@zama-fhe/sdk` talks to under the hood. It serves FHE public keys and routes decryption requests to the Zama KMS / coprocessor. Applications interact with it only indirectly through the Zama SDK. It holds no OpenZeppelin key material and does not sign EIP-712.
+
+</Callout>
+
+By the end of this guide you will have:
+
+- Composed a `ZamaSDK` instance backed by the OpenZeppelin Relayer.
+- Read and decrypted an encrypted counter value from the contract.
+- Submitted an encrypted increment through the OpenZeppelin Relayer and waited for confirmation.
+- Re-read and decrypted the updated value.
+
+<Callout>
+The FHE encryption/decryption primitives run in your application using the Zama SDK. The OpenZeppelin Relayer never sees cleartext values or your decryption keypair — it only sends transactions and signs EIP-712 payloads.
+</Callout>
+
+## Prerequisites
+
+- Node.js `>= 22.14.0`
+- `pnpm` (the example repository uses pnpm for installs)
+- A running OpenZeppelin Relayer with:
+  - a valid API key
+  - an EVM relayer configured on Sepolia (or another FHEVM-enabled network)
+- A Zama FHE counter contract deployed on your target network (e.g. via [fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template))
+
+## Example Setup
+
+The complete working example lives in the OpenZeppelin Relayer SDK repository:
+
+- **Location**: [examples/relayers/zama/zama-sdk](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/zama-sdk)
+- **Documentation**: [README.md](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/zama-sdk/README.md)
+
+The rest of this guide explains the moving parts, references the example files, and shows the minimum code required to adapt the flow to your own contract.
+
+## Architecture
+
+In `@zama-fhe/sdk`, the wallet contract is split into two framework-agnostic interfaces, and the example implements them across the OpenZeppelin Relayer and a viem client:
+
+- **`GenericSigner`** — write authority (`signTypedData`, `writeContract`). Implemented by `OpenZeppelinRelayerSigner` on top of the OpenZeppelin Relayer. This is the only component holding an EVM signer.
+- **`GenericProvider`** — read-only RPC (`getChainId`, `readContract`, `getBlockTimestamp`, `waitForTransactionReceipt`). The example uses the SDK's built-in `ViemProvider` (a viem `PublicClient`); reads never touch the relayer.
+
+The remaining pieces:
+
+- **Your script** — composes the SDK and orchestrates the flow.
+- **Zama SDK (`node()` transport)** + **Zama Relayer (service)** — the SDK encrypts inputs, manages decryption keypairs/sessions, and builds EIP-712 payloads; the Zama Relayer service serves FHE public keys and routes decryption requests to the Zama KMS / coprocessor. The application only interacts with it through the SDK.
+- **FHEVM contract** — stores encrypted state on-chain.
+
+The key boundary is that the OpenZeppelin Relayer does not do any encryption or decryption. The Zama SDK handles all FHE primitives; the OpenZeppelin Relayer only provides EVM transaction execution and EIP-712 signing.
+
+```
+                              composed by createConfig()
+                    ┌───────────────────────────────────────┐
+                    │               ZamaSDK                  │
+                    │   sdk.encrypt() / sdk.decryption.*     │
+                    └───┬───────────────┬───────────────┬────┘
+                        │               │               │
+       signTypedData /  │        reads  │       encrypt/decrypt (FHE)
+       writeContract    │   (RPC)       │               │
+                        ▼               ▼               ▼
+        ┌─────────────────────┐ ┌──────────────┐ ┌──────────────────┐
+        │ OpenZeppelinRelayer │ │ ViemProvider │ │ node() transport │
+        │ Signer (OZ Relayer) │ │   (RPC_URL)  │ │  → Zama Relayer  │
+        └──────────┬──────────┘ └──────────────┘ └──────────────────┘
+                   ▼
+        ┌─────────────────────┐
+        │   FHEVM network     │
+        │ Sepolia / Mainnet   │
+        └─────────────────────┘
+```
+
+## OpenZeppelin Relayer Configuration
+
+Zama FHEVM contracts live on standard EVM networks, so the OpenZeppelin Relayer is configured as a regular `evm` relayer.
+
+```json
+{
+  "relayers": [
+    {
+      "id": "zama-sepolia",
+      "name": "Zama FHEVM Sepolia",
+      "network": "sepolia",
+      "paused": false,
+      "signer_id": "local-signer",
+      "network_type": "evm"
+    }
+  ],
+  "signers": [
+    {
+      "id": "local-signer",
+      "type": "local",
+      "config": {
+        "path": "config/keys/local-signer.json",
+        "passphrase": {
+          "type": "env",
+          "value": "KEYSTORE_PASSPHRASE"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Important notes:**
+
+- The OpenZeppelin Relayer's signer is used both for submitting the encrypted transaction and for signing the EIP-712 payload that the Zama SDK requires for user decryption. The same key backs both operations.
+- For production, prefer a hosted signer (AWS KMS, Google Cloud KMS, Turnkey, CDP) over `local`.
+- The OpenZeppelin Relayer must be funded on the target network so it can pay gas for FHEVM contract calls.
+
+## Installation
+
+From the root of the `openzeppelin-relayer-sdk` repository:
+
+```bash
+pnpm install
+```
+
+The example imports the Zama SDK (`@zama-fhe/sdk`) as part of the workspace dependencies. If you are integrating the flow into your own project, install it directly:
+
+```bash
+pnpm add @zama-fhe/sdk @openzeppelin/relayer-sdk viem dotenv
+```
+
+## Environment Configuration
+
+Copy `.env.example` to `.env` in `examples/relayers/zama/` (the `.env` is shared with the lower-level `relayer-sdk/` example):
+
+```bash
+RELAYER_API_KEY=
+RELAYER_ID=
+ZAMA_CONTRACT_ADDRESS=
+RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+RELAYER_BASE_PATH=http://localhost:8080
+```
+
+- `RELAYER_BASE_PATH` defaults to `http://localhost:8080` if not set. This points at your OpenZeppelin Relayer.
+- `RPC_URL` defaults to the public Sepolia RPC if not set.
+
+<Callout type="info">
+Unlike the lower-level `relayer-sdk/` example, this path does **not** need `ZAMA_PUBLIC_KEY` / `ZAMA_PRIVATE_KEY` — `@zama-fhe/sdk` generates and caches the decryption keypair and user-decrypt session signatures for you in its `storage`.
+</Callout>
+
+## Running the Example
+
+Run the counter example from the SDK repository root:
+
+```bash
+npx ts-node examples/relayers/zama/zama-sdk/counter.ts
+```
+
+The script should:
+
+1. Read the encrypted counter handle from the contract.
+2. Attempt decryption (public first, then user decryption authorized by an OpenZeppelin Relayer signed EIP-712 payload).
+3. Submit an encrypted `increment()` through the OpenZeppelin Relayer and wait until the transaction is mined.
+4. Re-read and decrypt the updated counter value.
+
+## Walkthrough
+
+The following snippets show the integration points from `zama-sdk/counter.ts` and the `OpenZeppelinRelayerSigner` adapter. Full code is in the [SDK repository](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/zama-sdk).
+
+### 1. Compose the `ZamaSDK`
+
+Wire the read-only provider (viem), the signer (OpenZeppelin Relayer), and the Zama `node()` transport together with `createConfig`:
+
+```typescript
+import { Configuration, RelayersApi } from '@openzeppelin/relayer-sdk';
+import { MemoryStorage, ZamaSDK, createConfig } from '@zama-fhe/sdk';
+import { sepolia } from '@zama-fhe/sdk/chains';
+import { node } from '@zama-fhe/sdk/node';
+import { ViemProvider } from '@zama-fhe/sdk/viem';
+import { createPublicClient, http } from 'viem';
+import { OpenZeppelinRelayerSigner } from './openzeppelin-relayer-signer';
+
+const rpcUrl = process.env.RPC_URL ?? 'https://ethereum-sepolia-rpc.publicnode.com';
+
+const relayersApi = new RelayersApi(
+  new Configuration({
+    basePath: process.env.RELAYER_BASE_PATH ?? 'http://localhost:8080',
+    accessToken: process.env.RELAYER_API_KEY!,
+  }),
+);
+
+// GenericProvider — all read-only RPC (chain id, reads, receipts) via viem.
+const publicClient = createPublicClient({ transport: http(rpcUrl) });
+const provider = new ViemProvider({ publicClient });
+const chainId = await provider.getChainId();
+
+// GenericSigner — signing + submission via the OpenZeppelin Relayer.
+const signer = await OpenZeppelinRelayerSigner.create({
+  relayersApi,
+  relayerId: process.env.RELAYER_ID!,
+  chainId,
+});
+const relayerAddress = signer.address;
+
+// Compose the SDK — chain, relayer transport, signer, provider, storage.
+const chain = { ...sepolia, network: rpcUrl };
+const sdk = new ZamaSDK(
+  createConfig({
+    chains: [chain],
+    signer,
+    provider,
+    storage: new MemoryStorage(),
+    relayers: { [chain.id]: node() },
+  }),
+);
+```
+
+<Callout type="info">
+`OpenZeppelinRelayerSigner.create()` resolves the relayer's on-chain address from the API and seeds the SDK's `walletAccount` store with `{ address, chainId }`. `MemoryStorage` is fine for examples but loses cached FHE material and decrypt sessions across restarts — use a Redis-backed `GenericStorage` for a long-running server.
+</Callout>
+
+### 2. Read and decrypt the encrypted counter
+
+The contract exposes a `getCount()` view returning the encrypted handle — a plain EVM read through the provider, no OpenZeppelin Relayer involvement.
+
+```typescript
+import type { Abi, Hex } from 'viem';
+import counterAbi from './abi.json';
+
+const abi = counterAbi as Abi;
+
+const handle = (await provider.readContract({
+  address: contractAddress,
+  abi,
+  functionName: 'getCount',
+  args: [],
+})) as Hex;
+```
+
+The script first attempts public decryption, then falls back to user decryption (see [Decryption Model](#decryption-model) below):
+
+```typescript
+// Public decryption — no signature required.
+const pub = await sdk.decryption.decryptPublicValues([handle]);
+const value = pub.clearValues[handle]; // bigint | undefined
+
+// User decryption — the SDK builds the EIP-712 request, has the OZ Relayer
+// (our signer) authorize it, and caches the decrypt session in storage.
+const result = await sdk.decryption.decryptValues([{ encryptedValue: handle, contractAddress }]);
+const clear = result[handle]; // bigint
+```
+
+### 3. Encrypt an input and submit `increment()` via the OpenZeppelin Relayer
+
+Encryption happens inside the SDK. The encrypted value plus input proof are passed to the contract call, and `signer.writeContract` submits it through the OpenZeppelin Relayer.
+
+```typescript
+const { encryptedValues, inputProof } = await sdk.encrypt({
+  values: [{ value: 1n, type: 'euint32' }],
+  contractAddress,
+  userAddress: relayerAddress,
+});
+
+const txHash = await signer.writeContract({
+  address: contractAddress,
+  abi,
+  functionName: 'increment',
+  args: [encryptedValues[0], inputProof],
+});
+
+await provider.waitForTransactionReceipt(txHash);
+```
+
+<Callout type="info">
+`writeContract` polls the OpenZeppelin Relayer until the transaction is **mined** and returns the final on-chain hash (following any fee-bump resubmissions). That hash resolves immediately against `provider.waitForTransactionReceipt`, so no relayer-specific bookkeeping leaks into the read path.
+</Callout>
+
+### 4. Tear down the worker pool
+
+The `node()` transport spawns WASM worker threads. Call `sdk.terminate()` when finished so the process can exit:
+
+```typescript
+sdk.terminate();
+```
+
+## Decryption Model
+
+Zama FHEVM supports two decryption paths, and the example tries them in this order.
+
+### 1. Public Decryption
+
+If an encrypted handle is marked as publicly decryptable on-chain, the Zama SDK decrypts it directly via the Zama Relayer, with no involvement from the OpenZeppelin Relayer.
+
+```typescript
+const pub = await sdk.decryption.decryptPublicValues([handle]);
+const clear = pub.clearValues[handle];
+```
+
+### 2. User Decryption (OpenZeppelin Relayer's signed EIP-712)
+
+When decryption requires authorization, `sdk.decryption.decryptValues` builds an EIP-712 payload and the **OpenZeppelin Relayer** signs it through the `GenericSigner.signTypedData` adapter. The SDK manages the keypair and caches the session, so application code is a single call:
+
+```typescript
+const result = await sdk.decryption.decryptValues([{ encryptedValue: handle, contractAddress }]);
+const clear = result[handle];
+```
+
+Under the hood, `OpenZeppelinRelayerSigner.signTypedData` computes the EIP-712 domain separator and struct hash locally (with viem) and asks the OpenZeppelin Relayer to sign only the final hashes — the relayer's `signTypedData` endpoint takes a pre-computed `(domain_separator, hash_struct_message)` pair:
+
+```typescript
+import { hashDomain, hashStruct } from 'viem';
+import type { SignDataResponseEvm } from '@openzeppelin/relayer-sdk';
+
+async function signTypedData(typedData) {
+  const { EIP712Domain, ...structTypes } = typedData.types;
+  const domainSeparator = hashDomain({ domain: typedData.domain, types: typedData.types });
+  const hashStructMessage = hashStruct({
+    data: typedData.message,
+    primaryType: typedData.primaryType,
+    types: structTypes,
+  });
+
+  const response = await relayersApi.signTypedData(process.env.RELAYER_ID!, {
+    domain_separator: domainSeparator,
+    hash_struct_message: hashStructMessage,
+  });
+  return (response.data.data as SignDataResponseEvm).sig!;
+}
+```
+
+## Using on Mainnet
+
+The example defaults to Sepolia. To run against Ethereum mainnet:
+
+1. In `counter.ts`, swap the chain import and add Zama Relayer API-key auth:
+
+   ```typescript
+   import { mainnet } from '@zama-fhe/sdk/chains';
+
+   const chain = {
+     ...mainnet,
+     network: process.env.RPC_URL!,
+     auth: { __type: 'ApiKeyHeader', value: process.env.ZAMA_FHEVM_API_KEY! },
+   };
+   // relayers: { [chain.id]: node() }
+   ```
+
+2. Add the following to your `.env`:
+
+   ```bash
+   ZAMA_FHEVM_API_KEY=
+   RPC_URL=https://ethereum-rpc.publicnode.com
+   ```
+
+3. Point `ZAMA_CONTRACT_ADDRESS` at your mainnet contract and configure the OpenZeppelin Relayer for Ethereum mainnet.
+
+<Callout>
+Mainnet requires API key authentication with the Zama Relayer. See the [Zama mainnet API key guide](https://docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/mainnet-api-key) for instructions on obtaining one.
+</Callout>
+
+## Lower-Level Integration (`@zama-fhe/relayer-sdk`)
+
+If you need to work directly against the Zama Relayer SDK — hand-rolling EIP-712 hashing, `sendTransaction`, and confirmation polling in user code — use the [`relayer-sdk/` example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama/relayer-sdk). It targets `@zama-fhe/relayer-sdk` (v0.4.x), exposes every raw relayer API call, and ships a `generate-keypair.ts` helper for reusing a decryption keypair across runs (via the optional `ZAMA_PUBLIC_KEY` / `ZAMA_PRIVATE_KEY` env vars). Prefer the `@zama-fhe/sdk` path above for new integrations.
+
+## Current Limitations
+
+- The example is hardcoded for Sepolia via the `sepolia` chain plus an explicit Sepolia RPC URL.
+- It assumes a counter contract shape compatible with the included ABI.
+- Logging and error handling are intentionally simple — this is a demo script, not production code.
+- It does not cover OpenZeppelin Relayer creation or contract deployment.
+
+## Troubleshooting
+
+- **`Missing required environment variable`**: one of the required values in `.env` is unset.
+- **`did not return an address`**: the configured `RELAYER_ID` is valid for the API, but the response did not include an EVM address. Check that the OpenZeppelin Relayer is fully provisioned and the signer is reachable.
+- **`Public decryption failed`**: this can be expected depending on the contract and permissions. The script will then try user decryption.
+- **`User decryption failed`**: check that the OpenZeppelin Relayer can sign typed data correctly, the contract is on the configured chain, and the SDK's `storage` is persisting decrypt session signatures across runs (use Redis-backed storage in production).
+- **`Timed out waiting for relayer to mine the transaction`**: only thrown when `maxPollAttempts` is set on the signer. The transaction may still be pending, the OpenZeppelin Relayer may be unhealthy, or the target chain may be slow. Inspect `getTransactionById` directly and check OpenZeppelin Relayer logs.
+
+## Additional Resources
+
+- [Zama Protocol SDK docs](https://docs.zama.org/protocol/sdk) — `@zama-fhe/sdk`
+- [Zama Relayer SDK Guides](https://docs.zama.org/protocol/relayer-sdk-guides) — `@zama-fhe/relayer-sdk`
+- [Zama fhevm-hardhat-template](https://github.com/zama-ai/fhevm-hardhat-template)
+- [Zama mainnet API key guide](https://docs.zama.org/protocol/relayer-sdk-guides/fhevm-relayer/mainnet-api-key)
+- [OpenZeppelin Relayer SDK — Zama example](https://github.com/OpenZeppelin/openzeppelin-relayer-sdk/tree/main/examples/relayers/zama)
+- [Zama FHEVM Integration](/relayer/1.7.x/zama-fhevm)
+```

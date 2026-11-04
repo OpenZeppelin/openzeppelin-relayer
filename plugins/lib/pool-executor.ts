@@ -7,9 +7,18 @@
 
 import * as v8 from 'node:v8';
 import * as net from 'node:net';
+import * as path from 'node:path';
+import { createRequire } from 'node:module';
 import { v4 as uuidv4 } from 'uuid';
 import { DefaultPluginKVStore } from './kv';
-import type { PluginAPI, PluginContext, PluginHeaders, Relayer } from './plugin';
+import {
+  attachIdempotencyKey,
+  type PluginAPI,
+  type PluginContext,
+  type PluginHeaders,
+  type Relayer,
+  type SendTransactionOptions,
+} from './plugin';
 import {
   ApiResponseRelayerResponseData,
   ApiResponseRelayerStatusData,
@@ -22,6 +31,16 @@ import {
   pluginError,
 } from '@openzeppelin/relayer-sdk';
 import { SOCKET_REQUEST_TIMEOUT_MS } from './constants';
+
+/**
+ * Resolve packages left external by the plugin compiler (notably
+ * `@openzeppelin/relayer-sdk`) from the Relayer `plugins/` tree.
+ *
+ * Piscina may load this worker from a temp copy under `os.tmpdir()`, so the
+ * default `require` cannot see `plugins/node_modules`. Always resolve from
+ * `plugins/package.json` relative to the Relayer process cwd.
+ */
+const pluginsRequire = createRequire(path.resolve(process.cwd(), 'plugins', 'package.json'));
 
 /**
  * Function Cache - Caches compiled plugin factory functions.
@@ -203,7 +222,7 @@ export interface LogEntry {
  * **See also**: `DefaultPluginAPI` in `plugin.ts` for the legacy ts-node execution implementation
  * (fallback mode, enabled only when `PLUGIN_USE_POOL=false`).
  */
-class PluginAPIImpl implements PluginAPI {
+export class PluginAPIImpl implements PluginAPI {
   private socket: net.Socket | null = null;
   private pending: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }>;
   private connectionPromise: Promise<void> | null = null;
@@ -399,12 +418,17 @@ class PluginAPIImpl implements PluginAPI {
 
   useRelayer(relayerId: string): Relayer {
     return {
-      sendTransaction: async (payload: NetworkTransactionRequest) => {
-        const result = await this.send<{ id: string; relayer_id: string }>(relayerId, 'sendTransaction', payload);
+      sendTransaction: async (payload: NetworkTransactionRequest, options?: SendTransactionOptions) => {
+        const result = await this.send<{ id: string; relayer_id: string }>(
+          relayerId,
+          'sendTransaction',
+          payload,
+          options,
+        );
         return {
           ...result,
-          wait: (options?: { interval?: number; timeout?: number }) =>
-            this.transactionWait(result, options),
+          wait: (waitOpts?: { interval?: number; timeout?: number }) =>
+            this.transactionWait(result, waitOpts),
         } as any;
       },
       getTransaction: (payload: { transactionId: string }) =>
@@ -465,9 +489,15 @@ class PluginAPIImpl implements PluginAPI {
    * If the socket was lost between calls (error/close handler nullified it),
    * transparently reconnects once before sending.
    */
-  private async send<T>(relayerId: string, method: string, payload: any): Promise<T> {
+  private async send<T>(
+    relayerId: string,
+    method: string,
+    payload: any,
+    options?: SendTransactionOptions,
+  ): Promise<T> {
     const requestId = uuidv4();
     const msg: any = { requestId, relayerId, method, payload };
+    attachIdempotencyKey(msg, options, 'idempotencyKey');
     if (this.httpRequestId) {
       msg.httpRequestId = this.httpRequestId;
     }
@@ -652,8 +682,16 @@ export default async function executePlugin(task: ExecutorTask): Promise<Executo
     }
 
     // Execute the factory to populate module.exports
-    // Pass our custom console to capture logs
-    factory(moduleExports, require, moduleObject, `plugin-${task.pluginId}.js`, '/plugins', pluginConsole);
+    // Pass pluginsRequire so externalized packages resolve under plugins/node_modules
+    // even when this worker file lives in a Piscina temp path.
+    factory(
+      moduleExports,
+      pluginsRequire,
+      moduleObject,
+      `plugin-${task.pluginId}.js`,
+      path.resolve(process.cwd(), 'plugins'),
+      pluginConsole
+    );
 
     // Get the handler from exports
     const handler = moduleObject.exports.handler || moduleExports.handler;

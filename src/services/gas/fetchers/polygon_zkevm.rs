@@ -177,6 +177,7 @@ mod tests {
                     Err(ProviderError::RpcErrorCode {
                         code: -32601,
                         message: "Method not found".to_string(),
+                        data: None,
                     })
                 }
                 .boxed()

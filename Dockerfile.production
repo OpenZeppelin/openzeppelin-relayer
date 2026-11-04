@@ -1,3 +1,10 @@
+# Floor for the system trust store. 20260909-r3 distrusts the compromised
+# eMudhra intermediates (https://emudhra.we-have-a-problem.com). apk fails the
+# build if it cannot satisfy the floor, and changing it invalidates cached layers.
+ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION=20260909-r3
+# Node.js 24.22.1 is the first 24.x that rejects the compromised eMudhra intermediates.
+ARG MIN_NODEJS_VERSION=24.22.1
+
 # Base image
 # Rustc v1.93.0 minimum (MSRV, see rust-version in Cargo.toml)
 # The digest needs to be updated everytime the minimum version is changed, and if the version is above 1.93.0
@@ -25,16 +32,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # Setting up build directories
-FROM cgr.dev/chainguard/wolfi-base@sha256:0a8fd427de5882aed77471b0a432c3675eda6b6a0ae952b5d640b46da628cdbe
+FROM cgr.dev/chainguard/wolfi-base@sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
 
 WORKDIR /app
 COPY --from=base --chown=nonroot:nonroot /usr/app/bin/openzeppelin-relayer /app/openzeppelin-relayer
 COPY --from=base /usr/lib/libssl.so.3 /usr/lib/libssl.so.3
 COPY --from=base /usr/lib/libcrypto.so.3 /usr/lib/libcrypto.so.3
 
-ARG NODE_VERSION=20.19
+ARG MIN_NODEJS_VERSION
+ARG MIN_CA_CERTIFICATES_BUNDLE_VERSION
 USER root
-RUN apk add --no-cache nodejs=~${NODE_VERSION} npm
+RUN apk add --no-cache "ca-certificates-bundle>=${MIN_CA_CERTIFICATES_BUNDLE_VERSION}" "nodejs-24>=${MIN_NODEJS_VERSION}" npm
 ENV PATH="/usr/local/bin:$PATH"
 
 # Pin the pnpm major: pnpm 12 ships a preinstall script that newer npm blocks by

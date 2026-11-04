@@ -49,6 +49,17 @@ where
         &self,
         params: SolanaSignAndSendTransactionRequestParams,
     ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
+        self.sign_and_send_transaction_with_id_impl(params, None)
+            .await
+    }
+
+    /// Signs and sends a transaction. When `tx_id` is set, the transaction is
+    /// stored under that id instead of a generated one.
+    pub(crate) async fn sign_and_send_transaction_with_id_impl(
+        &self,
+        params: SolanaSignAndSendTransactionRequestParams,
+        tx_id: Option<String>,
+    ) -> Result<SolanaSignAndSendTransactionResult, SolanaRpcError> {
         debug!("Processing sign and send transaction request");
         let transaction_request = Transaction::try_from(params.transaction.clone())?;
 
@@ -97,12 +108,15 @@ where
             valid_until: None,
         });
 
-        let transaction =
+        let mut transaction =
             TransactionRepoModel::try_from((&network_transaction, &self.relayer, &self.network))
                 .map_err(|e| {
                     error!(error = %e, "failed to create transaction repo model");
                     SolanaRpcError::Internal(e.to_string())
                 })?;
+        if let Some(tx_id) = tx_id {
+            transaction.id = tx_id;
+        }
 
         let tx_repo_model = self
             .transaction_repository
@@ -263,8 +277,11 @@ mod tests {
     use solana_sdk::{program_pack::Pack, signature::Signature, signer::Signer};
     use spl_token_interface::state::Account;
 
-    #[tokio::test]
-    async fn test_sign_and_send_transaction_success_relayer_fee_strategy() {
+    /// Runs a successful relayer-paid sign-and-send, optionally with a preset id.
+    /// Returns the result and the expected signature.
+    async fn run_relayer_fee_sign_and_send(
+        tx_id: Option<String>,
+    ) -> (SolanaSignAndSendTransactionResult, Signature) {
         let (
             relayer,
             mut signer,
@@ -317,9 +334,7 @@ mod tests {
             .returning(move |_| Box::pin(async move { Ok(expected_signature) }));
 
         let mut tx_repo_mock = MockTransactionRepository::new();
-        tx_repo_mock
-            .expect_create()
-            .returning(move |_| Ok(create_mock_solana_transaction()));
+        tx_repo_mock.expect_create().returning(|tx| Ok(tx));
 
         tx_repo_mock
             .expect_partial_update()
@@ -343,12 +358,29 @@ mod tests {
             transaction: encoded_tx,
         };
 
-        let result = rpc.sign_and_send_transaction(params).await;
-        assert!(result.is_ok());
+        let result = match tx_id {
+            Some(tx_id) => rpc.sign_and_send_transaction_with_id(params, tx_id).await,
+            None => rpc.sign_and_send_transaction(params).await,
+        };
 
-        let send_result = result.unwrap();
+        (result.unwrap(), expected_signature)
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_success_relayer_fee_strategy() {
+        let (send_result, expected_signature) = run_relayer_fee_sign_and_send(None).await;
+
         assert_eq!(send_result.signature, expected_signature.to_string());
         assert!(!send_result.id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sign_and_send_transaction_with_id_stores_given_id() {
+        let (send_result, expected_signature) =
+            run_relayer_fee_sign_and_send(Some("preset-tx-id".to_string())).await;
+
+        assert_eq!(send_result.signature, expected_signature.to_string());
+        assert_eq!(send_result.id, "preset-tx-id");
     }
 
     #[tokio::test]

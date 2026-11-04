@@ -150,7 +150,14 @@ fn categorize_stellar_error_with_context(
                 jsonrpsee_core::ClientError::Call(err_obj) => {
                     let code = err_obj.code() as i64;
                     let message = add_context(err_obj.message().to_string());
-                    ProviderError::RpcErrorCode { code, message }
+                    let data = err_obj
+                        .data()
+                        .and_then(|raw| serde_json::from_str(raw.get()).ok());
+                    ProviderError::RpcErrorCode {
+                        code,
+                        message,
+                        data,
+                    }
                 }
 
                 // Handle request timeouts
@@ -640,6 +647,9 @@ fn json_rpc_error_to_provider_error(error: &serde_json::Value) -> ProviderError 
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown error")
                 .to_string(),
+            // Drop JSON null so clients don't see `"data": null` (Alloy/jsonrpsee
+            // parse null into `None`; keep the raw-JSON path aligned).
+            data: error.get("data").filter(|v| !v.is_null()).cloned(),
         };
     }
     ProviderError::Other(format!("JSON-RPC error: {error}"))
@@ -1792,14 +1802,51 @@ mod stellar_rpc_tests {
     }
 
     #[test]
-    fn test_categorize_stellar_error_with_context_json_rpc_call_error() {
-        // Test that RPC Call errors are properly categorized as RpcErrorCode
-        // We'll test this indirectly through other error types since creating Call errors
-        // requires jsonrpsee internals that aren't easily accessible in tests
-        let err = StellarClientError::TransactionSubmissionTimeout;
+    fn test_categorize_stellar_error_with_context_json_rpc_call_preserves_data() {
+        let payload = serde_json::json!({"reason": "txBAD_AUTH"});
+        let err_obj =
+            jsonrpsee_types::ErrorObject::owned(3, "transaction failed", Some(payload.clone()));
+        let err = StellarClientError::JsonRpc(jsonrpsee_core::ClientError::Call(err_obj));
+        let result = categorize_stellar_error_with_context(err, Some("Failed to simulate"));
+
+        match result {
+            ProviderError::RpcErrorCode {
+                code,
+                message,
+                data,
+            } => {
+                assert_eq!(code, 3);
+                assert!(message.contains("Failed to simulate"));
+                assert!(message.contains("transaction failed"));
+                assert_eq!(data, Some(payload));
+            }
+            other => panic!("expected RpcErrorCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_categorize_stellar_error_with_context_json_rpc_call_without_data() {
+        let err_obj = jsonrpsee_types::ErrorObject::owned(
+            -32601,
+            "Method not found",
+            None::<serde_json::Value>,
+        );
+        let err = StellarClientError::JsonRpc(jsonrpsee_core::ClientError::Call(err_obj));
         let result = categorize_stellar_error_with_context(err, Some("Test operation"));
-        // Verify timeout is properly categorized
-        assert!(matches!(result, ProviderError::Timeout));
+
+        match result {
+            ProviderError::RpcErrorCode {
+                code,
+                message,
+                data,
+            } => {
+                assert_eq!(code, -32601);
+                assert!(message.contains("Test operation"));
+                assert!(message.contains("Method not found"));
+                assert!(data.is_none());
+            }
+            other => panic!("expected RpcErrorCode, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2195,6 +2242,90 @@ mod stellar_rpc_tests {
             matches!(err, ProviderError::RpcErrorCode { code: -32601, .. }),
             "Unexpected error: {err}"
         );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_raw_path_json_rpc_error_preserves_data() {
+        let _env_guard = setup_test_env();
+        std::env::set_var("PROVIDER_MAX_RETRIES", "1");
+
+        let error_data = serde_json::json!({"status": "FAILED", "errorResultXdr": "AAAAAA=="});
+        let mut mock_server = mockito::Server::new_async().await;
+        let mock = mock_server
+            .mock("POST", "/")
+            .with_body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "transaction submission failed",
+                        "data": error_data
+                    }
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(mock_server.url())],
+            5,
+        ))
+        .unwrap();
+
+        let err = provider.get_transaction(&dummy_hash()).await.unwrap_err();
+        match err {
+            ProviderError::RpcErrorCode {
+                code,
+                message,
+                data,
+            } => {
+                assert_eq!(code, -32000);
+                assert!(message.contains("transaction submission failed"));
+                assert_eq!(data, Some(error_data));
+            }
+            other => panic!("expected RpcErrorCode with data, got {other:?}"),
+        }
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_raw_path_null_error_data_becomes_none() {
+        let _env_guard = setup_test_env();
+
+        let mut mock_server = mockito::Server::new_async().await;
+        let mock = mock_server
+            .mock("POST", "/")
+            .with_body(
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "transaction submission failed",
+                        "data": null
+                    }
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = StellarProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(mock_server.url())],
+            5,
+        ))
+        .unwrap();
+
+        let err = provider.get_transaction(&dummy_hash()).await.unwrap_err();
+        match err {
+            ProviderError::RpcErrorCode { data, .. } => assert!(data.is_none()),
+            other => panic!("expected RpcErrorCode with data=None, got {other:?}"),
+        }
         mock.assert_async().await;
     }
 

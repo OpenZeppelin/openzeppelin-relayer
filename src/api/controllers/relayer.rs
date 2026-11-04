@@ -10,6 +10,10 @@
 //! - Signing messages
 //! - JSON-RPC proxy
 use crate::{
+    api::controllers::idempotency::{
+        create_idempotent_detached, normalize_idempotency_key, transaction_request_fingerprint,
+    },
+    config::ServerConfig,
     domain::{
         get_network_relayer, get_network_relayer_by_model, get_relayer_by_id,
         get_relayer_transaction_by_model, get_transaction_by_id as get_tx_by_id,
@@ -413,6 +417,7 @@ where
 ///
 /// * `relayer_id` - The ID of the relayer to send the transaction through.
 /// * `request` - The transaction request data.
+/// * `idempotency_key` - Optional `Idempotency-Key` header value.
 /// * `state` - The application state containing the relayer repository.
 ///
 /// # Returns
@@ -421,6 +426,7 @@ where
 pub async fn send_transaction(
     relayer_id: String,
     request: serde_json::Value,
+    idempotency_key: Option<String>,
     state: web::ThinData<DefaultAppState>,
 ) -> Result<HttpResponse, ApiError> {
     let relayer_repo_model = get_relayer_by_id(relayer_id, &state).await?;
@@ -433,7 +439,30 @@ pub async fn send_transaction(
 
     tx_request.validate(&relayer_repo_model)?;
 
-    let transaction = relayer.process_transaction_request(tx_request).await?;
+    // The key is read only after the relayer, request, and validation checks pass,
+    // so an invalid request never consumes the key.
+    let Some(raw_key) = idempotency_key else {
+        let transaction = relayer.process_transaction_request(tx_request).await?;
+        let transaction_response: TransactionResponse = transaction.into();
+        return Ok(HttpResponse::Ok().json(ApiResponse::success(transaction_response)));
+    };
+
+    let key = normalize_idempotency_key(&raw_key)?;
+
+    let fingerprint = transaction_request_fingerprint(&request)?;
+    let transaction = create_idempotent_detached(
+        state.transaction_repository.clone(),
+        relayer_repo_model.id.clone(),
+        key,
+        fingerprint,
+        ServerConfig::get_idempotency_key_ttl_seconds(),
+        move |tx_id| async move {
+            relayer
+                .process_transaction_request_with_id(tx_request, tx_id)
+                .await
+        },
+    )
+    .await?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
