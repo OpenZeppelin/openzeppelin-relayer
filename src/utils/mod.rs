@@ -23,6 +23,9 @@ pub use base64::*;
 mod address_derivation;
 pub use address_derivation::*;
 
+#[cfg(fuzzing)]
+pub mod der;
+#[cfg(not(fuzzing))]
 mod der;
 pub use der::*;
 
