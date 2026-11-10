@@ -33,7 +33,7 @@ jobs:
       - name: Cargo Update
         id: lock-file-commit
         run: |-
-          cargo update
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo update
           git add Cargo.lock
           if ! git diff --cached --quiet Cargo.lock; then
             echo "changes=true" >> $GITHUB_OUTPUT
