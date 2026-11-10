@@ -103,7 +103,8 @@ impl<T: VaultServiceTrait> SolanaSignTrait for VaultTransitSigner<T> {
         debug!(vault_signature_str = %vault_signature_str, "vault signature string");
 
         let base64_sig = vault_signature_str
-            .strip_prefix("vault:v1:")
+            .rsplit_once(':')
+            .map(|(_, sig)| sig)
             .unwrap_or(&vault_signature_str);
 
         let sig_bytes = base64_decode(base64_sig)
@@ -198,6 +199,36 @@ mod tests {
 
         assert!(result.is_ok());
         let signature = result.unwrap();
+        assert_eq!(signature.as_ref(), &mock_sig_bytes);
+    }
+
+    #[tokio::test]
+    async fn test_sign_with_v2_vault_response() {
+        let mut mock_vault_service = MockVaultServiceTrait::new();
+        let key_name = "test-key";
+        let test_message = b"hello world";
+
+        let mock_sig_bytes = [1u8; 64];
+        let mock_sig_base64 = base64::engine::general_purpose::STANDARD.encode(mock_sig_bytes);
+        let mock_vault_signature = format!("vault:v2:{mock_sig_base64}");
+
+        mock_vault_service
+            .expect_sign()
+            .with(eq(key_name), eq(test_message.to_vec()))
+            .times(1)
+            .returning(move |_, _| {
+                let mock_vault_signature = mock_vault_signature.clone();
+                Box::pin(async move { Ok(mock_vault_signature) })
+            });
+
+        let signer = VaultTransitSigner::new_for_testing(
+            key_name.to_string(),
+            "9zzYYGQM9prm/xXgn6Vwas/TVgteDaACCm1zW1ouKQs=".to_string(),
+            mock_vault_service,
+        );
+
+        let signature = signer.sign(test_message).await.unwrap();
+
         assert_eq!(signature.as_ref(), &mock_sig_bytes);
     }
 
