@@ -77,7 +77,10 @@ Example configuration for a Stellar relayer:
   "paused": false,
   "notification_id": "notification-example",
   "signer_id": "local-signer",
-  "network_type": "stellar"
+  "network_type": "stellar",
+  "policies": {
+    "fee_payment_strategy": "relayer"
+  }
 }
 ```
 
@@ -95,7 +98,7 @@ Stellar relayers support standard relayer configuration options along with Stell
 | `max_fee` | integer | None | Maximum transaction fee in stroops the relayer is willing to pay |
 | `timeout_seconds` | integer | None | Transaction timeout in seconds |
 | `concurrent_transactions` | boolean | false | Enable concurrent transaction processing. When enabled, bypasses the lane gating mechanism that normally ensures sequential processing for each relayer. Only enable this when your relayer manages transactions from multiple accounts with independent sequence number pools. |
-| `fee_payment_strategy` | string | None | Fee payment strategy: `user` enables sponsored transactions (users pay fees in tokens), `relayer` means relayer pays all fees in XLM |
+| `fee_payment_strategy` | string | None (required) | Fee payment strategy: `user` enables sponsored transactions (users pay fees in tokens), `relayer` means relayer pays all fees in XLM. Required: a Stellar relayer without it fails configuration validation |
 | `allowed_tokens` | array | None | List of tokens allowed for fee payments in sponsored transactions. Each token includes `asset`, `max_allowed_fee` (optional), and `metadata` (optional) |
 | `fee_margin_percentage` | float | None | Fee margin percentage applied when converting XLM fees to token amounts for sponsored transactions |
 | `slippage_percentage` | float | None | Maximum slippage percentage allowed when swapping tokens via DEX for sponsored transactions |

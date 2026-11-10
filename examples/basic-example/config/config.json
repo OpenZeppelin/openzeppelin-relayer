@@ -19,7 +19,10 @@
       "paused": false,
       "notification_id": "notification-example",
       "signer_id": "local-signer",
-      "network_type": "stellar"
+      "network_type": "stellar",
+      "policies": {
+        "fee_payment_strategy": "relayer"
+      }
     }
   ],
   "notifications": [
