@@ -194,6 +194,17 @@ mod tests {
 
     use super::*;
 
+    /// The shipped example config is what the README tells users to copy, so it must
+    /// always pass validation. `cargo test` runs from the crate root, which is where the
+    /// example's relative `./config/networks` path resolves.
+    #[test]
+    fn test_example_config_is_valid() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/config.example.json");
+        if let Err(e) = load_config(path) {
+            panic!("config/config.example.json failed validation: {e}");
+        }
+    }
+
     fn create_valid_config() -> Config {
         Config {
             relayers: vec![RelayerFileConfig {
