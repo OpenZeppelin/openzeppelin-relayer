@@ -195,12 +195,44 @@ mod tests {
     use super::*;
 
     /// The shipped example config is what the README tells users to copy, so it must
-    /// always pass validation. `cargo test` runs from the crate root, which is where the
+    /// always pass validation once the documented setup steps are done (env vars set,
+    /// webhook URL filled in). `cargo test` runs from the crate root, which is where the
     /// example's relative `./config/networks` path resolves.
     #[test]
+    #[serial_test::serial]
     fn test_example_config_is_valid() {
+        // Env vars the example references; docker-compose provides these at runtime.
+        let env_vars = [
+            ("WEBHOOK_SIGNING_KEY", "a".repeat(32)),
+            ("KEYSTORE_PASSPHRASE", "test-passphrase".to_string()),
+        ];
+        let previous: Vec<_> = env_vars
+            .iter()
+            .map(|(key, value)| {
+                let prev = std::env::var(key).ok();
+                std::env::set_var(key, value);
+                (*key, prev)
+            })
+            .collect();
+
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/config.example.json");
-        if let Err(e) = load_config(path) {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).expect("failed to read example config"))
+                .expect("example config is not valid JSON");
+        // The webhook URL is intentionally left empty; the README asks users to set it.
+        raw["notifications"][0]["url"] = "https://example.com/webhook".into();
+        let result = serde_json::from_value::<Config>(raw)
+            .map_err(ConfigFileError::from)
+            .and_then(|config| config.validate());
+
+        for (key, prev) in previous {
+            match prev {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+
+        if let Err(e) = result {
             panic!("config/config.example.json failed validation: {e}");
         }
     }
