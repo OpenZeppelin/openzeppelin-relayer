@@ -32,7 +32,7 @@
     {
       "id": "x402-facilitator",
       "path": "x402-facilitator/index.ts",
-      "timeout": 30,
+      "timeout": 60,
       "emit_logs": false,
       "emit_traces": false,
       "raw_response": true,

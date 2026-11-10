@@ -99,7 +99,7 @@
     {
       "id": "channels",
       "path": "channel/index.ts",
-      "timeout": 30,
+      "timeout": 60,
       "emit_logs": true,
       "emit_traces": true
     }
