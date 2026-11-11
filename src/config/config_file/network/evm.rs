@@ -33,6 +33,25 @@ fn default_gas_cache_expire_after_ms() -> u64 {
     45_000 // 45 seconds
 }
 
+/// Default value for the OP-stack fee oracle cache enabled flag
+fn default_optimism_fee_cache_enabled() -> bool {
+    true
+}
+
+/// Configuration for caching the OP-stack GasPriceOracle reads.
+///
+/// Only consulted for networks tagged `optimism` / `optimism-based`. The cache is on unless a
+/// network turns it off; leaving the block out entirely means enabled. The TTLs are fixed (see
+/// `OPTIMISM_VOLATILE_FEE_CACHE_TTL_SECS` and `OPTIMISM_SCALAR_FEE_CACHE_TTL_SECS`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct OptimismFeeCacheConfig {
+    /// Serve the oracle reads from the process-wide cache. `false` reads the oracle on every
+    /// transaction, as before the cache existed.
+    #[serde(default = "default_optimism_fee_cache_enabled")]
+    pub enabled: bool,
+}
+
 /// Configuration for gas price caching
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[serde(deny_unknown_fields)]
@@ -171,6 +190,10 @@ pub struct EvmNetworkConfig {
     pub symbol: Option<String>,
     /// Gas price cache configuration
     pub gas_price_cache: Option<GasPriceCacheConfig>,
+    /// OP-stack GasPriceOracle read cache configuration (enabled when absent). Not serialized when
+    /// unset, so a network stored without it stays readable by builds that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimism_fee_cache: Option<OptimismFeeCacheConfig>,
 }
 
 impl EvmNetworkConfig {
@@ -251,6 +274,10 @@ impl EvmNetworkConfig {
                 .gas_price_cache
                 .clone()
                 .or_else(|| parent.gas_price_cache.clone()),
+            optimism_fee_cache: self
+                .optimism_fee_cache
+                .clone()
+                .or_else(|| parent.optimism_fee_cache.clone()),
         }
     }
 }
@@ -260,6 +287,61 @@ mod tests {
     use super::*;
     use crate::config::config_file::network::test_utils::*;
     use crate::models::RpcConfig;
+    #[test]
+    fn test_optimism_fee_cache_deserialization_defaults() {
+        let absent: EvmNetworkConfig =
+            serde_json::from_value(serde_json::to_value(create_evm_network("absent")).unwrap())
+                .unwrap();
+        assert_eq!(absent.optimism_fee_cache, None);
+
+        let empty: OptimismFeeCacheConfig = serde_json::from_str("{}").unwrap();
+        assert!(empty.enabled, "an empty block must mean enabled");
+
+        let disabled: OptimismFeeCacheConfig =
+            serde_json::from_str(r#"{"enabled": false}"#).unwrap();
+        assert!(!disabled.enabled);
+
+        assert!(serde_json::from_str::<OptimismFeeCacheConfig>(r#"{"ttl": 5}"#).is_err());
+    }
+
+    #[test]
+    fn test_optimism_fee_cache_not_serialized_when_unset() {
+        let json = serde_json::to_value(create_evm_network("unset")).unwrap();
+        assert!(
+            json.get("optimism_fee_cache").is_none(),
+            "an unset flag must not be written, so older builds can still read the stored network"
+        );
+
+        let mut config = create_evm_network("set");
+        config.optimism_fee_cache = Some(OptimismFeeCacheConfig { enabled: false });
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            json["optimism_fee_cache"]["enabled"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[test]
+    fn test_optimism_fee_cache_inheritance() {
+        let mut parent = create_evm_network("parent");
+        parent.optimism_fee_cache = Some(OptimismFeeCacheConfig { enabled: false });
+
+        let child = create_evm_network_with_parent("child", "parent");
+        assert_eq!(
+            child.merge_with_parent(&parent).optimism_fee_cache,
+            Some(OptimismFeeCacheConfig { enabled: false }),
+            "a child without its own setting inherits the parent's"
+        );
+
+        let mut overriding = create_evm_network_with_parent("child", "parent");
+        overriding.optimism_fee_cache = Some(OptimismFeeCacheConfig { enabled: true });
+        assert_eq!(
+            overriding.merge_with_parent(&parent).optimism_fee_cache,
+            Some(OptimismFeeCacheConfig { enabled: true }),
+            "a child's own setting wins over the parent's"
+        );
+    }
+
     #[test]
     fn test_validate_success_complete_config() {
         let config = create_evm_network("ethereum-mainnet");
@@ -529,6 +611,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -556,6 +639,7 @@ mod tests {
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -630,6 +714,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = create_evm_network_for_inheritance_test("ethereum-testnet", "ethereum-mainnet");
@@ -697,6 +782,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -721,6 +807,7 @@ mod tests {
                 stale_after_ms: 40_000,
                 expire_after_ms: 200_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -785,6 +872,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -803,6 +891,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -846,6 +935,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -868,6 +958,7 @@ mod tests {
             ]),
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -928,6 +1019,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -946,6 +1038,7 @@ mod tests {
             features: None,
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);
@@ -1002,6 +1095,7 @@ mod tests {
                 stale_after_ms: 20_000,
                 expire_after_ms: 100_000,
             }),
+            optimism_fee_cache: None,
         };
 
         let child = EvmNetworkConfig {
@@ -1020,6 +1114,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: None,
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         let result = child.merge_with_parent(&parent);

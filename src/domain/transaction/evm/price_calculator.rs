@@ -715,6 +715,7 @@ mod tests {
             features: vec![],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 
@@ -739,6 +740,7 @@ mod tests {
             features: vec!["eip1559".to_string()], // This makes it use EIP1559 pricing
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         }
     }
 
@@ -2082,6 +2084,7 @@ mod tests {
             features: vec!["eip1559".to_string()],
             symbol: "ETH".to_string(),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         };
 
         // Mock the network to return our arbitrum network
