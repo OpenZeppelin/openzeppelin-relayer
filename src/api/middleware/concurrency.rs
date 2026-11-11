@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
-use crate::metrics::IN_FLIGHT_REQUESTS;
+use crate::metrics::{middleware::route_label, IN_FLIGHT_REQUESTS};
 
 /// Middleware that limits concurrent requests using a semaphore
 pub struct ConcurrencyLimiter {
@@ -75,7 +75,8 @@ where
         let max_permits = self.max_permits;
 
         Box::pin(async move {
-            let endpoint = req.path().to_string();
+            let path = req.path().to_string();
+            let endpoint = route_label(&req);
 
             // Try to acquire a permit
             let permit = match semaphore.try_acquire() {
@@ -85,7 +86,7 @@ where
                     let current_in_flight = max_permits;
                     tracing::warn!(
                         "Concurrency limit reached for {}: {} requests in flight",
-                        endpoint,
+                        path,
                         current_in_flight
                     );
 
@@ -543,6 +544,57 @@ mod tests {
 
         assert_eq!(metric_a, 1.0, "Endpoint-a should have 1 in-flight request");
         assert_eq!(metric_b, 1.0, "Endpoint-b should have 1 in-flight request");
+    }
+
+    #[actix_rt::test]
+    async fn test_in_flight_metric_is_labelled_by_route_pattern() {
+        use tokio::sync::mpsc;
+
+        let pattern = "/in-flight-pattern/{transaction_id}";
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let app = Rc::new(
+            test::init_service(App::new().wrap(ConcurrencyLimiter::new(2)).route(
+                pattern,
+                web::get().to(move || {
+                    let tx = tx.clone();
+                    async move {
+                        let _ = tx.send(());
+                        sleep(Duration::from_millis(100)).await;
+                        HttpResponse::Ok().body("ok")
+                    }
+                }),
+            ))
+            .await,
+        );
+
+        let app_clone = Rc::clone(&app);
+        let handle = tokio::task::spawn_local(async move {
+            test::call_service(
+                &*app_clone,
+                test::TestRequest::get()
+                    .uri("/in-flight-pattern/tx-123")
+                    .to_request(),
+            )
+            .await
+        });
+        rx.recv().await.unwrap();
+
+        assert_eq!(IN_FLIGHT_REQUESTS.with_label_values(&[pattern]).get(), 1.0);
+        let labels: Vec<String> = crate::metrics::REGISTRY
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "in_flight_requests")
+            .flat_map(|family| family.get_metric().iter())
+            .flat_map(|metric| metric.get_label().iter())
+            .map(|label| label.value().to_string())
+            .collect();
+        assert!(
+            !labels.iter().any(|v| v.contains("tx-123")),
+            "in_flight_requests must not carry a resource id: {labels:?}"
+        );
+
+        assert!(handle.await.unwrap().status().is_success());
+        assert_eq!(IN_FLIGHT_REQUESTS.with_label_values(&[pattern]).get(), 0.0);
     }
 
     #[actix_rt::test]

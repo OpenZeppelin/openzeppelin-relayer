@@ -64,13 +64,6 @@ lazy_static! {
         counter_vec
     };
 
-    // Counter: Total HTTP requests by raw URI.
-    pub static ref RAW_REQUEST_COUNTER: CounterVec = {
-      let opts = Opts::new("raw_requests_total", "Total number of HTTP requests by raw URI");
-      let counter_vec = CounterVec::new(opts, &["raw_uri", "method", "status"]).unwrap();
-      REGISTRY.register(Box::new(counter_vec.clone())).unwrap();
-      counter_vec
-    };
 
     // Histogram for request latency in seconds.
     pub static ref REQUEST_LATENCY: HistogramVec = {
@@ -485,7 +478,7 @@ mod actix_tests {
         http, test, Error, HttpResponse,
     };
     use futures::future::{self};
-    use middleware::MetricsMiddleware;
+    use middleware::{MetricsMiddleware, UNMATCHED_ROUTE_LABEL};
     use prometheus::proto::MetricFamily;
     use std::{
         pin::Pin,
@@ -544,9 +537,6 @@ mod actix_tests {
         REQUEST_COUNTER
             .with_label_values(&["/test", "GET", "200"])
             .inc();
-        RAW_REQUEST_COUNTER
-            .with_label_values(&["/test?param=value", "GET", "200"])
-            .inc();
         REQUEST_LATENCY
             .with_label_values(&["/test", "GET", "200"])
             .observe(0.1);
@@ -593,7 +583,6 @@ mod actix_tests {
 
         // Request metrics
         assert!(output.contains("requests_total"));
-        assert!(output.contains("raw_requests_total"));
         assert!(output.contains("request_latency_seconds"));
         assert!(output.contains("error_requests_total"));
 
@@ -688,6 +677,7 @@ mod actix_tests {
 
     #[actix_rt::test]
     async fn test_middleware_success() {
+        // No app routes the request, so it is recorded under the shared unmatched label.
         let req = test::TestRequest::with_uri("/test_success").to_srv_request();
 
         let middleware = MetricsMiddleware;
@@ -705,7 +695,7 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.name() == "endpoint" && l.value() == "/test_success")
+                .any(|l| l.name() == "endpoint" && l.value() == UNMATCHED_ROUTE_LABEL)
             {
                 found = true;
                 assert!(m.get_counter().value() >= 1.0);
@@ -713,12 +703,13 @@ mod actix_tests {
         }
         assert!(
             found,
-            "Expected metric with endpoint '/test_success' not found"
+            "Expected metric with the unmatched endpoint label not found"
         );
     }
 
     #[actix_rt::test]
     async fn test_middleware_error() {
+        // No app routes the request, so it is recorded under the shared unmatched label.
         let req = test::TestRequest::with_uri("/test_error").to_srv_request();
 
         let middleware = MetricsMiddleware;
@@ -736,7 +727,7 @@ mod actix_tests {
             let labels = m.get_label();
             if labels
                 .iter()
-                .any(|l| l.name() == "endpoint" && l.value() == "/test_error")
+                .any(|l| l.name() == "endpoint" && l.value() == UNMATCHED_ROUTE_LABEL)
             {
                 found = true;
                 assert!(m.get_counter().value() >= 1.0);
@@ -744,7 +735,7 @@ mod actix_tests {
         }
         assert!(
             found,
-            "Expected error metric with endpoint '/test_error' not found"
+            "Expected error metric with the unmatched endpoint label not found"
         );
     }
 }

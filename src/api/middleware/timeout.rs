@@ -11,7 +11,7 @@ use std::{
 };
 use tokio::time::timeout;
 
-use crate::metrics::TIMEOUT_COUNTER;
+use crate::metrics::{middleware::route_label, TIMEOUT_COUNTER};
 
 /// Middleware that enforces a timeout on HTTP request handlers
 pub struct TimeoutMiddleware {
@@ -71,6 +71,7 @@ where
 
         Box::pin(async move {
             let path = req.path().to_string();
+            let endpoint = route_label(&req);
             let method = req.method().to_string();
 
             match timeout(duration, service.call(req)).await {
@@ -86,7 +87,7 @@ where
 
                     // Record timeout metric
                     TIMEOUT_COUNTER
-                        .with_label_values(&[path.as_str(), method.as_str(), "handler"])
+                        .with_label_values(&[endpoint.as_str(), method.as_str(), "handler"])
                         .inc();
 
                     Err(actix_web::error::ErrorGatewayTimeout(
