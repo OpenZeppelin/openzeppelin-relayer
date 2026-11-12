@@ -47,6 +47,7 @@ use crate::{
 
 use super::ProviderError;
 use super::{
+    mask_request_urls_in_text,
     rpc_selector::{RpcSelector, RpcSelectorError},
     ProviderConfig, RetryConfig,
 };
@@ -184,16 +185,18 @@ impl SolanaProviderError {
             // Network/IO errors - connection issues, timeouts (transient)
             ClientErrorKind::Io(_) => SolanaProviderError::NetworkError(error.to_string()),
 
-            // Reqwest errors - extract status code if available
+            // Reqwest errors - extract status code if available. The text is reqwest's,
+            // which ends with the request URL, so the URL is masked.
             ClientErrorKind::Reqwest(reqwest_err) => {
+                let message = mask_request_urls_in_text(&error.to_string());
                 if let Some(status) = reqwest_err.status() {
                     SolanaProviderError::RequestError {
-                        error: error.to_string(),
+                        error: message,
                         status_code: status.as_u16(),
                     }
                 } else {
                     // No status code available (e.g., connection error, timeout)
-                    SolanaProviderError::NetworkError(error.to_string())
+                    SolanaProviderError::NetworkError(message)
                 }
             }
 
@@ -985,7 +988,9 @@ impl SolanaProviderTrait for SolanaProvider {
                         params_for_call,
                     )
                     .await
-                    .map_err(|e| SolanaProviderError::RpcError(e.to_string()))
+                    .map_err(|e| {
+                        SolanaProviderError::RpcError(mask_request_urls_in_text(&e.to_string()))
+                    })
             }
         })
         .await
@@ -1786,6 +1791,87 @@ mod tests {
         let error_str = r#"{"code": -32000, "message": "Transaction was already processed"}"#;
         let result = SolanaProviderError::from_rpc_response_error(error_str, &mock_error);
         assert!(matches!(result, SolanaProviderError::AlreadyProcessed(_)));
+    }
+
+    #[tokio::test]
+    async fn test_from_rpc_error_masks_url_in_network_error() {
+        // Nothing listens on port 9. No proxy, so a proxy in the environment cannot answer.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = client
+            .post("http://127.0.0.1:9/v2/SECRET_KEY")
+            .send()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SECRET_KEY"));
+
+        let error = SolanaProviderError::from_rpc_error(ClientError::from(err));
+        assert!(matches!(error, SolanaProviderError::NetworkError(_)));
+        let message = error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(message.contains("http://127.0.0.1:9/***"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn test_from_rpc_error_masks_url_in_request_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+        // No proxy, so a proxy in the environment cannot answer instead of the mock
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let err = client
+            .post(format!("{}/v2/SECRET_KEY", server.url()))
+            .send()
+            .await
+            .expect("Failed to get response")
+            .error_for_status()
+            .expect_err("Expected error for status 500");
+        assert!(err.to_string().contains("SECRET_KEY"));
+
+        let error = SolanaProviderError::from_rpc_error(ClientError::from(err));
+        assert!(matches!(
+            error,
+            SolanaProviderError::RequestError {
+                status_code: 500,
+                ..
+            }
+        ));
+        let message = error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(
+            message.contains(&format!("{}/***", server.url())),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_raw_request_dyn_masks_url_in_error() {
+        let _env_guard = setup_test_env();
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await;
+        let provider = SolanaProvider::new(create_test_provider_config(
+            vec![RpcConfig::new(format!("{}/v2/SECRET_KEY", server.url()))],
+            10,
+        ))
+        .unwrap();
+
+        let error = provider
+            .raw_request_dyn("getHealth", serde_json::json!([]))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SolanaProviderError::RpcError(_)));
+        let message = error.to_string();
+        assert!(!message.contains("SECRET_KEY"), "{message}");
+        assert!(
+            message.contains(&format!("{}/***", server.url())),
+            "{message}"
+        );
     }
 
     #[test]
