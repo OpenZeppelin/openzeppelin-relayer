@@ -33,7 +33,7 @@ use thiserror::Error;
 #[cfg(test)]
 use mockall::automock;
 
-use crate::models::RepositoryError;
+use crate::models::{RepositoryError, TransactionRepoModel};
 
 #[derive(Error, Debug, Serialize)]
 pub enum TransactionCounterError {
@@ -54,6 +54,17 @@ pub trait TransactionCounterTrait {
         relayer_id: &str,
         address: &str,
     ) -> Result<u64, RepositoryError>;
+
+    /// Atomically assign an EVM nonce in durable storage. None means this backend
+    /// has no durable transaction storage (the in-memory legacy path).
+    async fn reserve_evm_nonce(
+        &self,
+        _relayer_id: &str,
+        _address: &str,
+        _tx: &TransactionRepoModel,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        Ok(None)
+    }
 
     async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError>;
 
@@ -144,6 +155,18 @@ impl TransactionCounterTrait for TransactionCounterRepositoryStorage {
             TransactionCounterRepositoryStorage::Redis(counter) => {
                 counter.get_and_increment(relayer_id, address).await
             }
+        }
+    }
+
+    async fn reserve_evm_nonce(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        tx: &TransactionRepoModel,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        match self {
+            Self::InMemory(counter) => counter.reserve_evm_nonce(relayer_id, address, tx).await,
+            Self::Redis(counter) => counter.reserve_evm_nonce(relayer_id, address, tx).await,
         }
     }
 

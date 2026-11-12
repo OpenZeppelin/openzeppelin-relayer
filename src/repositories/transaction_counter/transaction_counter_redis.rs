@@ -6,7 +6,9 @@
 //! to ensure consistency when incrementing and decrementing counters.
 
 use super::TransactionCounterTrait;
-use crate::models::RepositoryError;
+use crate::models::{
+    NetworkTransactionData, NetworkType, RepositoryError, TransactionRepoModel, TransactionStatus,
+};
 use crate::repositories::redis_base::RedisRepository;
 use crate::utils::RedisConnections;
 use async_trait::async_trait;
@@ -124,6 +126,140 @@ impl TransactionCounterTrait for RedisTransactionCounter {
 
         debug!(from = %current, to = %(current + 1), "counter incremented");
         Ok(current)
+    }
+
+    async fn reserve_evm_nonce(
+        &self,
+        relayer_id: &str,
+        address: &str,
+        expected: &TransactionRepoModel,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let tx_id = expected.id.as_str();
+        if relayer_id.is_empty() || address.is_empty() || tx_id.is_empty() {
+            return Err(RepositoryError::InvalidData(
+                "Empty EVM nonce allocation scope".into(),
+            ));
+        }
+        // Primary reads only. Rust preserves exact u64/JSON values; Lua compares bytes.
+        let counter_key = self.counter_key(relayer_id, address);
+        let lookup_key = format!("{}:relayer:tx_to_relayer:{}", self.key_prefix, tx_id);
+        let tx_key = format!("{}:relayer:{}:tx:{}", self.key_prefix, relayer_id, tx_id);
+        let script = redis::Script::new(include_str!("reserve_evm_nonce.lua"));
+        for _ in 0..8 {
+            let mut conn = self
+                .get_connection(self.connections.primary(), "reserve_evm_nonce")
+                .await?;
+            let (lookup, raw, count): (Option<String>, Option<String>, Option<String>) =
+                redis::pipe()
+                    .get(&lookup_key)
+                    .get(&tx_key)
+                    .get(&counter_key)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|e| self.map_redis_error(e, "read_evm_nonce_allocation"))?;
+            if lookup.as_deref() != Some(relayer_id) {
+                return Err(RepositoryError::NotFound(
+                    "EVM nonce transaction relayer binding missing".into(),
+                ));
+            }
+            let raw = raw
+                .ok_or_else(|| RepositoryError::NotFound("EVM nonce transaction missing".into()))?;
+            let mut tx: TransactionRepoModel = serde_json::from_str(&raw).map_err(|e| {
+                RepositoryError::InvalidData(format!("Invalid EVM nonce transaction: {e}"))
+            })?;
+            if tx.id != tx_id
+                || tx.relayer_id != relayer_id
+                || tx.network_type != NetworkType::Evm
+                || tx.status != TransactionStatus::Pending
+                || tx.is_canceled == Some(true)
+            {
+                return Err(RepositoryError::InvalidData(
+                    "EVM nonce transaction is not pending in its original scope".into(),
+                ));
+            }
+            let evm = match &tx.network_data {
+                NetworkTransactionData::Evm(evm) if evm.from.eq_ignore_ascii_case(address) => {
+                    evm.clone()
+                }
+                _ => {
+                    return Err(RepositoryError::InvalidData(
+                        "EVM nonce payer/network mismatch".into(),
+                    ))
+                }
+            };
+            // The caller's validated input must still be the same transaction. Preserve
+            // concurrent metadata, but never sign a changed payload with stale gas/balance checks.
+            let mut original = expected
+                .network_data
+                .get_evm_transaction_data()
+                .map_err(|e| RepositoryError::InvalidData(e.to_string()))?;
+            original.nonce = evm.nonce;
+            let original_json = serde_json::to_value(&original)
+                .map_err(|e| RepositoryError::InvalidData(e.to_string()))?;
+            let current_json = serde_json::to_value(&evm)
+                .map_err(|e| RepositoryError::InvalidData(e.to_string()))?;
+            if original_json != current_json {
+                return Err(RepositoryError::InvalidData(
+                    "EVM nonce transaction changed before allocation".into(),
+                ));
+            }
+            // Another preparation may already have won, including an ambiguous script reply.
+            if evm.nonce.is_some() {
+                return Ok(Some(tx));
+            }
+            if evm.signature.is_some()
+                || evm.hash.is_some()
+                || evm.raw.is_some()
+                || !tx.hashes.is_empty()
+            {
+                return Err(RepositoryError::InvalidData(
+                    "EVM nonce missing despite signed history".into(),
+                ));
+            }
+            let nonce = match count.as_deref() {
+                Some(value) => {
+                    let parsed = value.parse::<u64>().map_err(|_| {
+                        RepositoryError::InvalidData("Invalid EVM nonce counter".into())
+                    })?;
+                    if parsed.to_string() != value {
+                        return Err(RepositoryError::InvalidData(
+                            "Noncanonical EVM nonce counter".into(),
+                        ));
+                    }
+                    parsed
+                }
+                None => 0,
+            };
+            let next = nonce.checked_add(1).ok_or_else(|| {
+                RepositoryError::InvalidData("EVM nonce counter exhausted".into())
+            })?;
+            let nonce_key = format!("{}:relayer:{}:nonce:{}", self.key_prefix, relayer_id, nonce);
+            tx.network_data = NetworkTransactionData::Evm(evm.with_nonce(nonce));
+            let updated = serde_json::to_string(&tx).map_err(|e| {
+                RepositoryError::InvalidData(format!("Cannot serialize EVM nonce transaction: {e}"))
+            })?;
+            let committed: bool = script
+                .key(&counter_key)
+                .key(&tx_key)
+                .key(&lookup_key)
+                .key(&nonce_key)
+                .arg(relayer_id)
+                .arg(&raw)
+                .arg(count.as_deref().unwrap_or(""))
+                .arg(next.to_string())
+                .arg(&updated)
+                .arg(tx_id)
+                .invoke_async(&mut conn)
+                .await
+                .map_err(|e| self.map_redis_error(e, "commit_evm_nonce_allocation"))?;
+            if committed {
+                return Ok(Some(tx));
+            }
+            tokio::task::yield_now().await;
+        }
+        Err(RepositoryError::UnexpectedError(
+            "EVM nonce allocation contention budget exhausted".into(),
+        ))
     }
 
     async fn decrement(&self, relayer_id: &str, address: &str) -> Result<u64, RepositoryError> {

@@ -790,7 +790,17 @@ where
             // are applied just before signing, ensuring the transaction uses
             // current gas prices.
             tx
+        } else if let Some(assigned) = self
+            .transaction_counter_service
+            .reserve_evm_nonce(&self.relayer.id, &self.relayer.address, &tx)
+            .await
+            .map_err(|e| TransactionError::UnexpectedError(e.to_string()))?
+        {
+            // Redis commits the counter, transaction nonce and nonce index together.
+            // Never fall back to an unbound increment on an error or an ambiguous reply.
+            assigned
         } else {
+            // In-memory backend only: no durable process-recovery guarantee.
             // Balance validation passed, proceed to increment nonce
             let new_nonce = self
                 .transaction_counter_service
@@ -801,6 +811,7 @@ where
             debug!(nonce = new_nonce, "assigned new nonce to transaction");
 
             let updated_evm_data = evm_data
+                .clone()
                 .with_price_params(price_params.clone())
                 .with_nonce(new_nonce);
 
@@ -818,10 +829,12 @@ where
         };
 
         // Apply price params for signing (recalculated on every attempt)
-        let updated_evm_data = tx_with_nonce
+        let mut updated_evm_data = tx_with_nonce
             .network_data
             .get_evm_transaction_data()?
             .with_price_params(price_params.clone());
+        // Atomic allocation persists identity/nonce; retain this pass's validated estimate.
+        updated_evm_data.gas_limit = evm_data.gas_limit;
 
         // Now sign the transaction - if this fails, we still have the tx with nonce saved
         let sig_result = self
@@ -840,6 +853,7 @@ where
 
         // Update with signed data and mark as Sent
         let postsign_update = TransactionUpdateRequest {
+            priced_at: Some(Utc::now().to_rfc3339()),
             status: Some(TransactionStatus::Sent),
             network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
             hashes: Some(hashes),
@@ -1723,6 +1737,9 @@ mod tests {
         let test_tx = create_test_transaction();
 
         counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
+        counter_service
             .expect_get_and_increment()
             .returning(|_, _| Box::pin(ready(Ok(42))));
 
@@ -1836,6 +1853,9 @@ mod tests {
         });
         let test_tx = create_test_transaction();
 
+        counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
         counter_service
             .expect_get_and_increment()
             .returning(|_, _| Box::pin(ready(Ok(42))));
@@ -1967,6 +1987,9 @@ mod tests {
         }
 
         counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
+        counter_service
             .expect_get_and_increment()
             .returning(|_, _| Box::pin(ready(Ok(42))));
 
@@ -2087,6 +2110,9 @@ mod tests {
             evm_data.gas_limit = Some(21_000); // Within typical block gas limit of 30M
         }
 
+        counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
         counter_service
             .expect_get_and_increment()
             .returning(|_, _| Box::pin(ready(Ok(42))));
@@ -2962,6 +2988,9 @@ mod tests {
 
         // Mock transaction counter to return a nonce
         counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
+        counter_service
             .expect_get_and_increment()
             .times(1)
             .returning(|_, _| Box::pin(async { Ok(42) }));
@@ -3107,6 +3136,9 @@ mod tests {
             .expect_get_transaction_price_params()
             .returning(move |_, _| Ok(price_params.clone()));
 
+        counter_service
+            .expect_reserve_evm_nonce()
+            .returning(|_, _, _| Box::pin(ready(Ok(None))));
         counter_service
             .expect_get_and_increment()
             .times(1)
