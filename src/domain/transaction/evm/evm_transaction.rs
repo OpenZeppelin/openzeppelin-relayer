@@ -2933,6 +2933,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_prepare_transaction_uses_gas_estimation_and_stores_result() {
+        assert_prepare_with_nonce_reservation(false, false).await;
+    }
+
+    #[tokio::test]
+    async fn test_prepare_nonce_reservation_preserves_signer_inputs() {
+        assert_prepare_with_nonce_reservation(true, false).await;
+    }
+
+    #[tokio::test]
+    async fn test_prepare_nonce_reservation_error_has_no_side_effects() {
+        assert_prepare_with_nonce_reservation(true, true).await;
+    }
+
+    async fn assert_prepare_with_nonce_reservation(reserved: bool, reservation_error: bool) {
         let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
@@ -2954,6 +2968,7 @@ mod tests {
         if let NetworkTransactionData::Evm(ref mut evm_data) = test_tx.network_data {
             evm_data.gas_limit = None; // This should trigger gas estimation
             evm_data.nonce = None; // This will be set by the counter service
+            evm_data.gas_price = Some(1); // Stored/request payload; pricing below refreshes it.
         }
 
         // Expected estimated gas from provider
@@ -2986,40 +3001,69 @@ mod tests {
             .expect_get_transaction_price_params()
             .returning(move |_, _| Ok(price_params.clone()));
 
-        // Mock transaction counter to return a nonce
+        // The primary allocator returns the stored body, which has no pass-local
+        // gas estimate or fresh price. Preparation must carry both into signing.
         counter_service
             .expect_reserve_evm_nonce()
-            .returning(|_, _, _| Box::pin(ready(Ok(None))));
+            .times(1)
+            .returning(move |_, _, tx| {
+                let mut assigned = tx.clone();
+                let NetworkTransactionData::Evm(ref mut data) = assigned.network_data else {
+                    panic!("expected EVM body");
+                };
+                assert_eq!(data.gas_limit, None);
+                data.nonce = Some(42);
+                Box::pin(ready(if reservation_error {
+                    Err(crate::models::RepositoryError::ConnectionError(
+                        "ambiguous allocation reply".into(),
+                    ))
+                } else if reserved {
+                    Ok(Some(assigned))
+                } else {
+                    Ok(None)
+                }))
+            });
         counter_service
             .expect_get_and_increment()
-            .times(1)
+            .times(if reserved { 0 } else { 1 })
             .returning(|_, _| Box::pin(async { Ok(42) }));
 
         // Mock signer to return a signed transaction
-        mock_signer.expect_sign_transaction().returning(|_| {
-            Box::pin(ready(Ok(
-                crate::domain::relayer::SignTransactionResponse::Evm(
-                    crate::domain::relayer::SignTransactionResponseEvm {
-                        hash: "0xhash".to_string(),
-                        signature: crate::models::EvmTransactionDataSignature {
-                            r: "r".to_string(),
-                            s: "s".to_string(),
-                            v: 1,
-                            sig: "0xsignature".to_string(),
+        mock_signer
+            .expect_sign_transaction()
+            .times(if reservation_error { 0 } else { 1 })
+            .returning(|data| {
+                let NetworkTransactionData::Evm(data) = data else {
+                    panic!("expected EVM signer input")
+                };
+                assert_eq!(data.nonce, Some(42));
+                assert_eq!(data.gas_limit, Some(EXPECTED_GAS_WITH_BUFFER));
+                assert_eq!(data.gas_price, Some(20_000_000_000));
+                Box::pin(ready(Ok(
+                    crate::domain::relayer::SignTransactionResponse::Evm(
+                        crate::domain::relayer::SignTransactionResponseEvm {
+                            hash: "0xhash".to_string(),
+                            signature: crate::models::EvmTransactionDataSignature {
+                                r: "r".to_string(),
+                                s: "s".to_string(),
+                                v: 1,
+                                sig: "0xsignature".to_string(),
+                            },
+                            raw: vec![1, 2, 3],
                         },
-                        raw: vec![1, 2, 3],
-                    },
-                ),
-            )))
-        });
+                    ),
+                )))
+            });
 
         // Mock job producer to capture the submission job
         mock_job_producer
             .expect_produce_submit_transaction_job()
+            .times(if reservation_error { 0 } else { 1 })
             .returning(|_, _| Box::pin(async { Ok(()) }));
 
         mock_job_producer
             .expect_produce_send_notification_job()
+            .times(if reservation_error { 0 } else { 1 })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         // Mock transaction repository partial_update calls
@@ -3031,7 +3075,13 @@ mod tests {
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update()
-            .times(2)
+            .times(if reservation_error {
+                0
+            } else if reserved {
+                1
+            } else {
+                2
+            })
             .returning(move |_, update| {
                 let mut updated_tx = test_tx_clone.clone();
 
@@ -3072,6 +3122,12 @@ mod tests {
         // Call prepare_transaction
         let result = transaction.prepare_transaction(test_tx).await;
 
+        if reservation_error {
+            assert!(
+                matches!(result, Err(TransactionError::UnexpectedError(ref error)) if error.contains("ambiguous allocation reply"))
+            );
+            return;
+        }
         // Verify the transaction was prepared successfully
         assert!(result.is_ok(), "prepare_transaction should succeed");
         let prepared_tx = result.unwrap();

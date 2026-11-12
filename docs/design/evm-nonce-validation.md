@@ -35,6 +35,18 @@ One nonblocking harness finding was reproduced and repaired: CAS nil could consu
 
 ## Rebase and boundaries
 
-Publication rebased the source onto upstream main `2c0c317c79778c4b9e9568c3c6c394179e80e148`. The allocator, EVM transaction, model, repository, job and service trees remain byte-identical to the tested source; independent review confirmed continuity at `872db1cd32428897c18fbc882f0c0e6dc897f8f4`. Upstream changes include dependencies and Stellar/configuration code. **The tested binary remains pinned v1.9.0 plus the exact patch; the rebased upstream-main binary has not been built or runtime-qualified.**
+Publication rebased the source onto upstream main `2c0c317c79778c4b9e9568c3c6c394179e80e148`. The allocator, EVM transaction, model, repository, job and service trees remain byte-identical to the tested source; independent review confirmed continuity at `872db1cd32428897c18fbc882f0c0e6dc897f8f4`. Upstream changes include dependencies and Stellar/configuration code. At original publication, only the pinned v1.9.0 candidate had runtime qualification. The follow-up below qualifies the rebased source separately.
 
 Existing assigned-nonce inputs bypass the new allocator; stale postsign writes and cancellation of allocated Pending work retain existing behavior. No claim is made for exactly-once external signing, universal gap prevention, mixed old/new writers, rollback, Redis Cluster/failover, disk loss or repair of existing gaps. No staging or production change was made.
+
+## Rebased-main follow-up — 2026-11-12
+
+The exact published PR source `3ef2f4cc6500f5afeaa39df158f5caa9a41b44d5`, based on upstream main `2c0c317c79778c4b9e9568c3c6c394179e80e148`, was built with its locked dependencies and the same TLS/exact-JSON features. The allocator patch was reverified against the rebased base; it retains SHA-256 `3ad8e9fa0dba45fc9d191e75a9f1326789054923a6ed227677fda32c5a22eed8`.
+
+- Image: `sha256:e7f9d011b3c92ab05cfe4cb12a616d8047f729d2a790146cb052bd939e2bc673`.
+- Binary SHA-256: `71a612870afffe20629a09fdad022ac371d68a8d5419f9ea45425c710642240c`.
+- Actual x86_64 runtime and ELF64 machine62 verified under Docker AMD64 emulation on ARM64.
+- Strict recovery: **2/2 passed, zero skips, 40.592s**, at clean harness revision `8eec1efba7f41e0f5528b3ebaf9d1855ead1801e`.
+- Both successful-atomic-reply loss and signed-before-broadcast deaths recovered the original UUID at nonce0, mined a distinct request at nonce1, and finished at counter2. Both owned cleanups were empty; sanitized export checksums verified.
+
+This closes the previously unverified rebased-main binary check. It adds no staging, native-hardware, rollout or universal nonce-liveness qualification. Follow-up preparation tests exercise reserved `Some(assigned)` and reservation errors through the signer boundary; they change only test code, leaving the qualified production implementation unchanged.
