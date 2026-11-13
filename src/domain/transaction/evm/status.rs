@@ -868,6 +868,10 @@ where
             .provider()
             .get_transaction_count(&self.relayer().address)
             .await?;
+        if on_chain_nonce <= tx_nonce {
+            // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
+            return Ok(None);
+        }
         // Keep this read after the nonce and before every receipt lookup.
         let block_number = self.provider().get_block_number().await?;
         let mut had_rpc_errors = false;
@@ -911,89 +915,78 @@ where
             return Ok(Some(tx.clone()));
         }
 
-        if on_chain_nonce > tx_nonce {
-            let mut metadata = tx.metadata.clone().unwrap_or_default();
-            let Some(seen_at_block) = metadata.nonce_used_seen_at_block else {
-                metadata.nonce_used_seen_at_block = Some(block_number);
-                let updated_tx = self
-                    .transaction_repository()
-                    .partial_update(
-                        tx.id.clone(),
-                        TransactionUpdateRequest {
-                            metadata: Some(metadata),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                return Ok(Some(updated_tx));
-            };
-            let network_model = self
-                .network_repository()
-                .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
-                .await?
-                .ok_or_else(|| {
-                    TransactionError::UnexpectedError(format!(
-                        "Network with chain id {} not found",
-                        evm_data.chain_id
-                    ))
-                })?;
-            // Read the config directly: EvmNetwork conversion requires a block time.
-            let crate::models::NetworkConfigData::Evm(config) = network_model.config else {
-                return Err(TransactionError::UnexpectedError(
-                    "Expected EVM network config".to_string(),
-                ));
-            };
-            let required_confirmations = config.required_confirmations.ok_or_else(|| {
-                TransactionError::UnexpectedError(
-                    "EVM network has no required_confirmations".to_string(),
-                )
-            })?;
-            let span =
-                nonce_used_failure_span(required_confirmations, config.common.average_blocktime_ms);
-            if block_number.saturating_sub(seen_at_block) < span {
-                return Ok(Some(tx.clone()));
-            }
-
-            // Nonce was consumed but no known hash found — consumed externally
-            let reason = format!(
-                "Nonce {tx_nonce} consumed externally (on-chain nonce: {on_chain_nonce}). \
-                 No matching transaction hash found on-chain."
-            );
-            warn!(
-                tx_id = %tx.id,
-                relayer_id = %tx.relayer_id,
-                tx_nonce = tx_nonce,
-                on_chain_nonce = on_chain_nonce,
-                "nonce recovery: nonce consumed externally, marking as Failed"
-            );
-
+        let mut metadata = tx.metadata.clone().unwrap_or_default();
+        let Some(seen_at_block) = metadata.nonce_used_seen_at_block else {
+            metadata.nonce_used_seen_at_block = Some(block_number);
             let updated_tx = self
-                .update_transaction_status(tx.clone(), TransactionStatus::Failed, Some(reason))
+                .transaction_repository()
+                .partial_update(
+                    tx.id.clone(),
+                    TransactionUpdateRequest {
+                        metadata: Some(metadata),
+                        ..Default::default()
+                    },
+                )
                 .await?;
-
-            // External nonce consumption may have left the internal transaction counter
-            // behind the on-chain nonce, or created gaps. Schedule a nonce health job
-            // to sync the counter and fill any gaps with NOOPs. Best-effort — failure
-            // here doesn't block the recovery; the periodic health check will catch it.
-            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
-                warn!(
-                    tx_id = %tx.id,
-                    error = %e,
-                    "nonce recovery: failed to schedule nonce health after external consumption"
-                );
-            }
-
             return Ok(Some(updated_tx));
+        };
+        let network_model = self
+            .network_repository()
+            .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+            .await?
+            .ok_or_else(|| {
+                TransactionError::UnexpectedError(format!(
+                    "Network with chain id {} not found",
+                    evm_data.chain_id
+                ))
+            })?;
+        // Read the config directly: EvmNetwork conversion requires a block time.
+        let crate::models::NetworkConfigData::Evm(config) = network_model.config else {
+            return Err(TransactionError::UnexpectedError(
+                "Expected EVM network config".to_string(),
+            ));
+        };
+        let required_confirmations = config.required_confirmations.ok_or_else(|| {
+            TransactionError::UnexpectedError(
+                "EVM network has no required_confirmations".to_string(),
+            )
+        })?;
+        let span =
+            nonce_used_failure_span(required_confirmations, config.common.average_blocktime_ms);
+        if block_number.saturating_sub(seen_at_block) < span {
+            return Ok(Some(tx.clone()));
         }
 
-        // on_chain_nonce <= tx_nonce: nonce not yet consumed, defer to normal status flow
-        debug!(
+        // Nonce was consumed but no known hash found — consumed externally
+        let reason = format!(
+            "Nonce {tx_nonce} consumed externally (on-chain nonce: {on_chain_nonce}). \
+             No matching transaction hash found on-chain."
+        );
+        warn!(
             tx_id = %tx.id,
+            relayer_id = %tx.relayer_id,
             tx_nonce = tx_nonce,
             on_chain_nonce = on_chain_nonce,
-            "nonce recovery: on-chain nonce not past tx nonce, deferring to normal flow"
+            "nonce recovery: nonce consumed externally, marking as Failed"
         );
-        Ok(None)
+
+        let updated_tx = self
+            .update_transaction_status(tx.clone(), TransactionStatus::Failed, Some(reason))
+            .await?;
+
+        // External nonce consumption may have left the internal transaction counter
+        // behind the on-chain nonce, or created gaps. Schedule a nonce health job
+        // to sync the counter and fill any gaps with NOOPs. Best-effort — failure
+        // here doesn't block the recovery; the periodic health check will catch it.
+        if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+            warn!(
+                tx_id = %tx.id,
+                error = %e,
+                "nonce recovery: failed to schedule nonce health after external consumption"
+            );
+        }
+
+        Ok(Some(updated_tx))
     }
 
     /// Handles circuit breaker safely based on transaction status.
