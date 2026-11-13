@@ -1800,6 +1800,7 @@ mod tests {
             features: Some(vec!["eip1559".to_string()]),
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            status_check: None,
         };
         NetworkRepoModel {
             id: "evm:arbitrum-one".to_string(),
