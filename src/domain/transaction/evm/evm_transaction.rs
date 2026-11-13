@@ -457,7 +457,12 @@ where
             .await
         {
             Ok(Some(next_tx))
-                if next_tx.status == TransactionStatus::Sent && next_tx.sent_at.is_none() =>
+                if next_tx.status == TransactionStatus::Sent
+                    && next_tx.sent_at.is_none()
+                    && next_tx
+                        .network_data
+                        .get_evm_transaction_data()
+                        .is_ok_and(|data| !is_noop(&data)) =>
             {
                 info!(
                     relayer_id = %tx.relayer_id,
@@ -4808,16 +4813,28 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
-    /// Arbitrum chain link: no job when the successor was already broadcast
-    /// (sent_at set) or when no record exists at N+1.
+    /// Skip successors that are already sent, are NOOPs, or do not exist.
     #[tokio::test]
-    async fn test_submit_arbitrum_chain_link_skips_broadcast_or_missing_next() {
+    async fn test_submit_arbitrum_chain_link_skips_broadcast_noop_or_missing_next() {
         for next_record in [
             // Already broadcast → skip.
             Some({
                 let mut next_tx = create_arbitrum_submit_tx();
                 next_tx.id = "next-tx-id".to_string();
                 next_tx.sent_at = Some(Utc::now().to_rfc3339());
+                next_tx
+            }),
+            // A NOOP must be signed again by a resubmit job.
+            Some({
+                let mut next_tx = create_arbitrum_submit_tx();
+                next_tx.sent_at = None;
+                let mut data = next_tx.network_data.get_evm_transaction_data().unwrap();
+                data.to = Some(data.from.clone());
+                data.value = U256::from(0);
+                data.data = Some("0x".to_string());
+                data.speed = Some(Speed::Fast);
+                assert!(is_noop(&data));
+                next_tx.network_data = NetworkTransactionData::Evm(data);
                 next_tx
             }),
             // Missing record → skip.
