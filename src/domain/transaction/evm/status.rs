@@ -43,6 +43,12 @@ use crate::{
     utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff},
 };
 
+/// The nonce and gap result from one on-chain nonce lookup.
+struct NonceGapCheck {
+    on_chain_nonce: u64,
+    has_gap: bool,
+}
+
 /// The reason recorded on a failed EVM transaction when the on-chain revert payload cannot be
 /// recovered (or recovery is disabled). Kept byte-for-byte for consumers that match on it.
 const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt status: failed)";
@@ -519,8 +525,8 @@ where
         if self.should_resubmit(&tx).await? {
             // Before resubmitting, check if there's a nonce gap blocking this tx.
             // Only worth the RPC call when we're already going to resubmit (tx is stale).
-            if let Some(nonce_gap_detected) = self.detect_nonce_gap_ahead(&tx).await {
-                if nonce_gap_detected {
+            if let Some(check) = self.detect_nonce_gap_ahead(&tx).await {
+                if check.has_gap {
                     // Tx can't mine — nonce gap below it. Trigger health job, skip resubmit.
                     return self
                         .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
@@ -536,20 +542,9 @@ where
             .await
     }
 
-    /// Checks whether the tx is blocked by a nonce gap below it.
-    ///
-    /// 1. Fetches on-chain nonce (single RPC call).
-    /// 2. If `tx_nonce <= on_chain_nonce` — no gap, tx should be mineable.
-    /// 3. Otherwise scans `on_chain_nonce..tx_nonce` using the Redis nonce index
-    ///    to check if every slot has an active (Pending/Sent/Submitted/Mined) tx.
-    /// 4. If any slot is empty or has a terminal-status tx — that's a real gap.
-    ///    Schedules a nonce health job and returns `Some(true)`.
-    ///
-    /// Returns:
-    /// - `Some(true)` — gap confirmed, health job scheduled
-    /// - `Some(false)` — no gap (all slots filled or tx is next)
-    /// - `None` — couldn't determine (missing nonce, RPC/Redis error)
-    async fn detect_nonce_gap_ahead(&self, tx: &TransactionRepoModel) -> Option<bool> {
+    /// Checks for a nonce gap and returns the on-chain nonce for the head gate.
+    /// Returns no result if the transaction nonce or the RPC result is missing.
+    async fn detect_nonce_gap_ahead(&self, tx: &TransactionRepoModel) -> Option<NonceGapCheck> {
         let evm_data = match tx.network_data.get_evm_transaction_data() {
             Ok(d) => d,
             Err(_) => return None,
@@ -577,7 +572,10 @@ where
 
         // tx is the next expected nonce or already behind — no gap possible.
         if tx_nonce <= on_chain_nonce {
-            return Some(false);
+            return Some(NonceGapCheck {
+                on_chain_nonce,
+                has_gap: false,
+            });
         }
 
         // Cap the scan to avoid an unbounded MGET if tx_nonce is very far ahead.
@@ -595,9 +593,12 @@ where
                 debug!(
                     tx_id = %tx.id,
                     error = %e,
-                    "nonce gap check: occupancy lookup failed, skipping"
+                    "nonce gap check: occupancy lookup failed, skipping gap recovery"
                 );
-                return None;
+                return Some(NonceGapCheck {
+                    on_chain_nonce,
+                    has_gap: false,
+                });
             }
         };
 
@@ -609,7 +610,10 @@ where
 
         if gap_nonces.is_empty() {
             // All slots between on-chain and tx_nonce are actively filled — no gap.
-            return Some(false);
+            return Some(NonceGapCheck {
+                on_chain_nonce,
+                has_gap: false,
+            });
         }
 
         warn!(
@@ -644,7 +648,10 @@ where
             );
         }
 
-        Some(true)
+        Some(NonceGapCheck {
+            on_chain_nonce,
+            has_gap: true,
+        })
     }
 
     /// Processes transaction resubmission logic
@@ -1404,7 +1411,8 @@ where
         if age_since_sent > get_evm_resend_timeout() {
             // A nonce gap below this tx makes any resubmit futile; the detector schedules
             // the nonce-health job itself. Only worth the RPC once the tx is already stale.
-            if let Some(true) = self.detect_nonce_gap_ahead(&tx).await {
+            let nonce_check = self.detect_nonce_gap_ahead(&tx).await;
+            if nonce_check.as_ref().is_some_and(|check| check.has_gap) {
                 return self
                     .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
                     .await;
@@ -1415,15 +1423,20 @@ where
             // Only the tx at the on-chain nonce is broadcast. Successors are delivered
             // by the broadcast-success chain link, or by this gate once they become
             // the head.
-            if self.is_behind_arbitrum_head(&tx).await {
-                debug!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    "stuck Sent tx is queued behind the chain head on Arbitrum; skipping resubmit"
-                );
-                return self
-                    .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
-                    .await;
+            if let Some(check) = nonce_check {
+                if self
+                    .is_behind_arbitrum_head(&tx, check.on_chain_nonce)
+                    .await
+                {
+                    debug!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        "stuck Sent tx is queued behind the chain head on Arbitrum; skipping resubmit"
+                    );
+                    return self
+                        .update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
+                        .await;
+                }
             }
 
             warn!(
@@ -1444,7 +1457,11 @@ where
     /// Arbitrum only: returns `true` when the tx nonce is above the on-chain account
     /// nonce (queued behind other txs, guaranteed rejection if broadcast). Non-Arbitrum
     /// networks and lookup failures return `false` so resubmit behavior is preserved.
-    async fn is_behind_arbitrum_head(&self, tx: &TransactionRepoModel) -> bool {
+    async fn is_behind_arbitrum_head(
+        &self,
+        tx: &TransactionRepoModel,
+        on_chain_nonce: u64,
+    ) -> bool {
         let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
             return false;
         };
@@ -1465,21 +1482,7 @@ where
             }
         }
 
-        match self
-            .provider()
-            .get_transaction_count(&self.relayer().address)
-            .await
-        {
-            Ok(chain_nonce) => tx_nonce > chain_nonce,
-            Err(e) => {
-                debug!(
-                    tx_id = %tx.id,
-                    error = %e,
-                    "head gate: failed to fetch on-chain nonce; allowing resubmit"
-                );
-                false
-            }
-        }
+        tx_nonce > on_chain_nonce
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
@@ -2887,6 +2890,7 @@ mod tests {
             mocks
                 .provider
                 .expect_get_transaction_count()
+                .times(1)
                 .returning(|_| {
                     Box::pin(async {
                         Err(crate::services::provider::ProviderError::Other(
@@ -2899,6 +2903,7 @@ mod tests {
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
+                .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             mocks
@@ -2944,6 +2949,7 @@ mod tests {
             mocks
                 .provider
                 .expect_get_transaction_count()
+                .times(1)
                 .returning(|_| Box::pin(async { Ok(269) }));
 
             // Nonce 269 has an active Submitted tx -> no gap.
@@ -2960,6 +2966,7 @@ mod tests {
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
+                .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             mocks
@@ -3006,6 +3013,7 @@ mod tests {
             mocks
                 .provider
                 .expect_get_transaction_count()
+                .times(1)
                 .returning(|_| Box::pin(async { Ok(5) }));
 
             // Slots 5 and 6 are actively occupied — no gap, so only the head gate
@@ -3067,6 +3075,7 @@ mod tests {
             mocks
                 .provider
                 .expect_get_transaction_count()
+                .times(1)
                 .returning(|_| Box::pin(async { Ok(5) }));
 
             let submit_calls = StdArc::new(AtomicUsize::new(0));
