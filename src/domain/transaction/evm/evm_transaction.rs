@@ -12,10 +12,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     constants::{
-        matches_known_transaction, ALREADY_SUBMITTED_PATTERNS,
-        ARBITRUM_NONCE_TOO_HIGH_INPROCESS_RETRIES, ARBITRUM_NONCE_TOO_HIGH_RETRY_DELAY_MS,
-        DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
-        GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
+        matches_known_transaction, ALREADY_SUBMITTED_PATTERNS, DEFAULT_EVM_GAS_LIMIT_ESTIMATION,
+        DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS, GAS_LIMIT_BUFFER_MULTIPLIER,
+        MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
         evm::is_noop,
@@ -42,7 +41,7 @@ use crate::{
     },
     services::{
         gas::evm_gas_price::EvmGasPriceService,
-        provider::{EvmProvider, EvmProviderTrait, ProviderError},
+        provider::{EvmProvider, EvmProviderTrait},
         signer::{EvmSigner, Signer},
     },
     utils::{calculate_scheduled_timestamp, get_evm_default_gas_limit_for_tx},
@@ -417,47 +416,6 @@ where
                     "failed to load network; assuming default submission behavior"
                 );
                 None
-            }
-        }
-    }
-
-    /// Broadcasts raw transaction bytes. On Arbitrum-based networks, "nonce too high"
-    /// is retried in-process with the same bytes: the Nitro sequencer holds such a tx
-    /// ~1s and revives it if the predecessor lands. These retries do not touch
-    /// `nonce_too_high_retries`; the caller escalates after they exhaust.
-    async fn send_raw_transaction_with_nonce_retry(
-        &self,
-        tx_id: &str,
-        raw_tx: &[u8],
-        is_arbitrum: bool,
-    ) -> Result<String, ProviderError> {
-        let mut retries_left = if is_arbitrum {
-            ARBITRUM_NONCE_TOO_HIGH_INPROCESS_RETRIES
-        } else {
-            0
-        };
-        loop {
-            match self.provider.send_raw_transaction(raw_tx).await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    if retries_left > 0
-                        && Self::classify_submission_error(&e) == SubmissionErrorKind::NonceTooHigh
-                    {
-                        retries_left -= 1;
-                        info!(
-                            tx_id = %tx_id,
-                            retries_left = retries_left,
-                            error = %e,
-                            "nonce too high at broadcast; retrying in-process to ride the sequencer revive window"
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            ARBITRUM_NONCE_TOO_HIGH_RETRY_DELAY_MS,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    return Err(e);
-                }
             }
         }
     }
@@ -1060,8 +1018,7 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Nitro-specific: in-process nonce-too-high retries ride the sequencer's
-        // ~1s revive window, and success-chained delivery drains jams.
+        // Chain accepted sends only on Arbitrum.
         let is_arbitrum = self
             .delivery_network(&tx, evm_tx_data.chain_id)
             .await
@@ -1069,10 +1026,7 @@ where
 
         // Send transaction to blockchain - this is the critical operation
         // If this fails, retry is safe due to nonce idempotency
-        match self
-            .send_raw_transaction_with_nonce_retry(&tx.id, raw_tx, is_arbitrum)
-            .await
-        {
+        match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
                 // Transaction submitted successfully
             }
@@ -1300,10 +1254,7 @@ where
         })?;
 
         // Send the signed transaction to the network.
-        let was_already_submitted = match self
-            .send_raw_transaction_with_nonce_retry(&tx.id, raw_tx, is_arbitrum)
-            .await
-        {
+        let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
                 // Transaction resubmitted successfully with new pricing
                 false
@@ -4777,143 +4728,6 @@ mod tests {
             ..test_tx.network_data.get_evm_transaction_data().unwrap()
         });
         test_tx
-    }
-
-    /// Arbitrum: "nonce too high" at broadcast is retried in-process with the same
-    /// bytes and succeeds when the sequencer revives the tx; the escalation budget
-    /// (nonce_too_high_retries) is never touched.
-    #[tokio::test(start_paused = true)]
-    async fn test_submit_arbitrum_nonce_too_high_inprocess_retry_succeeds() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mock_signer = MockSigner::new();
-        let mut mock_job_producer = MockJobProducerTrait::new();
-        let mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = arbitrum_mock_network();
-
-        let relayer = create_test_relayer();
-        let test_tx = create_arbitrum_submit_tx();
-
-        // First two broadcasts hit the sequencer's nonce-failure window, third lands.
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(2)
-            .returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("nonce too high".to_string())) })
-            });
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
-
-        // Success bookkeeping only — no nonce_too_high_retries increment.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .withf(|_, update| {
-                update.status == Some(TransactionStatus::Submitted) && update.metadata.is_none()
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                updated_tx.sent_at = update.sent_at.clone();
-                Ok(updated_tx)
-            });
-
-        // Chain link: counter == nonce + 1 → no successor allocated, nothing to enqueue.
-        counter_service
-            .expect_get()
-            .returning(|_, _| Box::pin(ready(Ok(Some(43)))));
-        mock_transaction.expect_find_by_nonce().never();
-
-        mock_job_producer
-            .expect_produce_send_notification_job()
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.submit_transaction(test_tx).await;
-        assert!(result.is_ok(), "Expected Ok after revive, got: {result:?}");
-        assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
-    }
-
-    /// Arbitrum: when all in-process retries exhaust, the existing escalation runs
-    /// exactly once (single nonce_too_high_retries increment for 4 broadcast attempts).
-    #[tokio::test(start_paused = true)]
-    async fn test_submit_arbitrum_nonce_too_high_exhausts_then_escalates_once() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = arbitrum_mock_network();
-
-        let relayer = create_test_relayer();
-        let mut test_tx = create_arbitrum_submit_tx();
-        test_tx.metadata = Some(crate::models::TransactionMetadata {
-            nonce_too_high_retries: 0,
-            ..Default::default()
-        });
-
-        // Initial attempt + ARBITRUM_NONCE_TOO_HIGH_INPROCESS_RETRIES retries, all rejected.
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(4)
-            .returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("nonce too high".to_string())) })
-            });
-
-        // Exactly one escalation: nonce_too_high_retries goes 0 → 1.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .withf(|_, update| {
-                update
-                    .metadata
-                    .as_ref()
-                    .map(|m| m.nonce_too_high_retries == 1)
-                    .unwrap_or(false)
-            })
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
-
-        // No success path: no chain link, no notification.
-        counter_service.expect_get().never();
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.submit_transaction(test_tx).await;
-        assert!(
-            result.is_ok(),
-            "Expected Ok (no Dead Queue), got: {result:?}"
-        );
-        // Status unchanged — the status checker owns the next step.
-        assert_eq!(result.unwrap().status, TransactionStatus::Sent);
     }
 
     /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
