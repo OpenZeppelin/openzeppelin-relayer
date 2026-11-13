@@ -382,45 +382,29 @@ where
         }
     }
 
-    /// Loads the `EvmNetwork` for a chain id from the network repository.
-    pub(super) async fn get_evm_network(
-        &self,
-        chain_id: u64,
-    ) -> Result<EvmNetwork, TransactionError> {
-        let network_model = self
-            .network_repository
-            .get_by_chain_id(NetworkType::Evm, chain_id)
-            .await?
-            .ok_or(TransactionError::UnexpectedError(format!(
-                "Network with chain id {chain_id} not found"
-            )))?;
-        EvmNetwork::try_from(network_model).map_err(|e| {
-            TransactionError::UnexpectedError(format!(
-                "Error converting network model to EvmNetwork: {e}"
-            ))
-        })
-    }
-
-    /// Loads the network for Arbitrum delivery. Uses default behavior if the lookup fails.
-    async fn delivery_network(
+    /// Returns `true` when the chain is tagged Arbitrum. A failed lookup returns `false`,
+    /// so the default (non-Arbitrum) behaviour applies.
+    pub(super) async fn is_arbitrum_network(
         &self,
         tx: &TransactionRepoModel,
         chain_id: u64,
-    ) -> Option<EvmNetwork> {
-        match self.get_evm_network(chain_id).await {
-            Ok(network) => Some(network),
+    ) -> bool {
+        let network = match self
+            .network_repository
+            .get_by_chain_id(NetworkType::Evm, chain_id)
+            .await
+        {
+            Ok(Some(model)) => EvmNetwork::try_from(model).ok(),
+            Ok(None) => None,
             Err(e) => {
-                warn!(
-                    tx_id = %tx.id,
-                    error = %e,
-                    "failed to load network; assuming default submission behavior"
-                );
+                warn!(tx_id = %tx.id, error = %e, "failed to load network; assuming non-Arbitrum");
                 None
             }
-        }
+        };
+        network.is_some_and(|n| n.is_arbitrum())
     }
 
-    /// Arbitrum chained delivery: after a successful broadcast at nonce N, enqueue the
+    /// Arbitrum chained delivery (no-op on other networks): after a successful broadcast at nonce N, enqueue the
     /// submit job for a never-broadcast `Sent` tx at N+1. A jammed region then drains
     /// at job+RPC latency instead of one tx per resubmit cycle. Best-effort: failures
     /// only log, and the status checker remains the fallback driver. Duplicate links
@@ -432,6 +416,9 @@ where
         let Some(nonce) = evm_data.nonce else {
             return;
         };
+        if !self.is_arbitrum_network(tx, evm_data.chain_id).await {
+            return;
+        }
 
         let counter = match self
             .transaction_counter_service
@@ -1023,12 +1010,6 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Chain accepted sends only on Arbitrum.
-        let is_arbitrum = self
-            .delivery_network(&tx, evm_tx_data.chain_id)
-            .await
-            .is_some_and(|n| n.is_arbitrum());
-
         // Send transaction to blockchain - this is the critical operation
         // If this fails, retry is safe due to nonce idempotency
         match self.provider.send_raw_transaction(raw_tx).await {
@@ -1148,10 +1129,8 @@ where
             }
         };
 
-        // Chained delivery: a successful broadcast may unblock the next allocated nonce.
-        if is_arbitrum {
-            self.enqueue_next_nonce_submit(&updated_tx).await;
-        }
+        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
+        self.enqueue_next_nonce_submit(&updated_tx).await;
 
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
@@ -1218,9 +1197,6 @@ where
         }
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-
-        let network = self.delivery_network(&tx, evm_data.chain_id).await;
-        let is_arbitrum = network.as_ref().is_some_and(|n| n.is_arbitrum());
 
         // Calculate bumped gas price
         // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
@@ -1362,10 +1338,8 @@ where
             }
         };
 
-        // Chained delivery: a successful broadcast may unblock the next allocated nonce.
-        if is_arbitrum {
-            self.enqueue_next_nonce_submit(&updated_tx).await;
-        }
+        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
+        self.enqueue_next_nonce_submit(&updated_tx).await;
 
         Ok(updated_tx)
     }

@@ -1480,20 +1480,8 @@ where
             return false;
         };
 
-        match self.get_evm_network(evm_data.chain_id).await {
-            Ok(network) if network.is_arbitrum() => {}
-            Ok(_) => return false,
-            Err(e) => {
-                debug!(
-                    tx_id = %tx.id,
-                    error = %e,
-                    "head gate: failed to load network; allowing resubmit"
-                );
-                return false;
-            }
-        }
-
-        tx_nonce > on_chain_nonce
+        // Compare first, so the network lookup only runs for a tx behind the head.
+        tx_nonce > on_chain_nonce && self.is_arbitrum_network(tx, evm_data.chain_id).await
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
