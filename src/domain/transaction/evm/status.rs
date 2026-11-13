@@ -542,8 +542,19 @@ where
             .await
     }
 
-    /// Checks for a nonce gap and returns the on-chain nonce for the head gate.
-    /// Returns no result if the transaction nonce or the RPC result is missing.
+    /// Checks whether the tx is blocked by a nonce gap below it.
+    ///
+    /// 1. Fetches on-chain nonce (single RPC call).
+    /// 2. If `tx_nonce <= on_chain_nonce` — no gap, tx should be mineable.
+    /// 3. Otherwise scans `on_chain_nonce..tx_nonce` using the Redis nonce index
+    ///    to check if every slot has an active (Pending/Sent/Submitted/Mined) tx.
+    /// 4. If any slot is empty or has a terminal-status tx — that's a real gap.
+    ///    Schedules a nonce health job and sets `has_gap`.
+    ///
+    /// Returns the on-chain nonce too, so the Arbitrum head gate needs no second RPC call:
+    /// - `Some` with `has_gap: true` — gap confirmed, health job scheduled
+    /// - `Some` with `has_gap: false` — no gap, or the index lookup failed
+    /// - `None` — couldn't determine (missing nonce, RPC error)
     async fn detect_nonce_gap_ahead(&self, tx: &TransactionRepoModel) -> Option<NonceGapCheck> {
         let evm_data = match tx.network_data.get_evm_transaction_data() {
             Ok(d) => d,
