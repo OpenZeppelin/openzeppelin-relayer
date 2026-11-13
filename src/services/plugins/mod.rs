@@ -377,6 +377,44 @@ impl<R: PluginRunnerTrait> PluginService<R> {
                         metadata: None,
                     })
                 }
+                PluginError::InvalidPayload(ref msg) => {
+                    tracing::warn!("Plugin client error (invalid payload): {}", msg);
+                    PluginCallResult::Handler(PluginHandlerResponse {
+                        status: 400,
+                        message: msg.clone(),
+                        error: PluginHandlerError {
+                            code: Some("INVALID_PAYLOAD".to_string()),
+                            details: None,
+                        },
+                        metadata: None,
+                    })
+                }
+                PluginError::InvalidMethod(ref msg) => {
+                    tracing::warn!("Plugin client error (invalid method): {}", msg);
+                    PluginCallResult::Handler(PluginHandlerResponse {
+                        status: 400,
+                        message: msg.clone(),
+                        error: PluginHandlerError {
+                            code: Some("INVALID_METHOD".to_string()),
+                            details: None,
+                        },
+                        metadata: None,
+                    })
+                }
+                PluginError::RelayerError(ref msg)
+                    if msg.contains("not found") || msg.contains("Not found") =>
+                {
+                    tracing::warn!("Plugin not found error: {}", msg);
+                    PluginCallResult::Handler(PluginHandlerResponse {
+                        status: 404,
+                        message: msg.clone(),
+                        error: PluginHandlerError {
+                            code: Some("NOT_FOUND".to_string()),
+                            details: None,
+                        },
+                        metadata: None,
+                    })
+                }
                 other => {
                     // This is an actual execution/infrastructure failure
                     tracing::error!("Plugin execution failed: {:?}", other);

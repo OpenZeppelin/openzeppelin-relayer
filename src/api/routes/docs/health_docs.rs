@@ -15,7 +15,7 @@ use crate::models::health::ReadinessResponse;
 ///
 /// Handles the `/health` endpoint.
 ///
-/// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.
+/// Returns an `HttpResponse` with a status of `200 OK` and a JSON body `{"status":"ok"}`.
 /// This endpoint is used for liveness probes in container orchestration platforms.
 #[utoipa::path(
     get,
@@ -23,7 +23,7 @@ use crate::models::health::ReadinessResponse;
     tag = "Health",
     operation_id = "health",
     responses(
-        (status = 200, description = "Service is alive", body = String, example = json!("OK")),
+        (status = 200, description = "Service is alive", body = serde_json::Value, example = json!({"status": "ok"})),
         (status = 500, description = "Internal server error", body = String),
     )
 )]

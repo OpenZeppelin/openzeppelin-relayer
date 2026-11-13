@@ -58,7 +58,8 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::OK);
         let body = test::read_body(resp).await;
-        assert_eq!(body, "OK");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
     }
 
     #[actix_web::test]
@@ -137,7 +138,8 @@ mod tests {
 
             assert_eq!(resp.status(), StatusCode::OK);
             let body = test::read_body(resp).await;
-            assert_eq!(body, "OK");
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["status"], "ok");
         }
     }
 

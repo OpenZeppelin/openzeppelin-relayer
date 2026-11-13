@@ -19,9 +19,9 @@ use crate::services::health::get_readiness;
 
 /// Handles the health check endpoint.
 ///
-/// Returns an `HttpResponse` with a status of `200 OK` and a body of `"OK"`.
+/// Returns an `HttpResponse` with a status of `200 OK` and a JSON body `{"status":"ok"}`.
 pub async fn health() -> Result<HttpResponse, actix_web::Error> {
-    Ok(HttpResponse::Ok().body("OK"))
+    Ok(HttpResponse::Ok().json(serde_json::json!({"status": "ok"})))
 }
 
 /// Handles the readiness check endpoint.
@@ -81,7 +81,8 @@ mod tests {
 
         let response = result.unwrap();
         let body = to_bytes(response.into_body()).await.unwrap();
-        assert_eq!(body, "OK");
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
     }
 
     #[actix_web::test]
