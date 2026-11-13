@@ -25,11 +25,6 @@ pub const MAXIMUM_TX_ATTEMPTS: usize = 50;
 // Maximum number of NOOP transactions to attempt
 pub const MAXIMUM_NOOP_RETRY_ATTEMPTS: u32 = 50;
 
-/// Maximum delivery attempts (recorded hashes) for a rollup transaction before it is
-/// NOOP-replaced. Each broadcast is persisted first, so `hashes.len()` counts real
-/// attempts. The NOOP frees the nonces queued behind an undeliverable head.
-pub const ROLLUP_MAX_DELIVERY_ATTEMPTS: usize = 10;
-
 /// Time to resubmit for Arbitrum networks
 pub const ARBITRUM_TIME_TO_RESUBMIT: i64 = 20_000;
 
