@@ -52,6 +52,15 @@ const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt stat
 /// is persisted to avoid an oversized DB write or notification payload.
 const MAX_REVERT_DATA_HEX_LEN: usize = 4096;
 
+/// Returns true if the status-check circuit breaker may act on a transaction in this status.
+///
+/// The breaker remediates transactions that have not landed: it marks them Failed or replaces
+/// them with a NOOP. A `Mined` transaction is already on-chain, so neither action applies and
+/// the normal status flow must keep running until the transaction is confirmed.
+fn is_circuit_breaker_remediable(status: &TransactionStatus) -> bool {
+    is_pending_transaction(status)
+}
+
 /// Caps an overlong revert-data hex string to [`MAX_REVERT_DATA_HEX_LEN`], appending a marker so
 /// consumers can tell the payload was clipped. The hex is ASCII, so slicing on a byte index is safe.
 fn truncate_revert_hex(hex: &str) -> String {
@@ -967,7 +976,8 @@ where
     /// occupied and the original transaction could still execute. Simply marking as
     /// Failed/Expired would leave the nonce blocked and risk the relayer stopping.
     ///
-    /// Note: NOOP transactions are filtered out before entering this function.
+    /// Note: NOOP transactions and statuses that are not remediable (see
+    /// [`is_circuit_breaker_remediable`]) are filtered out before entering this function.
     async fn handle_circuit_breaker_safely(
         &self,
         tx: TransactionRepoModel,
@@ -1092,7 +1102,9 @@ where
                 .map(|data| is_noop(&data))
                 .unwrap_or(false);
 
-            if ctx.should_force_finalize() && !is_noop_tx {
+            let is_remediable = is_circuit_breaker_remediable(&tx.status);
+
+            if ctx.should_force_finalize() && !is_noop_tx && is_remediable {
                 warn!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,
@@ -1110,6 +1122,16 @@ where
                     consecutive_failures = ctx.consecutive_failures,
                     relayer_id = %tx.relayer_id,
                     "circuit breaker would trigger but transaction is NOOP - continuing with normal status logic"
+                );
+            }
+
+            if ctx.should_force_finalize() && !is_noop_tx && !is_remediable {
+                debug!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    relayer_id = %tx.relayer_id,
+                    status = ?tx.status,
+                    "circuit breaker would trigger but transaction is already on-chain - continuing with normal status logic"
                 );
             }
         }
@@ -3944,6 +3966,7 @@ mod tests {
 
     // Tests for circuit breaker functionality
     mod circuit_breaker_tests {
+        use super::super::is_circuit_breaker_remediable;
         use super::*;
         use crate::jobs::StatusCheckContext;
 
@@ -4284,6 +4307,90 @@ mod tests {
 
             // Should continue normal processing
             assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        /// A Mined transaction is already on-chain. A tripped circuit breaker must not
+        /// short-circuit its status check, otherwise it can never reach Confirmed.
+        #[tokio::test]
+        async fn test_circuit_breaker_mined_continues_to_confirmed() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Mined);
+            tx.sent_at = Some((Utc::now() - Duration::seconds(120)).to_rfc3339());
+
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xFakeHash".to_string());
+            }
+
+            // The normal status flow must run: receipt lookup plus confirmation depth check.
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .times(1)
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(113) }));
+
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+
+            let tx_clone = tx.clone();
+            mocks
+                .tx_repo
+                .expect_get_by_id()
+                .returning(move |_| Ok(tx_clone.clone()));
+
+            mocks
+                .tx_repo
+                .expect_partial_update()
+                .withf(|_, update| update.status == Some(TransactionStatus::Confirmed))
+                .returning(|_, update| {
+                    let mut updated_tx = make_test_transaction(TransactionStatus::Mined);
+                    updated_tx.status = update.status.unwrap_or(updated_tx.status);
+                    Ok(updated_tx)
+                });
+
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+
+            for ctx in [create_triggered_context(), create_total_triggered_context()] {
+                let result = evm_transaction
+                    .handle_status_impl(tx.clone(), Some(ctx))
+                    .await
+                    .unwrap();
+
+                assert_eq!(result.status, TransactionStatus::Confirmed);
+            }
+        }
+
+        #[test]
+        fn test_is_circuit_breaker_remediable() {
+            for status in [
+                TransactionStatus::Pending,
+                TransactionStatus::Sent,
+                TransactionStatus::Submitted,
+            ] {
+                assert!(is_circuit_breaker_remediable(&status), "{status:?}");
+            }
+
+            for status in [
+                TransactionStatus::Mined,
+                TransactionStatus::Confirmed,
+                TransactionStatus::Failed,
+                TransactionStatus::Expired,
+                TransactionStatus::Canceled,
+            ] {
+                assert!(!is_circuit_breaker_remediable(&status), "{status:?}");
+            }
         }
 
         #[tokio::test]
