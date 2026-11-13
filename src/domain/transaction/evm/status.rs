@@ -18,7 +18,7 @@ use super::EvmRelayerTransaction;
 use super::{
     ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
     has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_noop_attempts, too_many_rollup_attempts,
+    too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
@@ -383,7 +383,7 @@ where
             ))
         })?;
 
-        if network.is_rollup() && too_many_rollup_attempts(tx) {
+        if network.is_rollup() && too_many_attempts(tx) {
             let reason =
                 "Rollup transaction has too many attempts. Replacing with NOOP.".to_string();
             debug!(
@@ -1366,7 +1366,7 @@ where
             "handling Sent state"
         );
 
-        // Check if transaction should be replaced with NOOP (expired, too many attempts on rollup, etc.)
+        // Check if transaction should be replaced with NOOP (expired, too many attempts, etc.)
         let (should_noop, reason) = self.should_noop(&tx).await?;
         if should_noop {
             debug!(
@@ -2475,98 +2475,6 @@ mod tests {
             );
         }
 
-        /// Rollup give-up valve: with attempts persisted pre-broadcast, a rollup tx
-        /// is NOOP-replaced after ROLLUP_MAX_DELIVERY_ATTEMPTS (10) recorded hashes —
-        /// long before the generic 50-attempt cap.
-        #[tokio::test]
-        async fn test_rollup_noop_fires_at_rollup_delivery_threshold() {
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-
-            let mut tx = make_test_transaction(TransactionStatus::Sent);
-            // 11 recorded delivery attempts (> 10) on a never-mined transaction.
-            tx.hashes = vec!["0xHash1".to_string(); 11];
-
-            mocks
-                .network_repo
-                .expect_get_by_chain_id()
-                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
-            assert!(
-                res,
-                "Rollup transaction with 11 delivery attempts should be replaced with NOOP."
-            );
-            assert!(
-                reason.unwrap().contains("too many attempts"),
-                "Reason should mention too many attempts"
-            );
-        }
-
-        /// At exactly the threshold (10 hashes) the rollup NOOP does not fire yet.
-        #[tokio::test]
-        async fn test_rollup_noop_does_not_fire_at_threshold_boundary() {
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-
-            let mut tx = make_test_transaction(TransactionStatus::Sent);
-            tx.hashes = vec!["0xHash1".to_string(); 10];
-
-            mocks
-                .network_repo
-                .expect_get_by_chain_id()
-                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
-
-            // Falls through to the gas-limit check.
-            mocks.provider.expect_get_block_by_number().returning(|| {
-                Box::pin(async {
-                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
-                    let mut block: Block = Block::default();
-                    block.header.gas_limit = 30_000_000u64;
-                    Ok(AnyRpcBlock::from(block))
-                })
-            });
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
-            assert!(!res, "10 attempts is at, not above, the rollup threshold.");
-            assert!(reason.is_none());
-        }
-
-        /// Non-rollup networks keep the generic 50-attempt cap: 11 hashes must not
-        /// trigger a NOOP on mainnet.
-        #[tokio::test]
-        async fn test_non_rollup_unaffected_by_rollup_delivery_threshold() {
-            let mut mocks = default_test_mocks();
-            let relayer = create_test_relayer();
-
-            let mut tx = make_test_transaction(TransactionStatus::Sent);
-            tx.hashes = vec!["0xHash1".to_string(); 11];
-
-            mocks
-                .network_repo
-                .expect_get_by_chain_id()
-                .returning(|_, _| Ok(Some(create_test_network_model())));
-
-            mocks.provider.expect_get_block_by_number().returning(|| {
-                Box::pin(async {
-                    use alloy::{network::AnyRpcBlock, rpc::types::Block};
-                    let mut block: Block = Block::default();
-                    block.header.gas_limit = 30_000_000u64;
-                    Ok(AnyRpcBlock::from(block))
-                })
-            });
-
-            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let (res, reason) = evm_transaction.should_noop(&tx).await.unwrap();
-            assert!(
-                !res,
-                "Non-rollup transaction with 11 attempts must not be NOOP-replaced."
-            );
-            assert!(reason.is_none());
-        }
-
         #[tokio::test]
         async fn test_pending_state_timeout_triggers_noop() {
             let mut mocks = default_test_mocks();
@@ -2737,7 +2645,7 @@ mod tests {
             let relayer = create_test_relayer();
 
             let mut tx = make_test_transaction(TransactionStatus::Sent);
-            tx.hashes = vec!["0xHash1".to_string(); 11];
+            tx.hashes = vec!["0xHash1".to_string(); crate::constants::MAXIMUM_TX_ATTEMPTS + 1];
             tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
 
             // should_noop + prepare_noop_update_request both look the network up.
