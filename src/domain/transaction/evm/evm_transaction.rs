@@ -14,8 +14,8 @@ use crate::{
     constants::{
         matches_known_transaction, ALREADY_SUBMITTED_PATTERNS,
         ARBITRUM_NONCE_TOO_HIGH_INPROCESS_RETRIES, ARBITRUM_NONCE_TOO_HIGH_RETRY_DELAY_MS,
-        DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS, GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES,
-        NONCE_TOO_HIGH_PATTERNS,
+        DEFAULT_EVM_GAS_LIMIT_ESTIMATION, DEFAULT_EVM_STATUS_CHECK_RETRY_DELAY_SECONDS,
+        GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
         evm::is_noop,
@@ -402,9 +402,7 @@ where
         })
     }
 
-    /// Loads the network for delivery-behavior gating (`is_arbitrum`,
-    /// `lacks_mempool`). Lookup failures return `None` (logged) so the default
-    /// submission behavior is preserved.
+    /// Loads the network for Arbitrum delivery. Uses default behavior if the lookup fails.
     async fn delivery_network(
         &self,
         tx: &TransactionRepoModel,
@@ -1262,12 +1260,8 @@ where
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
-        // `lacks_mempool` gates pre-broadcast persistence. `is_arbitrum` gates the
-        // Nitro-specific behaviors: in-process nonce-too-high retries and
-        // success-chained delivery.
         let network = self.delivery_network(&tx, evm_data.chain_id).await;
         let is_arbitrum = network.as_ref().is_some_and(|n| n.is_arbitrum());
-        let pre_persist = network.as_ref().is_some_and(|n| n.lacks_mempool());
 
         // Calculate bumped gas price
         // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
@@ -1305,33 +1299,7 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Persist the new attempt BEFORE broadcast: any bytes that might reach the
-        // chain are recorded first, and `hashes.len()` stays a true delivery-attempt
-        // counter for the rollup NOOP threshold.
-        let mut pre_persisted = false;
-        let mut prior_network_data = None;
-        let tx = if pre_persist {
-            prior_network_data = Some(tx.network_data.clone());
-            let mut hashes = tx.hashes.clone();
-            if let Some(hash) = final_evm_data.hash.clone() {
-                hashes.push(hash);
-            }
-            let pre_broadcast_update = TransactionUpdateRequest {
-                network_data: Some(NetworkTransactionData::Evm(final_evm_data.clone())),
-                hashes: Some(hashes),
-                priced_at: Some(Utc::now().to_rfc3339()),
-                ..Default::default()
-            };
-            pre_persisted = true;
-            self.transaction_repository
-                .partial_update(tx.id.clone(), pre_broadcast_update)
-                .await?
-        } else {
-            tx
-        };
-
-        // Send resubmitted transaction to blockchain - this is the critical operation
-        let mut restore_prior_network_data = false;
+        // Send the signed transaction to the network.
         let was_already_submitted = match self
             .send_raw_transaction_with_nonce_retry(&tx.id, raw_tx, is_arbitrum)
             .await
@@ -1353,12 +1321,6 @@ where
                             error_kind = ?error_kind,
                             "resubmission indicates transaction already in mempool/mined - keeping original hash"
                         );
-                        // ReplacementUnderpriced: the node rejected the candidate,
-                        // so pre-persisted network_data points at a dead hash and
-                        // must be rolled back. AlreadyKnown keeps it because the
-                        // node has the candidate.
-                        restore_prior_network_data = pre_persisted
-                            && matches!(error_kind, SubmissionErrorKind::ReplacementUnderpriced);
                         true
                     }
                     // NonceTooLow: nonce was consumed (possibly externally).
@@ -1404,26 +1366,8 @@ where
 
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
-            // Keep original hash and data - just ensure status is Submitted.
-            // If the pre-persisted candidate was rejected, restore the prior
-            // network_data. The candidate hash stays in `hashes` as an attempt
-            // record.
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
-                metadata: metadata_reset,
-                network_data: if restore_prior_network_data {
-                    prior_network_data
-                } else {
-                    None
-                },
-                ..Default::default()
-            }
-        } else if pre_persisted {
-            // New hash, network_data and priced_at were persisted before broadcast;
-            // only the delivery bookkeeping remains.
-            TransactionUpdateRequest {
-                status: Some(TransactionStatus::Submitted),
-                sent_at: Some(Utc::now().to_rfc3339()),
                 metadata: metadata_reset,
                 ..Default::default()
             }
@@ -1794,18 +1738,6 @@ mod tests {
             Ok(Some(create_test_network_model_with_tags(vec![
                 "rollup".to_string(),
                 "arbitrum-based".to_string(),
-            ])))
-        });
-        mock_network
-    }
-
-    /// A network that lacks a mempool but is NOT Arbitrum: pre-broadcast
-    /// persistence applies, the Nitro-specific behaviors do not.
-    fn no_mempool_mock_network() -> MockNetworkRepository {
-        let mut mock_network = MockNetworkRepository::new();
-        mock_network.expect_get_by_chain_id().returning(|_, _| {
-            Ok(Some(create_test_network_model_with_tags(vec![
-                "no-mempool".to_string(),
             ])))
         });
         mock_network
@@ -4982,418 +4914,6 @@ mod tests {
         );
         // Status unchanged — the status checker owns the next step.
         assert_eq!(result.unwrap().status, TransactionStatus::Sent);
-    }
-
-    /// Helper: a Submitted test transaction ready for resubmission on Arbitrum,
-    /// with one prior hash and nonce 42.
-    fn create_arbitrum_resubmit_tx() -> TransactionRepoModel {
-        let mut test_tx = create_test_transaction();
-        test_tx.status = TransactionStatus::Submitted;
-        test_tx.sent_at = Some(Utc::now().to_rfc3339());
-        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-            nonce: Some(42),
-            hash: Some("0xoriginal_hash".to_string()),
-            raw: Some(vec![1, 2, 3]),
-            ..test_tx.network_data.get_evm_transaction_data().unwrap()
-        });
-        test_tx.hashes = vec!["0xoriginal_hash".to_string()];
-        test_tx
-    }
-
-    /// Sets up the price-calculator, balance and signer mocks shared by the
-    /// Arbitrum resubmit tests. The signer produces hash "0xarb_new_hash".
-    fn setup_arbitrum_resubmit_mocks(
-        mock_price_calculator: &mut MockPriceCalculator,
-        mock_provider: &mut MockEvmProviderTrait,
-        mock_signer: &mut MockSigner,
-    ) {
-        mock_price_calculator
-            .expect_calculate_bumped_gas_price()
-            .times(1)
-            .returning(|_, _, _| {
-                Ok(PriceParams {
-                    gas_price: Some(25000000000),
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    is_min_bumped: Some(true),
-                    extra_fee: None,
-                    total_cost: U256::from(525000000000000u64),
-                })
-            });
-        mock_provider
-            .expect_get_balance()
-            .times(1)
-            .returning(|_| Box::pin(async { Ok(U256::from(1000000000000000000u64)) }));
-        mock_signer
-            .expect_sign_transaction()
-            .times(1)
-            .returning(|_| {
-                Box::pin(ready(Ok(
-                    crate::domain::relayer::SignTransactionResponse::Evm(
-                        crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xarb_new_hash".to_string(),
-                            signature: crate::models::EvmTransactionDataSignature {
-                                r: "r".to_string(),
-                                s: "s".to_string(),
-                                v: 1,
-                                sig: "0xsignature".to_string(),
-                            },
-                            raw: vec![4, 5, 6],
-                        },
-                    ),
-                )))
-            });
-    }
-
-    /// Arbitrum: the resubmission attempt is persisted BEFORE broadcast, so when the
-    /// broadcast then fails the new hash stays recorded (true attempt counter, no
-    /// phantom broadcasts).
-    #[tokio::test]
-    async fn test_resubmit_arbitrum_persists_attempt_before_broadcast() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = arbitrum_mock_network();
-
-        let relayer = create_test_relayer();
-        let test_tx = create_arbitrum_resubmit_tx();
-
-        setup_arbitrum_resubmit_mocks(
-            &mut mock_price_calculator,
-            &mut mock_provider,
-            &mut mock_signer,
-        );
-
-        let mut seq = mockall::Sequence::new();
-
-        // Pre-broadcast persistence: new hash appended, network data updated, no
-        // status change yet.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status.is_none()
-                    && update.network_data.is_some()
-                    && update
-                        .hashes
-                        .as_ref()
-                        .is_some_and(|h| h.contains(&"0xarb_new_hash".to_string()))
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.hashes = update.hashes.clone().unwrap();
-                updated_tx.network_data = update.network_data.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        // Broadcast happens after persistence and fails with a non-nonce error.
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_| {
-                Box::pin(async { Err(ProviderError::Other("execution reverted".to_string())) })
-            });
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        // The broadcast error propagates, but the hash was already recorded — mockall
-        // verifies the persist-before-broadcast ordering and that no rollback happened.
-        let result = evm_transaction.resubmit_transaction(test_tx).await;
-        assert!(result.is_err(), "Expected broadcast error, got: {result:?}");
-    }
-
-    /// Arbitrum: on broadcast success after pre-persistence, the final update only
-    /// carries status/sent_at bookkeeping — the hash is not appended twice.
-    #[tokio::test]
-    async fn test_resubmit_arbitrum_success_does_not_append_hash_twice() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = arbitrum_mock_network();
-
-        let relayer = create_test_relayer();
-        let test_tx = create_arbitrum_resubmit_tx();
-
-        setup_arbitrum_resubmit_mocks(
-            &mut mock_price_calculator,
-            &mut mock_provider,
-            &mut mock_signer,
-        );
-
-        let mut seq = mockall::Sequence::new();
-
-        // Pre-broadcast persistence.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| update.status.is_none() && update.hashes.is_some())
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.hashes = update.hashes.clone().unwrap();
-                updated_tx.network_data = update.network_data.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_| Box::pin(async { Ok("0xarb_new_hash".to_string()) }));
-
-        // Final update: bookkeeping only — hashes and network_data must not be re-sent.
-        let test_tx_clone2 = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.sent_at.is_some()
-                    && update.hashes.is_none()
-                    && update.network_data.is_none()
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone2.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                updated_tx.sent_at = update.sent_at.clone();
-                Ok(updated_tx)
-            });
-
-        // Chain link: no successor allocated.
-        counter_service
-            .expect_get()
-            .returning(|_, _| Box::pin(ready(Ok(Some(43)))));
-        mock_transaction.expect_find_by_nonce().never();
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.resubmit_transaction(test_tx).await;
-        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
-        assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
-    }
-
-    /// Arbitrum: when the node rejects the pre-persisted candidate with
-    /// "replacement transaction underpriced", the final update restores the prior
-    /// network_data (the old bytes keep the slot) while the candidate hash stays
-    /// recorded in `hashes`.
-    #[tokio::test]
-    async fn test_resubmit_arbitrum_replacement_underpriced_restores_network_data() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = arbitrum_mock_network();
-
-        let relayer = create_test_relayer();
-        let test_tx = create_arbitrum_resubmit_tx();
-
-        setup_arbitrum_resubmit_mocks(
-            &mut mock_price_calculator,
-            &mut mock_provider,
-            &mut mock_signer,
-        );
-
-        let mut seq = mockall::Sequence::new();
-
-        // Pre-broadcast persistence stores the candidate.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status.is_none()
-                    && update
-                        .hashes
-                        .as_ref()
-                        .is_some_and(|h| h.contains(&"0xarb_new_hash".to_string()))
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.hashes = update.hashes.clone().unwrap();
-                updated_tx.network_data = update.network_data.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        // The node keeps the old bytes and rejects the candidate.
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_| {
-                Box::pin(async {
-                    Err(ProviderError::Other(
-                        "replacement transaction underpriced".to_string(),
-                    ))
-                })
-            });
-
-        // Final update: prior network_data restored, hashes not re-sent (the
-        // candidate stays in the history from the pre-persist).
-        let test_tx_clone2 = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.hashes.is_none()
-                    && update.network_data.as_ref().is_some_and(|data| {
-                        data.get_evm_transaction_data()
-                            .is_ok_and(|d| d.hash == Some("0xoriginal_hash".to_string()))
-                    })
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone2.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                updated_tx.network_data = update.network_data.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        // Chain link: no successor allocated.
-        counter_service
-            .expect_get()
-            .returning(|_, _| Box::pin(ready(Ok(Some(43)))));
-        mock_transaction.expect_find_by_nonce().never();
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.resubmit_transaction(test_tx).await;
-        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
-    }
-
-    /// Predicate split: a no-mempool network that is NOT Arbitrum still gets the
-    /// pre-broadcast persistence (gated on `lacks_mempool`), but none of the
-    /// Nitro-specific behaviors — no success-chained delivery.
-    #[tokio::test]
-    async fn test_resubmit_no_mempool_pre_persists_without_chain_link() {
-        let mut mock_transaction = MockTransactionRepository::new();
-        let mock_relayer = MockRelayerRepository::new();
-        let mut mock_provider = MockEvmProviderTrait::new();
-        let mut mock_signer = MockSigner::new();
-        let mock_job_producer = MockJobProducerTrait::new();
-        let mut mock_price_calculator = MockPriceCalculator::new();
-        let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = no_mempool_mock_network();
-
-        let relayer = create_test_relayer();
-        let test_tx = create_arbitrum_resubmit_tx();
-
-        setup_arbitrum_resubmit_mocks(
-            &mut mock_price_calculator,
-            &mut mock_provider,
-            &mut mock_signer,
-        );
-
-        let mut seq = mockall::Sequence::new();
-
-        // Pre-broadcast persistence fires on lacks_mempool alone.
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status.is_none()
-                    && update
-                        .hashes
-                        .as_ref()
-                        .is_some_and(|h| h.contains(&"0xarb_new_hash".to_string()))
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.hashes = update.hashes.clone().unwrap();
-                updated_tx.network_data = update.network_data.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        mock_provider
-            .expect_send_raw_transaction()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|_| Box::pin(async { Ok("0xarb_new_hash".to_string()) }));
-
-        // Final update: bookkeeping only.
-        let test_tx_clone2 = test_tx.clone();
-        mock_transaction
-            .expect_partial_update()
-            .times(1)
-            .in_sequence(&mut seq)
-            .withf(|_, update| {
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.hashes.is_none()
-                    && update.network_data.is_none()
-            })
-            .returning(move |_, update| {
-                let mut updated_tx = test_tx_clone2.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                Ok(updated_tx)
-            });
-
-        // Not Arbitrum: no chain link.
-        counter_service.expect_get().never();
-        mock_transaction.expect_find_by_nonce().never();
-
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: relayer.clone(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(mock_relayer),
-            network_repository: Arc::new(mock_network),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(counter_service),
-            job_producer: Arc::new(mock_job_producer),
-            price_calculator: mock_price_calculator,
-            signer: mock_signer,
-        };
-
-        let result = evm_transaction.resubmit_transaction(test_tx).await;
-        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
     }
 
     /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
