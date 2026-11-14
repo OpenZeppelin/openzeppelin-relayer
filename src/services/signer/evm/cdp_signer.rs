@@ -24,8 +24,8 @@ use tracing::{debug, info};
 
 use crate::{
     domain::{
-        SignDataRequest, SignDataResponse, SignDataResponseEvm, SignTransactionResponse,
-        SignTransactionResponseEvm, SignTypedDataRequest,
+        SignDataRequest, SignDataRequestEncoding, SignDataResponse, SignDataResponseEvm,
+        SignTransactionResponse, SignTransactionResponseEvm, SignTypedDataRequest,
     },
     models::{
         Address, CdpSignerConfig, EvmTransactionDataSignature, EvmTransactionDataTrait,
@@ -145,6 +145,11 @@ impl<T: CdpServiceTrait> Signer for CdpSigner<T> {
 #[async_trait]
 impl<T: CdpServiceTrait> DataSignerTrait for CdpSigner<T> {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
+        if matches!(request.encoding, SignDataRequestEncoding::Hex) {
+            return Err(SignerError::NotImplemented(
+                "hex encoding is not supported by the CDP signer".to_string(),
+            ));
+        }
         let message_string = request.message.to_string();
         let signature_bytes = self
             .cdp_service
@@ -254,6 +259,7 @@ mod tests {
         let signer = CdpSigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await.unwrap();
@@ -341,6 +347,7 @@ mod tests {
         let signer = CdpSigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;
@@ -370,6 +377,7 @@ mod tests {
         let signer = CdpSigner::new_for_testing(mock_service);
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         // Verify that we get the expected error about signature length

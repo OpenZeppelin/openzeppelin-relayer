@@ -23,7 +23,9 @@ use crate::{
     },
     services::{
         signer::{
-            evm::{construct_eip712_message_hash, validate_and_format_signature},
+            evm::{
+                construct_eip712_message_hash, resolve_message_bytes, validate_and_format_signature,
+            },
             DataSignerTrait, Signer,
         },
         GoogleCloudKmsEvmService, GoogleCloudKmsService,
@@ -120,7 +122,7 @@ impl Signer for GoogleCloudKmsSigner {
 #[async_trait]
 impl DataSignerTrait for GoogleCloudKmsSigner {
     async fn sign_data(&self, request: SignDataRequest) -> Result<SignDataResponse, SignerError> {
-        let eip191_message = eip191_message(&request.message);
+        let eip191_message = eip191_message(&resolve_message_bytes(&request)?);
         let signature_bytes = self
             .gcp_kms_service
             .sign_payload_evm(&eip191_message)
@@ -295,6 +297,7 @@ mod tests {
         let signer = setup_mock_gcp_signer(&mock_server).await;
         let request = SignDataRequest {
             message: test_message.to_string(),
+            encoding: Default::default(),
         };
 
         let result = signer.sign_data(request).await;
