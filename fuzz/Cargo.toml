@@ -1,0 +1,21 @@
+[package]
+name = "openzeppelin-relayer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.openzeppelin-relayer]
+path = ".."
+
+[[bin]]
+name = "extract_public_key_from_der"
+path = "fuzz_targets/extract_public_key_from_der.rs"
+test = false
+doc = false
+bench = false
