@@ -63,6 +63,17 @@ fn nonce_used_failure_span(required_confirmations: u64, average_blocktime_ms: Op
         .max(minute_in_blocks)
 }
 
+/// Metadata with the "nonce used" block cleared, or `None` when it is not set.
+/// A receipt or an unused nonce ends the wait; a stale block would let a later
+/// empty receipt mark a mined transaction `Failed` without a new wait.
+fn without_nonce_used_seen(
+    tx: &TransactionRepoModel,
+) -> Option<crate::models::TransactionMetadata> {
+    let mut metadata = tx.metadata.clone()?;
+    metadata.nonce_used_seen_at_block.take()?;
+    Some(metadata)
+}
+
 /// Outcome of checking a transaction's historical hashes for a mined receipt.
 #[derive(Debug)]
 enum HistoricalHashRecovery {
@@ -870,6 +881,7 @@ where
             .await?;
         if on_chain_nonce <= tx_nonce {
             // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
+            self.clear_nonce_used_seen(tx).await?;
             return Ok(None);
         }
         // Keep this read after the nonce and before every receipt lookup.
@@ -885,6 +897,7 @@ where
                         hash = %hash,
                         "nonce recovery: receipt found for current hash, deferring to normal flow"
                     );
+                    self.clear_nonce_used_seen(tx).await?;
                     return Ok(None);
                 }
                 Ok(None) => {
@@ -1573,6 +1586,25 @@ where
         Ok(HistoricalHashRecovery::NotFound)
     }
 
+    /// Clears the "nonce used" block, if set. See `without_nonce_used_seen`.
+    async fn clear_nonce_used_seen(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        if let Some(metadata) = without_nonce_used_seen(tx) {
+            self.transaction_repository()
+                .partial_update(
+                    tx.id.clone(),
+                    TransactionUpdateRequest {
+                        metadata: Some(metadata),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Updates transaction with the corrected hash and status
     ///
     /// Returns the updated transaction model and sends a notification about the status change.
@@ -1593,6 +1625,7 @@ where
                 TransactionUpdateRequest {
                     network_data: Some(NetworkTransactionData::Evm(corrected_data)),
                     status: Some(status),
+                    metadata: without_nonce_used_seen(tx),
                     ..Default::default()
                 },
             )
@@ -5790,7 +5823,10 @@ mod tests {
             tx
         }
 
-        fn repository(mocks: &mut TestMocks, tx: &TransactionRepoModel) {
+        fn repository(
+            mocks: &mut TestMocks,
+            tx: &TransactionRepoModel,
+        ) -> Arc<Mutex<TransactionRepoModel>> {
             let state = Arc::new(Mutex::new(tx.clone()));
             let updated = state.clone();
             mocks
@@ -5809,10 +5845,21 @@ mod tests {
                     }
                     Ok(tx.clone())
                 });
-            mocks
-                .tx_repo
-                .expect_get_by_id()
-                .returning(move |_| Ok(state.lock().unwrap().clone()));
+            mocks.tx_repo.expect_get_by_id().returning({
+                let state = state.clone();
+                move |_| Ok(state.lock().unwrap().clone())
+            });
+            state
+        }
+
+        fn seen_at(state: &Arc<Mutex<TransactionRepoModel>>) -> Option<u64> {
+            state
+                .lock()
+                .unwrap()
+                .metadata
+                .as_ref()
+                .unwrap()
+                .nonce_used_seen_at_block
         }
 
         fn reads(mocks: &mut TestMocks, block: Arc<AtomicU64>, receipt_visible: Arc<AtomicBool>) {
@@ -6093,6 +6140,101 @@ mod tests {
                     .status,
                 TransactionStatus::Failed
             );
+        }
+
+        /// #991 review: a recovered receipt ends the wait, so one later empty
+        /// receipt answer after the span must not mark the transaction `Failed`.
+        #[tokio::test]
+        async fn recovered_receipt_clears_seen_block_and_later_empty_receipt_never_fails() {
+            let mut tx = transaction();
+            tx.hashes = vec!["0xoriginal".to_string(), "0xcurrent".to_string()];
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            let mut mocks = default_test_mocks_with_network();
+            let block = Arc::new(AtomicU64::new(110));
+            let original_visible = Arc::new(AtomicBool::new(true));
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(6) }));
+            mocks.provider.expect_get_block_number().returning({
+                let block = block.clone();
+                move || {
+                    let head = block.load(Ordering::SeqCst);
+                    Box::pin(async move { Ok(head) })
+                }
+            });
+            mocks.provider.expect_get_transaction_receipt().returning({
+                let original_visible = original_visible.clone();
+                move |hash| {
+                    let receipt = (hash == "0xoriginal" && original_visible.load(Ordering::SeqCst))
+                        .then(|| make_mock_receipt(true, Some(100)));
+                    Box::pin(async move { Ok(receipt) })
+                }
+            });
+            let state = repository(&mut mocks, &tx);
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+
+            let recovered = evm.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(recovered.status, TransactionStatus::Mined);
+            assert_eq!(seen_at(&state), None);
+
+            block.store(124, Ordering::SeqCst);
+            original_visible.store(false, Ordering::SeqCst);
+            let later = evm.handle_status_impl(recovered, None).await.unwrap();
+            assert_ne!(later.status, TransactionStatus::Failed);
+        }
+
+        #[tokio::test]
+        async fn current_receipt_clears_seen_block() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(110)),
+                Arc::new(AtomicBool::new(true)),
+            );
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+            assert_eq!(seen_at(&state), None);
+            assert_eq!(
+                state
+                    .lock()
+                    .unwrap()
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .total_failures,
+                7
+            );
+        }
+
+        #[tokio::test]
+        async fn unused_nonce_clears_seen_block() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(5) }));
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+            assert_eq!(seen_at(&state), None);
         }
 
         #[test]
