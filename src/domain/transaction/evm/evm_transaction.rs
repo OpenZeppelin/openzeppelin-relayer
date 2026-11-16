@@ -460,20 +460,27 @@ where
         tx: &TransactionRepoModel,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        let updated = self
+        let updated = match self
             .transaction_repository()
             .partial_update_if_version(tx.id.clone(), tx.version, update)
-            .await?;
-        if matches!(
-            updated.status,
-            TransactionStatus::Failed | TransactionStatus::Canceled
-        ) && updated.sent_at.is_none()
-            && updated
-                .network_data
-                .get_evm_transaction_data()?
-                .nonce
-                .is_some()
+            .await
         {
+            Ok(updated) => updated,
+            Err(e @ crate::models::RepositoryError::ConcurrentUpdateConflict(_)) => {
+                // A lost reply can report a conflict for a write that applied.
+                // Heal from the stored record so a final write still frees its nonce.
+                let stored = self
+                    .transaction_repository()
+                    .get_by_id_on_primary(tx.id.clone())
+                    .await?;
+                if holds_unused_nonce(&stored)? {
+                    self.schedule_relayer_nonce_health_job(&stored).await?;
+                }
+                return Err(e.into());
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if holds_unused_nonce(&updated)? {
             self.schedule_relayer_nonce_health_job(&updated).await?;
         }
         Ok(updated)
@@ -843,10 +850,9 @@ where
                     crate::metrics::NONCE_PRESIGN_CONFLICTS
                         .with_label_values(&[tx.relayer_id.as_str(), "evm"])
                         .inc();
-                    let job = RelayerHealthCheck::nonce_health_with_hint(
-                        tx.relayer_id.clone(),
-                        new_nonce,
-                    );
+                    // No hint: no record holds the leaked nonce, and a hint
+                    // raises the counter to hint + 1 over an earlier rewind.
+                    let job = RelayerHealthCheck::nonce_health(tx.relayer_id.clone());
                     self.job_producer
                         .produce_relayer_health_check_job(job, None)
                         .await?;
@@ -1518,6 +1524,15 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
     TransactionCounterRepositoryStorage,
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
+/// A final record that was never sent but holds a nonce leaves a gap.
+fn holds_unused_nonce(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+    Ok(matches!(
+        tx.status,
+        TransactionStatus::Failed | TransactionStatus::Canceled
+    ) && tx.sent_at.is_none()
+        && tx.network_data.get_evm_transaction_data()?.nonce.is_some())
+}
+
 #[cfg(test)]
 mod tests {
 

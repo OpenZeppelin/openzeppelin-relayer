@@ -671,10 +671,8 @@ async fn guarded_race_in_alloc_window_loser_allocates_last() {
     assert_eq!(jobs.submit.load(Ordering::SeqCst), 1);
     assert_eq!(nonce, Some(0));
     assert_eq!(tx.hashes, vec!["0xA0".to_string()]);
-    assert_eq!(
-        *jobs.health_hints.lock().unwrap(),
-        vec![Some("1".to_string())]
-    );
+    // No hint: a hint would raise the counter over an earlier rewind.
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![None]);
 }
 
 #[tokio::test]
@@ -727,8 +725,8 @@ async fn guarded_race_in_alloc_window_loser_allocates_first() {
     assert_eq!(nonce, Some(1));
     assert_eq!(
         *jobs.health_hints.lock().unwrap(),
-        vec![Some("0".to_string())],
-        "gap fill for nonce 0 scheduled immediately"
+        vec![None],
+        "gap fill for nonce 0 scheduled immediately, with no hint"
     );
 }
 
@@ -830,7 +828,46 @@ async fn cancel_during_prepare_stops_postsign() {
     assert_eq!(canceled.status, TransactionStatus::Canceled);
     assert_eq!(stored(&repo).await.0.version, 2);
     assert_eq!(jobs.submit.load(Ordering::SeqCst), 0);
-    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("0".into())]);
+    // The cancel heals, and the losing postsign heals again from the stored
+    // record (it cannot tell a lost reply from a lost race).
+    assert_eq!(
+        *jobs.health_hints.lock().unwrap(),
+        vec![Some("0".into()), Some("0".into())]
+    );
+}
+
+/// A final write that applied but lost its reply reports a conflict.
+/// The heal must still run from the stored record.
+#[tokio::test]
+async fn conflict_on_applied_final_write_still_heals() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let tx = repo
+        .create(pending_tx(Some(7), Duration::seconds(30)))
+        .await
+        .unwrap();
+    let cancel = crate::models::TransactionUpdateRequest {
+        status: Some(TransactionStatus::Canceled),
+        ..Default::default()
+    };
+    // The first attempt applied; the retry sends the same write at the old version.
+    repo.partial_update_if_version(tx.id.clone(), tx.version, cancel.clone())
+        .await
+        .unwrap();
+    let e = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        block_ok(),
+        MockSigner::new(),
+        &jobs,
+    );
+    assert!(e
+        .cas_update(&tx, cancel)
+        .await
+        .unwrap_err()
+        .is_concurrent_update_conflict());
+    assert_eq!(stored(&repo).await.0.status, TransactionStatus::Canceled);
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("7".into())]);
 }
 
 #[tokio::test]
