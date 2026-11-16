@@ -134,6 +134,7 @@ mod tests {
 
     fn create_test_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test-tx-1".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,

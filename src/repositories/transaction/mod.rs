@@ -155,6 +155,21 @@ pub trait TransactionRepository: Repository<TransactionRepoModel, String> {
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError>;
 
+    /// Apply a patch only if the stored revision matches. Increment it on success.
+    async fn partial_update_if_version(
+        &self,
+        tx_id: String,
+        expected_version: u64,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError>;
+
+    /// Read both the nonce index and transaction body from the primary.
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError>;
+
     /// Repairs stale Redis status-index entries whose indexed status diverged from
     /// the persisted transaction body.
     ///
@@ -313,6 +328,8 @@ mockall::mock! {
       async fn find_by_nonce(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn get_nonce_occupancy(&self, relayer_id: &str, from_nonce: u64, to_nonce: u64) -> Result<Vec<(u64, Option<TransactionStatus>)>, RepositoryError>;
       async fn update_status(&self, tx_id: String, status: TransactionStatus) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn partial_update_if_version(&self, tx_id: String, expected_version: u64, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
+      async fn find_by_nonce_on_primary(&self, relayer_id: &str, nonce: u64) -> Result<Option<TransactionRepoModel>, RepositoryError>;
       async fn partial_update(&self, tx_id: String, update: TransactionUpdateRequest) -> Result<TransactionRepoModel, RepositoryError>;
       async fn reconcile_stale_status_indexes(&self, relayer_id: &str) -> Result<usize, RepositoryError>;
       async fn reserve_idempotency_key(&self, relayer_id: &str, key: &str, record: &IdempotencyRecord, ttl_seconds: u64) -> Result<bool, RepositoryError>;
@@ -517,6 +534,35 @@ impl TransactionRepository for TransactionRepositoryStorage {
         match self {
             TransactionRepositoryStorage::InMemory(repo) => repo.update_status(tx_id, status).await,
             TransactionRepositoryStorage::Redis(repo) => repo.update_status(tx_id, status).await,
+        }
+    }
+
+    async fn partial_update_if_version(
+        &self,
+        tx_id: String,
+        expected_version: u64,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        match self {
+            Self::InMemory(repo) => {
+                repo.partial_update_if_version(tx_id, expected_version, update)
+                    .await
+            }
+            Self::Redis(repo) => {
+                repo.partial_update_if_version(tx_id, expected_version, update)
+                    .await
+            }
+        }
+    }
+
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        match self {
+            Self::InMemory(repo) => repo.find_by_nonce_on_primary(relayer_id, nonce).await,
+            Self::Redis(repo) => repo.find_by_nonce_on_primary(relayer_id, nonce).await,
         }
     }
 
