@@ -870,6 +870,78 @@ async fn conflict_on_applied_final_write_still_heals() {
     assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("7".into())]);
 }
 
+/// The heal enqueue runs after the write applied, so its failure must not
+/// turn the applied cancel into an error.
+#[tokio::test]
+async fn heal_enqueue_failure_keeps_applied_cancel() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let tx = repo
+        .create(pending_tx(Some(7), Duration::seconds(30)))
+        .await
+        .unwrap();
+    let mut network = MockNetworkRepository::new();
+    network
+        .expect_get_by_chain_id()
+        .returning(|_, _| Ok(Some(create_test_network_model())));
+    let mut jobs = MockJobProducerTrait::new();
+    jobs.expect_produce_relayer_health_check_job()
+        .returning(|_, _| {
+            Box::pin(async { Err(crate::jobs::JobProducerError::QueueError("down".into())) })
+        });
+    jobs.expect_produce_send_notification_job()
+        .returning(|_, _| Box::pin(async { Ok(()) }));
+    let e = EvmRelayerTransaction::new(
+        relayer(),
+        block_ok(),
+        Arc::new(MockRelayerRepository::new()),
+        Arc::new(network),
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        Arc::new(jobs),
+        price_calc(),
+        MockSigner::new(),
+    )
+    .unwrap();
+    let canceled = e.cancel_transaction(tx).await.unwrap();
+    assert_eq!(canceled.status, TransactionStatus::Canceled);
+}
+
+/// A write between the early read and the late read (for example a replace)
+/// makes the gas estimate stale: prepare stops before it allocates a nonce.
+#[tokio::test]
+async fn change_during_prepare_stops_before_allocation() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let counter = Arc::new(InMemoryTransactionCounter::new());
+    let jobs = Jobs::default();
+    let signed = Arc::new(Mutex::new(vec![]));
+    let (reached, release) = pair();
+    let tx = repo
+        .create(pending_tx(None, Duration::seconds(30)))
+        .await
+        .unwrap();
+    let e = evm(
+        repo.clone(),
+        counter.clone(),
+        provider(Some((reached.clone(), release.clone()))),
+        signer("A", signed.clone(), None, None),
+        &jobs,
+    );
+    let (prepared, _) = tokio::join!(e.prepare_transaction(tx), async {
+        reached.notified().await;
+        repo.partial_update(
+            "tx-1".into(),
+            crate::models::TransactionUpdateRequest::default(),
+        )
+        .await
+        .unwrap();
+        release.notify_one();
+    });
+    assert!(prepared.unwrap_err().is_concurrent_update_conflict());
+    assert_eq!(counter_value(&counter).await, 0, "no nonce allocated");
+    assert!(signed.lock().unwrap().is_empty());
+    assert!(jobs.health_hints.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn stale_cancel_stops_without_jobs_or_notifications() {
     let repo = Arc::new(InMemoryTransactionRepository::new());
