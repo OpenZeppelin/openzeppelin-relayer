@@ -829,9 +829,10 @@ where
             return Ok(tx);
         }
         let mut fresh_evm_data = tx.network_data.get_evm_transaction_data()?;
-        // Without a nonce, a newer version means the payload changed (for example
-        // a replace), so the estimate above is stale. Stop; the status job re-prepares.
-        if fresh_evm_data.nonce.is_none() && tx.version != snapshot_version {
+        // A newer version means another writer changed the record (for example a
+        // replace or another prepare), so the estimate above may be stale. Stop;
+        // the status job re-prepares.
+        if tx.version != snapshot_version {
             return Err(TransactionError::ConcurrentUpdateConflict(format!(
                 "transaction {} changed during prepare",
                 tx.id
@@ -882,9 +883,19 @@ where
                     // No hint: no record holds the leaked nonce, and a hint
                     // raises the counter to hint + 1 over an earlier rewind.
                     let job = RelayerHealthCheck::nonce_health(tx.relayer_id.clone());
-                    self.job_producer
+                    // Best effort: the caller must still see the conflict.
+                    if let Err(enqueue_err) = self
+                        .job_producer
                         .produce_relayer_health_check_job(job, None)
-                        .await?;
+                        .await
+                    {
+                        error!(
+                            tx_id = %tx.id,
+                            relayer_id = %tx.relayer_id,
+                            error = %enqueue_err,
+                            "failed to queue nonce heal for a lost presign"
+                        );
+                    }
                     return Err(e);
                 }
                 result => result?,

@@ -910,13 +910,23 @@ async fn heal_enqueue_failure_keeps_applied_cancel() {
 /// makes the gas estimate stale: prepare stops before it allocates a nonce.
 #[tokio::test]
 async fn change_during_prepare_stops_before_allocation() {
+    change_during_prepare_stops(None).await;
+}
+
+/// The same with a nonce already saved (a re-prepare after a failed signing).
+#[tokio::test]
+async fn change_during_reprepare_stops_before_signing() {
+    change_during_prepare_stops(Some(3)).await;
+}
+
+async fn change_during_prepare_stops(nonce: Option<u64>) {
     let repo = Arc::new(InMemoryTransactionRepository::new());
     let counter = Arc::new(InMemoryTransactionCounter::new());
     let jobs = Jobs::default();
     let signed = Arc::new(Mutex::new(vec![]));
     let (reached, release) = pair();
     let tx = repo
-        .create(pending_tx(None, Duration::seconds(30)))
+        .create(pending_tx(nonce, Duration::seconds(30)))
         .await
         .unwrap();
     let e = evm(
