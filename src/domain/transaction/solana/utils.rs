@@ -187,6 +187,7 @@ mod tests {
     fn test_decode_solana_transaction_invalid_data() {
         // Create a transaction with invalid base64 data
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,
@@ -222,6 +223,7 @@ mod tests {
     fn test_decode_solana_transaction_not_built() {
         // Create a transaction that hasn't been built yet (transaction field is None)
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,
@@ -390,6 +392,7 @@ mod tests {
     #[test]
     fn test_too_many_solana_attempts_under_limit() {
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,
@@ -415,6 +418,7 @@ mod tests {
     #[test]
     fn test_too_many_solana_attempts_at_limit() {
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,
@@ -440,6 +444,7 @@ mod tests {
     #[test]
     fn test_too_many_solana_attempts_over_limit() {
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,

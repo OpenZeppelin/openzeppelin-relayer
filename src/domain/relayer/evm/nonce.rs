@@ -117,7 +117,7 @@ where
     ) -> Result<Option<TransactionRepoModel>, RelayerError> {
         let tx = self
             .transaction_repository
-            .find_by_nonce(&self.relayer.id, nonce)
+            .find_by_nonce_on_primary(&self.relayer.id, nonce)
             .await
             .map_err(|e| RelayerError::Internal(e.to_string()))?;
 
@@ -474,6 +474,7 @@ where
 
         let now = chrono::Utc::now().to_rfc3339();
         let tx = TransactionRepoModel {
+            version: 0,
             id: uuid::Uuid::new_v4().to_string(),
             relayer_id: self.relayer.id.clone(),
             status: TransactionStatus::Pending,
@@ -814,7 +815,7 @@ mod tests {
         let relayer_model = create_test_relayer();
 
         tx_repo
-            .expect_find_by_nonce()
+            .expect_find_by_nonce_on_primary()
             .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Submitted))));
 
         let relayer = EvmRelayer::new(
@@ -841,7 +842,7 @@ mod tests {
         let relayer_model = create_test_relayer();
 
         tx_repo
-            .expect_find_by_nonce()
+            .expect_find_by_nonce_on_primary()
             .returning(|_, _| Ok(Some(make_tx_with_status(TransactionStatus::Failed))));
 
         let relayer = EvmRelayer::new(
@@ -867,7 +868,9 @@ mod tests {
             setup_mocks();
         let relayer_model = create_test_relayer();
 
-        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+        tx_repo
+            .expect_find_by_nonce_on_primary()
+            .returning(|_, _| Ok(None));
 
         let relayer = EvmRelayer::new(
             relayer_model,
@@ -1108,7 +1111,7 @@ mod tests {
 
         // resolve_nonce_gaps double-check: nonce 6 → still gap (Failed)
         tx_repo
-            .expect_find_by_nonce()
+            .expect_find_by_nonce_on_primary()
             .returning(|_, nonce| match nonce {
                 6 => Ok(Some(make_tx_with_status(TransactionStatus::Failed))),
                 _ => Ok(None),
@@ -1222,7 +1225,9 @@ mod tests {
             });
 
         // Double-check for each gap nonce (5-9) — all empty
-        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+        tx_repo
+            .expect_find_by_nonce_on_primary()
+            .returning(|_, _| Ok(None));
 
         // create_gap_filling_noop needs network repo
         let config = EvmNetworkConfig {
@@ -1445,7 +1450,9 @@ mod tests {
             .returning(|_, _| Box::pin(ready(Ok(true))));
 
         // Double-check finds the gap slots empty.
-        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+        tx_repo
+            .expect_find_by_nonce_on_primary()
+            .returning(|_, _| Ok(None));
 
         let network_model = create_test_network_model();
         network_repo
@@ -1525,7 +1532,9 @@ mod tests {
             .expect_set_if_equals()
             .returning(|_, _| Box::pin(ready(Ok(false))));
 
-        tx_repo.expect_find_by_nonce().returning(|_, _| Ok(None));
+        tx_repo
+            .expect_find_by_nonce_on_primary()
+            .returning(|_, _| Ok(None));
 
         let network_model = create_test_network_model();
         network_repo

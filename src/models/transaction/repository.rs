@@ -124,6 +124,9 @@ pub struct TransactionUpdateRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionRepoModel {
+    /// Monotonic revision. Never reset while this record exists.
+    #[serde(default)]
+    pub version: u64,
     pub id: String,
     pub relayer_id: String,
     pub status: TransactionStatus,
@@ -457,6 +460,7 @@ impl Default for EvmTransactionData {
 impl Default for TransactionRepoModel {
     fn default() -> Self {
         Self {
+            version: 0,
             id: "00000000-0000-0000-0000-000000000001".to_string(),
             relayer_id: "00000000-0000-0000-0000-000000000002".to_string(),
             status: TransactionStatus::Pending,
@@ -961,6 +965,7 @@ impl
             NetworkTransactionRequest::Evm(evm_request) => {
                 let network = EvmNetwork::try_from(network_model.clone())?;
                 Ok(Self {
+                    version: 0,
                     id: Uuid::new_v4().to_string(),
                     relayer_id: relayer_model.id.clone(),
                     status: TransactionStatus::Pending,
@@ -995,6 +1000,7 @@ impl
                 })
             }
             NetworkTransactionRequest::Solana(solana_request) => Ok(Self {
+                version: 0,
                 id: Uuid::new_v4().to_string(),
                 relayer_id: relayer_model.id.clone(),
                 status: TransactionStatus::Pending,
@@ -1041,6 +1047,7 @@ impl
                 };
 
                 Ok(Self {
+                    version: 0,
                     id: Uuid::new_v4().to_string(),
                     relayer_id: relayer_model.id.clone(),
                     status: TransactionStatus::Pending,
@@ -1388,6 +1395,7 @@ mod tests {
         };
 
         let tx = TransactionRepoModel {
+            version: 0,
             id: "tx-1".to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Failed,
@@ -3308,6 +3316,7 @@ mod tests {
     /// Helper function to create a test transaction for testing delete_at functionality
     fn create_test_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test-transaction-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status: TransactionStatus::Pending,
@@ -3389,6 +3398,7 @@ mod tests {
     fn test_apply_partial_update_preserves_unchanged_fields() {
         // Create a test transaction with initial values
         let mut transaction = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,

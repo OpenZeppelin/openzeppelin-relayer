@@ -223,6 +223,7 @@ mod tests {
     fn test_from_transaction_repo_model_evm() {
         let now = Utc::now().to_rfc3339();
         let model = TransactionRepoModel {
+            version: 0,
             id: "tx123".to_string(),
             status: TransactionStatus::Pending,
             status_reason: None,
@@ -282,6 +283,7 @@ mod tests {
     fn test_from_transaction_repo_model_solana() {
         let now = Utc::now().to_rfc3339();
         let model = TransactionRepoModel {
+            version: 0,
             id: "tx456".to_string(),
             status: TransactionStatus::Confirmed,
             status_reason: None,
@@ -324,6 +326,7 @@ mod tests {
     fn test_from_transaction_repo_model_stellar() {
         let now = Utc::now().to_rfc3339();
         let model = TransactionRepoModel {
+            version: 0,
             id: "tx789".to_string(),
             status: TransactionStatus::Failed,
             status_reason: None,
@@ -378,6 +381,7 @@ mod tests {
     fn test_stellar_fee_bump_transaction_response() {
         let now = Utc::now().to_rfc3339();
         let model = TransactionRepoModel {
+            version: 0,
             id: "tx-fee-bump".to_string(),
             status: TransactionStatus::Confirmed,
             status_reason: None,
@@ -462,6 +466,7 @@ mod tests {
     fn test_solana_default_recent_blockhash() {
         let now = Utc::now().to_rfc3339();
         let model = TransactionRepoModel {
+            version: 0,
             id: "tx456".to_string(),
             status: TransactionStatus::Pending,
             status_reason: None,

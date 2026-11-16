@@ -329,7 +329,11 @@ where
 
     /// Handles a "nonce too high" error by incrementing the retry counter and
     /// escalating to a nonce health job after the threshold.
-    pub(super) async fn handle_nonce_too_high(&self, tx: &TransactionRepoModel, context: &str) {
+    pub(super) async fn handle_nonce_too_high(
+        &self,
+        tx: &TransactionRepoModel,
+        context: &str,
+    ) -> Result<(), TransactionError> {
         let retry_count = tx
             .metadata
             .as_ref()
@@ -347,17 +351,7 @@ where
             status_reason: Some(format!("Nonce too high (attempt {new_count})")),
             ..Default::default()
         };
-        if let Err(update_err) = self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
-            .await
-        {
-            warn!(
-                tx_id = %tx.id,
-                error = %update_err,
-                "failed to persist nonce_too_high_retries metadata {context}"
-            );
-        }
+        self.cas_update(tx, update).await?;
 
         if new_count >= MAX_NONCE_TOO_HIGH_RETRIES {
             warn!(
@@ -380,6 +374,7 @@ where
                 MAX_NONCE_TOO_HIGH_RETRIES
             );
         }
+        Ok(())
     }
 
     /// Helper method to produce a submit transaction job.
@@ -459,6 +454,31 @@ where
             })
     }
 
+    /// Stop stale writers before they can schedule work or send notifications.
+    pub(super) async fn cas_update(
+        &self,
+        tx: &TransactionRepoModel,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let updated = self
+            .transaction_repository()
+            .partial_update_if_version(tx.id.clone(), tx.version, update)
+            .await?;
+        if matches!(
+            updated.status,
+            TransactionStatus::Failed | TransactionStatus::Canceled
+        ) && updated.sent_at.is_none()
+            && updated
+                .network_data
+                .get_evm_transaction_data()?
+                .nonce
+                .is_some()
+        {
+            self.schedule_relayer_nonce_health_job(&updated).await?;
+        }
+        Ok(updated)
+    }
+
     /// Updates a transaction's status, optionally including a status reason.
     pub(super) async fn update_transaction_status(
         &self,
@@ -479,10 +499,7 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update_request)
-            .await?;
+        let updated_tx = self.cas_update(&tx, update_request).await?;
 
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
@@ -539,10 +556,7 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
-            .await?;
+        let updated_tx = self.cas_update(tx, update).await?;
 
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
@@ -778,6 +792,18 @@ where
             }
         }
 
+        // Re-read after RPC work to shorten the nonce allocation race.
+        let tx = self
+            .transaction_repository
+            .get_by_id_on_primary(tx.id.clone())
+            .await?;
+        if tx.status != TransactionStatus::Pending {
+            return Ok(tx);
+        }
+        let mut fresh_evm_data = tx.network_data.get_evm_transaction_data()?;
+        fresh_evm_data.gas_limit = fresh_evm_data.gas_limit.or(evm_data.gas_limit);
+        let evm_data = fresh_evm_data;
+
         // Check if transaction already has a nonce (recovery from failed signing attempt)
         let tx_with_nonce = if let Some(existing_nonce) = evm_data.nonce {
             debug!(
@@ -812,9 +838,22 @@ where
                 ..Default::default()
             };
 
-            self.transaction_repository
-                .partial_update(tx.id.clone(), presign_update)
-                .await?
+            match self.cas_update(&tx, presign_update).await {
+                Err(e) if e.is_concurrent_update_conflict() => {
+                    crate::metrics::NONCE_PRESIGN_CONFLICTS
+                        .with_label_values(&[tx.relayer_id.as_str(), "evm"])
+                        .inc();
+                    let job = RelayerHealthCheck::nonce_health_with_hint(
+                        tx.relayer_id.clone(),
+                        new_nonce,
+                    );
+                    self.job_producer
+                        .produce_relayer_health_check_job(job, None)
+                        .await?;
+                    return Err(e);
+                }
+                result => result?,
+            }
         };
 
         // Apply price params for signing (recalculated on every attempt)
@@ -846,10 +885,7 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
-            .transaction_repository
-            .partial_update(tx_with_nonce.id.clone(), postsign_update)
-            .await?;
+        let updated_tx = self.cas_update(&tx_with_nonce, postsign_update).await?;
 
         debug!(
             tx_id = %updated_tx.id,
@@ -994,7 +1030,7 @@ where
                     // Could be transient (burst ordering) or persistent (counter drift).
                     // Track retries and escalate to nonce health job after threshold.
                     (_, SubmissionErrorKind::NonceTooHigh) => {
-                        self.handle_nonce_too_high(&tx, "during submission").await;
+                        self.handle_nonce_too_high(&tx, "during submission").await?;
                         // Return Ok to prevent Dead Queue — status checker handles resubmission
                         return Ok(tx);
                     }
@@ -1020,12 +1056,9 @@ where
             ..Default::default()
         };
 
-        let updated_tx = match self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
-            .await
-        {
+        let updated_tx = match self.cas_update(&tx, update).await {
             Ok(tx) => tx,
+            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
             Err(e) => {
                 error!(
                     tx_id = %tx.id,
@@ -1185,7 +1218,8 @@ where
                     }
                     // NonceTooHigh: same pattern as submit_transaction — track retries, escalate
                     SubmissionErrorKind::NonceTooHigh => {
-                        self.handle_nonce_too_high(&tx, "during resubmission").await;
+                        self.handle_nonce_too_high(&tx, "during resubmission")
+                            .await?;
                         // Return Ok — status checker handles resubmission
                         return Ok(tx);
                     }
@@ -1229,12 +1263,9 @@ where
             }
         };
 
-        let updated_tx = match self
-            .transaction_repository
-            .partial_update(tx.id.clone(), update)
-            .await
-        {
+        let updated_tx = match self.cas_update(&tx, update).await {
             Ok(tx) => tx,
+            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
             Err(e) => {
                 error!(
                     error = %e,
@@ -1300,10 +1331,7 @@ where
             )
             .await?;
 
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update)
-            .await?;
+        let updated_tx = self.cas_update(&tx, update).await?;
 
         // Submit the updated transaction to the network using the resubmit job
         self.send_transaction_resubmit_job(&updated_tx).await?;
@@ -1416,10 +1444,12 @@ where
 
         // Update the transaction in the repository
         let updated_tx = self
-            .transaction_repository
-            .update_network_data(
-                old_tx.id.clone(),
-                NetworkTransactionData::Evm(final_evm_data),
+            .cas_update(
+                &old_tx,
+                TransactionUpdateRequest {
+                    network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
+                    ..Default::default()
+                },
             )
             .await?;
 
@@ -1563,6 +1593,7 @@ mod tests {
     // Helper to create test transaction with specific configuration for these tests
     fn create_test_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test-tx-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status: TransactionStatus::Pending,
@@ -1774,10 +1805,14 @@ mod tests {
                 })
             });
 
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
-            .returning(move |_, update| {
+            .expect_partial_update_if_version()
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 if let Some(status) = &update.status {
                     updated_tx.status = status.clone();
@@ -1888,13 +1923,17 @@ mod tests {
                 })
             });
 
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
-            .withf(move |id, update| {
+            .expect_partial_update_if_version()
+            .withf(move |id, _, update| {
                 id == "test-tx-id" && update.status == Some(TransactionStatus::Failed)
             })
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap_or(updated_tx.status);
                 updated_tx.status_reason = update.status_reason.clone();
@@ -1985,10 +2024,14 @@ mod tests {
             });
 
         // Mock partial_update to be called when marking transaction as failed
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
-            .withf(move |id, update| {
+            .expect_partial_update_if_version()
+            .withf(move |id, _, update| {
                 id == "test-tx-id"
                     && update.status == Some(TransactionStatus::Failed)
                     && update.status_reason.is_some()
@@ -1998,7 +2041,7 @@ mod tests {
                         .unwrap()
                         .contains("exceeds block gas limit")
             })
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap_or(updated_tx.status);
                 updated_tx.status_reason = update.status_reason.clone();
@@ -2139,10 +2182,14 @@ mod tests {
                 })
             });
 
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
-            .returning(move |_, update| {
+            .expect_partial_update_if_version()
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 if let Some(status) = &update.status {
                     updated_tx.status = status.clone();
@@ -2207,11 +2254,11 @@ mod tests {
             // Transaction repository should update the transaction with Canceled status
             let test_tx_clone = test_tx.clone();
             mock_transaction
-                .expect_partial_update()
-                .withf(move |id, update| {
+                .expect_partial_update_if_version()
+                .withf(move |id, _, update| {
                     id == "test-tx-id" && update.status == Some(TransactionStatus::Canceled)
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = test_tx_clone.clone();
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -2302,8 +2349,8 @@ mod tests {
             // Transaction repository should update the transaction
             let test_tx_clone = test_tx.clone();
             mock_transaction
-                .expect_partial_update()
-                .returning(move |tx_id, update| {
+                .expect_partial_update_if_version()
+                .returning(move |tx_id, _, update| {
                     let mut updated_tx = test_tx_clone.clone();
                     updated_tx.id = tx_id;
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
@@ -2495,11 +2542,11 @@ mod tests {
             // Transaction repository should update using update_network_data
             let test_tx_clone = test_tx.clone();
             mock_transaction
-                .expect_update_network_data()
-                .returning(move |tx_id, network_data| {
+                .expect_partial_update_if_version()
+                .returning(move |tx_id, _, update| {
                     let mut updated_tx = test_tx_clone.clone();
                     updated_tx.id = tx_id;
-                    updated_tx.network_data = network_data;
+                    updated_tx.network_data = update.network_data.unwrap();
                     Ok(updated_tx)
                 });
 
@@ -2999,11 +3046,15 @@ mod tests {
         // 2. Postsign update (saves signed data and marks as Sent)
         let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
 
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(2)
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
 
                 // Apply the updates from the request
@@ -3138,11 +3189,15 @@ mod tests {
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
         let expected_gas_limit = EXPECTED_GAS_WITH_BUFFER;
+        let fresh_tx = test_tx.clone();
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(fresh_tx.clone()));
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(2)
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
 
                 if let Some(status) = &update.status {
@@ -3301,10 +3356,10 @@ mod tests {
         // Should still update to Submitted status
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| update.status == Some(TransactionStatus::Submitted))
-            .returning(move |_, update| {
+            .withf(|_, _, update| update.status == Some(TransactionStatus::Submitted))
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap();
                 updated_tx.sent_at = update.sent_at.clone();
@@ -3465,15 +3520,15 @@ mod tests {
         // Verify that partial_update is called with NO network_data (preserving original hash)
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 // Should only update status, NOT network_data or hashes
                 update.status == Some(TransactionStatus::Submitted)
                     && update.network_data.is_none()
                     && update.hashes.is_none()
             })
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = TransactionStatus::Submitted;
                 // Hash should remain unchanged!
@@ -3533,9 +3588,9 @@ mod tests {
 
         // But database update fails
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Err(crate::models::RepositoryError::UnexpectedError(
                     "Redis timeout".to_string(),
                 ))
@@ -3824,15 +3879,15 @@ mod tests {
         // Should update to Submitted status with new hash
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 update.status == Some(TransactionStatus::Submitted)
                     && update.sent_at.is_some()
                     && update.priced_at.is_some()
                     && update.hashes.is_some()
             })
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.unwrap();
                 updated_tx.sent_at = update.sent_at.clone();
@@ -4241,14 +4296,14 @@ mod tests {
         // Should update status without changing hash (was_already_submitted = true)
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 update.status == Some(TransactionStatus::Submitted)
                     && update.network_data.is_none()
                     && update.hashes.is_none()
             })
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = TransactionStatus::Submitted;
                 Ok(updated_tx)
@@ -4320,16 +4375,16 @@ mod tests {
         // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 update
                     .metadata
                     .as_ref()
                     .map(|m| m.nonce_too_high_retries == 1)
                     .unwrap_or(false)
             })
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
+            .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -4395,16 +4450,16 @@ mod tests {
         // Should persist incremented counter (nonce_too_high_retries = 3) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 update
                     .metadata
                     .as_ref()
                     .map(|m| m.nonce_too_high_retries == 3)
                     .unwrap_or(false)
             })
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
+            .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         // Should schedule a relayer health check job at the threshold
         mock_job_producer
@@ -4519,16 +4574,16 @@ mod tests {
         // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| {
+            .withf(|_, _, update| {
                 update
                     .metadata
                     .as_ref()
                     .map(|m| m.nonce_too_high_retries == 1)
                     .unwrap_or(false)
             })
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
+            .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
