@@ -1429,8 +1429,9 @@ where
                 relayer_id = %tx.relayer_id,
                 "status changed during check, reloading transaction from DB to ensure fresh data"
             );
+            // Primary: a lagging replica would make the next guarded write lose.
             self.transaction_repository()
-                .get_by_id(tx.id.clone())
+                .get_by_id_on_primary(tx.id.clone())
                 .await?
         } else {
             tx
@@ -4283,8 +4284,8 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
-            // Expect get_by_id to reload the transaction after status change
-            mocks.tx_repo.expect_get_by_id().returning(|_| {
+            // Expect a primary read to reload the transaction after status change
+            mocks.tx_repo.expect_get_by_id_on_primary().returning(|_| {
                 let updated_tx = make_test_transaction(TransactionStatus::Mined);
                 Ok(updated_tx)
             });
@@ -4380,11 +4381,14 @@ mod tests {
 
             // Mock get_by_id for the DB reload after status change.
             let tx_clone = tx.clone();
-            mocks.tx_repo.expect_get_by_id().returning(move |_| {
-                let mut reloaded = tx_clone.clone();
-                reloaded.status = TransactionStatus::Submitted;
-                Ok(reloaded)
-            });
+            mocks
+                .tx_repo
+                .expect_get_by_id_on_primary()
+                .returning(move |_| {
+                    let mut reloaded = tx_clone.clone();
+                    reloaded.status = TransactionStatus::Submitted;
+                    Ok(reloaded)
+                });
 
             // Expect partial_update with status=Failed and a status_reason.
             mocks
@@ -4496,7 +4500,7 @@ mod tests {
         /// DB reload after the status change, plus a partial_update that captures the
         /// status_reason onto the returned transaction so assertions can inspect it.
         fn expect_reload_and_capture(mocks: &mut TestMocks) {
-            mocks.tx_repo.expect_get_by_id().returning(|_| {
+            mocks.tx_repo.expect_get_by_id_on_primary().returning(|_| {
                 let mut reloaded = failing_submitted_tx();
                 reloaded.status = TransactionStatus::Submitted;
                 Ok(reloaded)
