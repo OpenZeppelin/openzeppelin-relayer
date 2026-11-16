@@ -473,17 +473,29 @@ where
                     .transaction_repository()
                     .get_by_id_on_primary(tx.id.clone())
                     .await?;
-                if holds_unused_nonce(&stored)? {
-                    self.schedule_relayer_nonce_health_job(&stored).await?;
-                }
+                self.heal_unused_nonce(&stored).await?;
                 return Err(e.into());
             }
             Err(e) => return Err(e.into()),
         };
-        if holds_unused_nonce(&updated)? {
-            self.schedule_relayer_nonce_health_job(&updated).await?;
-        }
+        self.heal_unused_nonce(&updated).await?;
         Ok(updated)
+    }
+
+    /// Queues the nonce heal for a final record that holds an unused nonce.
+    /// The write already applied, so an enqueue failure is logged, not returned.
+    async fn heal_unused_nonce(&self, tx: &TransactionRepoModel) -> Result<(), TransactionError> {
+        if holds_unused_nonce(tx)? {
+            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+                error!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    error = %e,
+                    "failed to queue nonce heal for a final transaction"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Updates a transaction's status, optionally including a status reason.
@@ -800,6 +812,7 @@ where
         }
 
         // Re-read after RPC work to shorten the nonce allocation race.
+        let snapshot_version = tx.version;
         let tx = self
             .transaction_repository
             .get_by_id_on_primary(tx.id.clone())
@@ -808,6 +821,14 @@ where
             return Ok(tx);
         }
         let mut fresh_evm_data = tx.network_data.get_evm_transaction_data()?;
+        // Without a nonce, a newer version means the payload changed (for example
+        // a replace), so the estimate above is stale. Stop; the status job re-prepares.
+        if fresh_evm_data.nonce.is_none() && tx.version != snapshot_version {
+            return Err(TransactionError::ConcurrentUpdateConflict(format!(
+                "transaction {} changed during prepare",
+                tx.id
+            )));
+        }
         fresh_evm_data.gas_limit = fresh_evm_data.gas_limit.or(evm_data.gas_limit);
         let evm_data = fresh_evm_data;
 

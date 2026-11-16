@@ -2,7 +2,7 @@ use eyre::Report;
 use tracing::{debug, error, warn};
 
 use crate::{
-    models::{ApiError, RepositoryError},
+    models::{ApiError, RepositoryError, TransactionError},
     observability::request_id::get_request_id,
     queues::{HandlerError, WorkerContext},
 };
@@ -48,6 +48,16 @@ pub use relayer_health_check_handler::*;
 /// re-enqueues a fresh message with `ApproximateReceiveCount` reset to 1, so
 /// the attempt counter never advances and the job would otherwise loop
 /// forever, also bypassing the SQS dead-letter redrive policy.
+/// A version conflict means another writer won; the status job decides again.
+fn is_concurrent_update_conflict(err: &Report) -> bool {
+    err.downcast_ref::<TransactionError>()
+        .is_some_and(TransactionError::is_concurrent_update_conflict)
+        || matches!(
+            err.downcast_ref::<RepositoryError>(),
+            Some(RepositoryError::ConcurrentUpdateConflict(_))
+        )
+}
+
 fn is_terminal_error(err: &Report) -> bool {
     if let Some(api_err) = err.downcast_ref::<ApiError>() {
         if matches!(api_err, ApiError::NotFound(_)) {
@@ -87,6 +97,15 @@ pub fn handle_result(
         "request failed"
     );
 
+    if is_concurrent_update_conflict(err) {
+        debug!(
+            job_type = %job_type,
+            request_id = ?get_request_id(),
+            "lost a concurrent update, completing job"
+        );
+        return Ok(());
+    }
+
     if is_terminal_error(err) {
         error!(
             job_type = %job_type,
@@ -125,6 +144,17 @@ mod tests {
 
         let handled = handle_result(result, &ctx, "test_job", 3);
         assert!(handled.is_ok());
+    }
+
+    #[test]
+    fn test_handle_result_completes_on_conflict() {
+        let ctx = WorkerContext::new(0, "test-task".into());
+        for err in [
+            Report::new(TransactionError::ConcurrentUpdateConflict("lost".into())),
+            Report::new(RepositoryError::ConcurrentUpdateConflict("lost".into())),
+        ] {
+            assert!(handle_result(Err(err), &ctx, "test_job", 3).is_ok());
+        }
     }
 
     #[test]
