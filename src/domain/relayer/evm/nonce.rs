@@ -1286,6 +1286,71 @@ mod tests {
         assert_eq!(*counter_values.lock().unwrap(), 11);
     }
 
+    /// Two lost presigns leak nonces 5 and 6 and queue two heal jobs with no
+    /// hint. Each run rewinds or keeps the counter at the chain nonce; no run
+    /// raises it again, so no gap and no NOOP is left.
+    #[tokio::test]
+    async fn test_two_lost_presign_heals_leave_no_gap() {
+        let (
+            mut provider,
+            relayer_repo,
+            network_repo,
+            mut tx_repo,
+            job_producer,
+            signer,
+            mut counter,
+        ) = setup_mocks();
+        provider
+            .expect_get_transaction_count()
+            .returning(|_| Box::pin(ready(Ok(5u64))));
+        let value = Arc::new(std::sync::Mutex::new(7u64));
+        let get = value.clone();
+        counter
+            .expect_get()
+            .returning(move || Box::pin(ready(Ok(Some(*get.lock().unwrap())))));
+        let floor = value.clone();
+        counter.expect_sync_floor().returning(move |f| {
+            let mut v = floor.lock().unwrap();
+            *v = (*v).max(f);
+            Box::pin(ready(Ok(*v)))
+        });
+        let cas = value.clone();
+        counter
+            .expect_set_if_equals()
+            .returning(move |expected, new| {
+                let mut v = cas.lock().unwrap();
+                let ok = *v == expected;
+                if ok {
+                    *v = new;
+                }
+                Box::pin(ready(Ok(ok)))
+            });
+        tx_repo
+            .expect_get_nonce_occupancy()
+            .returning(|_, from, to| Ok((from..to).map(|n| (n, None)).collect()));
+        tx_repo
+            .expect_find_by_nonce_on_primary()
+            .returning(|_, _| Ok(None));
+        tx_repo.expect_create().times(0);
+
+        let relayer = EvmRelayer::new(
+            create_test_relayer(),
+            signer,
+            provider,
+            create_test_evm_network(),
+            Arc::new(relayer_repo),
+            Arc::new(network_repo),
+            Arc::new(tx_repo),
+            Arc::new(counter),
+            Arc::new(job_producer),
+        )
+        .unwrap();
+
+        relayer.resolve_nonce_gaps(None).await.unwrap();
+        relayer.resolve_nonce_gaps(None).await.unwrap();
+        assert_eq!(*value.lock().unwrap(), 5, "counter back at the chain nonce");
+    }
+
     /// Rewind (a): a fully-empty drift region rewinds the counter down to the chain nonce.
     #[tokio::test]
     async fn test_try_rewind_counter_empty_region_rewinds_to_chain() {

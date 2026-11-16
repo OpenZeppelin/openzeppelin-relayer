@@ -469,33 +469,41 @@ where
             Err(e @ crate::models::RepositoryError::ConcurrentUpdateConflict(_)) => {
                 // A lost reply can report a conflict for a write that applied.
                 // Heal from the stored record so a final write still frees its nonce.
-                let stored = self
+                // Best effort: the caller must still see the conflict.
+                match self
                     .transaction_repository()
                     .get_by_id_on_primary(tx.id.clone())
-                    .await?;
-                self.heal_unused_nonce(&stored).await?;
+                    .await
+                {
+                    Ok(stored) => self.heal_unused_nonce(&stored).await,
+                    Err(read_err) => warn!(
+                        tx_id = %tx.id,
+                        error = %read_err,
+                        "failed to read transaction after a version conflict"
+                    ),
+                }
                 return Err(e.into());
             }
             Err(e) => return Err(e.into()),
         };
-        self.heal_unused_nonce(&updated).await?;
+        self.heal_unused_nonce(&updated).await;
         Ok(updated)
     }
 
     /// Queues the nonce heal for a final record that holds an unused nonce.
     /// The write already applied, so an enqueue failure is logged, not returned.
-    async fn heal_unused_nonce(&self, tx: &TransactionRepoModel) -> Result<(), TransactionError> {
-        if holds_unused_nonce(tx)? {
-            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
-                error!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    error = %e,
-                    "failed to queue nonce heal for a final transaction"
-                );
-            }
+    async fn heal_unused_nonce(&self, tx: &TransactionRepoModel) {
+        if !holds_unused_nonce(tx) {
+            return;
         }
-        Ok(())
+        if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+            error!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                error = %e,
+                "failed to queue nonce heal for a final transaction"
+            );
+        }
     }
 
     /// Updates a transaction's status, optionally including a status reason.
@@ -1546,12 +1554,15 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
 /// A final record that was never sent but holds a nonce leaves a gap.
-fn holds_unused_nonce(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
-    Ok(matches!(
+fn holds_unused_nonce(tx: &TransactionRepoModel) -> bool {
+    matches!(
         tx.status,
         TransactionStatus::Failed | TransactionStatus::Canceled
     ) && tx.sent_at.is_none()
-        && tx.network_data.get_evm_transaction_data()?.nonce.is_some())
+        && tx
+            .network_data
+            .get_evm_transaction_data()
+            .is_ok_and(|data| data.nonce.is_some())
 }
 
 #[cfg(test)]
