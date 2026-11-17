@@ -601,7 +601,10 @@ mod tests {
         repo.create(create_local_signer(&signer_name))
             .await
             .unwrap();
-        repo.connections.primary().resize(1);
+        // Use a fresh pool: shrinking a populated pool can retain idle connections.
+        let single_connection_repo = setup_test_repo_with_pool_size(1).await;
+        let repo = RedisSignerRepository::new(single_connection_repo.connections, repo.key_prefix)
+            .expect("Failed to create single-connection repository");
 
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
