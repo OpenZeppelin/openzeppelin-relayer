@@ -17,7 +17,7 @@ use crate::{
         GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
-        evm::is_noop,
+        evm::{is_noop, is_unsent},
         transaction::{
             evm::{
                 ensure_status, ensure_status_one_of, is_transaction_valid, PriceCalculator,
@@ -1392,8 +1392,14 @@ where
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
         // Duplicate jobs must not sign again before the current price expires.
+        // Saved bytes that no node accepted yet are sent again instead.
+        let resend_unsent = evm_data.raw.is_some() && is_unsent(&tx)?;
         if evm_data.raw.is_some() && !self.should_resubmit(&tx).await? {
-            return Ok(tx);
+            return if resend_unsent {
+                self.submit_transaction(tx).await
+            } else {
+                Ok(tx)
+            };
         }
 
         // Calculate bumped gas price
@@ -1410,7 +1416,12 @@ where
                 price_params = ?bumped_price_params,
                 "bumped gas price does not meet minimum requirement, skipping resubmission"
             );
-            return Ok(tx);
+            // A reprice that is not possible must not strand saved bytes.
+            return if resend_unsent {
+                self.submit_transaction(tx).await
+            } else {
+                Ok(tx)
+            };
         }
 
         // Validate the relayer has sufficient balance

@@ -710,6 +710,17 @@ where
         }
 
         if is_unsent(&tx)? && get_age_since_priced(&tx)? > get_evm_resend_timeout() {
+            // A nonce gap below this tx makes a resend futile; the detector
+            // schedules the nonce health job itself.
+            if self
+                .detect_nonce_gap_ahead(&tx)
+                .await
+                .is_some_and(|check| check.has_gap)
+            {
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
+                    .await;
+            }
             self.send_transaction_submit_job(&tx).await?;
         }
 

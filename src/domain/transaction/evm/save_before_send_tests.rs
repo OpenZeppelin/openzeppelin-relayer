@@ -57,6 +57,7 @@ struct Events {
     same_signature: bool,
     receipt: bool,
     cancel_in_send: bool,
+    cap_hit: bool,
 }
 
 struct Harness {
@@ -149,6 +150,10 @@ impl Harness {
         mock_repo
             .expect_partial_update()
             .returning(move |id, update| block_on(r.partial_update(id, update)));
+        let r = repo.clone();
+        mock_repo
+            .expect_get_nonce_occupancy()
+            .returning(move |relayer, from, to| block_on(r.get_nonce_occupancy(relayer, from, to)));
         let r = repo.clone();
         mock_repo
             .expect_get_by_id_on_primary()
@@ -328,8 +333,17 @@ impl Harness {
             .expect_get_by_name()
             .returning(move |_, _| Ok(Some(model())));
         let mut calc = MockPriceCalculatorTrait::new();
+        let e = events.clone();
         calc.expect_calculate_bumped_gas_price()
-            .returning(|_, _, _| Box::pin(async { Ok(price()) }));
+            .returning(move |_, _, _| {
+                let cap_hit = e.lock().unwrap().cap_hit;
+                Box::pin(async move {
+                    Ok(PriceParams {
+                        is_min_bumped: Some(!cap_hit),
+                        ..price()
+                    })
+                })
+            });
         calc.expect_get_transaction_price_params()
             .returning(|_, _| Box::pin(async { Ok(price()) }));
         let worker = Worker::new(
@@ -481,10 +495,12 @@ async fn failed_send_keeps_saved_hash_and_resends_without_signing() {
     assert_eq!(stored.hashes, ["A", "H1"]);
     assert!(stored.sent_at.is_none());
     assert!(stored.priced_at.is_some());
+    // A retried job before the price timer sends the saved bytes again.
+    h.events.lock().unwrap().error = None;
     let same = h.worker.resubmit_transaction(stored).await.unwrap();
     assert_eq!(same.hashes, ["A", "H1"]);
-    assert_eq!(h.events.lock().unwrap().signs.len(), 1);
-    h.recover(false).await;
+    assert!(!is_unsent(&same).unwrap());
+    assert_eq!(h.events.lock().unwrap().sent.last(), Some(&vec![1u8]));
     assert_eq!(h.events.lock().unwrap().signs.len(), 1);
 }
 
@@ -515,6 +531,13 @@ async fn accepted_a_failed_b_uses_unsent_stamp_and_reprice_has_priority() {
         .await
         .is_err());
     assert!(is_unsent(&h.stored().await).unwrap());
+    // B is unsent and its price timer is due: a reprice comes before a resend.
+    h.age_payload(10000).await;
+    h.cycle().await;
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Resubmit]
+    ));
     h.recover(false).await;
     // Both the resend age and price timer are due. Only a reprice is queued.
     h.age_payload(10000).await;
@@ -768,7 +791,11 @@ async fn sixty_failed_saves_and_one_accepted_send_do_not_trip_valve() {
     h.age_payload(30).await;
     h.cycle().await;
     h.run_job(TransactionCommand::Resubmit).await;
-    assert_eq!(h.stored().await.metadata.unwrap().accepted_sends, 2);
+    let t = h.stored().await;
+    assert_eq!(t.metadata.unwrap().accepted_sends, 2);
+    assert!(!is_noop(
+        &t.network_data.get_evm_transaction_data().unwrap()
+    ));
 }
 
 #[tokio::test]
@@ -971,4 +998,61 @@ fn unsent_and_timer_fallbacks_cover_old_records() {
     assert!(
         crate::domain::transaction::evm::get_age_since_priced(&t).unwrap() > Duration::hours(1)
     );
+}
+
+#[tokio::test]
+async fn unsent_submitted_behind_nonce_gap_sends_nothing() {
+    let mut initial = tx(TransactionStatus::Submitted);
+    if let NetworkTransactionData::Evm(ref mut data) = initial.network_data {
+        data.nonce = Some(9);
+    }
+    let h = Harness::new(initial, false, None).await;
+    h.age_payload(30).await;
+    h.cycle().await;
+    assert!(h.events.lock().unwrap().jobs.is_empty());
+    assert!(h.events.lock().unwrap().sent.is_empty());
+    h.cycle().await;
+    assert!(h.events.lock().unwrap().jobs.is_empty());
+}
+
+#[tokio::test]
+async fn price_cap_resends_saved_unsent_bytes() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.worker.submit_transaction(h.stored().await).await.unwrap();
+    h.age_payload(10000).await;
+    h.events.lock().unwrap().error = Some("transport");
+    assert!(h
+        .worker
+        .resubmit_transaction(h.stored().await)
+        .await
+        .is_err());
+    {
+        let mut events = h.events.lock().unwrap();
+        events.error = None;
+        events.cap_hit = true;
+    }
+    h.age_payload(10000).await;
+    h.cycle().await;
+    let jobs = h.events.lock().unwrap().jobs.clone();
+    assert!(matches!(jobs.as_slice(), [TransactionCommand::Resubmit]));
+    h.run_job(TransactionCommand::Resubmit).await;
+    let t = h.stored().await;
+    assert_eq!(h.events.lock().unwrap().signs.len(), 1);
+    assert_eq!(h.events.lock().unwrap().sent.last(), Some(&vec![1u8]));
+    assert_eq!(t.hashes, ["A", "H1"]);
+    assert!(!is_unsent(&t).unwrap());
+}
+
+#[tokio::test]
+async fn young_unsent_record_gets_no_resend() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.age_payload(10).await;
+    h.cycle().await;
+    assert!(h.events.lock().unwrap().jobs.is_empty());
+    h.age_payload(30).await;
+    h.cycle().await;
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Submit]
+    ));
 }
