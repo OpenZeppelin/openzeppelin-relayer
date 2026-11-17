@@ -1066,12 +1066,14 @@ async fn cancel_during_resubmit_preserves_cancel_patch() {
     let mut tx = pending_tx(Some(7), Duration::seconds(30));
     tx.status = TransactionStatus::Submitted;
     tx.sent_at = Some(Utc::now().to_rfc3339());
+    tx.hashes = vec!["original".into()];
+    if let NetworkTransactionData::Evm(ref mut data) = tx.network_data {
+        data.hash = Some("original".into());
+    }
     let tx = repo.create(tx).await.unwrap();
     let mut p = provider(None);
-    // PR 4 will move the version check before this send.
-    p.expect_send_raw_transaction()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok("0xA7".into()) }));
+    // A lost save must return before the send.
+    p.expect_send_raw_transaction().times(0);
     let e = evm(
         repo.clone(),
         Arc::new(InMemoryTransactionCounter::new()),
@@ -1092,11 +1094,43 @@ async fn cancel_during_resubmit_preserves_cancel_patch() {
         canceled
     });
     assert!(resubmitted.unwrap_err().is_concurrent_update_conflict());
-    let stored = stored(&repo).await.0;
-    assert_eq!(stored.is_canceled, Some(true));
-    assert_eq!(stored.version, canceled.version);
+    let current = stored(&repo).await.0;
+    assert_eq!(current.is_canceled, Some(true));
+    assert_eq!(current.version, canceled.version);
     assert_eq!(jobs.submit.load(Ordering::SeqCst), 1);
     assert_eq!(jobs.notifications.load(Ordering::SeqCst), 1);
+
+    // Cross another status cycle and worker job after the conflict.
+    let mut p = provider(None);
+    p.expect_get_transaction_receipt()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    p.expect_send_raw_transaction().times(1).returning(|raw| {
+        assert_eq!(raw, &[7]);
+        Box::pin(async { Ok("NOOP7".into()) })
+    });
+    let recovery = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        p,
+        signer("NOOP", Arc::new(Mutex::new(vec![])), None, Some(1)),
+        &jobs,
+    );
+    recovery
+        .handle_transaction_status(current, None)
+        .await
+        .unwrap();
+    assert_eq!(jobs.submit.load(Ordering::SeqCst), 2);
+    recovery
+        .resubmit_transaction(stored(&repo).await.0)
+        .await
+        .unwrap();
+    let current = stored(&repo).await.0;
+    assert_eq!(current.hashes, ["original", "0xNOOP7"]);
+    assert!(current.sent_at.is_some());
+    assert!(current.priced_at.is_some());
+    assert!(crate::domain::transaction::evm::is_noop(
+        &current.network_data.get_evm_transaction_data().unwrap()
+    ));
 }
 
 #[tokio::test]

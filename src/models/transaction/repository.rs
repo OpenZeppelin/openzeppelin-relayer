@@ -81,6 +81,9 @@ pub struct TransactionMetadata {
     /// When the used EVM nonce was first observed (RFC 3339).
     #[serde(default)]
     pub nonce_used_seen_at: Option<String>,
+    /// Number of EVM sends that returned Ok from the node.
+    #[serde(default)]
+    pub accepted_sends: u64,
 }
 
 impl TransactionMetadata {
@@ -1323,6 +1326,7 @@ mod tests {
             nonce_too_high_retries: 0,
             nonce_used_seen_at_block: None,
             nonce_used_seen_at: None,
+            accepted_sends: 0,
         };
         assert!(metadata.with_nonce_retries_reset().is_none());
     }
@@ -1337,6 +1341,7 @@ mod tests {
             nonce_too_high_retries: 3,
             nonce_used_seen_at_block: None,
             nonce_used_seen_at: None,
+            accepted_sends: 0,
         };
         let result = metadata.with_nonce_retries_reset();
         assert!(result.is_some());

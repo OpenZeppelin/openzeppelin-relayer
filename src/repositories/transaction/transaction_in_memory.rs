@@ -2521,6 +2521,7 @@ mod tests {
             nonce_too_high_retries: 0,
             nonce_used_seen_at_block: None,
             nonce_used_seen_at: None,
+            accepted_sends: 0,
         });
         repo.create(tx).await.unwrap();
 

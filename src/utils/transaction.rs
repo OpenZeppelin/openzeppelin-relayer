@@ -36,7 +36,8 @@ pub fn get_resubmit_timeout_with_backoff(timeout: i64, attempts: usize) -> i64 {
     if attempts <= 1 {
         timeout
     } else {
-        timeout * 2_i64.pow((attempts - 1) as u32)
+        // Cap the exponent at 4: at most 16 base intervals, even in an outage.
+        timeout.saturating_mul(2_i64.pow((attempts - 1).min(4) as u32))
     }
 }
 

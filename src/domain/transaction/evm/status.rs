@@ -16,9 +16,9 @@ use tracing::{debug, error, info, warn};
 use super::super::common::is_active_nonce_status;
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
-    has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    ensure_status_one_of, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_priced,
+    has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, is_unsent,
+    make_noop, too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_max_age,
@@ -26,9 +26,7 @@ use crate::constants::{
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
     DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
-use crate::domain::transaction::common::{
-    get_age_of_sent_at, is_final_state, is_pending_transaction,
-};
+use crate::domain::transaction::common::{is_final_state, is_pending_transaction};
 use crate::domain::transaction::util::get_age_since_created;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
@@ -473,10 +471,14 @@ where
         tx: &TransactionRepoModel,
     ) -> Result<bool, TransactionError> {
         // Validate transaction is in correct state for resubmission
-        ensure_status(tx, TransactionStatus::Submitted, Some("should_resubmit"))?;
+        ensure_status_one_of(
+            tx,
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("should_resubmit"),
+        )?;
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let age = get_age_of_sent_at(tx)?;
+        let age = get_age_since_priced(tx)?;
 
         // Check if network lacks mempool and determine appropriate timeout
         let network_model = self
@@ -687,6 +689,10 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        if tx.network_data.get_evm_transaction_data()?.raw.is_none() {
+            self.send_transaction_resubmit_job(&tx).await?;
+            return Ok(tx);
+        }
         if self.should_resubmit(&tx).await? {
             // Before resubmitting, check if there's a nonce gap blocking this tx.
             // Only worth the RPC call when we're already going to resubmit (tx is stale).
@@ -701,6 +707,10 @@ where
 
             let resubmitted_tx = self.handle_resubmission(tx).await?;
             return Ok(resubmitted_tx);
+        }
+
+        if is_unsent(&tx)? && get_age_since_priced(&tx)? > get_evm_resend_timeout() {
+            self.send_transaction_submit_job(&tx).await?;
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
@@ -1451,7 +1461,13 @@ where
         // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
         // if the transaction is too young. Just update status and return.
         // For other states (Mined/Confirmed/Failed/etc), process immediately regardless of age.
-        if is_too_early_to_resubmit(&tx)? && is_pending_transaction(&status) {
+        if is_too_early_to_resubmit(&tx)?
+            && is_pending_transaction(&status)
+            && !(matches!(
+                status,
+                TransactionStatus::Sent | TransactionStatus::Submitted
+            ) && tx.network_data.get_evm_transaction_data()?.raw.is_none())
+        {
             // Update status if it changed, then return
             return self
                 .update_transaction_status_if_needed(tx, status, None)
@@ -1661,7 +1677,13 @@ where
 
         // Transaction was prepared but submission job may have failed
         // Re-queue a resend job if it's been stuck for a while
-        let age_since_sent = get_age_since_status_change(&tx)?;
+        let age_since_sent = get_age_since_priced(&tx)?;
+        let missing_raw = tx.network_data.get_evm_transaction_data()?.raw.is_none();
+
+        if missing_raw {
+            self.send_transaction_resubmit_job(&tx).await?;
+            return Ok(tx);
+        }
 
         if age_since_sent > get_evm_resend_timeout() {
             // A nonce gap below this tx makes any resubmit futile; the detector schedules
@@ -1698,11 +1720,15 @@ where
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
                 age_seconds = age_since_sent.num_seconds(),
-                "transaction stuck in Sent, queuing resubmit job with repricing"
+                "transaction stuck in Sent, scheduling delivery"
             );
 
-            // Queue resubmit job to reprice the transaction for better acceptance
-            self.send_transaction_resubmit_job(&tx).await?;
+            // Reuse the stored bytes until the price timer is due.
+            if self.should_resubmit(&tx).await? {
+                self.send_transaction_resubmit_job(&tx).await?;
+            } else {
+                self.send_transaction_submit_job(&tx).await?;
+            }
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
@@ -1810,7 +1836,7 @@ where
         }
 
         // Only try if transaction has been stuck for a while
-        let age = get_age_of_sent_at(tx)?;
+        let age = get_age_since_priced(tx)?;
         let min_age_for_recovery = get_evm_min_age_for_hash_recovery();
 
         if age < min_age_for_recovery {
@@ -2023,7 +2049,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
@@ -2202,6 +2228,11 @@ mod tests {
     /// Allows quick creation of a test transaction with default fields,
     /// then updates them based on the provided status or overrides.
     pub fn make_test_transaction(status: TransactionStatus) -> TransactionRepoModel {
+        let raw = matches!(
+            status,
+            TransactionStatus::Sent | TransactionStatus::Submitted
+        )
+        .then(|| vec![1, 2, 3]);
         TransactionRepoModel {
             version: 0,
             id: "test-tx-id".to_string(),
@@ -2228,7 +2259,7 @@ mod tests {
                 signature: None,
                 hash: None,
                 speed: Some(Speed::Fast),
-                raw: None,
+                raw,
             }),
             priced_at: None,
             hashes: Vec::new(),
@@ -2284,7 +2315,7 @@ mod tests {
         }
     }
 
-    fn make_mock_receipt(status: bool, block_number: Option<u64>) -> TransactionReceipt {
+    pub(super) fn make_mock_receipt(status: bool, block_number: Option<u64>) -> TransactionReceipt {
         // Use some placeholder values for minimal completeness
         let tx_hash = TxHash::from(b256!(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -2911,8 +2942,10 @@ mod tests {
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
                 evm_data.chain_id = 42161; // Arbitrum
             }
-            // Set enough hashes to trigger too_many_attempts (> 50)
-            tx.hashes = vec!["0xHash1".to_string(); 51];
+            tx.metadata = Some(crate::models::TransactionMetadata {
+                accepted_sends: 51,
+                ..Default::default()
+            });
 
             // Mock network repository to return Arbitrum network
             mocks
@@ -7963,3 +7996,7 @@ mod tests {
 #[cfg(test)]
 #[path = "reprepare_tests.rs"]
 mod reprepare_tests;
+
+#[cfg(test)]
+#[path = "save_before_send_tests.rs"]
+mod save_before_send_tests;

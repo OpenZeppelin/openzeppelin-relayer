@@ -252,6 +252,61 @@ where
             })
     }
 
+    /// Save the full signed payload before it can be sent. A lost version sends nothing.
+    async fn save_signed_payload(
+        &self,
+        tx: &TransactionRepoModel,
+        data: EvmTransactionData,
+        status: Option<TransactionStatus>,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        if data.raw.is_none() {
+            return Err(TransactionError::InvalidType(
+                "Raw transaction data is missing".into(),
+            ));
+        }
+        let hash = data.hash.as_ref().ok_or_else(|| {
+            TransactionError::InvalidType("Signed transaction hash is missing".into())
+        })?;
+        let mut hashes = tx.hashes.clone();
+        if !hashes.contains(hash) {
+            hashes.push(hash.clone());
+        }
+        self.cas_update(
+            tx,
+            TransactionUpdateRequest {
+                network_data: Some(NetworkTransactionData::Evm(data)),
+                hashes: Some(hashes),
+                priced_at: Some(Utc::now().to_rfc3339()),
+                status,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Keep send evidence guarded so it cannot mark a newer payload as sent.
+    async fn record_send(
+        &self,
+        tx: &TransactionRepoModel,
+        accepted: bool,
+    ) -> Result<TransactionRepoModel, TransactionError> {
+        let mut metadata = tx.metadata.clone().unwrap_or_default();
+        metadata.nonce_too_high_retries = 0;
+        if accepted {
+            metadata.accepted_sends = metadata.accepted_sends.saturating_add(1);
+        }
+        self.cas_update(
+            tx,
+            TransactionUpdateRequest {
+                status: Some(TransactionStatus::Submitted),
+                sent_at: Some(Utc::now().to_rfc3339()),
+                metadata: Some(metadata),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     /// Best effort: a lookup failure must not block scheduling the check.
     ///
     /// Resolves by the relayer's network name, not by chain id like the checks in
@@ -1065,21 +1120,13 @@ where
         let updated_evm_data =
             updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Track the transaction hash
-        let mut hashes = tx_with_nonce.hashes.clone();
-        if let Some(hash) = updated_evm_data.hash.clone() {
-            hashes.push(hash);
-        }
-
-        // Update with signed data and mark as Sent
-        let postsign_update = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Sent),
-            network_data: Some(NetworkTransactionData::Evm(updated_evm_data)),
-            hashes: Some(hashes),
-            ..Default::default()
-        };
-
-        let updated_tx = self.cas_update(&tx_with_nonce, postsign_update).await?;
+        let updated_tx = self
+            .save_signed_payload(
+                &tx_with_nonce,
+                updated_evm_data,
+                Some(TransactionStatus::Sent),
+            )
+            .await?;
 
         debug!(
             tx_id = %updated_tx.id,
@@ -1165,23 +1212,29 @@ where
             return Ok(tx);
         }
 
-        let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
-            TransactionError::InvalidType("Raw transaction data is missing".to_string())
-        })?;
+        let Some(raw_tx) = evm_tx_data.raw.as_ref() else {
+            return Ok(tx);
+        };
 
-        // Send transaction to blockchain - this is the critical operation
-        // If this fails, retry is safe due to nonce idempotency
-        match self.provider.send_raw_transaction(raw_tx).await {
-            Ok(_) => {
-                // Transaction submitted successfully
-            }
+        // Release before every send, including a resend of Submitted bytes.
+        let tx = self
+            .cas_update(
+                &tx,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Submitted),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let accepted = match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => true,
             Err(e) => {
                 let error_kind = Self::classify_submission_error(&e);
 
                 match (&tx.status, &error_kind) {
                     // AlreadyKnown / ReplacementUnderpriced (any status):
-                    // The node recognizes the exact same transaction bytes (same hash)
-                    // in its mempool — this confirms it's our tx. Safe to treat as submitted.
+                    // A saved payload can already be in the mempool. Receipt checks
+                    // determine which payload mined. These errors do not raise the count.
                     (_, SubmissionErrorKind::AlreadyKnown)
                     | (_, SubmissionErrorKind::ReplacementUnderpriced) => {
                         warn!(
@@ -1190,7 +1243,7 @@ where
                             error_kind = ?error_kind,
                             "transaction appears to be already submitted based on RPC error - treating as success"
                         );
-                        // Continue to update status to Submitted
+                        false
                     }
                     // NonceTooLow (any status): the nonce was consumed, but we don't know
                     // by whom — could be our tx (retry after crash) or a different tx
@@ -1251,23 +1304,9 @@ where
                     }
                 }
             }
-        }
-
-        // Transaction is now on-chain - update database
-        // If this fails, transaction is still valid, just not tracked correctly
-        // Reset nonce_too_high_retries on success so resubmission gets a fresh retry budget.
-        let metadata_reset = tx
-            .metadata
-            .as_ref()
-            .and_then(|m| m.with_nonce_retries_reset());
-        let update = TransactionUpdateRequest {
-            status: Some(TransactionStatus::Submitted),
-            sent_at: Some(Utc::now().to_rfc3339()),
-            metadata: metadata_reset,
-            ..Default::default()
         };
 
-        let updated_tx = match self.cas_update(&tx, update).await {
+        let updated_tx = match self.record_send(&tx, accepted).await {
             Ok(tx) => tx,
             Err(e) if e.is_concurrent_update_conflict() => return Err(e),
             Err(e) => {
@@ -1352,6 +1391,11 @@ where
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
+        // Duplicate jobs must not sign again before the current price expires.
+        if evm_data.raw.is_some() && !self.should_resubmit(&tx).await? {
+            return Ok(tx);
+        }
+
         // Calculate bumped gas price
         // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
         let bumped_price_params = self
@@ -1388,26 +1432,34 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Send the signed transaction to the network.
-        let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
+        let tx = self
+            .save_signed_payload(
+                &tx,
+                final_evm_data.clone(),
+                Some(TransactionStatus::Submitted),
+            )
+            .await?;
+
+        // Send resubmitted transaction to blockchain - this is the critical operation
+        let accepted = match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
                 // Transaction resubmitted successfully with new pricing
-                false
+                true
             }
             Err(e) => {
                 let error_kind = Self::classify_submission_error(&e);
 
                 match &error_kind {
-                    // AlreadyKnown / ReplacementUnderpriced: existing behavior — keep original hash
+                    // The prior payload can be in the mempool. Its hash is saved.
                     SubmissionErrorKind::AlreadyKnown
                     | SubmissionErrorKind::ReplacementUnderpriced => {
                         warn!(
                             tx_id = %tx.id,
                             error = %e,
                             error_kind = ?error_kind,
-                            "resubmission indicates transaction already in mempool/mined - keeping original hash"
+                            "resubmission indicates transaction already in mempool/mined"
                         );
-                        true
+                        false
                     }
                     // NonceTooLow: nonce was consumed (possibly externally).
                     // Schedule nonce recovery and treat as already submitted — the
@@ -1428,7 +1480,7 @@ where
                                 "failed to schedule nonce recovery status check during resubmission"
                             );
                         }
-                        true
+                        return Ok(tx);
                     }
                     // NonceTooHigh: same pattern as submit_transaction — track retries, escalate
                     SubmissionErrorKind::NonceTooHigh => {
@@ -1445,38 +1497,7 @@ where
             }
         };
 
-        // Reset nonce_too_high_retries on success so subsequent resubmissions get a fresh budget.
-        let metadata_reset = tx
-            .metadata
-            .as_ref()
-            .and_then(|m| m.with_nonce_retries_reset());
-
-        // If transaction was already submitted, just update status without changing hash
-        let update = if was_already_submitted {
-            TransactionUpdateRequest {
-                status: Some(TransactionStatus::Submitted),
-                metadata: metadata_reset,
-                ..Default::default()
-            }
-        } else {
-            // Transaction resubmitted successfully - update with new hash and pricing
-            let mut hashes = tx.hashes.clone();
-            if let Some(hash) = final_evm_data.hash.clone() {
-                hashes.push(hash);
-            }
-
-            TransactionUpdateRequest {
-                network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-                hashes: Some(hashes),
-                status: Some(TransactionStatus::Submitted),
-                priced_at: Some(Utc::now().to_rfc3339()),
-                sent_at: Some(Utc::now().to_rfc3339()),
-                metadata: metadata_reset,
-                ..Default::default()
-            }
-        };
-
-        let updated_tx = match self.cas_update(&tx, update).await {
+        let updated_tx = match self.record_send(&tx, accepted).await {
             Ok(tx) => tx,
             Err(e) if e.is_concurrent_update_conflict() => return Err(e),
             Err(e) => {
@@ -1665,18 +1686,10 @@ where
         let final_evm_data =
             evm_data_with_price_params.with_signed_transaction_data(sig_result.into_evm()?);
 
-        // Update the transaction in the repository
         let updated_tx = self
-            .cas_update(
-                &old_tx,
-                TransactionUpdateRequest {
-                    network_data: Some(NetworkTransactionData::Evm(final_evm_data)),
-                    ..Default::default()
-                },
-            )
+            .save_signed_payload(&old_tx, final_evm_data, None)
             .await?;
-
-        self.send_transaction_resubmit_job(&updated_tx).await?;
+        self.send_transaction_submit_job(&updated_tx).await?;
 
         // Send notification
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
@@ -1868,6 +1881,38 @@ mod tests {
                 ])))
             });
         mock_network
+    }
+
+    fn expect_lifecycle_updates(
+        repo: &mut MockTransactionRepository,
+        initial: &TransactionRepoModel,
+        count: usize,
+    ) {
+        let mut current = initial.clone();
+        repo.expect_partial_update_if_version()
+            .times(count)
+            .returning(move |_, version, update| {
+                assert_eq!(version, current.version);
+                current.version += 1;
+                current.apply_partial_update(update);
+                Ok(current.clone())
+            });
+    }
+
+    fn expect_release_write(repo: &mut MockTransactionRepository, initial: &TransactionRepoModel) {
+        let mut released = initial.clone();
+        repo.expect_partial_update_if_version()
+            .times(1)
+            .withf(|_, _, update| {
+                update.status == Some(TransactionStatus::Submitted)
+                    && update.sent_at.is_none()
+                    && update.metadata.is_none()
+            })
+            .returning(move |_, _, update| {
+                released.version += 1;
+                released.apply_partial_update(update);
+                Ok(released.clone())
+            });
     }
 
     // Helper to create a relayer model with specific configuration for these tests
@@ -3663,6 +3708,8 @@ mod tests {
                 })
             });
 
+        expect_release_write(&mut mock_transaction, &test_tx);
+
         // Should still update to Submitted status
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -3702,7 +3749,7 @@ mod tests {
     /// Test submit_transaction with real error (not "already known") should fail
     #[tokio::test]
     async fn test_submit_transaction_real_error_fails() {
-        let mock_transaction = MockTransactionRepository::new();
+        let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
         let mock_signer = MockSigner::new();
@@ -3731,6 +3778,8 @@ mod tests {
                 })
             });
 
+        expect_release_write(&mut mock_transaction, &test_tx);
+
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
             provider: mock_provider,
@@ -3748,9 +3797,9 @@ mod tests {
     }
 
     /// Test resubmit_transaction when transaction is already submitted
-    /// Should NOT update hash, only status
+    /// Keeps the saved candidate and the previous hash.
     #[tokio::test]
-    async fn test_resubmit_transaction_already_submitted_preserves_hash() {
+    async fn test_resubmit_transaction_already_submitted_keeps_both_hashes() {
         let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
@@ -3758,7 +3807,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = default_mock_network();
+        let mut mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3802,7 +3851,7 @@ mod tests {
                 Box::pin(ready(Ok(
                     crate::domain::relayer::SignTransactionResponse::Evm(
                         crate::domain::relayer::SignTransactionResponseEvm {
-                            hash: "0xnew_hash_that_should_not_be_saved".to_string(),
+                            hash: "0xcandidate_hash".to_string(),
                             signature: crate::models::EvmTransactionDataSignature {
                                 r: "r".to_string(),
                                 s: "s".to_string(),
@@ -3827,23 +3876,15 @@ mod tests {
                 })
             });
 
-        // Verify that partial_update is called with NO network_data (preserving original hash)
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update_if_version()
-            .times(1)
-            .withf(|_, _, update| {
-                // Should only update status, NOT network_data or hashes
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.network_data.is_none()
-                    && update.hashes.is_none()
-            })
-            .returning(move |_, _, _| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = TransactionStatus::Submitted;
-                // Hash should remain unchanged!
-                Ok(updated_tx)
-            });
+        // Save the candidate, then record the send result.
+        test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        expect_lifecycle_updates(&mut mock_transaction, &test_tx, 2);
+
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(
+                super::super::status::tests::create_test_network_model(),
+            ))
+        });
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -3861,9 +3902,9 @@ mod tests {
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
 
-        // Verify hash was NOT changed
+        // The signed candidate is saved even when the node reports already known.
         if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
-            assert_eq!(evm_data.hash, Some(original_hash));
+            assert_eq!(evm_data.hash, Some("0xcandidate_hash".to_string()));
         } else {
             panic!("Expected EVM network data");
         }
@@ -3895,6 +3936,8 @@ mod tests {
             .expect_send_raw_transaction()
             .times(1)
             .returning(|_| Box::pin(async { Ok("0xsubmitted_hash".to_string()) }));
+
+        expect_release_write(&mut mock_transaction, &test_tx);
 
         // But database update fails
         mock_transaction
@@ -3928,9 +3971,9 @@ mod tests {
         // Should return Ok (transaction is on-chain, don't retry)
         assert!(result.is_ok());
         let returned_tx = result.unwrap();
-        // Should return original tx since DB update failed
+        // Keep the released record when the post-send write fails.
         assert_eq!(returned_tx.id, test_tx.id);
-        assert_eq!(returned_tx.status, TransactionStatus::Sent); // Original status
+        assert_eq!(returned_tx.status, TransactionStatus::Submitted); // Released before send
     }
 
     /// Test send_transaction_resend_job success
@@ -4126,7 +4169,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = default_mock_network();
+        let mut mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4187,29 +4230,14 @@ mod tests {
             .returning(|_| Box::pin(async { Ok("0xnew_hash".to_string()) }));
 
         // Should update to Submitted status with new hash
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update_if_version()
-            .times(1)
-            .withf(|_, _, update| {
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.sent_at.is_some()
-                    && update.priced_at.is_some()
-                    && update.hashes.is_some()
-            })
-            .returning(move |_, _, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = update.status.unwrap();
-                updated_tx.sent_at = update.sent_at.clone();
-                updated_tx.priced_at = update.priced_at.clone();
-                if let Some(hashes) = update.hashes.clone() {
-                    updated_tx.hashes = hashes;
-                }
-                if let Some(network_data) = update.network_data.clone() {
-                    updated_tx.network_data = network_data;
-                }
-                Ok(updated_tx)
-            });
+        test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        expect_lifecycle_updates(&mut mock_transaction, &test_tx, 2);
+
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(
+                super::super::status::tests::create_test_network_model(),
+            ))
+        });
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -4397,6 +4425,8 @@ mod tests {
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
+        expect_release_write(&mut mock_transaction, &test_tx);
+
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
             provider: mock_provider,
@@ -4482,6 +4512,8 @@ mod tests {
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
+        expect_release_write(&mut mock_transaction, &test_tx);
+
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
             provider: mock_provider,
@@ -4494,15 +4526,15 @@ mod tests {
             signer: mock_signer,
         };
 
-        // Should return Ok (not error → Dead Queue) but NOT advance to Submitted
+        // The nonce error returns Ok and keeps the release status.
         let result = evm_transaction.submit_transaction(test_tx.clone()).await;
         assert!(
             result.is_ok(),
             "Expected Ok on nonce too low for Sent tx, got: {result:?}"
         );
-        // Status should remain Sent — reconciliation happens via status checker
+        // The release remains Submitted. Receipt checks resolve the nonce.
         let returned_tx = result.unwrap();
-        assert_eq!(returned_tx.status, TransactionStatus::Sent);
+        assert_eq!(returned_tx.status, TransactionStatus::Submitted);
     }
 
     #[tokio::test]
@@ -4673,21 +4705,15 @@ mod tests {
             })
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        // Should update status without changing hash (was_already_submitted = true)
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update_if_version()
-            .times(1)
-            .withf(|_, _, update| {
-                update.status == Some(TransactionStatus::Submitted)
-                    && update.network_data.is_none()
-                    && update.hashes.is_none()
-            })
-            .returning(move |_, _, _| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = TransactionStatus::Submitted;
-                Ok(updated_tx)
-            });
+        // The candidate is saved before the nonce error.
+        test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        expect_lifecycle_updates(&mut mock_transaction, &test_tx, 1);
+
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(
+                super::super::status::tests::create_test_network_model(),
+            ))
+        });
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -4704,9 +4730,9 @@ mod tests {
         let result = evm_transaction.resubmit_transaction(test_tx.clone()).await;
         assert!(result.is_ok());
         let updated_tx = result.unwrap();
-        // Hash should remain unchanged
+        // The saved candidate remains current.
         if let NetworkTransactionData::Evm(evm_data) = &updated_tx.network_data {
-            assert_eq!(evm_data.hash, Some(original_hash));
+            assert_eq!(evm_data.hash, Some("0xnew_hash".to_string()));
         } else {
             panic!("Expected EVM network data");
         }
@@ -4751,6 +4777,8 @@ mod tests {
                     ))
                 })
             });
+
+        expect_release_write(&mut mock_transaction, &test_tx);
 
         // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
         let test_tx_clone = test_tx.clone();
@@ -4827,6 +4855,8 @@ mod tests {
                 })
             });
 
+        expect_release_write(&mut mock_transaction, &test_tx);
+
         // Should persist incremented counter (nonce_too_high_retries = 3) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -4877,7 +4907,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = default_mock_network();
+        let mut mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4951,6 +4981,17 @@ mod tests {
                 })
             });
 
+        let released = test_tx.clone();
+        mock_transaction
+            .expect_partial_update_if_version()
+            .times(1)
+            .withf(|_, _, update| update.hashes.is_some())
+            .returning(move |_, _, update| {
+                let mut tx = released.clone();
+                tx.version += 1;
+                tx.apply_partial_update(update);
+                Ok(tx)
+            });
         // Should persist incremented counter (nonce_too_high_retries = 1) in metadata
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -4964,6 +5005,13 @@ mod tests {
                     .unwrap_or(false)
             })
             .returning(move |_, _, _| Ok(test_tx_clone.clone()));
+
+        test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(
+                super::super::status::tests::create_test_network_model(),
+            ))
+        });
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),

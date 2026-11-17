@@ -69,7 +69,7 @@ pub fn is_noop(evm_data: &EvmTransactionData) -> bool {
 
 /// Checks if a transaction has too many attempts
 pub fn too_many_attempts(tx: &TransactionRepoModel) -> bool {
-    tx.hashes.len() > MAXIMUM_TX_ATTEMPTS
+    tx.metadata.as_ref().map_or(0, |m| m.accepted_sends) > MAXIMUM_TX_ATTEMPTS as u64
 }
 
 /// Checks if a transaction has too many NOOP attempts
@@ -199,6 +199,35 @@ pub fn get_age_since_status_change(
 
     // Fallback to created_at
     get_age_since_created(tx)
+}
+
+/// Age of the current payload. Old records can have no price or send time.
+pub fn get_age_since_priced(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
+    let timestamp = tx
+        .priced_at
+        .as_ref()
+        .or(tx.sent_at.as_ref())
+        .unwrap_or(&tx.created_at);
+    let time = DateTime::parse_from_rfc3339(timestamp).map_err(|e| {
+        TransactionError::UnexpectedError(format!("Error parsing payload time: {e}"))
+    })?;
+    Ok(Utc::now().signed_duration_since(time))
+}
+
+/// A previous payload's send time does not prove that the current bytes were sent.
+pub fn is_unsent(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
+    let Some(sent_at) = &tx.sent_at else {
+        return Ok(true);
+    };
+    let Some(priced_at) = &tx.priced_at else {
+        return Ok(false);
+    };
+    let parse = |value: &str| {
+        DateTime::parse_from_rfc3339(value).map_err(|e| {
+            TransactionError::UnexpectedError(format!("Error parsing payload time: {e}"))
+        })
+    };
+    Ok(parse(sent_at)? < parse(priced_at)?)
 }
 
 /// Check if transaction is too young for resubmission and timeout checks.
@@ -543,11 +572,14 @@ mod tests {
         assert!(!too_many_attempts(&tx));
 
         // Test with maximum attempts
-        tx.hashes = vec!["hash".to_string(); MAXIMUM_TX_ATTEMPTS];
+        tx.metadata = Some(crate::models::TransactionMetadata {
+            accepted_sends: MAXIMUM_TX_ATTEMPTS as u64,
+            ..Default::default()
+        });
         assert!(!too_many_attempts(&tx));
 
         // Test with too many attempts
-        tx.hashes = vec!["hash".to_string(); MAXIMUM_TX_ATTEMPTS + 1];
+        tx.metadata.as_mut().unwrap().accepted_sends += 1;
         assert!(too_many_attempts(&tx));
     }
 
