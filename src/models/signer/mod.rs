@@ -152,10 +152,9 @@ pub struct AzureKeyVaultSignerConfig {
     pub tenant_id: Option<SecretString>,
     pub client_id: Option<SecretString>,
     pub client_secret: Option<SecretString>,
-    pub federated_token_file: Option<SecretString>,
     #[validate(custom(
-        function = "validate_secret_url",
-        message = "Vault URL must be a valid URL"
+        function = "validate_azure_vault_url",
+        message = "Vault URL must be an Azure Key Vault URL (https://<vault-name>.vault.azure.net)"
     ))]
     pub vault_url: SecretString,
     #[validate(custom(
@@ -404,16 +403,72 @@ fn validate_optional_secret_if_present(
     Ok(())
 }
 
+/// Host suffix of Key Vault endpoints in the Azure public cloud, the only cloud
+/// the Azure signer requests tokens for.
+const AZURE_KEY_VAULT_HOST_SUFFIX: &str = ".vault.azure.net";
+
+/// Custom validator for the Azure Key Vault URL.
+///
+/// The URL must be an HTTPS Key Vault endpoint: the host ends with the Key
+/// Vault suffix, which starts with a dot. Key paths are appended to it, so it
+/// must be a bare base URL: a path, query string or fragment is rejected.
+fn validate_azure_vault_url(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    secret.as_str(|value| {
+        let url = reqwest::Url::parse(value)
+            .map_err(|_| validator::ValidationError::new("invalid_url"))?;
+        let is_azure_vault = url.scheme() == "https"
+            && url
+                .host_str()
+                .is_some_and(|host| host.ends_with(AZURE_KEY_VAULT_HOST_SUFFIX))
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none();
+        if !is_azure_vault {
+            return Err(validator::ValidationError::new("vault_url_not_azure"));
+        }
+        Ok(())
+    })
+}
+
+/// Returns true when the value has the shape of a GUID or a domain name:
+/// letters, digits, hyphens and single dots, starting and ending with a letter
+/// or digit.
+fn is_azure_tenant_identifier(value: &str) -> bool {
+    let is_edge = |c: char| c.is_ascii_alphanumeric();
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && value.starts_with(is_edge)
+        && value.ends_with(is_edge)
+        && !value.contains("..")
+}
+
+/// Validates that the Azure tenant ID is present and is an identifier (a GUID
+/// or a domain name) rather than a URL or path.
+fn validate_azure_tenant_id(
+    value: &Option<SecretString>,
+) -> Result<(), validator::ValidationError> {
+    validate_required_optional_secret(value, "tenant_id", "Tenant ID cannot be empty")?;
+
+    let is_identifier = value
+        .as_ref()
+        .is_some_and(|secret| secret.as_str(is_azure_tenant_identifier));
+    if !is_identifier {
+        let mut error = validator::ValidationError::new("invalid_tenant_id");
+        error.add_param(std::borrow::Cow::Borrowed("field"), &"tenant_id");
+        error.message = Some("Tenant ID must be a GUID or a domain name".into());
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 fn validate_azure_key_vault_config(
     config: &AzureKeyVaultSignerConfig,
 ) -> Result<(), validator::ValidationError> {
     match config.auth_type() {
         AzureKeyVaultAuthType::ClientSecret => {
-            validate_required_optional_secret(
-                &config.tenant_id,
-                "tenant_id",
-                "Tenant ID cannot be empty",
-            )?;
+            validate_azure_tenant_id(&config.tenant_id)?;
             validate_required_optional_secret(
                 &config.client_id,
                 "client_id",
@@ -433,20 +488,11 @@ fn validate_azure_key_vault_config(
             )?;
         }
         AzureKeyVaultAuthType::WorkloadIdentity => {
-            validate_required_optional_secret(
-                &config.tenant_id,
-                "tenant_id",
-                "Tenant ID cannot be empty",
-            )?;
+            validate_azure_tenant_id(&config.tenant_id)?;
             validate_required_optional_secret(
                 &config.client_id,
                 "client_id",
                 "Client ID cannot be empty",
-            )?;
-            validate_optional_secret_if_present(
-                &config.federated_token_file,
-                "federated_token_file",
-                "Federated token file cannot be empty",
             )?;
         }
     }
@@ -832,7 +878,6 @@ mod tests {
             tenant_id: Some(SecretString::new("tenant-id")),
             client_id: Some(SecretString::new("client-id")),
             client_secret: Some(SecretString::new("client-secret")),
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -849,7 +894,6 @@ mod tests {
             tenant_id: None,
             client_id: Some(SecretString::new("managed-client-id")),
             client_secret: None,
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -866,7 +910,6 @@ mod tests {
             tenant_id: None,
             client_id: Some(SecretString::new("workload-client-id")),
             client_secret: None,
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -879,6 +922,117 @@ mod tests {
             assert!(msg.contains("Tenant ID cannot be empty"));
         } else {
             panic!("Expected InvalidConfig error for missing tenant ID");
+        }
+    }
+
+    fn azure_signer(auth_type: AzureKeyVaultAuthType, tenant_id: &str, vault_url: &str) -> Signer {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(auth_type),
+            tenant_id: Some(SecretString::new(tenant_id)),
+            client_id: Some(SecretString::new("client-id")),
+            client_secret: Some(SecretString::new("client-secret")),
+            vault_url: SecretString::new(vault_url),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        });
+        Signer::new("azure-signer".to_string(), config)
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_tenant_id_that_is_not_an_identifier() {
+        let invalid_tenant_ids = [
+            "https://attacker.example",
+            "http://127.0.0.1:9900/tenant-a",
+            "tenant/../other",
+            "tenant?x=1",
+            "tenant id",
+            ".",
+            "..",
+            "contoso..com",
+            "-tenant",
+            "tenant.",
+        ];
+
+        for tenant_id in invalid_tenant_ids {
+            for auth_type in [
+                AzureKeyVaultAuthType::ClientSecret,
+                AzureKeyVaultAuthType::WorkloadIdentity,
+            ] {
+                let result = azure_signer(auth_type, tenant_id, "https://example.vault.azure.net")
+                    .validate();
+                assert!(
+                    matches!(result, Err(SignerValidationError::InvalidConfig(_))),
+                    "tenant_id {tenant_id:?} should be rejected for {auth_type:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_guid_and_domain_tenant_id() {
+        for tenant_id in [
+            "11111111-2222-3333-4444-555555555555",
+            "contoso.onmicrosoft.com",
+        ] {
+            let result = azure_signer(
+                AzureKeyVaultAuthType::ClientSecret,
+                tenant_id,
+                "https://example.vault.azure.net",
+            )
+            .validate();
+            assert!(result.is_ok(), "tenant_id {tenant_id:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_vault_url_outside_azure() {
+        let invalid_vault_urls = [
+            "https://attacker.example",
+            "http://example.vault.azure.net",
+            "https://vault.azure.net",
+            "https://evilvault.azure.net",
+            "https://example.vault.azure.net.attacker.example",
+            "https://example.vault.azure.net@attacker.example",
+            "https://attacker.example/example.vault.azure.net",
+            "http://169.254.169.254",
+            "http://localhost:8080",
+            "https://example.vault.azure.net.",
+            "https://example.vault.azure.net?x=1",
+            "https://example.vault.azure.net/?x=1",
+            "https://example.vault.azure.net#fragment",
+            "https://example.vault.azure.net/keys/my-key",
+            "https://example.vault.azure.net/keys/my-key/0123456789abcdef",
+            "https://attacker.example\\@example.vault.azure.net",
+        ];
+
+        for vault_url in invalid_vault_urls {
+            let result = azure_signer(
+                AzureKeyVaultAuthType::ClientSecret,
+                "11111111-2222-3333-4444-555555555555",
+                vault_url,
+            )
+            .validate();
+            assert!(
+                matches!(result, Err(SignerValidationError::InvalidConfig(_))),
+                "vault_url {vault_url:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_azure_vault_url() {
+        for vault_url in [
+            "https://example.vault.azure.net",
+            "https://example.vault.azure.net/",
+            "https://EXAMPLE.VAULT.AZURE.NET",
+        ] {
+            let result = azure_signer(
+                AzureKeyVaultAuthType::ClientSecret,
+                "11111111-2222-3333-4444-555555555555",
+                vault_url,
+            )
+            .validate();
+            assert!(result.is_ok(), "vault_url {vault_url:?} should be accepted");
         }
     }
 

@@ -501,6 +501,46 @@ mod tests {
         assert!(matches!(signer, EvmSigner::Vault(_)));
     }
 
+    fn azure_signer_model(vault_url: &str) -> SignerDomainModel {
+        SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::AzureKeyVault(crate::models::AzureKeyVaultSignerConfig {
+                auth_type: Some(crate::models::AzureKeyVaultAuthType::ManagedIdentity),
+                tenant_id: None,
+                client_id: None,
+                client_secret: None,
+                vault_url: SecretString::new(vault_url),
+                key_name: SecretString::new("test-key"),
+                key_version: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_evm_signer_azure_key_vault() {
+        let signer_model = azure_signer_model("https://example.vault.azure.net");
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        assert!(matches!(signer, EvmSigner::AzureKeyVault(_)));
+    }
+
+    #[tokio::test]
+    async fn test_create_evm_signer_azure_key_vault_with_non_azure_vault_url_is_unusable() {
+        // Signers loaded from storage skip request validation. Building one
+        // must not fail, because startup builds every stored relayer and a
+        // failure there stops the whole service. It must refuse to operate.
+        let signer_model = azure_signer_model("https://attacker.example");
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        assert!(signer.address().await.is_err());
+    }
+
     #[tokio::test]
     async fn test_create_evm_signer_aws_kms() {
         let signer_model = SignerDomainModel {

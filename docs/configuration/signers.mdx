@@ -312,7 +312,7 @@ Uses Azure Key Vault for secure EVM signing operations with secp256k1 keys.
 
 * `client_secret`: Uses a Microsoft Entra application client ID and client secret.
 * `managed_identity`: Uses an Azure managed identity. `client_id` is optional and can be used for user-assigned identities.
-* `workload_identity`: Uses a federated workload identity. If `federated_token_file` is not set in config, the relayer reads `AZURE_FEDERATED_TOKEN_FILE`.
+* `workload_identity`: Uses a federated workload identity. The relayer reads the token file path from the `AZURE_FEDERATED_TOKEN_FILE` environment variable, which Azure Kubernetes Service workload identity sets automatically.
 
 </Callout>
 
@@ -346,14 +346,12 @@ Configuration fields:
 | --- | --- | --- |
 | auth_type | String | Azure authentication mode. Supported values are `client_secret`, `managed_identity`, and `workload_identity`. Defaults to `client_secret` when omitted |
 | tenant_id.type | String | Type of value source (`env` or `plain`) |
-| tenant_id.value | String | The Azure tenant ID, or the environment variable name containing it. Required for `client_secret` and `workload_identity` |
+| tenant_id.value | String | The Azure tenant ID (a GUID or a domain name such as `contoso.onmicrosoft.com`), or the environment variable name containing it. Required for `client_secret` and `workload_identity` |
 | client_id.type | String | Type of value source (`env` or `plain`) |
 | client_id.value | String | The Azure client ID, or the environment variable name containing it. Required for `client_secret` and `workload_identity`. Optional for `managed_identity` and commonly used for user-assigned identities |
 | client_secret.type | String | Type of value source (`env` or `plain`) |
 | client_secret.value | String | The Azure client secret, or the environment variable name containing it. Required for `client_secret` |
-| federated_token_file.type | String | Type of value source (`env` or `plain`) |
-| federated_token_file.value | String | Path to the federated token file, or the environment variable name containing it. Optional for `workload_identity`; if omitted, `AZURE_FEDERATED_TOKEN_FILE` is used |
-| vault_url | String | The Azure Key Vault URL |
+| vault_url | String | The Azure Key Vault URL. Must be an HTTPS URL of the form `https://<vault-name>.vault.azure.net` |
 | key_name | String | The Azure Key Vault key name used for signing operations |
 | key_version | String | Specific Azure Key Vault key version to use. Optional. When omitted or empty, the latest version for the key is used |
 
@@ -361,6 +359,7 @@ Azure-specific requirements:
 * The signer currently supports EVM networks only
 * Use a secp256k1 key in Azure Key Vault
 * Ensure the chosen identity can read key metadata and perform signing operations
+* For `workload_identity`, set the `AZURE_FEDERATED_TOKEN_FILE` environment variable to the token file path. The `federated_token_file` signer field is no longer accepted, in the config file or through the API. If your configuration sets it, remove the field and set the environment variable instead
 
 ## CDP Signer Configuration
 

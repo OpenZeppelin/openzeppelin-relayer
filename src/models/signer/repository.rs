@@ -98,6 +98,9 @@ pub struct AzureKeyVaultSignerConfigStorage {
         deserialize_with = "deserialize_option_secret_string"
     )]
     pub client_secret: Option<SecretString>,
+    /// Legacy field, never read. Earlier versions persisted a token file path
+    /// here; it stays in the record format so those records still load and so
+    /// records written now remain readable by earlier versions.
     #[serde(
         serialize_with = "serialize_option_secret_string",
         deserialize_with = "deserialize_option_secret_string"
@@ -312,7 +315,7 @@ impl From<AzureKeyVaultSignerConfig> for AzureKeyVaultSignerConfigStorage {
             tenant_id: config.tenant_id,
             client_id: config.client_id,
             client_secret: config.client_secret,
-            federated_token_file: config.federated_token_file,
+            federated_token_file: None,
             vault_url: config.vault_url,
             key_name: config.key_name,
             key_version: config.key_version,
@@ -327,7 +330,6 @@ impl From<AzureKeyVaultSignerConfigStorage> for AzureKeyVaultSignerConfig {
             tenant_id: storage.tenant_id,
             client_id: storage.client_id,
             client_secret: storage.client_secret,
-            federated_token_file: storage.federated_token_file,
             vault_url: storage.vault_url,
             key_name: storage.key_name,
             key_version: storage.key_version,

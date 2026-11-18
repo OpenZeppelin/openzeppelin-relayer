@@ -43,6 +43,9 @@ pub struct AzureKeyVaultSignerRequestConfig {
     pub tenant_id: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
+    /// Not accepted: requests that set it are rejected. Workload identity reads
+    /// the token file path from the `AZURE_FEDERATED_TOKEN_FILE` environment
+    /// variable.
     pub federated_token_file: Option<String>,
     pub vault_url: String,
     pub key_name: String,
@@ -246,6 +249,17 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                 key_id: aws_config.key_id,
             }),
             SignerConfigRequest::AzureKeyVault(azure_config) => {
+                // The token file path is set by the operator through the
+                // environment and never by signer configuration.
+                if azure_config.federated_token_file.is_some() {
+                    return Err(ApiError::BadRequest(
+                        "federated_token_file is not accepted. Workload identity reads the \
+                         token file path from the AZURE_FEDERATED_TOKEN_FILE environment \
+                         variable."
+                            .to_string(),
+                    ));
+                }
+
                 SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
                     auth_type: azure_config.auth_type,
                     tenant_id: azure_config
@@ -256,9 +270,6 @@ impl TryFrom<SignerConfigRequest> for SignerConfig {
                         .map(|value| SecretString::new(&value)),
                     client_secret: azure_config
                         .client_secret
-                        .map(|value| SecretString::new(&value)),
-                    federated_token_file: azure_config
-                        .federated_token_file
                         .map(|value| SecretString::new(&value)),
                     vault_url: SecretString::new(&azure_config.vault_url),
                     key_name: SecretString::new(&azure_config.key_name),
@@ -692,6 +703,44 @@ mod tests {
 
         let result = Signer::try_from(request);
         assert!(result.is_err());
+    }
+
+    fn azure_workload_identity_request(federated_token_file: Option<&str>) -> SignerCreateRequest {
+        SignerCreateRequest {
+            id: Some("azure-signer".to_string()),
+            signer_type: SignerTypeRequest::AzureKeyVault,
+            config: SignerConfigRequest::AzureKeyVault(AzureKeyVaultSignerRequestConfig {
+                auth_type: Some(AzureKeyVaultAuthType::WorkloadIdentity),
+                tenant_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
+                client_id: Some("client-id".to_string()),
+                client_secret: None,
+                federated_token_file: federated_token_file.map(str::to_string),
+                vault_url: "https://example.vault.azure.net".to_string(),
+                key_name: "test-key".to_string(),
+                key_version: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_request_rejects_federated_token_file() {
+        let request = azure_workload_identity_request(Some("/var/run/secrets/token"));
+
+        let result = Signer::try_from(request);
+
+        assert!(
+            matches!(&result, Err(ApiError::BadRequest(msg)) if msg.contains("federated_token_file")),
+            "expected BadRequest naming federated_token_file"
+        );
+    }
+
+    #[test]
+    fn test_valid_azure_key_vault_workload_identity_create_request() {
+        let request = azure_workload_identity_request(None);
+
+        let signer = Signer::try_from(request).unwrap();
+
+        assert!(matches!(signer.config, SignerConfig::AzureKeyVault(_)));
     }
 
     #[test]
