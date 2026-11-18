@@ -407,23 +407,36 @@ fn validate_optional_secret_if_present(
 /// the Azure signer requests tokens for.
 const AZURE_KEY_VAULT_HOST_SUFFIX: &str = ".vault.azure.net";
 
-/// Custom validator for the Azure Key Vault URL.
+/// Returns true for `https://<vault-name>.vault.azure.net` and nothing more.
 ///
-/// The URL must be an HTTPS Key Vault endpoint: the host ends with the Key
-/// Vault suffix, which starts with a dot. Key paths are appended to it, so it
-/// must be a bare base URL: a path, query string or fragment is rejected.
+/// Key paths are appended to this URL, so it must be a bare base URL: no
+/// credentials, port, path, query string or fragment. The host must be a
+/// single vault name label directly under the Key Vault suffix, which starts
+/// with a dot.
+fn is_azure_vault_base_url(url: &reqwest::Url) -> bool {
+    let has_vault_name = url
+        .host_str()
+        .and_then(|host| host.strip_suffix(AZURE_KEY_VAULT_HOST_SUFFIX))
+        .is_some_and(|name| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+
+    url.scheme() == "https"
+        && has_vault_name
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+/// Custom validator for the Azure Key Vault URL.
 fn validate_azure_vault_url(secret: &SecretString) -> Result<(), validator::ValidationError> {
     secret.as_str(|value| {
         let url = reqwest::Url::parse(value)
             .map_err(|_| validator::ValidationError::new("invalid_url"))?;
-        let is_azure_vault = url.scheme() == "https"
-            && url
-                .host_str()
-                .is_some_and(|host| host.ends_with(AZURE_KEY_VAULT_HOST_SUFFIX))
-            && url.path() == "/"
-            && url.query().is_none()
-            && url.fragment().is_none();
-        if !is_azure_vault {
+        if !is_azure_vault_base_url(&url) {
             return Err(validator::ValidationError::new("vault_url_not_azure"));
         }
         Ok(())
@@ -1002,21 +1015,31 @@ mod tests {
             "https://example.vault.azure.net#fragment",
             "https://example.vault.azure.net/keys/my-key",
             "https://example.vault.azure.net/keys/my-key/0123456789abcdef",
+            "https://user:pass@example.vault.azure.net",
+            "https://user@example.vault.azure.net",
+            "https://example.vault.azure.net:8443",
+            "https://.vault.azure.net",
+            "https://nested.example.vault.azure.net",
             "https://attacker.example\\@example.vault.azure.net",
         ];
 
-        for vault_url in invalid_vault_urls {
-            let result = azure_signer(
-                AzureKeyVaultAuthType::ClientSecret,
-                "11111111-2222-3333-4444-555555555555",
-                vault_url,
-            )
-            .validate();
-            assert!(
-                matches!(result, Err(SignerValidationError::InvalidConfig(_))),
-                "vault_url {vault_url:?} should be rejected"
-            );
-        }
+        let accepted: Vec<&str> = invalid_vault_urls
+            .into_iter()
+            .filter(|vault_url| {
+                azure_signer(
+                    AzureKeyVaultAuthType::ClientSecret,
+                    "11111111-2222-3333-4444-555555555555",
+                    vault_url,
+                )
+                .validate()
+                .is_ok()
+            })
+            .collect();
+
+        assert!(
+            accepted.is_empty(),
+            "these vault URLs should be rejected: {accepted:?}"
+        );
     }
 
     #[test]
@@ -1025,6 +1048,7 @@ mod tests {
             "https://example.vault.azure.net",
             "https://example.vault.azure.net/",
             "https://EXAMPLE.VAULT.AZURE.NET",
+            "https://my-vault-01.vault.azure.net",
         ] {
             let result = azure_signer(
                 AzureKeyVaultAuthType::ClientSecret,

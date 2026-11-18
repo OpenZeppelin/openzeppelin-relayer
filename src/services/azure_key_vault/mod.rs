@@ -123,16 +123,31 @@ impl AzureKeyVaultService {
     /// do not pass through request validation. A failure is recorded rather
     /// than returned (see `config_error`) and enforced by `ensure_valid_config`.
     pub fn new(config: &AzureKeyVaultSignerConfig) -> AzureKeyVaultResult<Self> {
+        Self::with_token_file(config, env::var(AZURE_FEDERATED_TOKEN_FILE_ENV).ok())
+    }
+
+    /// Builds the service with the process-level token file setting passed in,
+    /// so the setting can be exercised without touching the environment.
+    fn with_token_file(
+        config: &AzureKeyVaultSignerConfig,
+        token_file: Option<String>,
+    ) -> AzureKeyVaultResult<Self> {
+        let config_error = validator::Validate::validate(config)
+            .err()
+            .map(|e| e.to_string());
+        if let Some(reason) = &config_error {
+            tracing::warn!(
+                reason = %reason,
+                "Azure Key Vault signer configuration is invalid. The signer will refuse to operate."
+            );
+        }
+
         Ok(Self {
             config: config.clone(),
             client: Self::build_http_client()?,
             authority_host: AZURE_AUTHORITY_HOST.to_string(),
-            federated_token_file: env::var(AZURE_FEDERATED_TOKEN_FILE_ENV)
-                .ok()
-                .filter(|path| !path.is_empty()),
-            config_error: validator::Validate::validate(config)
-                .err()
-                .map(|e| e.to_string()),
+            federated_token_file: token_file.filter(|path| !path.is_empty()),
+            config_error,
         })
     }
 
@@ -191,12 +206,15 @@ impl AzureKeyVaultService {
     }
 
     /// Returns the configured vault base URL without a trailing slash.
+    ///
+    /// Built from the parsed URL, the same form validation checks, so that
+    /// what is validated and what is requested cannot differ.
     fn vault_url(&self) -> String {
-        self.config
-            .vault_url
-            .to_str()
-            .trim_end_matches('/')
-            .to_string()
+        let raw = self.config.vault_url.to_str();
+        match reqwest::Url::parse(raw.as_str()) {
+            Ok(url) => url.origin().ascii_serialization(),
+            Err(_) => raw.trim_end_matches('/').to_string(),
+        }
     }
 
     /// Returns the configured key name.
@@ -692,6 +710,58 @@ mod tests {
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
             key_version: Some("test-version".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_token_file_path_comes_from_the_process_setting() {
+        let config = test_config("https://example.vault.azure.net");
+
+        let service =
+            AzureKeyVaultService::with_token_file(&config, Some("/var/run/token".to_string()))
+                .unwrap();
+        assert_eq!(
+            service.federated_token_file(),
+            Some("/var/run/token".to_string())
+        );
+
+        // An empty setting means "not configured", not "read the empty path".
+        let service = AzureKeyVaultService::with_token_file(&config, Some(String::new())).unwrap();
+        assert_eq!(service.federated_token_file(), None);
+    }
+
+    #[test]
+    fn test_config_error_does_not_echo_configured_values() {
+        // The reason is logged and returned to API callers, and the vault URL
+        // and tenant ID are stored as secrets.
+        let mut config = test_config("https://attacker.example/some-path");
+        config.tenant_id = Some(SecretString::new("https://tenant.attacker.example"));
+
+        let service = AzureKeyVaultService::new(&config).unwrap();
+        let reason = service.config_error.clone().unwrap();
+
+        assert!(!reason.contains("attacker.example"), "reason: {reason}");
+    }
+
+    #[test]
+    fn test_key_url_is_built_from_the_canonical_vault_origin() {
+        // Validation parses the URL, so requests must be built from the parsed
+        // form too. Otherwise spellings that parse to the same vault would be
+        // accepted and then produce a different request path.
+        for raw in [
+            "https://example.vault.azure.net",
+            "https://example.vault.azure.net/",
+            "https://EXAMPLE.vault.azure.net",
+            " https://example.vault.azure.net/\n",
+            "https://example.vault.azure.net\\",
+        ] {
+            let service = service_with_authority(&test_config(raw), AZURE_AUTHORITY_HOST);
+
+            assert_eq!(
+                service.key_url(),
+                "https://example.vault.azure.net/keys/test-key/test-version?api-version=7.4",
+                "vault_url {raw:?}"
+            );
         }
     }
 

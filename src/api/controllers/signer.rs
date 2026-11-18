@@ -122,7 +122,7 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    // Convert request to domain model (validates automatically and includes placeholder config)
+    // Convert request to domain model (validates automatically)
     let signer = Signer::try_from(request)?;
 
     // Convert domain model to repository model

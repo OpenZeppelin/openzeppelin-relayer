@@ -40,13 +40,18 @@ pub struct AwsKmsSignerRequestConfig {
 #[serde(deny_unknown_fields)]
 pub struct AzureKeyVaultSignerRequestConfig {
     pub auth_type: Option<AzureKeyVaultAuthType>,
+    /// Azure tenant ID: a GUID or a domain name. Required for `client_secret`
+    /// and `workload_identity`.
     pub tenant_id: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     /// Not accepted: requests that set it are rejected. Workload identity reads
     /// the token file path from the `AZURE_FEDERATED_TOKEN_FILE` environment
-    /// variable.
+    /// variable. Hidden from the OpenAPI schema so the published contract does
+    /// not advertise a field that is always rejected.
+    #[schema(ignore)]
     pub federated_token_file: Option<String>,
+    /// Azure Key Vault URL in the form `https://<vault-name>.vault.azure.net`.
     pub vault_url: String,
     pub key_name: String,
     #[schema(nullable = false)]
