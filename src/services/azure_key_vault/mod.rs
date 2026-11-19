@@ -132,23 +132,29 @@ impl AzureKeyVaultService {
         config: &AzureKeyVaultSignerConfig,
         token_file: Option<String>,
     ) -> AzureKeyVaultResult<Self> {
+        let federated_token_file = token_file.filter(|path| !path.is_empty());
+        let needs_token_file = config.auth_type() == AzureKeyVaultAuthType::WorkloadIdentity;
         let config_error = validator::Validate::validate(config)
             .err()
-            .map(|e| e.to_string());
-        if let Some(reason) = &config_error {
-            tracing::warn!(
-                reason = %reason,
-                "Azure Key Vault signer configuration is invalid. The signer will refuse to operate."
-            );
-        }
+            .map(|e| e.to_string())
+            .or_else(|| {
+                (needs_token_file && federated_token_file.is_none()).then(|| {
+                    format!("{AZURE_FEDERATED_TOKEN_FILE_ENV} must be set to use workload identity")
+                })
+            });
 
         Ok(Self {
             config: config.clone(),
             client: Self::build_http_client()?,
             authority_host: AZURE_AUTHORITY_HOST.to_string(),
-            federated_token_file: token_file.filter(|path| !path.is_empty()),
+            federated_token_file,
             config_error,
         })
+    }
+
+    /// Why this service refuses to operate, if it does. See `config_error`.
+    pub fn config_error(&self) -> Option<&str> {
+        self.config_error.as_deref()
     }
 
     /// Refuses to operate on a configuration that failed validation.
@@ -669,6 +675,8 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    const VAULT_URL: &str = "https://example.vault.azure.net";
+
     async fn clear_test_caches() {
         AZURE_ACCESS_TOKEN_CACHE.write().await.clear();
         AZURE_PUBLIC_KEY_CACHE.write().await.clear();
@@ -697,7 +705,7 @@ mod tests {
             client_secret: Some(SecretString::new("test-secret")),
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         }
     }
 
@@ -709,7 +717,7 @@ mod tests {
             client_secret: None,
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         }
     }
 
@@ -728,6 +736,48 @@ mod tests {
         // An empty setting means "not configured", not "read the empty path".
         let service = AzureKeyVaultService::with_token_file(&config, Some(String::new())).unwrap();
         assert_eq!(service.federated_token_file(), None);
+    }
+
+    #[test]
+    fn test_workload_identity_without_token_file_is_refused_at_construction() {
+        let mut config = test_config(VAULT_URL);
+        config.auth_type = Some(AzureKeyVaultAuthType::WorkloadIdentity);
+        config.client_secret = None;
+
+        let service = AzureKeyVaultService::with_token_file(&config, None).unwrap();
+        assert!(service
+            .config_error()
+            .is_some_and(|reason| reason.contains(AZURE_FEDERATED_TOKEN_FILE_ENV)));
+
+        let service =
+            AzureKeyVaultService::with_token_file(&config, Some("/var/run/token".to_string()))
+                .unwrap();
+        assert_eq!(service.config_error(), None);
+
+        // Other auth types do not need the token file.
+        let service =
+            AzureKeyVaultService::with_token_file(&managed_identity_config(VAULT_URL), None)
+                .unwrap();
+        assert_eq!(service.config_error(), None);
+    }
+
+    #[test]
+    fn test_key_name_and_version_outside_azure_format_are_refused() {
+        let service = AzureKeyVaultService::new(&test_config(VAULT_URL)).unwrap();
+        assert_eq!(service.config_error(), None);
+
+        for (key_name, key_version) in [("my/key", "0123"), ("my-key", "0123/sign")] {
+            let mut config = test_config(VAULT_URL);
+            config.key_name = SecretString::new(key_name);
+            config.key_version = Some(key_version.to_string());
+
+            let service = AzureKeyVaultService::new(&config).unwrap();
+
+            assert!(
+                service.config_error().is_some(),
+                "key {key_name:?} version {key_version:?}"
+            );
+        }
     }
 
     #[test]
@@ -759,7 +809,7 @@ mod tests {
 
             assert_eq!(
                 service.key_url(),
-                "https://example.vault.azure.net/keys/test-key/test-version?api-version=7.4",
+                "https://example.vault.azure.net/keys/test-key/testversion?api-version=7.4",
                 "vault_url {raw:?}"
             );
         }
@@ -913,7 +963,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -964,7 +1014,7 @@ mod tests {
             .await;
 
         let _sign = server
-            .mock("POST", "/keys/test-key/test-version/sign")
+            .mock("POST", "/keys/test-key/testversion/sign")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -983,7 +1033,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -1126,7 +1176,7 @@ mod tests {
             client_secret: None,
             vault_url: SecretString::new(&server.url()),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         };
 
         let mut service = service_with_authority(&config, &server.url());
@@ -1179,7 +1229,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),

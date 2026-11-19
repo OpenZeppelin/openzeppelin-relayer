@@ -48,7 +48,10 @@ use turnkey_signer::*;
 use vault_signer::*;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use crate::{
     domain::{
@@ -349,6 +352,24 @@ impl DataSignerTrait for EvmSigner {
     }
 }
 
+/// Tells the operator that an Azure Key Vault signer was built but will refuse
+/// to operate. Logged once per signer in each process, because the signer is
+/// rebuilt for every transaction.
+fn warn_unusable_azure_signer(signer_id: &str, reason: &str) {
+    static WARNED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+    let is_first = WARNED
+        .lock()
+        .is_ok_and(|mut warned| warned.insert(signer_id.to_string()));
+    if is_first {
+        tracing::warn!(
+            signer_id = %signer_id,
+            reason = %reason,
+            "Azure Key Vault signer configuration is invalid. The signer will refuse to operate."
+        );
+    }
+}
+
 pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
@@ -389,6 +410,9 @@ impl EvmSignerFactory {
                         "Azure Key Vault service error: {e}"
                     ))
                 })?;
+                if let Some(reason) = azure_service.config_error() {
+                    warn_unusable_azure_signer(&signer_model.id, reason);
+                }
                 EvmSigner::AzureKeyVault(AzureKeyVaultSigner::new(azure_service))
             }
             SignerConfig::VaultTransit(_) => {

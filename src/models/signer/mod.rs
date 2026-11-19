@@ -158,10 +158,11 @@ pub struct AzureKeyVaultSignerConfig {
     ))]
     pub vault_url: SecretString,
     #[validate(custom(
-        function = "validate_secret_string",
-        message = "Key name cannot be empty"
+        function = "validate_azure_key_name",
+        message = "Key name must be 1 to 127 letters, digits or hyphens"
     ))]
     pub key_name: SecretString,
+    /// Checked in `validate_azure_key_vault_config`.
     pub key_version: Option<String>,
 }
 
@@ -443,6 +444,39 @@ fn validate_azure_vault_url(secret: &SecretString) -> Result<(), validator::Vali
     })
 }
 
+/// Longest key name Azure Key Vault accepts.
+const AZURE_KEY_NAME_MAX_LEN: usize = 127;
+
+/// Custom validator for the Azure Key Vault key name.
+///
+/// The name becomes one segment of the request path, so it is limited to the
+/// form Azure Key Vault itself accepts: 1 to 127 letters, digits and hyphens.
+fn validate_azure_key_name(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    secret.as_str(|name| {
+        let is_valid = !name.is_empty()
+            && name.len() <= AZURE_KEY_NAME_MAX_LEN
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if !is_valid {
+            return Err(validator::ValidationError::new("invalid_key_name"));
+        }
+        Ok(())
+    })
+}
+
+/// Validates the optional Azure Key Vault key version: letters and digits only,
+/// because it becomes one segment of the request path. An empty or missing
+/// version selects the latest one.
+fn validate_azure_key_version(version: Option<&str>) -> Result<(), validator::ValidationError> {
+    let is_valid = version.is_none_or(|v| v.chars().all(|c| c.is_ascii_alphanumeric()));
+    if !is_valid {
+        let mut error = validator::ValidationError::new("invalid_key_version");
+        error.add_param(std::borrow::Cow::Borrowed("field"), &"key_version");
+        error.message = Some("Key version must contain only letters and digits".into());
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Returns true when the value has the shape of a GUID or a domain name:
 /// letters, digits, hyphens and single dots, starting and ending with a letter
 /// or digit.
@@ -479,6 +513,8 @@ fn validate_azure_tenant_id(
 fn validate_azure_key_vault_config(
     config: &AzureKeyVaultSignerConfig,
 ) -> Result<(), validator::ValidationError> {
+    validate_azure_key_version(config.key_version.as_deref())?;
+
     match config.auth_type() {
         AzureKeyVaultAuthType::ClientSecret => {
             validate_azure_tenant_id(&config.tenant_id)?;
@@ -1057,6 +1093,80 @@ mod tests {
             )
             .validate();
             assert!(result.is_ok(), "vault_url {vault_url:?} should be accepted");
+        }
+    }
+
+    fn azure_signer_with_key(key_name: &str, key_version: Option<&str>) -> Signer {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::ManagedIdentity),
+            tenant_id: None,
+            client_id: None,
+            client_secret: None,
+            vault_url: SecretString::new("https://example.vault.azure.net"),
+            key_name: SecretString::new(key_name),
+            key_version: key_version.map(str::to_string),
+        });
+        Signer::new("azure-signer".to_string(), config)
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_key_name_outside_azure_format() {
+        let too_long = "a".repeat(128);
+        let invalid_key_names = [
+            "",
+            "my/key",
+            "../my-key",
+            "my-key/versions",
+            "my-key?x=1",
+            "my-key#fragment",
+            "my%2Fkey",
+            "my key",
+            "my_key",
+            "my.key",
+            too_long.as_str(),
+        ];
+
+        for key_name in invalid_key_names {
+            let result = azure_signer_with_key(key_name, None).validate();
+            assert!(
+                matches!(&result, Err(SignerValidationError::InvalidConfig(msg)) if msg.contains("Key name")),
+                "key_name {key_name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_key_version_with_other_characters() {
+        for key_version in [
+            "0123/sign",
+            "../0123",
+            "0123?x=1",
+            "0123#fragment",
+            "01 23",
+            "01-23",
+        ] {
+            let result = azure_signer_with_key("my-key", Some(key_version)).validate();
+            assert!(
+                matches!(&result, Err(SignerValidationError::InvalidConfig(msg)) if msg.contains("Key version")),
+                "key_version {key_version:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_azure_key_name_and_version() {
+        let longest = "a".repeat(127);
+        for key_name in ["my-key", "MyKey01", "k", longest.as_str()] {
+            let result = azure_signer_with_key(key_name, None).validate();
+            assert!(result.is_ok(), "key_name {key_name:?} should be accepted");
+        }
+
+        for key_version in [None, Some(""), Some("0123456789abcdef0123456789abcdef")] {
+            let result = azure_signer_with_key("my-key", key_version).validate();
+            assert!(
+                result.is_ok(),
+                "key_version {key_version:?} should be accepted"
+            );
         }
     }
 

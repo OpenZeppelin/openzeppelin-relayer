@@ -352,14 +352,17 @@ Configuration fields:
 | client_secret.type | String | Type of value source (`env` or `plain`) |
 | client_secret.value | String | The Azure client secret, or the environment variable name containing it. Required for `client_secret` |
 | vault_url | String | The Azure Key Vault URL. Must be an HTTPS URL of the form `https://<vault-name>.vault.azure.net` |
-| key_name | String | The Azure Key Vault key name used for signing operations |
-| key_version | String | Specific Azure Key Vault key version to use. Optional. When omitted or empty, the latest version for the key is used |
+| key_name | String | The Azure Key Vault key name used for signing operations. 1 to 127 letters, digits or hyphens |
+| key_version | String | Specific Azure Key Vault key version to use, letters and digits only. Optional. When omitted or empty, the latest version for the key is used |
 
 Azure-specific requirements:
 * The signer currently supports EVM networks only
 * Use a secp256k1 key in Azure Key Vault
 * Ensure the chosen identity can read key metadata and perform signing operations
+* Only Key Vault in the Azure public cloud is supported. Vaults in sovereign clouds (`vault.azure.cn`, `vault.usgovcloudapi.net`) and Managed HSM (`managedhsm.azure.net`) are rejected
 * For `workload_identity`, set the `AZURE_FEDERATED_TOKEN_FILE` environment variable to the token file path. The `federated_token_file` signer field is no longer accepted, in the config file or through the API. If your configuration sets it, remove the field and set the environment variable instead
+* `tenant_id` must be the tenant ID alone. A value in URL form, such as `https://login.microsoftonline.com/<tenant-id>`, is no longer accepted. Replace it with the GUID or domain name
+* Signers already saved in the repository follow the same rules. A saved `federated_token_file` path is ignored and a warning names the signer. A signer that does not meet the rules, including a `workload_identity` signer when `AZURE_FEDERATED_TOKEN_FILE` is not set, does not stop startup. A warning names it and its signing requests fail with a configuration error until it is corrected
 
 ## CDP Signer Configuration
 
