@@ -1,6 +1,7 @@
 use crate::constants::{
-    ARBITRUM_GAS_LIMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED, DEFAULT_TX_VALID_TIMESPAN,
-    EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS, MAXIMUM_TX_ATTEMPTS,
+    ARBITRUM_GAS_LIMIT, ARBITRUM_TIME_TO_RESUBMIT, DEFAULT_GAS_LIMIT, DEFAULT_TRANSACTION_SPEED,
+    DEFAULT_TX_VALID_TIMESPAN, EVM_MIN_AGE_FOR_RESUBMIT_SECONDS, MAXIMUM_NOOP_RETRY_ATTEMPTS,
+    MAXIMUM_TX_ATTEMPTS,
 };
 use crate::domain::get_age_since_created;
 use crate::models::EvmNetwork;
@@ -8,6 +9,7 @@ use crate::models::{
     EvmTransactionData, TransactionError, TransactionRepoModel, TransactionStatus, U256,
 };
 use crate::services::provider::EvmProviderTrait;
+use crate::utils::{get_resubmit_timeout_for_speed, get_resubmit_timeout_with_backoff};
 use chrono::{DateTime, Duration, Utc};
 use eyre::Result;
 
@@ -201,16 +203,20 @@ pub fn get_age_since_status_change(
     get_age_since_created(tx)
 }
 
-/// Age of the current payload. Old records can have no price or send time.
+/// Age from the later of pricing and acceptance, falling back for old records.
 pub fn get_age_since_priced(tx: &TransactionRepoModel) -> Result<Duration, TransactionError> {
-    let timestamp = tx
-        .priced_at
-        .as_ref()
-        .or(tx.sent_at.as_ref())
-        .unwrap_or(&tx.created_at);
-    let time = DateTime::parse_from_rfc3339(timestamp).map_err(|e| {
-        TransactionError::UnexpectedError(format!("Error parsing payload time: {e}"))
-    })?;
+    let parse = |timestamp: &str| {
+        DateTime::parse_from_rfc3339(timestamp).map_err(|e| {
+            TransactionError::UnexpectedError(format!("Error parsing payload time: {e}"))
+        })
+    };
+    let priced = tx.priced_at.as_deref().map(parse).transpose()?;
+    let sent = tx.sent_at.as_deref().map(parse).transpose()?;
+    let time = match (priced, sent) {
+        (Some(priced), Some(sent)) => priced.max(sent),
+        (Some(time), None) | (None, Some(time)) => time,
+        (None, None) => parse(&tx.created_at)?,
+    };
     Ok(Utc::now().signed_duration_since(time))
 }
 
@@ -228,6 +234,31 @@ pub fn is_unsent(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
         })
     };
     Ok(parse(sent_at)? < parse(priced_at)?)
+}
+
+/// Bound the wait for unsent bytes even when a node rejection is misclassified.
+pub const REPRICE_NET_INTERVALS: i64 = 4;
+
+pub fn is_reprice_net_due(
+    tx: &TransactionRepoModel,
+    network: &EvmNetwork,
+) -> Result<bool, TransactionError> {
+    let evm_data = tx.network_data.get_evm_transaction_data()?;
+    let timeout = if network.is_arbitrum() {
+        ARBITRUM_TIME_TO_RESUBMIT
+    } else {
+        get_resubmit_timeout_with_backoff(
+            get_resubmit_timeout_for_speed(&evm_data.speed),
+            tx.hashes.len(),
+        )
+    };
+    // The net measures pricing age, regardless of any previous payload's send.
+    let priced = DateTime::parse_from_rfc3339(tx.priced_at.as_ref().unwrap_or(&tx.created_at))
+        .map_err(|e| {
+            TransactionError::UnexpectedError(format!("Error parsing payload time: {e}"))
+        })?;
+    Ok(Utc::now().signed_duration_since(priced).num_milliseconds()
+        > timeout.saturating_mul(REPRICE_NET_INTERVALS))
 }
 
 /// Check if transaction is too young for resubmission and timeout checks.

@@ -52,6 +52,7 @@ struct Events {
     notifications: usize,
     health: usize,
     error: Option<&'static str>,
+    typed_error: Option<ProviderError>,
     fault: Option<(&'static str, bool)>,
     fail_enqueue: bool,
     same_signature: bool,
@@ -202,10 +203,14 @@ impl Harness {
                     assert_eq!(data.raw.as_ref(), Some(&raw), "save must precede send");
                     assert!(stored.hashes.contains(data.hash.as_ref().unwrap()));
                     assert!(stored.priced_at.is_some());
-                    let (error, cancel) = {
+                    let (error, typed_error, cancel) = {
                         let mut events = e.lock().unwrap();
                         events.sent.push(raw);
-                        (events.error, events.cancel_in_send)
+                        (
+                            events.error,
+                            events.typed_error.take(),
+                            events.cancel_in_send,
+                        )
                     };
                     if cancel {
                         let mut data = data;
@@ -226,6 +231,9 @@ impl Harness {
                         .await
                         .unwrap();
                         e.lock().unwrap().cancel_in_send = false;
+                    }
+                    if let Some(error) = typed_error {
+                        return Err(error);
                     }
                     match error {
                         Some(message) => Err(ProviderError::Other(message.into())),
@@ -384,8 +392,14 @@ impl Harness {
         let before = self.stored().await;
         let old_price =
             chrono::DateTime::parse_from_rfc3339(before.priced_at.as_ref().unwrap()).unwrap();
-        let new_price = Utc::now() - Duration::seconds(seconds);
-        let shift = new_price.signed_duration_since(old_price);
+        // Age the timer base while preserving the order of pricing and sending.
+        let old_base = before.sent_at.as_ref().map_or(old_price, |time| {
+            chrono::DateTime::parse_from_rfc3339(time)
+                .unwrap()
+                .max(old_price)
+        });
+        let shift = (Utc::now() - Duration::seconds(seconds)).signed_duration_since(old_base);
+        let new_price = old_price + shift;
         let sent_at = before.sent_at.map(|time| {
             (chrono::DateTime::parse_from_rfc3339(&time).unwrap() + shift).to_rfc3339()
         });
@@ -418,18 +432,31 @@ impl Harness {
     // Item 14: cross both boundaries again, then check all persistent payload fields.
     async fn recover(&self, needs_sign: bool) {
         let before = self.stored().await;
-        self.events.lock().unwrap().error = None;
+        {
+            let mut events = self.events.lock().unwrap();
+            events.error = None;
+            events.typed_error = None;
+        }
         self.age_payload(30).await;
+        let priced_at = self.stored().await.priced_at;
         self.cycle().await;
         let jobs = self.events.lock().unwrap().jobs.clone();
         assert_eq!(jobs.len(), 1);
-        assert_eq!(matches!(jobs[0], TransactionCommand::Resubmit), needs_sign);
+        if needs_sign {
+            assert!(matches!(jobs[0], TransactionCommand::Resubmit));
+        }
+        let signs = self.events.lock().unwrap().signs.len();
         self.run_job(jobs[0].clone()).await;
+        assert_eq!(
+            self.events.lock().unwrap().signs.len(),
+            signs + usize::from(needs_sign)
+        );
         let after = self.stored().await;
         let data = after.network_data.get_evm_transaction_data().unwrap();
         assert!(after.sent_at.is_some());
         assert!(after.priced_at.is_some());
         if !needs_sign {
+            assert_eq!(after.priced_at, priced_at);
             assert_eq!(after.hashes, before.hashes);
             assert_eq!(
                 data.raw,
@@ -495,9 +522,17 @@ async fn failed_send_keeps_saved_hash_and_resends_without_signing() {
     assert_eq!(stored.hashes, ["A", "H1"]);
     assert!(stored.sent_at.is_none());
     assert!(stored.priced_at.is_some());
-    // A retried job before the price timer sends the saved bytes again.
+    // A status cycle and a retried job before the price timer send the saved bytes.
+    h.age_payload(30).await;
+    h.cycle().await;
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Submit]
+    ));
+    let before = h.stored().await;
     h.events.lock().unwrap().error = None;
-    let same = h.worker.resubmit_transaction(stored).await.unwrap();
+    let same = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+    assert_eq!(same.priced_at, before.priced_at);
     assert_eq!(same.hashes, ["A", "H1"]);
     assert!(!is_unsent(&same).unwrap());
     assert_eq!(h.events.lock().unwrap().sent.last(), Some(&vec![1u8]));
@@ -766,21 +801,33 @@ async fn sixty_failed_saves_and_one_accepted_send_do_not_trip_valve() {
     let h = Harness::new(tx(TransactionStatus::Submitted), true, None).await;
     h.worker.submit_transaction(h.stored().await).await.unwrap();
     for _ in 0..60 {
-        h.age_payload(30).await;
+        // The synchronous mock bridge must not exhaust Tokio's cooperative budget.
+        tokio::task::yield_now().await;
+        // Unsent bytes need the four-interval safety net for another blind reprice.
+        h.age_payload(90).await;
         h.events.lock().unwrap().error = Some("transport");
         assert!(h
             .worker
             .resubmit_transaction(h.stored().await)
             .await
             .is_err());
-        // Cross both boundaries after every failure. Arbitrum's timer is 20 s,
-        // so a fresh status cycle has no job; the duplicate worker must do nothing.
+        // Cross both boundaries after every failure. A duplicate job resends
+        // the unsent payload, but cannot sign before its next timer.
+        let before = h.stored().await;
         h.cycle().await;
-        h.worker
-            .resubmit_transaction(h.stored().await)
-            .await
-            .unwrap();
+        assert!(h.worker.resubmit_transaction(before.clone()).await.is_err());
         let t = h.stored().await;
+        assert_eq!(t.hashes, before.hashes);
+        assert_eq!(t.sent_at, before.sent_at);
+        assert_eq!(t.priced_at, before.priced_at);
+        assert_eq!(
+            h.events.lock().unwrap().sent.last(),
+            t.network_data
+                .get_evm_transaction_data()
+                .unwrap()
+                .raw
+                .as_ref()
+        );
         assert!(t.sent_at.is_some());
         assert!(t.priced_at.is_some());
         assert_eq!(t.hashes.len(), h.events.lock().unwrap().signs.len() + 1);
@@ -923,10 +970,18 @@ async fn cancel_while_signing_prevents_save_and_broadcast() {
 }
 
 #[test]
-fn backoff_caps_at_sixteen_intervals_and_metadata_defaults_to_zero() {
+fn backoff_only_clamps_overflow_and_metadata_defaults_to_zero() {
     assert_eq!(
         crate::utils::get_resubmit_timeout_with_backoff(1000, usize::MAX),
-        16000
+        i64::MAX
+    );
+    assert_eq!(
+        crate::utils::get_resubmit_timeout_with_backoff(1000, 6),
+        32000
+    );
+    assert_eq!(
+        crate::utils::get_resubmit_timeout_with_backoff(1000, 7),
+        64000
     );
     let metadata: crate::models::TransactionMetadata = serde_json::from_str("{}").unwrap();
     assert_eq!(metadata.accepted_sends, 0);
@@ -1055,4 +1110,304 @@ async fn young_unsent_record_gets_no_resend() {
         h.events.lock().unwrap().jobs.as_slice(),
         [TransactionCommand::Submit]
     ));
+}
+
+fn rpc_error(code: i64, message: &str) -> ProviderError {
+    ProviderError::RpcErrorCode {
+        code,
+        message: message.into(),
+        data: None,
+    }
+}
+
+#[tokio::test]
+async fn due_transport_probe_keeps_hash_fee_and_price_time() {
+    // Even a non-transient HTTP error or an untyped rejection is not proof
+    // that a node rejected these bytes.
+    for error in [
+        ProviderError::Timeout,
+        ProviderError::RateLimited,
+        ProviderError::BadGateway,
+        ProviderError::TransportError("connection reset".into()),
+        ProviderError::RequestError {
+            status_code: 400,
+            error: "rejected".into(),
+        },
+        ProviderError::Other("transaction underpriced".into()),
+    ] {
+        let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+        h.age_payload(200).await;
+        let before = h.stored().await;
+        h.events.lock().unwrap().typed_error = Some(error);
+        assert!(h.worker.resubmit_transaction(before.clone()).await.is_err());
+        let after = h.stored().await;
+        assert_eq!(after.hashes, before.hashes);
+        assert_eq!(after.sent_at, before.sent_at);
+        assert_eq!(after.priced_at, before.priced_at);
+        assert_eq!(
+            serde_json::to_value(&after.network_data).unwrap(),
+            serde_json::to_value(&before.network_data).unwrap()
+        );
+        assert!(h.events.lock().unwrap().signs.is_empty());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+        // The timer is still due. The next status cycle probes and accepts A.
+        h.cycle().await;
+        assert!(matches!(
+            h.events.lock().unwrap().jobs.as_slice(),
+            [TransactionCommand::Resubmit]
+        ));
+        h.run_job(TransactionCommand::Resubmit).await;
+        let repaired = h.stored().await;
+        assert_eq!(repaired.hashes, before.hashes);
+        assert_eq!(repaired.priced_at, before.priced_at);
+        assert!(repaired.sent_at.is_some());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![0]]);
+        assert!(h.events.lock().unwrap().signs.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn due_node_rejection_reprices_in_same_job_using_released_version() {
+    let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+    h.age_payload(200).await;
+    let before = h.stored().await;
+    h.events.lock().unwrap().typed_error = Some(rpc_error(-32000, "transaction underpriced"));
+    let after = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+    assert_eq!(after.hashes, ["A", "H1"]);
+    assert_eq!(after.version, before.version + 3); // release, save, post
+    assert_ne!(after.priced_at, before.priced_at);
+    assert!(after.sent_at.is_some());
+    assert_eq!(
+        after
+            .network_data
+            .get_evm_transaction_data()
+            .unwrap()
+            .gas_price,
+        price().gas_price
+    );
+    assert_eq!(h.events.lock().unwrap().signs, [vec![1]]);
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![1]]);
+}
+
+#[tokio::test]
+async fn due_accepted_or_known_probe_records_send_without_signing() {
+    for error in [
+        None,
+        Some(rpc_error(-32000, "already known")),
+        Some(rpc_error(-32603, "replacement transaction underpriced")),
+    ] {
+        let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+        h.age_payload(200).await;
+        let before = h.stored().await;
+        let accepted = error.is_none();
+        h.events.lock().unwrap().typed_error = error;
+        let after = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+        assert_eq!(after.hashes, before.hashes);
+        assert_eq!(after.priced_at, before.priced_at);
+        assert!(after.sent_at.is_some());
+        assert_eq!(after.metadata.unwrap().accepted_sends, u64::from(accepted));
+        assert!(h.events.lock().unwrap().signs.is_empty());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+    }
+}
+
+#[tokio::test]
+async fn net_reprices_without_probe_after_four_backed_off_intervals() {
+    for rollup in [false, true] {
+        let mut initial = tx(TransactionStatus::Submitted);
+        initial.hashes.push("old".into());
+        let h = Harness::new(initial, rollup, None).await;
+        // Two hashes: Fast = 180 s * 2; Arbitrum = 20 s without backoff.
+        let interval = if rollup { 20 } else { 360 };
+        for age in [interval + 1, 4 * interval - 1, 4 * interval + 1] {
+            h.age_payload(age).await;
+            h.events.lock().unwrap().error = Some("transport");
+            let before = h.stored().await;
+            let sends = h.events.lock().unwrap().sent.len();
+            assert!(h.worker.resubmit_transaction(before.clone()).await.is_err());
+            let after = h.stored().await;
+            assert_eq!(after.sent_at, before.sent_at);
+            if age < 4 * interval {
+                assert_eq!(after.hashes, before.hashes);
+                assert_eq!(after.priced_at, before.priced_at);
+                assert_eq!(h.events.lock().unwrap().sent[sends..], [vec![0]]);
+            } else {
+                assert_eq!(after.hashes, ["A", "old", "H1"]);
+                assert_ne!(after.priced_at, before.priced_at);
+                assert_eq!(h.events.lock().unwrap().sent[sends..], [vec![1]]);
+            }
+            // One more status cycle and worker after each failed send, still in
+            // the outage. Before the net it probes A; after the net it resends B.
+            if age > 4 * interval {
+                h.age_payload(30).await;
+            }
+            let before = h.stored().await;
+            h.cycle().await;
+            let jobs = h.events.lock().unwrap().jobs.clone();
+            assert_eq!(jobs.len(), 1);
+            let result = match jobs[0] {
+                TransactionCommand::Resubmit => h.worker.resubmit_transaction(before.clone()).await,
+                TransactionCommand::Submit | TransactionCommand::Resend => {
+                    h.worker.submit_transaction(before.clone()).await
+                }
+                _ => panic!("unexpected job"),
+            };
+            assert!(result.is_err());
+            let after = h.stored().await;
+            assert_eq!(after.hashes, before.hashes);
+            assert_eq!(after.sent_at, before.sent_at);
+            assert_eq!(after.priced_at, before.priced_at);
+            assert_eq!(
+                h.events.lock().unwrap().sent.last(),
+                after
+                    .network_data
+                    .get_evm_transaction_data()
+                    .unwrap()
+                    .raw
+                    .as_ref()
+            );
+        }
+        assert_eq!(h.events.lock().unwrap().signs, [vec![1]]);
+        h.recover(false).await;
+    }
+}
+
+#[tokio::test]
+async fn due_unknown_internal_rpc_error_is_no_answer() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.age_payload(200).await;
+    let before = h.stored().await;
+    h.events.lock().unwrap().typed_error = Some(rpc_error(-32603, "unknown backend failure"));
+    assert!(h.worker.resubmit_transaction(before.clone()).await.is_err());
+    let after = h.stored().await;
+    assert_eq!(after.hashes, before.hashes);
+    assert_eq!(after.sent_at, before.sent_at);
+    assert_eq!(after.priced_at, before.priced_at);
+    assert_eq!(
+        serde_json::to_value(&after.network_data).unwrap(),
+        serde_json::to_value(&before.network_data).unwrap()
+    );
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+    h.cycle().await;
+    h.run_job(TransactionCommand::Resubmit).await;
+    let after = h.stored().await;
+    assert_eq!(after.hashes, before.hashes);
+    assert_eq!(after.priced_at, before.priced_at);
+    assert!(after.sent_at.is_some());
+    assert!(h.events.lock().unwrap().signs.is_empty());
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![0]]);
+}
+
+#[tokio::test]
+async fn consecutive_resubmit_jobs_after_rejection_add_one_hash() {
+    for lost_reply in [false, true] {
+        let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+        h.age_payload(200).await;
+        h.events.lock().unwrap().typed_error = Some(rpc_error(-32000, "fee too low"));
+        // Fail the send of the repriced bytes, then run the duplicate job.
+        h.events.lock().unwrap().error = Some("transport");
+        assert!(h
+            .worker
+            .resubmit_transaction(h.stored().await)
+            .await
+            .is_err());
+        h.age_payload(30).await;
+        let before = h.stored().await;
+        assert_eq!(before.hashes, ["A", "H1"]);
+        assert!(before.sent_at.is_none());
+        h.cycle().await;
+        assert!(matches!(
+            h.events.lock().unwrap().jobs.as_slice(),
+            [TransactionCommand::Submit]
+        ));
+        h.events.lock().unwrap().error = None;
+        let after = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+        assert_eq!(after.hashes, before.hashes);
+        assert_eq!(after.priced_at, before.priced_at);
+        assert!(after.sent_at.is_some());
+        assert_eq!(h.events.lock().unwrap().signs, [vec![1]]);
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![1], vec![1]]);
+        // Also exercise the probe's second-write conflict, applied and unapplied.
+        let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+        h.age_payload(200).await;
+        h.events.lock().unwrap().typed_error = Some(rpc_error(-32000, "fee too low"));
+        h.events.lock().unwrap().fault = Some(("save", lost_reply));
+        assert!(h
+            .worker
+            .resubmit_transaction(h.stored().await)
+            .await
+            .unwrap_err()
+            .is_concurrent_update_conflict());
+        let faulted = h.stored().await;
+        assert_eq!(faulted.hashes.len(), if lost_reply { 2 } else { 1 });
+        assert!(faulted.sent_at.is_none());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+        h.recover(false).await;
+    }
+}
+
+#[tokio::test]
+async fn late_acceptance_waits_full_interval_from_sent_at() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.age_payload(700).await; // Timer due, net not due.
+    h.run_job(TransactionCommand::Resubmit).await;
+    let accepted = h.stored().await;
+    assert_eq!(accepted.hashes, ["A"]);
+    assert!(accepted.sent_at.as_ref().unwrap() > accepted.priced_at.as_ref().unwrap());
+    assert!(!h.worker.should_resubmit(&accepted).await.unwrap());
+    h.patch(TransactionUpdateRequest {
+        sent_at: Some((Utc::now() - Duration::seconds(170)).to_rfc3339()),
+        ..Default::default()
+    })
+    .await;
+    h.cycle().await;
+    assert!(h.events.lock().unwrap().jobs.is_empty());
+    h.run_job(TransactionCommand::Resubmit).await; // A queued duplicate also waits.
+    assert!(h.events.lock().unwrap().signs.is_empty());
+    assert_eq!(h.stored().await.priced_at, accepted.priced_at);
+    h.patch(TransactionUpdateRequest {
+        sent_at: Some((Utc::now() - Duration::seconds(190)).to_rfc3339()),
+        ..Default::default()
+    })
+    .await;
+    h.cycle().await;
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Resubmit]
+    ));
+    h.run_job(TransactionCommand::Resubmit).await;
+    let after = h.stored().await;
+    assert_eq!(after.hashes, ["A", "H1"]);
+    assert_ne!(after.priced_at, accepted.priced_at);
+    assert!(after.sent_at.as_ref().unwrap() >= after.priced_at.as_ref().unwrap());
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![1]]);
+}
+
+#[tokio::test]
+async fn due_nonce_probe_keeps_existing_recovery_without_repricing() {
+    for message in ["nonce too high", "nonce too low"] {
+        let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+        h.age_payload(200).await;
+        let before = h.stored().await;
+        h.events.lock().unwrap().typed_error = Some(rpc_error(-32000, message));
+        h.run_job(TransactionCommand::Resubmit).await;
+        let after = h.stored().await;
+        assert_eq!(after.hashes, before.hashes);
+        assert_eq!(after.priced_at, before.priced_at);
+        assert_eq!(after.sent_at, before.sent_at);
+        assert!(h.events.lock().unwrap().signs.is_empty());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+        if message == "nonce too high" {
+            assert_eq!(after.metadata.unwrap().nonce_too_high_retries, 1);
+        } else {
+            assert!(after.status_reason.unwrap().contains("NonceTooLow"));
+        }
+        h.cycle().await;
+        h.run_job(TransactionCommand::Resubmit).await;
+        let after = h.stored().await;
+        assert_eq!(after.hashes, before.hashes);
+        assert_eq!(after.priced_at, before.priced_at);
+        assert!(after.sent_at.is_some());
+        assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![0]]);
+    }
 }

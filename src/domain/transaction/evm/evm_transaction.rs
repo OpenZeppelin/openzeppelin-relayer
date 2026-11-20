@@ -17,7 +17,7 @@ use crate::{
         GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
-        evm::{is_noop, is_unsent},
+        evm::{is_noop, is_reprice_net_due, is_unsent},
         transaction::{
             evm::{
                 ensure_status, ensure_status_one_of, is_transaction_valid, PriceCalculator,
@@ -44,13 +44,30 @@ use crate::{
     },
     services::{
         gas::evm_gas_price::EvmGasPriceService,
-        provider::{EvmProvider, EvmProviderTrait},
+        provider::{EvmProvider, EvmProviderTrait, ProviderError},
         signer::{EvmSigner, Signer},
     },
     utils::{calculate_scheduled_timestamp, get_evm_default_gas_limit_for_tx},
 };
 
 use super::PriceParams;
+
+/// Only a typed, non-transient node rejection permits an immediate reprice.
+enum StoredSendOutcome {
+    Accepted,
+    Known,
+    Rejected(ProviderError),
+    NoAnswer(Option<ProviderError>),
+}
+
+impl StoredSendOutcome {
+    fn finish(self, tx: TransactionRepoModel) -> Result<TransactionRepoModel, TransactionError> {
+        match self {
+            Self::Rejected(e) | Self::NoAnswer(Some(e)) => Err(e.into()),
+            _ => Ok(tx),
+        }
+    }
+}
 
 /// Metadata key that triggers nonce reconciliation in the status checker.
 /// Written by `schedule_nonce_recovery_status_check`, read by `handle_status_impl`.
@@ -175,6 +192,151 @@ where
         &self.transaction_repository
     }
 
+    /// Release stored bytes before sending. Return the released version on rejection
+    /// so a probe and its reprice share the same optimistic-write chain.
+    async fn send_stored_payload(
+        &self,
+        tx: TransactionRepoModel,
+    ) -> Result<(TransactionRepoModel, StoredSendOutcome), TransactionError> {
+        let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
+        let Some(raw_tx) = evm_tx_data.raw.as_ref() else {
+            return Ok((tx, StoredSendOutcome::NoAnswer(None)));
+        };
+
+        // Release before every send, including a resend of Submitted bytes.
+        let tx = self
+            .cas_update(
+                &tx,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Submitted),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let accepted = match self.provider.send_raw_transaction(raw_tx).await {
+            Ok(_) => true,
+            Err(e) => {
+                let error_kind = Self::classify_submission_error(&e);
+
+                match (&tx.status, &error_kind) {
+                    // AlreadyKnown / ReplacementUnderpriced (any status):
+                    // A saved payload can already be in the mempool. Receipt checks
+                    // determine which payload mined. These errors do not raise the count.
+                    (_, SubmissionErrorKind::AlreadyKnown)
+                    | (_, SubmissionErrorKind::ReplacementUnderpriced) => {
+                        warn!(
+                            tx_id = %tx.id,
+                            error = %e,
+                            error_kind = ?error_kind,
+                            "transaction appears to be already submitted based on RPC error - treating as success"
+                        );
+                        false
+                    }
+                    // NonceTooLow (any status): the nonce was consumed, but we don't know
+                    // by whom — could be our tx (retry after crash) or a different tx
+                    // (multi-instance / external wallet). Schedule nonce recovery via the
+                    // status checker, which will check receipts and on-chain nonce to
+                    // determine the actual outcome.
+                    (_, SubmissionErrorKind::NonceTooLow) => {
+                        warn!(
+                            tx_id = %tx.id,
+                            status = ?tx.status,
+                            error = %e,
+                            error_kind = ?error_kind,
+                            "nonce error during submission - scheduling nonce recovery"
+                        );
+
+                        // Persist status_reason so the error is visible
+                        let reason = format!("Nonce error during submission: {error_kind:?}");
+                        let update = TransactionUpdateRequest {
+                            status_reason: Some(reason),
+                            ..Default::default()
+                        };
+                        match self.cas_update(&tx, update).await {
+                            Ok(_) => {}
+                            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+                            Err(update_err) => warn!(
+                                tx_id = %tx.id,
+                                error = %update_err,
+                                "failed to persist status_reason for nonce error"
+                            ),
+                        }
+
+                        // Schedule nonce recovery status check (best effort)
+                        if let Err(schedule_err) = self
+                            .schedule_nonce_recovery_status_check(&tx, &error_kind)
+                            .await
+                        {
+                            error!(
+                                tx_id = %tx.id,
+                                error = %schedule_err,
+                                "failed to schedule nonce recovery status check"
+                            );
+                        }
+
+                        // Return Ok to prevent Dead Queue — status checker handles reconciliation
+                        return Ok((tx, StoredSendOutcome::NoAnswer(None)));
+                    }
+                    // NonceTooHigh: transaction nonce is ahead of on-chain nonce.
+                    // Could be transient (burst ordering) or persistent (counter drift).
+                    // Track retries and escalate to nonce health job after threshold.
+                    (_, SubmissionErrorKind::NonceTooHigh) => {
+                        self.handle_nonce_too_high(&tx, "during submission").await?;
+                        // Return Ok to prevent Dead Queue — status checker handles resubmission
+                        return Ok((tx, StoredSendOutcome::NoAnswer(None)));
+                    }
+                    _ => {
+                        let outcome = if matches!(e, ProviderError::RpcErrorCode { .. })
+                            && !e.is_transient()
+                        {
+                            StoredSendOutcome::Rejected(e)
+                        } else {
+                            StoredSendOutcome::NoAnswer(Some(e))
+                        };
+                        return Ok((tx, outcome));
+                    }
+                }
+            }
+        };
+
+        let updated_tx = match self.record_send(&tx, accepted).await {
+            Ok(tx) => tx,
+            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+            Err(e) => {
+                error!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    error = %e,
+                    "CRITICAL: transaction sent to blockchain but failed to update database - transaction may not be tracked correctly"
+                );
+                // Transaction is on-chain - don't propagate error to avoid wasteful retries
+                // Return the original transaction data
+                tx
+            }
+        };
+
+        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
+        self.enqueue_next_nonce_submit(&updated_tx).await;
+
+        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
+            error!(
+                tx_id = %updated_tx.id,
+                relayer_id = %updated_tx.relayer_id,
+                status = ?TransactionStatus::Submitted,
+                error = %e,
+                "sending transaction update notification failed after submit",
+            );
+        }
+
+        Ok((
+            updated_tx,
+            if accepted {
+                StoredSendOutcome::Accepted
+            } else {
+                StoredSendOutcome::Known
+            },
+        ))
+    }
     /// Classifies a submission/resubmission error into a specific kind for targeted handling.
     ///
     /// Uses `ALREADY_SUBMITTED_PATTERNS` and `matches_known_transaction` from constants
@@ -1212,130 +1374,8 @@ where
             return Ok(tx);
         }
 
-        let Some(raw_tx) = evm_tx_data.raw.as_ref() else {
-            return Ok(tx);
-        };
-
-        // Release before every send, including a resend of Submitted bytes.
-        let tx = self
-            .cas_update(
-                &tx,
-                TransactionUpdateRequest {
-                    status: Some(TransactionStatus::Submitted),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let accepted = match self.provider.send_raw_transaction(raw_tx).await {
-            Ok(_) => true,
-            Err(e) => {
-                let error_kind = Self::classify_submission_error(&e);
-
-                match (&tx.status, &error_kind) {
-                    // AlreadyKnown / ReplacementUnderpriced (any status):
-                    // A saved payload can already be in the mempool. Receipt checks
-                    // determine which payload mined. These errors do not raise the count.
-                    (_, SubmissionErrorKind::AlreadyKnown)
-                    | (_, SubmissionErrorKind::ReplacementUnderpriced) => {
-                        warn!(
-                            tx_id = %tx.id,
-                            error = %e,
-                            error_kind = ?error_kind,
-                            "transaction appears to be already submitted based on RPC error - treating as success"
-                        );
-                        false
-                    }
-                    // NonceTooLow (any status): the nonce was consumed, but we don't know
-                    // by whom — could be our tx (retry after crash) or a different tx
-                    // (multi-instance / external wallet). Schedule nonce recovery via the
-                    // status checker, which will check receipts and on-chain nonce to
-                    // determine the actual outcome.
-                    (_, SubmissionErrorKind::NonceTooLow) => {
-                        warn!(
-                            tx_id = %tx.id,
-                            status = ?tx.status,
-                            error = %e,
-                            error_kind = ?error_kind,
-                            "nonce error during submission - scheduling nonce recovery"
-                        );
-
-                        // Persist status_reason so the error is visible
-                        let reason = format!("Nonce error during submission: {error_kind:?}");
-                        let update = TransactionUpdateRequest {
-                            status_reason: Some(reason),
-                            ..Default::default()
-                        };
-                        match self.cas_update(&tx, update).await {
-                            Ok(_) => {}
-                            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
-                            Err(update_err) => warn!(
-                                tx_id = %tx.id,
-                                error = %update_err,
-                                "failed to persist status_reason for nonce error"
-                            ),
-                        }
-
-                        // Schedule nonce recovery status check (best effort)
-                        if let Err(schedule_err) = self
-                            .schedule_nonce_recovery_status_check(&tx, &error_kind)
-                            .await
-                        {
-                            error!(
-                                tx_id = %tx.id,
-                                error = %schedule_err,
-                                "failed to schedule nonce recovery status check"
-                            );
-                        }
-
-                        // Return Ok to prevent Dead Queue — status checker handles reconciliation
-                        return Ok(tx);
-                    }
-                    // NonceTooHigh: transaction nonce is ahead of on-chain nonce.
-                    // Could be transient (burst ordering) or persistent (counter drift).
-                    // Track retries and escalate to nonce health job after threshold.
-                    (_, SubmissionErrorKind::NonceTooHigh) => {
-                        self.handle_nonce_too_high(&tx, "during submission").await?;
-                        // Return Ok to prevent Dead Queue — status checker handles resubmission
-                        return Ok(tx);
-                    }
-                    // All other errors: propagate as before
-                    _ => {
-                        return Err(e.into());
-                    }
-                }
-            }
-        };
-
-        let updated_tx = match self.record_send(&tx, accepted).await {
-            Ok(tx) => tx,
-            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
-            Err(e) => {
-                error!(
-                    tx_id = %tx.id,
-                    relayer_id = %tx.relayer_id,
-                    error = %e,
-                    "CRITICAL: transaction sent to blockchain but failed to update database - transaction may not be tracked correctly"
-                );
-                // Transaction is on-chain - don't propagate error to avoid wasteful retries
-                // Return the original transaction data
-                tx
-            }
-        };
-
-        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
-        self.enqueue_next_nonce_submit(&updated_tx).await;
-
-        if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
-            error!(
-                tx_id = %updated_tx.id,
-                relayer_id = %updated_tx.relayer_id,
-                status = ?TransactionStatus::Submitted,
-                error = %e,
-                "sending transaction update notification failed after submit",
-            );
-        }
-
-        Ok(updated_tx)
+        let (tx, outcome) = self.send_stored_payload(tx).await?;
+        outcome.finish(tx)
     }
 
     /// Handles the status of a transaction.
@@ -1401,6 +1441,35 @@ where
                 Ok(tx)
             };
         }
+
+        let tx = if resend_unsent {
+            let network_model = self
+                .network_repository
+                .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
+                .await?
+                .ok_or_else(|| {
+                    TransactionError::UnexpectedError(format!(
+                        "Network with chain id {} not found",
+                        evm_data.chain_id
+                    ))
+                })?;
+            let network = EvmNetwork::try_from(network_model).map_err(|e| {
+                TransactionError::UnexpectedError(format!(
+                    "Error converting network model to EvmNetwork: {e}"
+                ))
+            })?;
+            if is_reprice_net_due(&tx, &network)? {
+                tx
+            } else {
+                let (released, outcome) = self.send_stored_payload(tx).await?;
+                match outcome {
+                    StoredSendOutcome::Rejected(_) => released,
+                    outcome => return outcome.finish(released),
+                }
+            }
+        } else {
+            tx
+        };
 
         // Calculate bumped gas price
         // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
@@ -3889,6 +3958,7 @@ mod tests {
 
         // Save the candidate, then record the send result.
         test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        test_tx.sent_at = test_tx.priced_at.clone();
         expect_lifecycle_updates(&mut mock_transaction, &test_tx, 2);
 
         mock_network.expect_get_by_chain_id().returning(|_, _| {
@@ -4242,6 +4312,7 @@ mod tests {
 
         // Should update to Submitted status with new hash
         test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        test_tx.sent_at = test_tx.priced_at.clone();
         expect_lifecycle_updates(&mut mock_transaction, &test_tx, 2);
 
         mock_network.expect_get_by_chain_id().returning(|_, _| {
@@ -4718,6 +4789,7 @@ mod tests {
 
         // The candidate is saved before the nonce error.
         test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        test_tx.sent_at = test_tx.priced_at.clone();
         expect_lifecycle_updates(&mut mock_transaction, &test_tx, 1);
 
         mock_network.expect_get_by_chain_id().returning(|_, _| {
@@ -5018,6 +5090,7 @@ mod tests {
             .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         test_tx.priced_at = Some((Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+        test_tx.sent_at = test_tx.priced_at.clone();
         mock_network.expect_get_by_chain_id().returning(|_, _| {
             Ok(Some(
                 super::super::status::tests::create_test_network_model(),
