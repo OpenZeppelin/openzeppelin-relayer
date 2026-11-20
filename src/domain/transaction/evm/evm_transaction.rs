@@ -286,8 +286,15 @@ where
                         return Ok((tx, StoredSendOutcome::NoAnswer(None)));
                     }
                     _ => {
-                        let outcome = if matches!(e, ProviderError::RpcErrorCode { .. })
-                            && !e.is_transient()
+                        // Only the codes nodes use for a refused transaction count as
+                        // a rejection; any other error is not proof a node saw the bytes.
+                        let outcome = if matches!(
+                            e,
+                            ProviderError::RpcErrorCode {
+                                code: -32000 | -32003,
+                                ..
+                            }
+                        ) && !e.is_transient()
                         {
                             StoredSendOutcome::Rejected(e)
                         } else {
@@ -1442,6 +1449,7 @@ where
             };
         }
 
+        let mut probed = false;
         let tx = if resend_unsent {
             let network_model = self
                 .network_repository
@@ -1463,7 +1471,10 @@ where
             } else {
                 let (released, outcome) = self.send_stored_payload(tx).await?;
                 match outcome {
-                    StoredSendOutcome::Rejected(_) => released,
+                    StoredSendOutcome::Rejected(_) => {
+                        probed = true;
+                        released
+                    }
                     outcome => return outcome.finish(released),
                 }
             }
@@ -1486,7 +1497,8 @@ where
                 "bumped gas price does not meet minimum requirement, skipping resubmission"
             );
             // A reprice that is not possible must not strand saved bytes.
-            return if resend_unsent {
+            // A probe in this job has just sent them.
+            return if resend_unsent && !probed {
                 self.submit_transaction(tx).await
             } else {
                 Ok(tx)

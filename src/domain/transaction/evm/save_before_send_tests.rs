@@ -1274,10 +1274,21 @@ async fn net_reprices_without_probe_after_four_backed_off_intervals() {
 
 #[tokio::test]
 async fn due_unknown_internal_rpc_error_is_no_answer() {
+    // Only -32000 and -32003 are node rejections of the bytes.
+    for (code, message) in [
+        (-32603, "unknown backend failure"),
+        (-32601, "method not found"),
+        (-32001, "quota exceeded"),
+    ] {
+        due_rpc_error_is_no_answer(code, message).await;
+    }
+}
+
+async fn due_rpc_error_is_no_answer(code: i64, message: &str) {
     let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
     h.age_payload(200).await;
     let before = h.stored().await;
-    h.events.lock().unwrap().typed_error = Some(rpc_error(-32603, "unknown backend failure"));
+    h.events.lock().unwrap().typed_error = Some(rpc_error(code, message));
     assert!(h.worker.resubmit_transaction(before.clone()).await.is_err());
     let after = h.stored().await;
     assert_eq!(after.hashes, before.hashes);
@@ -1410,4 +1421,20 @@ async fn due_nonce_probe_keeps_existing_recovery_without_repricing() {
         assert!(after.sent_at.is_some());
         assert_eq!(h.events.lock().unwrap().sent, [vec![0], vec![0]]);
     }
+}
+
+#[tokio::test]
+async fn refused_bump_after_rejected_probe_sends_once() {
+    let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+    h.age_payload(200).await;
+    let before = h.stored().await;
+    {
+        let mut events = h.events.lock().unwrap();
+        events.typed_error = Some(rpc_error(-32000, "transaction underpriced"));
+        events.cap_hit = true;
+    }
+    let after = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+    assert_eq!(after.hashes, before.hashes);
+    assert!(h.events.lock().unwrap().signs.is_empty());
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
 }
