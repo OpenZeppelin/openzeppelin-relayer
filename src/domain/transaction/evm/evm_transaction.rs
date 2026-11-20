@@ -382,6 +382,96 @@ where
         }
     }
 
+    /// Returns `true` when the chain is tagged Arbitrum. A failed lookup returns `false`,
+    /// so the default (non-Arbitrum) behaviour applies.
+    pub(super) async fn is_arbitrum_network(
+        &self,
+        tx: &TransactionRepoModel,
+        chain_id: u64,
+    ) -> bool {
+        let network = match self
+            .network_repository
+            .get_by_chain_id(NetworkType::Evm, chain_id)
+            .await
+        {
+            Ok(Some(model)) => EvmNetwork::try_from(model).ok(),
+            Ok(None) => None,
+            Err(e) => {
+                warn!(tx_id = %tx.id, error = %e, "failed to load network; assuming non-Arbitrum");
+                None
+            }
+        };
+        network.is_some_and(|n| n.is_arbitrum())
+    }
+
+    /// Arbitrum chained delivery (no-op on other networks): after a successful broadcast at nonce N, enqueue the
+    /// submit job for a never-broadcast `Sent` tx at N+1. A jammed region then drains
+    /// at job+RPC latency instead of one tx per resubmit cycle. Best-effort: failures
+    /// only log, and the status checker remains the fallback driver. Duplicate links
+    /// are safe because re-submitting already-broadcast bytes yields `AlreadyKnown`.
+    pub(super) async fn enqueue_next_nonce_submit(&self, tx: &TransactionRepoModel) {
+        let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
+            return;
+        };
+        let Some(nonce) = evm_data.nonce else {
+            return;
+        };
+        if !self.is_arbitrum_network(tx, evm_data.chain_id).await {
+            return;
+        }
+
+        let counter = match self
+            .transaction_counter_service
+            .get(&self.relayer.id, &self.relayer.address)
+            .await
+        {
+            Ok(Some(counter)) => counter,
+            Ok(None) => return,
+            Err(e) => {
+                debug!(tx_id = %tx.id, error = %e, "chain link: failed to read nonce counter");
+                return;
+            }
+        };
+
+        // The counter is the next unallocated nonce — no successor exists at N+1.
+        if counter <= nonce + 1 {
+            return;
+        }
+
+        match self
+            .transaction_repository
+            .find_by_nonce(&tx.relayer_id, nonce + 1)
+            .await
+        {
+            Ok(Some(next_tx))
+                if next_tx.status == TransactionStatus::Sent
+                    && next_tx.sent_at.is_none()
+                    && next_tx
+                        .network_data
+                        .get_evm_transaction_data()
+                        .is_ok_and(|data| !is_noop(&data)) =>
+            {
+                info!(
+                    relayer_id = %tx.relayer_id,
+                    next_nonce = nonce + 1,
+                    next_tx_id = %next_tx.id,
+                    "drain chain advanced: enqueueing submit for next nonce"
+                );
+                if let Err(e) = self.send_transaction_submit_job(&next_tx).await {
+                    warn!(
+                        tx_id = %next_tx.id,
+                        error = %e,
+                        "chain link: failed to enqueue submit job for next nonce"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                debug!(tx_id = %tx.id, error = %e, "chain link: find_by_nonce lookup failed");
+            }
+        }
+    }
+
     /// Helper method to produce a submit transaction job.
     pub(super) async fn send_transaction_submit_job(
         &self,
@@ -1039,6 +1129,9 @@ where
             }
         };
 
+        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
+        self.enqueue_next_nonce_submit(&updated_tx).await;
+
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
             error!(
                 tx_id = %updated_tx.id,
@@ -1141,7 +1234,7 @@ where
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
 
-        // Send resubmitted transaction to blockchain - this is the critical operation
+        // Send the signed transaction to the network.
         let was_already_submitted = match self.provider.send_raw_transaction(raw_tx).await {
             Ok(_) => {
                 // Transaction resubmitted successfully with new pricing
@@ -1205,7 +1298,6 @@ where
 
         // If transaction was already submitted, just update status without changing hash
         let update = if was_already_submitted {
-            // Keep original hash and data - just ensure status is Submitted
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
                 metadata: metadata_reset,
@@ -1245,6 +1337,9 @@ where
                 tx
             }
         };
+
+        // Chained delivery (Arbitrum only): a successful broadcast may unblock the next nonce.
+        self.enqueue_next_nonce_submit(&updated_tx).await;
 
         Ok(updated_tx)
     }
@@ -1497,7 +1592,7 @@ mod tests {
         domain::evm::price_calculator::PriceParams,
         jobs::MockJobProducerTrait,
         models::{
-            evm::Speed, EvmTransactionData, EvmTransactionRequest, NetworkType,
+            evm::Speed, EvmTransactionData, EvmTransactionRequest, NetworkConfigData, NetworkType,
             RelayerNetworkPolicy, RpcConfig, U256,
         },
         repositories::{
@@ -1528,6 +1623,54 @@ mod tests {
                 force_bump: bool,
             ) -> Result<PriceParams, TransactionError>;
         }
+    }
+
+    /// Creates a NetworkRepoModel for chain_id 1; `tags` controls rollup/arbitrum gating.
+    fn create_test_network_model_with_tags(tags: Vec<String>) -> NetworkRepoModel {
+        let evm_config = EvmNetworkConfig {
+            common: NetworkConfigCommon {
+                network: "testnet".to_string(),
+                from: None,
+                rpc_urls: Some(vec![RpcConfig::new("https://rpc.example.com".to_string())]),
+                explorer_urls: Some(vec!["https://explorer.example.com".to_string()]),
+                average_blocktime_ms: Some(12000),
+                is_testnet: Some(false),
+                tags: Some(tags),
+            },
+            chain_id: Some(1),
+            required_confirmations: Some(12),
+            features: Some(vec!["eip1559".to_string()]),
+            symbol: Some("ETH".to_string()),
+            gas_price_cache: None,
+            status_check: None,
+        };
+        NetworkRepoModel {
+            id: "evm:testnet".to_string(),
+            name: "testnet".to_string(),
+            network_type: NetworkType::Evm,
+            config: NetworkConfigData::Evm(evm_config),
+        }
+    }
+
+    /// MockNetworkRepository resolving any chain id to a plain (non-rollup) network.
+    fn default_mock_network() -> MockNetworkRepository {
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network
+            .expect_get_by_chain_id()
+            .returning(|_, _| Ok(Some(create_test_network_model_with_tags(vec![]))));
+        mock_network
+    }
+
+    /// MockNetworkRepository resolving any chain id to an Arbitrum-based rollup network.
+    fn arbitrum_mock_network() -> MockNetworkRepository {
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network.expect_get_by_chain_id().returning(|_, _| {
+            Ok(Some(create_test_network_model_with_tags(vec![
+                "rollup".to_string(),
+                "arbitrum-based".to_string(),
+            ])))
+        });
+        mock_network
     }
 
     // Helper to create a relayer model with specific configuration for these tests
@@ -1798,7 +1941,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -1905,7 +2048,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -2009,7 +2152,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -2163,7 +2306,7 @@ mod tests {
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
 
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: relayer.clone(),
@@ -2222,7 +2365,7 @@ mod tests {
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(ready(Ok(()))));
 
-            let mock_network = MockNetworkRepository::new();
+            let mock_network = default_mock_network();
 
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
@@ -2409,7 +2552,7 @@ mod tests {
             let mut test_tx = create_test_transaction();
             test_tx.status = TransactionStatus::Confirmed;
 
-            let mock_network = MockNetworkRepository::new();
+            let mock_network = default_mock_network();
 
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
@@ -2615,7 +2758,7 @@ mod tests {
             let mut test_tx = create_test_transaction();
             test_tx.status = TransactionStatus::Confirmed;
 
-            let mock_network = MockNetworkRepository::new();
+            let mock_network = default_mock_network();
 
             // Set up EVM transaction with the mocks
             let evm_transaction = EvmRelayerTransaction {
@@ -2665,7 +2808,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         // Create test relayer and pending transaction
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
@@ -2726,7 +2869,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         // Create test relayer and pending transaction
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
@@ -2787,7 +2930,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
             gas_limit_estimation: None, // Should default to true
@@ -2848,7 +2991,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
             gas_limit_estimation: Some(true),
@@ -2914,7 +3057,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         // Create test relayer with gas limit estimation enabled
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
@@ -3064,7 +3207,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let mut counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer_with_policy(RelayerEvmPolicy {
             gas_limit_estimation: Some(true),
@@ -3273,7 +3416,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3344,7 +3487,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3393,7 +3536,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3515,7 +3658,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3578,7 +3721,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let test_tx = create_test_transaction();
@@ -3622,7 +3765,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let test_tx = create_test_transaction();
@@ -3670,7 +3813,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let test_tx = create_test_transaction();
@@ -3713,7 +3856,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let test_tx = create_test_transaction();
@@ -3761,7 +3904,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -3981,7 +4124,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = MockNetworkRepository::new();
+        let mut mock_network = default_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
@@ -4065,7 +4208,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = MockNetworkRepository::new();
+        let mut mock_network = default_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
@@ -4150,7 +4293,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = MockNetworkRepository::new();
+        let mut mock_network = default_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
@@ -4287,7 +4430,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4362,7 +4505,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4442,7 +4585,7 @@ mod tests {
         let mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mock_network = MockNetworkRepository::new();
+        let mock_network = default_mock_network();
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4551,5 +4694,184 @@ mod tests {
         let returned_tx = result.unwrap();
         // Status should remain Submitted (unchanged)
         assert_eq!(returned_tx.status, TransactionStatus::Submitted);
+    }
+
+    /// Helper: a Sent test transaction with nonce 42 and raw bytes, ready to submit.
+    fn create_arbitrum_submit_tx() -> TransactionRepoModel {
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xhash".to_string()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        test_tx
+    }
+
+    /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
+    /// the never-broadcast Sent transaction at N+1.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_enqueues_next_nonce() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let mut counter_service = MockTransactionCounterTrait::new();
+        let mock_network = arbitrum_mock_network();
+
+        let relayer = create_test_relayer();
+        let test_tx = create_arbitrum_submit_tx();
+
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
+
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update()
+            .times(1)
+            .returning(move |_, update| {
+                let mut updated_tx = test_tx_clone.clone();
+                updated_tx.status = update.status.clone().unwrap();
+                updated_tx.sent_at = update.sent_at.clone();
+                Ok(updated_tx)
+            });
+
+        // Successors are allocated up to nonce 49.
+        counter_service
+            .expect_get()
+            .returning(|_, _| Box::pin(ready(Ok(Some(50)))));
+
+        // Nonce 43 holds a Sent, never-broadcast transaction.
+        let mut next_tx = create_arbitrum_submit_tx();
+        next_tx.id = "next-tx-id".to_string();
+        next_tx.sent_at = None;
+        next_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(43),
+            ..next_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        mock_transaction
+            .expect_find_by_nonce()
+            .times(1)
+            .withf(|relayer_id, nonce| relayer_id == "test-relayer-id" && *nonce == 43)
+            .returning(move |_, _| Ok(Some(next_tx.clone())));
+
+        // The chain link enqueues the successor's submit job.
+        mock_job_producer
+            .expect_produce_submit_transaction_job()
+            .times(1)
+            .withf(|job, _| job.transaction_id == "next-tx-id")
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        mock_job_producer
+            .expect_produce_send_notification_job()
+            .returning(|_, _| Box::pin(ready(Ok(()))));
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+    }
+
+    /// Skip successors that are already sent, are NOOPs, or do not exist.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_skips_broadcast_noop_or_missing_next() {
+        for next_record in [
+            // Already broadcast → skip.
+            Some({
+                let mut next_tx = create_arbitrum_submit_tx();
+                next_tx.id = "next-tx-id".to_string();
+                next_tx.sent_at = Some(Utc::now().to_rfc3339());
+                next_tx
+            }),
+            // A NOOP must be signed again by a resubmit job.
+            Some({
+                let mut next_tx = create_arbitrum_submit_tx();
+                next_tx.sent_at = None;
+                let mut data = next_tx.network_data.get_evm_transaction_data().unwrap();
+                data.to = Some(data.from.clone());
+                data.value = U256::from(0);
+                data.data = Some("0x".to_string());
+                data.speed = Some(Speed::Fast);
+                assert!(is_noop(&data));
+                next_tx.network_data = NetworkTransactionData::Evm(data);
+                next_tx
+            }),
+            // Missing record → skip.
+            None,
+        ] {
+            let mut mock_transaction = MockTransactionRepository::new();
+            let mock_relayer = MockRelayerRepository::new();
+            let mut mock_provider = MockEvmProviderTrait::new();
+            let mock_signer = MockSigner::new();
+            let mut mock_job_producer = MockJobProducerTrait::new();
+            let mock_price_calculator = MockPriceCalculator::new();
+            let mut counter_service = MockTransactionCounterTrait::new();
+            let mock_network = arbitrum_mock_network();
+
+            let relayer = create_test_relayer();
+            let test_tx = create_arbitrum_submit_tx();
+
+            mock_provider
+                .expect_send_raw_transaction()
+                .times(1)
+                .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
+
+            let test_tx_clone = test_tx.clone();
+            mock_transaction
+                .expect_partial_update()
+                .times(1)
+                .returning(move |_, update| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.status = update.status.clone().unwrap();
+                    Ok(updated_tx)
+                });
+
+            counter_service
+                .expect_get()
+                .returning(|_, _| Box::pin(ready(Ok(Some(50)))));
+
+            mock_transaction
+                .expect_find_by_nonce()
+                .times(1)
+                .returning(move |_, _| Ok(next_record.clone()));
+
+            // No successor submit job may be produced.
+            mock_job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+            mock_job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: relayer.clone(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(mock_relayer),
+                network_repository: Arc::new(mock_network),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(counter_service),
+                job_producer: Arc::new(mock_job_producer),
+                price_calculator: mock_price_calculator,
+                signer: mock_signer,
+            };
+
+            let result = evm_transaction.submit_transaction(test_tx).await;
+            assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+        }
     }
 }
