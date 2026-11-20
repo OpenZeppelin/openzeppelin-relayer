@@ -105,10 +105,8 @@ where
 ///
 /// # Note
 ///
-/// This endpoint only creates the signer metadata. The actual signer configuration
-/// (keys, credentials, etc.) should be provided through configuration files or
-/// other secure channels. This is a security measure to prevent sensitive data
-/// from being transmitted through API requests.
+/// The request carries the full signer configuration, including credentials, and
+/// is validated before it is stored. The response never returns secret values.
 pub async fn create_signer<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>(
     request: SignerCreateRequest,
     state: ThinDataAppState<J, RR, TR, NR, NFR, SR, TCR, PR, AKR>,
@@ -124,7 +122,7 @@ where
     PR: PluginRepositoryTrait + Send + Sync + 'static,
     AKR: ApiKeyRepositoryTrait + Send + Sync + 'static,
 {
-    // Convert request to domain model (validates automatically and includes placeholder config)
+    // Convert request to domain model (validates automatically)
     let signer = Signer::try_from(request)?;
 
     // Convert domain model to repository model

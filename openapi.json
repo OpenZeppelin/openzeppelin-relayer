@@ -12,7 +12,7 @@
       "name": "AGPL-3.0 license",
       "url": "https://github.com/OpenZeppelin/openzeppelin-relayer/blob/main/LICENSE"
     },
-    "version": "1.8.0"
+    "version": "1.9.0"
   },
   "paths": {
     "/api/v1/health": {
@@ -6092,12 +6092,6 @@
               "null"
             ]
           },
-          "federated_token_file": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "key_name": {
             "type": "string"
           },
@@ -6108,10 +6102,12 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Azure tenant ID: a GUID or a domain name. Required for `client_secret`\nand `workload_identity`."
           },
           "vault_url": {
-            "type": "string"
+            "type": "string",
+            "description": "Azure Key Vault URL in the form `https://<vault-name>.vault.azure.net`."
           }
         },
         "additionalProperties": false

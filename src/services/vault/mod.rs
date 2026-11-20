@@ -192,7 +192,13 @@ impl VaultService {
     async fn create_authenticated_client(&self) -> Result<Arc<VaultClient>, VaultError> {
         let mut auth_settings_builder = VaultClientSettingsBuilder::default();
         let address = &self.config.address;
-        auth_settings_builder.address(address).verify(true);
+        // The login carries the signer's own role and secret. The token is set
+        // explicitly because the builder otherwise defaults it from the
+        // `VAULT_TOKEN` environment variable.
+        auth_settings_builder
+            .address(address)
+            .token("")
+            .verify(true);
 
         if let Some(namespace) = &self.config.namespace {
             auth_settings_builder.namespace(Some(namespace.clone()));
@@ -404,6 +410,70 @@ mod tests {
             )
             .create_async()
             .await
+    }
+
+    /// The AppRole login authenticates with the signer's own role and secret.
+    /// A `VAULT_TOKEN` set in the process environment belongs to the operator
+    /// and must not be attached to it.
+    #[tokio::test]
+    #[serial_test::serial(vault_token_env)]
+    async fn test_login_does_not_send_token_from_environment() {
+        let mut mock_server = mockito::Server::new_async().await;
+
+        let login_mock = mock_server
+            .mock("POST", "/v1/auth/approle/login")
+            .match_header("X-Vault-Token", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::to_string(&json!({
+                    "request_id": "test-request-id",
+                    "lease_id": "",
+                    "renewable": false,
+                    "lease_duration": 0,
+                    "data": null,
+                    "wrap_info": null,
+                    "warnings": null,
+                    "auth": {
+                        "client_token": "signer-token",
+                        "accessor": "test-accessor",
+                        "policies": ["default"],
+                        "token_policies": ["default"],
+                        "metadata": {},
+                        "lease_duration": 3600,
+                        "renewable": true,
+                        "entity_id": "test-entity-id",
+                        "token_type": "service",
+                        "orphan": true
+                    }
+                }))
+                .unwrap(),
+            )
+            .create_async()
+            .await;
+
+        let config = VaultConfig::new(
+            mock_server.url(),
+            SecretString::new("test-role-id"),
+            SecretString::new("test-secret-id"),
+            None,
+            "test-mount".to_string(),
+            Some(60),
+        );
+
+        let previous = std::env::var("VAULT_TOKEN").ok();
+        std::env::set_var("VAULT_TOKEN", "operator-token");
+        let result = VaultService::new(config)
+            .create_authenticated_client()
+            .await;
+        match previous {
+            Some(value) => std::env::set_var("VAULT_TOKEN", value),
+            None => std::env::remove_var("VAULT_TOKEN"),
+        }
+
+        let client = result.expect("login should succeed");
+        login_mock.assert_async().await;
+        assert_eq!(client.settings.token, "signer-token");
     }
 
     #[tokio::test]

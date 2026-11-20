@@ -48,7 +48,10 @@ use turnkey_signer::*;
 use vault_signer::*;
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use crate::{
     domain::{
@@ -349,6 +352,24 @@ impl DataSignerTrait for EvmSigner {
     }
 }
 
+/// Tells the operator that an Azure Key Vault signer was built but will refuse
+/// to operate. Logged once per signer in each process, because the signer is
+/// rebuilt for every transaction.
+fn warn_unusable_azure_signer(signer_id: &str, reason: &str) {
+    static WARNED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+    let is_first = WARNED
+        .lock()
+        .is_ok_and(|mut warned| warned.insert(signer_id.to_string()));
+    if is_first {
+        tracing::warn!(
+            signer_id = %signer_id,
+            reason = %reason,
+            "Azure Key Vault signer configuration is invalid. The signer will refuse to operate."
+        );
+    }
+}
+
 pub struct EvmSignerFactory;
 
 impl EvmSignerFactory {
@@ -389,6 +410,9 @@ impl EvmSignerFactory {
                         "Azure Key Vault service error: {e}"
                     ))
                 })?;
+                if let Some(reason) = azure_service.config_error() {
+                    warn_unusable_azure_signer(&signer_model.id, reason);
+                }
                 EvmSigner::AzureKeyVault(AzureKeyVaultSigner::new(azure_service))
             }
             SignerConfig::VaultTransit(_) => {
@@ -499,6 +523,46 @@ mod tests {
             .unwrap();
 
         assert!(matches!(signer, EvmSigner::Vault(_)));
+    }
+
+    fn azure_signer_model(vault_url: &str) -> SignerDomainModel {
+        SignerDomainModel {
+            id: "test".to_string(),
+            config: SignerConfig::AzureKeyVault(crate::models::AzureKeyVaultSignerConfig {
+                auth_type: Some(crate::models::AzureKeyVaultAuthType::ManagedIdentity),
+                tenant_id: None,
+                client_id: None,
+                client_secret: None,
+                vault_url: SecretString::new(vault_url),
+                key_name: SecretString::new("test-key"),
+                key_version: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_evm_signer_azure_key_vault() {
+        let signer_model = azure_signer_model("https://example.vault.azure.net");
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        assert!(matches!(signer, EvmSigner::AzureKeyVault(_)));
+    }
+
+    #[tokio::test]
+    async fn test_create_evm_signer_azure_key_vault_with_non_azure_vault_url_is_unusable() {
+        // Signers loaded from storage skip request validation. Building one
+        // must not fail, because startup builds every stored relayer and a
+        // failure there stops the whole service. It must refuse to operate.
+        let signer_model = azure_signer_model("https://attacker.example");
+
+        let signer = EvmSignerFactory::create_evm_signer(signer_model)
+            .await
+            .unwrap();
+
+        assert!(signer.address().await.is_err());
     }
 
     #[tokio::test]
