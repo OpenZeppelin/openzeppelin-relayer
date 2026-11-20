@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.10.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.9.0...v1.10.0) (2026-11-20)
+
+
+### 🚀 Features
+
+* Support Stellar Protocol 30 (Bell) ([#968](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/968)) ([b171824](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/b1718246d66a5995e15a5fc2fead6e989f9810cb))
+
+
+### 🐛 Bug Fixes
+
+* Remove Jupiter swap config from devnet relayer in example config ([#971](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/971)) ([adc4114](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/adc4114081446ca58afd2f294d36e0e852264cf0))
+* Set Vault login client token explicitly ([#997](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/997)) ([dd66226](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/dd662268c8308c9df82364f10ac76e7b8b86122e))
+* Tighten Azure Key Vault signer validation ([#998](https://github.com/OpenZeppelin/openzeppelin-relayer/issues/998)) ([bae82df](https://github.com/OpenZeppelin/openzeppelin-relayer/commit/bae82dfafad57ce2a9afc6cb4a8b8d2fc20ab3c8))
+
 ## [1.9.0](https://github.com/OpenZeppelin/openzeppelin-relayer/compare/v1.8.0...v1.9.0) (2026-10-22)
 
 
