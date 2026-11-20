@@ -24,6 +24,8 @@ use crate::{
 };
 
 const AZURE_API_VERSION: &str = "7.4";
+const AZURE_AUTHORITY_HOST: &str = "https://login.microsoftonline.com";
+const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
 const AZURE_SCOPE: &str = "https://vault.azure.net/.default";
 const AZURE_MANAGED_IDENTITY_RESOURCE: &str = "https://vault.azure.net";
 const AZURE_SIGN_ALGORITHM: &str = "ES256K";
@@ -45,6 +47,8 @@ pub enum AzureKeyVaultError {
     ParseError(String),
     #[error("Azure Key Vault missing field: {0}")]
     MissingField(String),
+    #[error("Azure Key Vault invalid configuration: {0}")]
+    InvalidConfig(String),
     #[error("Azure Key Vault recovery error: {0}")]
     RecoveryError(#[from] Secp256k1Error),
 }
@@ -64,8 +68,22 @@ pub trait AzureKeyVaultEvmService: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct AzureKeyVaultService {
-    pub config: AzureKeyVaultSignerConfig,
+    /// Private so the configuration cannot change after `new` validated it:
+    /// `config_error` reflects exactly the values that requests are built from.
+    config: AzureKeyVaultSignerConfig,
     client: Client,
+    /// Base URL of the Microsoft identity platform that issues access tokens.
+    /// Fixed, never derived from signer configuration.
+    authority_host: String,
+    /// Path of the workload identity token file, read from the
+    /// `AZURE_FEDERATED_TOKEN_FILE` environment variable when the service is
+    /// built. Never derived from signer configuration.
+    federated_token_file: Option<String>,
+    /// Why the signer configuration failed validation, if it did. Such a
+    /// service is still built, so that one invalid stored signer cannot stop
+    /// the relayer from starting, but it refuses every operation before
+    /// anything is read or sent.
+    config_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -100,16 +118,60 @@ static AZURE_PUBLIC_KEY_CACHE: Lazy<RwLock<HashMap<AzurePublicKeyCacheKey, [u8; 
 
 impl AzureKeyVaultService {
     /// Creates a new Azure Key Vault service with a shared HTTP client configuration.
+    ///
+    /// The configuration is validated here because signers loaded from storage
+    /// do not pass through request validation. A failure is recorded rather
+    /// than returned (see `config_error`) and enforced by `ensure_valid_config`.
     pub fn new(config: &AzureKeyVaultSignerConfig) -> AzureKeyVaultResult<Self> {
+        Self::with_token_file(config, env::var(AZURE_FEDERATED_TOKEN_FILE_ENV).ok())
+    }
+
+    /// Builds the service with the process-level token file setting passed in,
+    /// so the setting can be exercised without touching the environment.
+    fn with_token_file(
+        config: &AzureKeyVaultSignerConfig,
+        token_file: Option<String>,
+    ) -> AzureKeyVaultResult<Self> {
+        let federated_token_file = token_file.filter(|path| !path.is_empty());
+        let needs_token_file = config.auth_type() == AzureKeyVaultAuthType::WorkloadIdentity;
+        let config_error = validator::Validate::validate(config)
+            .err()
+            .map(|e| e.to_string())
+            .or_else(|| {
+                (needs_token_file && federated_token_file.is_none()).then(|| {
+                    format!("{AZURE_FEDERATED_TOKEN_FILE_ENV} must be set to use workload identity")
+                })
+            });
+
         Ok(Self {
             config: config.clone(),
             client: Self::build_http_client()?,
+            authority_host: AZURE_AUTHORITY_HOST.to_string(),
+            federated_token_file,
+            config_error,
         })
     }
 
+    /// Why this service refuses to operate, if it does. See `config_error`.
+    pub fn config_error(&self) -> Option<&str> {
+        self.config_error.as_deref()
+    }
+
+    /// Refuses to operate on a configuration that failed validation.
+    fn ensure_valid_config(&self) -> AzureKeyVaultResult<()> {
+        match &self.config_error {
+            Some(reason) => Err(AzureKeyVaultError::InvalidConfig(reason.clone())),
+            None => Ok(()),
+        }
+    }
+
     /// Builds the reqwest client used for Azure AD and Key Vault requests.
+    ///
+    /// Redirects are disabled. Neither service is expected to redirect these
+    /// requests.
     fn build_http_client() -> AzureKeyVaultResult<Client> {
         Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(AZURE_HTTP_CONNECT_TIMEOUT)
             .timeout(AZURE_HTTP_REQUEST_TIMEOUT)
             .pool_idle_timeout(AZURE_HTTP_POOL_IDLE_TIMEOUT)
@@ -144,22 +206,21 @@ impl AzureKeyVaultService {
             .unwrap_or_default()
     }
 
-    /// Resolves the workload identity federated token file from config or environment.
+    /// Returns the workload identity token file path configured for the process.
     fn federated_token_file(&self) -> Option<String> {
-        self.config
-            .federated_token_file
-            .as_ref()
-            .map(|value| value.to_str().to_string())
-            .or_else(|| env::var("AZURE_FEDERATED_TOKEN_FILE").ok())
+        self.federated_token_file.clone()
     }
 
     /// Returns the configured vault base URL without a trailing slash.
+    ///
+    /// Built from the parsed URL, the same form validation checks, so that
+    /// what is validated and what is requested cannot differ.
     fn vault_url(&self) -> String {
-        self.config
-            .vault_url
-            .to_str()
-            .trim_end_matches('/')
-            .to_string()
+        let raw = self.config.vault_url.to_str();
+        match reqwest::Url::parse(raw.as_str()) {
+            Ok(url) => url.origin().ascii_serialization(),
+            Err(_) => raw.trim_end_matches('/').to_string(),
+        }
     }
 
     /// Returns the configured key name.
@@ -169,15 +230,11 @@ impl AzureKeyVaultService {
 
     /// Builds the Azure AD OAuth token endpoint for the configured tenant.
     fn oauth_token_url(&self) -> String {
-        let tenant_id = self.tenant_id();
-        if tenant_id.starts_with("http://") || tenant_id.starts_with("https://") {
-            format!("{}/oauth2/v2.0/token", tenant_id.trim_end_matches('/'))
-        } else {
-            format!(
-                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-                tenant_id
-            )
-        }
+        format!(
+            "{}/{}/oauth2/v2.0/token",
+            self.authority_host,
+            self.tenant_id()
+        )
     }
 
     /// Builds the Key Vault key path, including the key version when configured.
@@ -304,9 +361,11 @@ impl AzureKeyVaultService {
     ) -> AzureKeyVaultResult<AzureAccessTokenCacheEntry> {
         let client_id = self.client_id();
         let url = self.oauth_token_url();
-        let token_file = self
-            .federated_token_file()
-            .ok_or_else(|| AzureKeyVaultError::MissingField("federated_token_file".to_string()))?;
+        let token_file = self.federated_token_file().ok_or_else(|| {
+            AzureKeyVaultError::InvalidConfig(format!(
+                "{AZURE_FEDERATED_TOKEN_FILE_ENV} must be set to use workload identity"
+            ))
+        })?;
         let federated_token = fs::read_to_string(&token_file).await.map_err(|e| {
             AzureKeyVaultError::HttpError(format!(
                 "failed to read federated token file {token_file}: {e}"
@@ -393,6 +452,7 @@ impl AzureKeyVaultService {
 
     /// Returns a cached Azure access token or fetches and caches a fresh one.
     async fn get_access_token(&self) -> AzureKeyVaultResult<String> {
+        self.ensure_valid_config()?;
         let cache_key = self.access_token_cache_key();
 
         // Try cache first with minimal lock time
@@ -475,6 +535,7 @@ impl AzureKeyVaultService {
 
     /// Returns the uncompressed secp256k1 public key, using the cache when available.
     async fn get_public_key(&self) -> AzureKeyVaultResult<[u8; 64]> {
+        self.ensure_valid_config()?;
         let cache_key = self.public_key_cache_key();
         // Try cache first with minimal lock time
         let cached = {
@@ -614,21 +675,37 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    const VAULT_URL: &str = "https://example.vault.azure.net";
+
     async fn clear_test_caches() {
         AZURE_ACCESS_TOKEN_CACHE.write().await.clear();
         AZURE_PUBLIC_KEY_CACHE.write().await.clear();
     }
 
+    /// Builds a service directly, skipping the validation in `new`, so that
+    /// local mock servers can stand in for the identity platform and the vault.
+    fn service_with_authority(
+        config: &AzureKeyVaultSignerConfig,
+        authority_host: &str,
+    ) -> AzureKeyVaultService {
+        AzureKeyVaultService {
+            config: config.clone(),
+            client: AzureKeyVaultService::build_http_client().unwrap(),
+            authority_host: authority_host.to_string(),
+            federated_token_file: None,
+            config_error: None,
+        }
+    }
+
     fn test_config(base_url: &str) -> AzureKeyVaultSignerConfig {
         AzureKeyVaultSignerConfig {
             auth_type: Some(AzureKeyVaultAuthType::ClientSecret),
-            tenant_id: Some(SecretString::new(base_url)),
+            tenant_id: Some(SecretString::new("test-tenant")),
             client_id: Some(SecretString::new("test-client")),
             client_secret: Some(SecretString::new("test-secret")),
-            federated_token_file: None,
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         }
     }
 
@@ -638,11 +715,232 @@ mod tests {
             tenant_id: None,
             client_id: Some(SecretString::new("managed-client-id")),
             client_secret: None,
-            federated_token_file: None,
             vault_url: SecretString::new(base_url),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         }
+    }
+
+    #[test]
+    fn test_token_file_path_comes_from_the_process_setting() {
+        let config = test_config("https://example.vault.azure.net");
+
+        let service =
+            AzureKeyVaultService::with_token_file(&config, Some("/var/run/token".to_string()))
+                .unwrap();
+        assert_eq!(
+            service.federated_token_file(),
+            Some("/var/run/token".to_string())
+        );
+
+        // An empty setting means "not configured", not "read the empty path".
+        let service = AzureKeyVaultService::with_token_file(&config, Some(String::new())).unwrap();
+        assert_eq!(service.federated_token_file(), None);
+    }
+
+    #[test]
+    fn test_workload_identity_without_token_file_is_refused_at_construction() {
+        let mut config = test_config(VAULT_URL);
+        config.auth_type = Some(AzureKeyVaultAuthType::WorkloadIdentity);
+        config.client_secret = None;
+
+        let service = AzureKeyVaultService::with_token_file(&config, None).unwrap();
+        assert!(service
+            .config_error()
+            .is_some_and(|reason| reason.contains(AZURE_FEDERATED_TOKEN_FILE_ENV)));
+
+        let service =
+            AzureKeyVaultService::with_token_file(&config, Some("/var/run/token".to_string()))
+                .unwrap();
+        assert_eq!(service.config_error(), None);
+
+        // Other auth types do not need the token file.
+        let service =
+            AzureKeyVaultService::with_token_file(&managed_identity_config(VAULT_URL), None)
+                .unwrap();
+        assert_eq!(service.config_error(), None);
+    }
+
+    #[test]
+    fn test_key_name_and_version_outside_azure_format_are_refused() {
+        let service = AzureKeyVaultService::new(&test_config(VAULT_URL)).unwrap();
+        assert_eq!(service.config_error(), None);
+
+        for (key_name, key_version) in [("my/key", "0123"), ("my-key", "0123/sign")] {
+            let mut config = test_config(VAULT_URL);
+            config.key_name = SecretString::new(key_name);
+            config.key_version = Some(key_version.to_string());
+
+            let service = AzureKeyVaultService::new(&config).unwrap();
+
+            assert!(
+                service.config_error().is_some(),
+                "key {key_name:?} version {key_version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_config_error_does_not_echo_configured_values() {
+        // The reason is logged and returned to API callers, and the vault URL
+        // and tenant ID are stored as secrets.
+        let mut config = test_config("https://attacker.example/some-path");
+        config.tenant_id = Some(SecretString::new("https://tenant.attacker.example"));
+
+        let service = AzureKeyVaultService::new(&config).unwrap();
+        let reason = service.config_error.clone().unwrap();
+
+        assert!(!reason.contains("attacker.example"), "reason: {reason}");
+    }
+
+    #[test]
+    fn test_key_url_is_built_from_the_canonical_vault_origin() {
+        // Validation parses the URL, so requests must be built from the parsed
+        // form too. Otherwise spellings that parse to the same vault would be
+        // accepted and then produce a different request path.
+        for raw in [
+            "https://example.vault.azure.net",
+            "https://example.vault.azure.net/",
+            "https://EXAMPLE.vault.azure.net",
+            " https://example.vault.azure.net/\n",
+            "https://example.vault.azure.net\\",
+        ] {
+            let service = service_with_authority(&test_config(raw), AZURE_AUTHORITY_HOST);
+
+            assert_eq!(
+                service.key_url(),
+                "https://example.vault.azure.net/keys/test-key/testversion?api-version=7.4",
+                "vault_url {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_oauth_token_url_uses_microsoft_authority() {
+        let mut config = test_config("https://example.vault.azure.net");
+        config.tenant_id = Some(SecretString::new("11111111-2222-3333-4444-555555555555"));
+
+        let service = AzureKeyVaultService::new(&config).unwrap();
+
+        assert_eq!(
+            service.oauth_token_url(),
+            "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/oauth2/v2.0/token"
+        );
+    }
+
+    #[test]
+    fn test_oauth_token_url_host_is_never_taken_from_tenant_id() {
+        for tenant_id in [
+            "https://attacker.example",
+            "http://127.0.0.1:9900/tenant-a",
+            "@attacker.example",
+        ] {
+            let mut config = test_config("https://example.vault.azure.net");
+            config.tenant_id = Some(SecretString::new(tenant_id));
+
+            // Bypasses validation on purpose: the URL builder must stay on the
+            // authority host even for values validation would reject.
+            let service = service_with_authority(&config, AZURE_AUTHORITY_HOST);
+            let url = reqwest::Url::parse(&service.oauth_token_url()).unwrap();
+
+            assert_eq!(url.scheme(), "https", "tenant_id {tenant_id:?}");
+            assert_eq!(
+                url.host_str(),
+                Some("login.microsoftonline.com"),
+                "tenant_id {tenant_id:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_non_azure_vault_url_builds_but_sends_nothing() {
+        clear_test_caches().await;
+        let mut server = Server::new_async().await;
+        let token_request = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"test-token","expires_in":3600}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let vault_request = server
+            .mock("GET", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        // The mock server is not an Azure Key Vault host, so this configuration
+        // fails validation the way a stored signer pointing elsewhere would.
+        // Building it must still succeed: startup builds every stored signer.
+        let mut service = AzureKeyVaultService::new(&test_config(&server.url())).unwrap();
+        service.authority_host = server.url();
+
+        assert!(matches!(
+            service.get_evm_address().await,
+            Err(AzureKeyVaultError::InvalidConfig(_))
+        ));
+        assert!(matches!(
+            service.sign_hash_evm(&[1u8; 32]).await,
+            Err(AzureKeyVaultError::InvalidConfig(_))
+        ));
+        token_request.assert_async().await;
+        vault_request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_url_tenant_id_builds_but_sends_nothing() {
+        clear_test_caches().await;
+        let mut server = Server::new_async().await;
+        let token_request = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"test-token","expires_in":3600}"#)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mut config = test_config("https://example.vault.azure.net");
+        config.tenant_id = Some(SecretString::new("https://attacker.example"));
+        let mut service = AzureKeyVaultService::new(&config).unwrap();
+        service.authority_host = server.url();
+
+        assert!(matches!(
+            service.get_access_token().await,
+            Err(AzureKeyVaultError::InvalidConfig(_))
+        ));
+        token_request.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_token_request_does_not_follow_redirects() {
+        clear_test_caches().await;
+        let mut authority = Server::new_async().await;
+        let mut other_host = Server::new_async().await;
+
+        let redirect = authority
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
+            .with_status(307)
+            .with_header("location", &format!("{}/capture", other_host.url()))
+            .expect(1)
+            .create_async()
+            .await;
+        let captured = other_host
+            .mock("POST", "/capture")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"redirected-token","expires_in":3600}"#)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let service = service_with_authority(&test_config(&authority.url()), &authority.url());
+        let result = service.get_access_token().await;
+
+        assert!(result.is_err());
+        redirect.assert_async().await;
+        captured.assert_async().await;
     }
 
     #[tokio::test]
@@ -655,7 +953,7 @@ mod tests {
         let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
 
         let _token = server
-            .mock("POST", "/oauth2/v2.0/token")
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
             .match_body(mockito::Matcher::Any)
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -665,7 +963,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -686,7 +984,7 @@ mod tests {
             .create_async()
             .await;
 
-        let service = AzureKeyVaultService::new(&test_config(&server.url())).unwrap();
+        let service = service_with_authority(&test_config(&server.url()), &server.url());
         let address = service.get_evm_address().await.unwrap();
         assert!(matches!(address, Address::Evm(_)));
     }
@@ -706,7 +1004,7 @@ mod tests {
         let raw_signature = signature.to_bytes();
 
         let _token_1 = server
-            .mock("POST", "/oauth2/v2.0/token")
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
             .match_body(mockito::Matcher::Any)
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -716,7 +1014,7 @@ mod tests {
             .await;
 
         let _sign = server
-            .mock("POST", "/keys/test-key/test-version/sign")
+            .mock("POST", "/keys/test-key/testversion/sign")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -735,7 +1033,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -756,7 +1054,7 @@ mod tests {
             .create_async()
             .await;
 
-        let service = AzureKeyVaultService::new(&test_config(&server.url())).unwrap();
+        let service = service_with_authority(&test_config(&server.url()), &server.url());
         let signature = service.sign_payload_evm(&message).await.unwrap();
 
         assert_eq!(signature.len(), 65);
@@ -791,10 +1089,10 @@ mod tests {
             .create_async()
             .await;
 
-        let service = AzureKeyVaultService {
-            config: managed_identity_config(&server.url()),
-            client: AzureKeyVaultService::build_http_client().unwrap(),
-        };
+        let service = service_with_authority(
+            &managed_identity_config(&server.url()),
+            AZURE_AUTHORITY_HOST,
+        );
 
         let token = service.get_access_token().await.unwrap();
         assert_eq!(token, "managed-token");
@@ -805,6 +1103,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_workload_identity_never_reads_token_file_path_from_stored_record() {
+        clear_test_caches().await;
+        let mut server = Server::new_async().await;
+        let mut stored_path_file = NamedTempFile::new().unwrap();
+        writeln!(stored_path_file, "contents-of-stored-path").unwrap();
+
+        let token_request = server
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
+            .match_body(mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"access_token":"workload-token","expires_in":3600}"#)
+            .expect(0)
+            .create_async()
+            .await;
+
+        // A record persisted by an earlier version, which stored a token file path.
+        let legacy_record = crate::models::AzureKeyVaultSignerConfigStorage {
+            auth_type: Some(AzureKeyVaultAuthType::WorkloadIdentity),
+            tenant_id: Some(SecretString::new("test-tenant")),
+            client_id: Some(SecretString::new("workload-client-id")),
+            client_secret: None,
+            federated_token_file: Some(SecretString::new(
+                stored_path_file.path().to_string_lossy().as_ref(),
+            )),
+            vault_url: SecretString::new(&server.url()),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        };
+        let config = AzureKeyVaultSignerConfig::from(legacy_record);
+
+        // No token file is configured for the process, so the request must fail
+        // before anything is read or sent.
+        let service = service_with_authority(&config, &server.url());
+        let result = service.get_access_token().await;
+
+        assert!(matches!(result, Err(AzureKeyVaultError::InvalidConfig(_))));
+        token_request.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_workload_identity_access_token() {
         clear_test_caches().await;
         let mut server = Server::new_async().await;
@@ -812,7 +1151,7 @@ mod tests {
         writeln!(token_file, "federated-jwt").unwrap();
 
         let _token = server
-            .mock("POST", "/oauth2/v2.0/token")
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
             .match_body(mockito::Matcher::AllOf(vec![
                 mockito::Matcher::UrlEncoded("grant_type".into(), "client_credentials".into()),
                 mockito::Matcher::UrlEncoded("client_id".into(), "workload-client-id".into()),
@@ -832,18 +1171,16 @@ mod tests {
 
         let config = AzureKeyVaultSignerConfig {
             auth_type: Some(AzureKeyVaultAuthType::WorkloadIdentity),
-            tenant_id: Some(SecretString::new(&server.url())),
+            tenant_id: Some(SecretString::new("test-tenant")),
             client_id: Some(SecretString::new("workload-client-id")),
             client_secret: None,
-            federated_token_file: Some(SecretString::new(
-                token_file.path().to_string_lossy().as_ref(),
-            )),
             vault_url: SecretString::new(&server.url()),
             key_name: SecretString::new("test-key"),
-            key_version: Some("test-version".to_string()),
+            key_version: Some("testversion".to_string()),
         };
 
-        let service = AzureKeyVaultService::new(&config).unwrap();
+        let mut service = service_with_authority(&config, &server.url());
+        service.federated_token_file = Some(token_file.path().to_string_lossy().into_owned());
         let token = service.get_access_token().await.unwrap();
         assert_eq!(token, "workload-token");
     }
@@ -854,7 +1191,7 @@ mod tests {
         let mut server = Server::new_async().await;
 
         let _token = server
-            .mock("POST", "/oauth2/v2.0/token")
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
             .match_body(mockito::Matcher::Any)
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -863,7 +1200,7 @@ mod tests {
             .create_async()
             .await;
 
-        let service = AzureKeyVaultService::new(&test_config(&server.url())).unwrap();
+        let service = service_with_authority(&test_config(&server.url()), &server.url());
 
         let first = service.get_access_token().await.unwrap();
         let second = service.get_access_token().await.unwrap();
@@ -882,7 +1219,7 @@ mod tests {
         let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
 
         let _token = server
-            .mock("POST", "/oauth2/v2.0/token")
+            .mock("POST", "/test-tenant/oauth2/v2.0/token")
             .match_body(mockito::Matcher::Any)
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -892,7 +1229,7 @@ mod tests {
             .await;
 
         let _key = server
-            .mock("GET", "/keys/test-key/test-version")
+            .mock("GET", "/keys/test-key/testversion")
             .match_query(mockito::Matcher::UrlEncoded(
                 "api-version".into(),
                 AZURE_API_VERSION.into(),
@@ -913,7 +1250,7 @@ mod tests {
             .create_async()
             .await;
 
-        let service = AzureKeyVaultService::new(&test_config(&server.url())).unwrap();
+        let service = service_with_authority(&test_config(&server.url()), &server.url());
 
         let first = service.get_public_key().await.unwrap();
         let second = service.get_public_key().await.unwrap();

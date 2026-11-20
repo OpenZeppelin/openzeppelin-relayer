@@ -40,7 +40,7 @@ cd openzeppelin-relayer
 4. Depending on the auth mode, also collect:
    - `client_secret`: tenant ID, client ID, client secret
    - `managed_identity`: optional client ID for a user-assigned identity
-   - `workload_identity`: tenant ID, client ID, and optionally a federated token file path if you don't rely on `AZURE_FEDERATED_TOKEN_FILE`
+   - `workload_identity`: tenant ID and client ID. The token file path comes from the `AZURE_FEDERATED_TOKEN_FILE` environment variable
 5. Make sure the chosen identity has permission to read the key metadata and sign payloads with it
 
 ### Step 3: Configure Environment Variables
@@ -140,7 +140,7 @@ Workload identity example:
 ```
 
 If you want to pin the signer to a specific key version, replace `null` with the Azure Key Vault key version string.
-For workload identity, the relayer reads `AZURE_FEDERATED_TOKEN_FILE` automatically unless you set `federated_token_file` explicitly in the signer config.
+For workload identity, the relayer reads the token file path from the `AZURE_FEDERATED_TOKEN_FILE` environment variable. Azure Kubernetes Service workload identity sets it automatically.
 
 ### Step 5: Configure the Webhook URL
 

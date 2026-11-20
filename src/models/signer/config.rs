@@ -43,6 +43,8 @@ pub struct AzureKeyVaultSignerFileConfig {
     pub tenant_id: Option<PlainOrEnvValue>,
     pub client_id: Option<PlainOrEnvValue>,
     pub client_secret: Option<PlainOrEnvValue>,
+    /// No longer supported. Kept so that a configuration that still sets it
+    /// fails with an explanation instead of an unknown-field error.
     pub federated_token_file: Option<PlainOrEnvValue>,
     pub vault_url: String,
     pub key_name: String,
@@ -198,6 +200,28 @@ impl SignerFileConfig {
                 "Signer ID cannot be empty".into(),
             ));
         }
+        // Checked here, and not only on conversion, because conversion is
+        // skipped when the signer store is already populated.
+        if let SignerFileConfigEnum::AzureKeyVault(azure) = &self.config {
+            azure.reject_removed_fields()?;
+        }
+        Ok(())
+    }
+}
+
+impl AzureKeyVaultSignerFileConfig {
+    /// Fails loudly on a field that is no longer supported, so an operator who
+    /// set a token file path here is not left reading a different file than
+    /// they expect.
+    fn reject_removed_fields(&self) -> Result<(), ConfigFileError> {
+        if self.federated_token_file.is_some() {
+            return Err(ConfigFileError::InvalidFormat(
+                "federated_token_file is no longer supported in the Azure Key Vault signer \
+                 configuration. Remove the field and set the AZURE_FEDERATED_TOKEN_FILE \
+                 environment variable to the token file path."
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -285,6 +309,8 @@ impl TryFrom<AzureKeyVaultSignerFileConfig> for AzureKeyVaultSignerConfig {
     type Error = ConfigFileError;
 
     fn try_from(config: AzureKeyVaultSignerFileConfig) -> Result<Self, Self::Error> {
+        config.reject_removed_fields()?;
+
         let tenant_id = config
             .tenant_id
             .map(|value| {
@@ -311,23 +337,11 @@ impl TryFrom<AzureKeyVaultSignerFileConfig> for AzureKeyVaultSignerConfig {
                 })
             })
             .transpose()?;
-        let federated_token_file = config
-            .federated_token_file
-            .map(|value| {
-                value.get_value().map_err(|e| {
-                    ConfigFileError::InvalidFormat(format!(
-                        "Failed to get federated_token_file value: {e}"
-                    ))
-                })
-            })
-            .transpose()?;
-
         Ok(AzureKeyVaultSignerConfig {
             auth_type: config.auth_type,
             tenant_id,
             client_id,
             client_secret,
-            federated_token_file,
             vault_url: crate::models::SecretString::new(&config.vault_url),
             key_name: crate::models::SecretString::new(&config.key_name),
             key_version: config.key_version,
@@ -549,6 +563,65 @@ impl TryFrom<SignerFileConfig> for Signer {
 mod tests {
     use super::*;
     use crate::models::SecretString;
+
+    fn azure_workload_identity_file_config(
+        federated_token_file: Option<PlainOrEnvValue>,
+    ) -> AzureKeyVaultSignerFileConfig {
+        AzureKeyVaultSignerFileConfig {
+            auth_type: Some(crate::models::AzureKeyVaultAuthType::WorkloadIdentity),
+            tenant_id: Some(PlainOrEnvValue::Plain {
+                value: SecretString::new("11111111-2222-3333-4444-555555555555"),
+            }),
+            client_id: Some(PlainOrEnvValue::Plain {
+                value: SecretString::new("client-id"),
+            }),
+            client_secret: None,
+            federated_token_file,
+            vault_url: "https://example.vault.azure.net".to_string(),
+            key_name: "test-key".to_string(),
+            key_version: None,
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_conversion_rejects_federated_token_file() {
+        let config = azure_workload_identity_file_config(Some(PlainOrEnvValue::Plain {
+            value: SecretString::new("/var/run/secrets/token"),
+        }));
+
+        let result = AzureKeyVaultSignerConfig::try_from(config);
+
+        assert!(
+            matches!(&result, Err(ConfigFileError::InvalidFormat(msg)) if msg.contains("AZURE_FEDERATED_TOKEN_FILE")),
+            "expected an error naming AZURE_FEDERATED_TOKEN_FILE"
+        );
+    }
+
+    #[test]
+    fn test_signers_validation_rejects_azure_federated_token_file() {
+        let signers = SignersFileConfig::new(vec![SignerFileConfig {
+            id: "azure-signer".to_string(),
+            config: SignerFileConfigEnum::AzureKeyVault(azure_workload_identity_file_config(Some(
+                PlainOrEnvValue::Plain {
+                    value: SecretString::new("/var/run/secrets/token"),
+                },
+            ))),
+        }]);
+
+        let result = signers.validate();
+
+        assert!(
+            matches!(&result, Err(ConfigFileError::InvalidFormat(msg)) if msg.contains("AZURE_FEDERATED_TOKEN_FILE")),
+            "expected an error naming AZURE_FEDERATED_TOKEN_FILE"
+        );
+    }
+
+    #[test]
+    fn test_azure_key_vault_workload_identity_conversion() {
+        let config = azure_workload_identity_file_config(None);
+
+        assert!(AzureKeyVaultSignerConfig::try_from(config).is_ok());
+    }
 
     #[test]
     fn test_aws_kms_conversion() {

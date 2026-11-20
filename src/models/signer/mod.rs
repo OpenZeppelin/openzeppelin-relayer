@@ -152,17 +152,17 @@ pub struct AzureKeyVaultSignerConfig {
     pub tenant_id: Option<SecretString>,
     pub client_id: Option<SecretString>,
     pub client_secret: Option<SecretString>,
-    pub federated_token_file: Option<SecretString>,
     #[validate(custom(
-        function = "validate_secret_url",
-        message = "Vault URL must be a valid URL"
+        function = "validate_azure_vault_url",
+        message = "Vault URL must be an Azure Key Vault URL (https://<vault-name>.vault.azure.net)"
     ))]
     pub vault_url: SecretString,
     #[validate(custom(
-        function = "validate_secret_string",
-        message = "Key name cannot be empty"
+        function = "validate_azure_key_name",
+        message = "Key name must be 1 to 127 letters, digits or hyphens"
     ))]
     pub key_name: SecretString,
+    /// Checked in `validate_azure_key_vault_config`.
     pub key_version: Option<String>,
 }
 
@@ -404,16 +404,120 @@ fn validate_optional_secret_if_present(
     Ok(())
 }
 
+/// Host suffix of Key Vault endpoints in the Azure public cloud, the only cloud
+/// the Azure signer requests tokens for.
+const AZURE_KEY_VAULT_HOST_SUFFIX: &str = ".vault.azure.net";
+
+/// Returns true for `https://<vault-name>.vault.azure.net` and nothing more.
+///
+/// Key paths are appended to this URL, so it must be a bare base URL: no
+/// credentials, port, path, query string or fragment. The host must be a
+/// single vault name label directly under the Key Vault suffix, which starts
+/// with a dot.
+fn is_azure_vault_base_url(url: &reqwest::Url) -> bool {
+    let has_vault_name = url
+        .host_str()
+        .and_then(|host| host.strip_suffix(AZURE_KEY_VAULT_HOST_SUFFIX))
+        .is_some_and(|name| {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        });
+
+    url.scheme() == "https"
+        && has_vault_name
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+/// Custom validator for the Azure Key Vault URL.
+fn validate_azure_vault_url(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    secret.as_str(|value| {
+        let url = reqwest::Url::parse(value)
+            .map_err(|_| validator::ValidationError::new("invalid_url"))?;
+        if !is_azure_vault_base_url(&url) {
+            return Err(validator::ValidationError::new("vault_url_not_azure"));
+        }
+        Ok(())
+    })
+}
+
+/// Longest key name Azure Key Vault accepts.
+const AZURE_KEY_NAME_MAX_LEN: usize = 127;
+
+/// Custom validator for the Azure Key Vault key name.
+///
+/// The name becomes one segment of the request path, so it is limited to the
+/// form Azure Key Vault itself accepts: 1 to 127 letters, digits and hyphens.
+fn validate_azure_key_name(secret: &SecretString) -> Result<(), validator::ValidationError> {
+    secret.as_str(|name| {
+        let is_valid = !name.is_empty()
+            && name.len() <= AZURE_KEY_NAME_MAX_LEN
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        if !is_valid {
+            return Err(validator::ValidationError::new("invalid_key_name"));
+        }
+        Ok(())
+    })
+}
+
+/// Validates the optional Azure Key Vault key version: letters and digits only,
+/// because it becomes one segment of the request path. An empty or missing
+/// version selects the latest one.
+fn validate_azure_key_version(version: Option<&str>) -> Result<(), validator::ValidationError> {
+    let is_valid = version.is_none_or(|v| v.chars().all(|c| c.is_ascii_alphanumeric()));
+    if !is_valid {
+        let mut error = validator::ValidationError::new("invalid_key_version");
+        error.add_param(std::borrow::Cow::Borrowed("field"), &"key_version");
+        error.message = Some("Key version must contain only letters and digits".into());
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Returns true when the value has the shape of a GUID or a domain name:
+/// letters, digits, hyphens and single dots, starting and ending with a letter
+/// or digit.
+fn is_azure_tenant_identifier(value: &str) -> bool {
+    let is_edge = |c: char| c.is_ascii_alphanumeric();
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && value.starts_with(is_edge)
+        && value.ends_with(is_edge)
+        && !value.contains("..")
+}
+
+/// Validates that the Azure tenant ID is present and is an identifier (a GUID
+/// or a domain name) rather than a URL or path.
+fn validate_azure_tenant_id(
+    value: &Option<SecretString>,
+) -> Result<(), validator::ValidationError> {
+    validate_required_optional_secret(value, "tenant_id", "Tenant ID cannot be empty")?;
+
+    let is_identifier = value
+        .as_ref()
+        .is_some_and(|secret| secret.as_str(is_azure_tenant_identifier));
+    if !is_identifier {
+        let mut error = validator::ValidationError::new("invalid_tenant_id");
+        error.add_param(std::borrow::Cow::Borrowed("field"), &"tenant_id");
+        error.message = Some("Tenant ID must be a GUID or a domain name".into());
+        return Err(error);
+    }
+
+    Ok(())
+}
+
 fn validate_azure_key_vault_config(
     config: &AzureKeyVaultSignerConfig,
 ) -> Result<(), validator::ValidationError> {
+    validate_azure_key_version(config.key_version.as_deref())?;
+
     match config.auth_type() {
         AzureKeyVaultAuthType::ClientSecret => {
-            validate_required_optional_secret(
-                &config.tenant_id,
-                "tenant_id",
-                "Tenant ID cannot be empty",
-            )?;
+            validate_azure_tenant_id(&config.tenant_id)?;
             validate_required_optional_secret(
                 &config.client_id,
                 "client_id",
@@ -433,20 +537,11 @@ fn validate_azure_key_vault_config(
             )?;
         }
         AzureKeyVaultAuthType::WorkloadIdentity => {
-            validate_required_optional_secret(
-                &config.tenant_id,
-                "tenant_id",
-                "Tenant ID cannot be empty",
-            )?;
+            validate_azure_tenant_id(&config.tenant_id)?;
             validate_required_optional_secret(
                 &config.client_id,
                 "client_id",
                 "Client ID cannot be empty",
-            )?;
-            validate_optional_secret_if_present(
-                &config.federated_token_file,
-                "federated_token_file",
-                "Federated token file cannot be empty",
             )?;
         }
     }
@@ -832,7 +927,6 @@ mod tests {
             tenant_id: Some(SecretString::new("tenant-id")),
             client_id: Some(SecretString::new("client-id")),
             client_secret: Some(SecretString::new("client-secret")),
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -849,7 +943,6 @@ mod tests {
             tenant_id: None,
             client_id: Some(SecretString::new("managed-client-id")),
             client_secret: None,
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -866,7 +959,6 @@ mod tests {
             tenant_id: None,
             client_id: Some(SecretString::new("workload-client-id")),
             client_secret: None,
-            federated_token_file: None,
             vault_url: SecretString::new("https://example.vault.azure.net"),
             key_name: SecretString::new("test-key"),
             key_version: None,
@@ -879,6 +971,202 @@ mod tests {
             assert!(msg.contains("Tenant ID cannot be empty"));
         } else {
             panic!("Expected InvalidConfig error for missing tenant ID");
+        }
+    }
+
+    fn azure_signer(auth_type: AzureKeyVaultAuthType, tenant_id: &str, vault_url: &str) -> Signer {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(auth_type),
+            tenant_id: Some(SecretString::new(tenant_id)),
+            client_id: Some(SecretString::new("client-id")),
+            client_secret: Some(SecretString::new("client-secret")),
+            vault_url: SecretString::new(vault_url),
+            key_name: SecretString::new("test-key"),
+            key_version: None,
+        });
+        Signer::new("azure-signer".to_string(), config)
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_tenant_id_that_is_not_an_identifier() {
+        let invalid_tenant_ids = [
+            "https://attacker.example",
+            "http://127.0.0.1:9900/tenant-a",
+            "tenant/../other",
+            "tenant?x=1",
+            "tenant id",
+            ".",
+            "..",
+            "contoso..com",
+            "-tenant",
+            "tenant.",
+        ];
+
+        for tenant_id in invalid_tenant_ids {
+            for auth_type in [
+                AzureKeyVaultAuthType::ClientSecret,
+                AzureKeyVaultAuthType::WorkloadIdentity,
+            ] {
+                let result = azure_signer(auth_type, tenant_id, "https://example.vault.azure.net")
+                    .validate();
+                assert!(
+                    matches!(result, Err(SignerValidationError::InvalidConfig(_))),
+                    "tenant_id {tenant_id:?} should be rejected for {auth_type:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_guid_and_domain_tenant_id() {
+        for tenant_id in [
+            "11111111-2222-3333-4444-555555555555",
+            "contoso.onmicrosoft.com",
+        ] {
+            let result = azure_signer(
+                AzureKeyVaultAuthType::ClientSecret,
+                tenant_id,
+                "https://example.vault.azure.net",
+            )
+            .validate();
+            assert!(result.is_ok(), "tenant_id {tenant_id:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_vault_url_outside_azure() {
+        let invalid_vault_urls = [
+            "https://attacker.example",
+            "http://example.vault.azure.net",
+            "https://vault.azure.net",
+            "https://evilvault.azure.net",
+            "https://example.vault.azure.net.attacker.example",
+            "https://example.vault.azure.net@attacker.example",
+            "https://attacker.example/example.vault.azure.net",
+            "http://169.254.169.254",
+            "http://localhost:8080",
+            "https://example.vault.azure.net.",
+            "https://example.vault.azure.net?x=1",
+            "https://example.vault.azure.net/?x=1",
+            "https://example.vault.azure.net#fragment",
+            "https://example.vault.azure.net/keys/my-key",
+            "https://example.vault.azure.net/keys/my-key/0123456789abcdef",
+            "https://user:pass@example.vault.azure.net",
+            "https://user@example.vault.azure.net",
+            "https://example.vault.azure.net:8443",
+            "https://.vault.azure.net",
+            "https://nested.example.vault.azure.net",
+            "https://attacker.example\\@example.vault.azure.net",
+        ];
+
+        let accepted: Vec<&str> = invalid_vault_urls
+            .into_iter()
+            .filter(|vault_url| {
+                azure_signer(
+                    AzureKeyVaultAuthType::ClientSecret,
+                    "11111111-2222-3333-4444-555555555555",
+                    vault_url,
+                )
+                .validate()
+                .is_ok()
+            })
+            .collect();
+
+        assert!(
+            accepted.is_empty(),
+            "these vault URLs should be rejected: {accepted:?}"
+        );
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_azure_vault_url() {
+        for vault_url in [
+            "https://example.vault.azure.net",
+            "https://example.vault.azure.net/",
+            "https://EXAMPLE.VAULT.AZURE.NET",
+            "https://my-vault-01.vault.azure.net",
+        ] {
+            let result = azure_signer(
+                AzureKeyVaultAuthType::ClientSecret,
+                "11111111-2222-3333-4444-555555555555",
+                vault_url,
+            )
+            .validate();
+            assert!(result.is_ok(), "vault_url {vault_url:?} should be accepted");
+        }
+    }
+
+    fn azure_signer_with_key(key_name: &str, key_version: Option<&str>) -> Signer {
+        let config = SignerConfig::AzureKeyVault(AzureKeyVaultSignerConfig {
+            auth_type: Some(AzureKeyVaultAuthType::ManagedIdentity),
+            tenant_id: None,
+            client_id: None,
+            client_secret: None,
+            vault_url: SecretString::new("https://example.vault.azure.net"),
+            key_name: SecretString::new(key_name),
+            key_version: key_version.map(str::to_string),
+        });
+        Signer::new("azure-signer".to_string(), config)
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_key_name_outside_azure_format() {
+        let too_long = "a".repeat(128);
+        let invalid_key_names = [
+            "",
+            "my/key",
+            "../my-key",
+            "my-key/versions",
+            "my-key?x=1",
+            "my-key#fragment",
+            "my%2Fkey",
+            "my key",
+            "my_key",
+            "my.key",
+            too_long.as_str(),
+        ];
+
+        for key_name in invalid_key_names {
+            let result = azure_signer_with_key(key_name, None).validate();
+            assert!(
+                matches!(&result, Err(SignerValidationError::InvalidConfig(msg)) if msg.contains("Key name")),
+                "key_name {key_name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_rejects_key_version_with_other_characters() {
+        for key_version in [
+            "0123/sign",
+            "../0123",
+            "0123?x=1",
+            "0123#fragment",
+            "01 23",
+            "01-23",
+        ] {
+            let result = azure_signer_with_key("my-key", Some(key_version)).validate();
+            assert!(
+                matches!(&result, Err(SignerValidationError::InvalidConfig(msg)) if msg.contains("Key version")),
+                "key_version {key_version:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_azure_key_vault_accepts_azure_key_name_and_version() {
+        let longest = "a".repeat(127);
+        for key_name in ["my-key", "MyKey01", "k", longest.as_str()] {
+            let result = azure_signer_with_key(key_name, None).validate();
+            assert!(result.is_ok(), "key_name {key_name:?} should be accepted");
+        }
+
+        for key_version in [None, Some(""), Some("0123456789abcdef0123456789abcdef")] {
+            let result = azure_signer_with_key("my-key", key_version).validate();
+            assert!(
+                result.is_ok(),
+                "key_version {key_version:?} should be accepted"
+            );
         }
     }
 

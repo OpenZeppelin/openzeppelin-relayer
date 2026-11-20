@@ -28,6 +28,10 @@ use crate::{
 };
 use secrets::SecretVec;
 use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    sync::{LazyLock, Mutex},
+};
 /// Repository model for signer storage and retrieval
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignerRepoModel {
@@ -98,6 +102,9 @@ pub struct AzureKeyVaultSignerConfigStorage {
         deserialize_with = "deserialize_option_secret_string"
     )]
     pub client_secret: Option<SecretString>,
+    /// Legacy field, never read. Earlier versions persisted a token file path
+    /// here; it stays in the record format so those records still load and so
+    /// records written now remain readable by earlier versions.
     #[serde(
         serialize_with = "serialize_option_secret_string",
         deserialize_with = "deserialize_option_secret_string"
@@ -280,6 +287,12 @@ impl From<Signer> for SignerRepoModel {
 /// Convert from repository model to domain model
 impl From<SignerRepoModel> for Signer {
     fn from(repo_model: SignerRepoModel) -> Self {
+        if let SignerConfigStorage::AzureKeyVault(azure) = &repo_model.config {
+            if azure.federated_token_file.is_some() {
+                warn_ignored_legacy_token_file(&repo_model.id);
+            }
+        }
+
         Self {
             id: repo_model.id,
             config: repo_model.config.into(),
@@ -312,11 +325,31 @@ impl From<AzureKeyVaultSignerConfig> for AzureKeyVaultSignerConfigStorage {
             tenant_id: config.tenant_id,
             client_id: config.client_id,
             client_secret: config.client_secret,
-            federated_token_file: config.federated_token_file,
+            federated_token_file: None,
             vault_url: config.vault_url,
             key_name: config.key_name,
             key_version: config.key_version,
         }
+    }
+}
+
+/// Tells the operator that a stored Azure signer still carries a token file
+/// path saved by an earlier version and that it is ignored. Logged once per
+/// signer in each process, because stored signers are loaded for every
+/// transaction.
+fn warn_ignored_legacy_token_file(signer_id: &str) {
+    static WARNED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+    let is_first = WARNED
+        .lock()
+        .is_ok_and(|mut warned| warned.insert(signer_id.to_string()));
+    if is_first {
+        tracing::warn!(
+            signer_id = %signer_id,
+            "Stored Azure Key Vault signer has a saved federated_token_file path. \
+             It is ignored: workload identity reads the token file path from the \
+             AZURE_FEDERATED_TOKEN_FILE environment variable."
+        );
     }
 }
 
@@ -327,7 +360,6 @@ impl From<AzureKeyVaultSignerConfigStorage> for AzureKeyVaultSignerConfig {
             tenant_id: storage.tenant_id,
             client_id: storage.client_id,
             client_secret: storage.client_secret,
-            federated_token_file: storage.federated_token_file,
             vault_url: storage.vault_url,
             key_name: storage.key_name,
             key_version: storage.key_version,
