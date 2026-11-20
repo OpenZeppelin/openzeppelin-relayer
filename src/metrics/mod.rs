@@ -53,6 +53,14 @@ pub fn set_worker_threads(runtime: &str, count: usize) {
 use sysinfo::{Disks, System};
 
 lazy_static! {
+    /// Lost presign writes that held a newly allocated nonce.
+    pub static ref NONCE_PRESIGN_CONFLICTS: CounterVec = {
+        let opts = Opts::new("nonce_presign_conflicts_total", "Lost presign writes with an allocated nonce");
+        let counter = CounterVec::new(opts, &["relayer_id", "network_type"]).unwrap();
+        REGISTRY.register(Box::new(counter.clone())).unwrap();
+        counter
+    };
+
     // Global Prometheus registry.
     pub static ref REGISTRY: Registry = Registry::new();
 
@@ -579,6 +587,10 @@ mod actix_tests {
         // Queue depth gauge
         set_queue_depth("pubsub", "status-check-evm", 7.0);
 
+        NONCE_PRESIGN_CONFLICTS
+            .with_label_values(&["test-relayer", "evm"])
+            .inc();
+
         let metrics = gather_metrics().expect("failed to gather metrics");
         let output = String::from_utf8(metrics).expect("metrics output is not valid UTF-8");
 
@@ -611,6 +623,7 @@ mod actix_tests {
 
         // Queue depth gauge
         assert!(output.contains("queue_depth"));
+        assert!(output.contains("nonce_presign_conflicts_total"));
         assert!(output.contains(r#"queue_depth{backend="pubsub",queue_type="status-check-evm"} 7"#));
     }
 

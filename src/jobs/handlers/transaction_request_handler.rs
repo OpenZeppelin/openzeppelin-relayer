@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{
     constants::WORKER_TRANSACTION_REQUEST_RETRIES,
-    domain::{get_relayer_transaction, get_transaction_by_id, Transaction},
+    domain::{get_relayer_transaction, get_transaction_by_id_on_primary, Transaction},
     jobs::{handle_result, Job, TransactionRequest},
     metrics::{observe_processing_time, STAGE_PREPARE_DURATION, STAGE_REQUEST_QUEUE_DWELL},
     models::DefaultAppState,
@@ -60,7 +60,8 @@ async fn handle_request(
 ) -> eyre::Result<()> {
     let relayer_transaction = get_relayer_transaction(request.relayer_id, state).await?;
 
-    let transaction = get_transaction_by_id(request.transaction_id.clone(), state).await?;
+    let transaction =
+        get_transaction_by_id_on_primary(request.transaction_id.clone(), state).await?;
 
     // Measure time from transaction creation to request handler start.
     // On first attempt this approximates queue dwell time. On retries it

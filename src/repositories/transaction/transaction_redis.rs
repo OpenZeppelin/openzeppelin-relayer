@@ -27,6 +27,11 @@ use std::fmt;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+#[cfg(test)]
+thread_local! {
+    static DISCARD_PATCH_REPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 const RELAYER_PREFIX: &str = "relayer";
 const TX_PREFIX: &str = "tx";
 const STATUS_PREFIX: &str = "status";
@@ -67,6 +72,242 @@ pub struct RedisTransactionRepository {
 impl RedisRepository for RedisTransactionRepository {}
 
 impl RedisTransactionRepository {
+    async fn apply_patch(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+        expected_version: Option<u64>,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        // Serialize only the non-None fields as a JSON patch.
+        let patch_json = serde_json::to_string(&update).map_err(|e| {
+            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
+        })?;
+
+        // If the update sets a final status, compute delete_at in Rust (depends on server config)
+        // and include it in the patch so the Lua script applies it atomically.
+        let delete_at_value = if let Some(ref status) = update.status {
+            if FINAL_TRANSACTION_STATUSES.contains(status) {
+                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
+                let seconds = (expiration_hours * 3600.0) as i64;
+                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
+                Some(delete_time.to_rfc3339())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
+        // The Lua script only decodes ARGV[5] on a status change, so skip
+        // building the metadata for non-status patches.
+        let index_metadata_json = if update.status.is_some() {
+            self.partial_update_index_metadata(&tx_id, &update)?
+        } else {
+            String::new()
+        };
+
+        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
+
+        // Lua script: atomically applies a JSON patch to the stored transaction.
+        // Guards: rejects status changes on already-finalized transactions.
+        // Returns a two-element array {old_json, new_json} so Rust has the full
+        // pre-update state for index cleanup and metrics.
+        // Returns false if tx not found.
+        let patch_script = Script::new(
+            r#"
+            local relayer_id = redis.call('GET', KEYS[1])
+            if not relayer_id then return false end
+
+            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
+            local current = redis.call('GET', tx_key)
+            if not current then return false end
+
+            local tx = cjson.decode(current)
+            local patch = cjson.decode(ARGV[3])
+            if ARGV[6] ~= '' and (tx["version"] or 0) ~= tonumber(ARGV[6]) then
+                return {current}
+            end
+
+            -- Guard: reject status changes on finalized transactions.
+            -- A stale worker must not resurrect a tx that another worker
+            -- already moved to a terminal state.
+            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
+            if final_states[tx["status"]] and patch["status"] then
+                return {current, current}
+            end
+
+            local old_snapshot = current
+            local old_status = tx["status"]
+
+            -- lua-cjson cannot distinguish empty Lua tables from empty
+            -- arrays, so a decode/encode round-trip turns [] into {}.
+            -- Record which keys held [] in the stored doc and the patch
+            -- so we can restore them after cjson.encode.
+            -- NOTE: this relies on each array-typed field having a unique key
+            -- name across the entire JSON document (including nested objects).
+            -- If the model ever introduces duplicate key names at different
+            -- nesting levels (e.g. metadata.hashes), the gsub below could
+            -- restore the wrong occurrence.
+            local empty_arrs = {}
+            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
+                empty_arrs[k] = true
+            end
+
+            for k, v in pairs(patch) do
+                tx[k] = v
+            end
+
+            -- Apply delete_at if transitioning to a final state and not already set
+            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
+                tx["delete_at"] = ARGV[4]
+            end
+
+            tx["version"] = (tx["version"] or 0) + 1
+            local updated = cjson.encode(tx)
+            local new_status = tx["status"]
+
+            -- Restore empty arrays that cjson.encode converted to {}
+            for k, _ in pairs(empty_arrs) do
+                updated = string.gsub(
+                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
+                )
+            end
+
+            local index_meta = nil
+            if patch["status"] and new_status ~= old_status then
+                index_meta = cjson.decode(ARGV[5])
+            end
+
+            -- Persist nonce ownership with the body, including after a lost reply.
+            local old_tx = cjson.decode(old_snapshot)
+            local function evm_nonce(data)
+                if data and data["network_data"] == "Evm" then return data["data"]["nonce"] end
+            end
+            local old_nonce = evm_nonce(old_tx["network_data"])
+            local new_nonce = evm_nonce(tx["network_data"])
+            local nonce_prefix = ARGV[1] .. relayer_id .. ':nonce:'
+            if old_nonce and old_nonce ~= cjson.null and old_nonce ~= new_nonce then
+                redis.call('DEL', nonce_prefix .. string.format('%.0f', old_nonce))
+            end
+            if new_nonce and new_nonce ~= cjson.null then
+                redis.call('SET', nonce_prefix .. string.format('%.0f', new_nonce), tx["id"])
+            end
+
+            redis.call('SET', tx_key, updated)
+
+            if index_meta then
+                local tx_id = index_meta["tx_id"]
+                local new_status_sorted_suffix = index_meta["sorted"][new_status]
+                local old_status_sorted_suffix = index_meta["sorted"][old_status]
+                local old_status_legacy_suffix = index_meta["legacy"][old_status]
+
+                if new_status_sorted_suffix then
+                    local score = nil
+                    if new_status == "confirmed" and index_meta["confirmed_score"] ~= "" then
+                        score = index_meta["confirmed_score"]
+                    else
+                        local created_key = ARGV[1] .. relayer_id .. index_meta["created_key_suffix"]
+                        score = redis.call('ZSCORE', created_key, tx_id)
+                        if not score then score = 0 end
+                    end
+
+                    redis.call('ZADD', ARGV[1] .. relayer_id .. new_status_sorted_suffix, score, tx_id)
+                end
+
+                if old_status_sorted_suffix then
+                    redis.call('ZREM', ARGV[1] .. relayer_id .. old_status_sorted_suffix, tx_id)
+                end
+                if old_status_legacy_suffix then
+                    redis.call('SREM', ARGV[1] .. relayer_id .. old_status_legacy_suffix, tx_id)
+                end
+
+                if final_states[new_status] then
+                    for _, status in ipairs(index_meta["nonfinal"]) do
+                        local sorted_suffix = index_meta["sorted"][status]
+                        local legacy_suffix = index_meta["legacy"][status]
+                        if sorted_suffix then
+                            redis.call('ZREM', ARGV[1] .. relayer_id .. sorted_suffix, tx_id)
+                        end
+                        if legacy_suffix then
+                            redis.call('SREM', ARGV[1] .. relayer_id .. legacy_suffix, tx_id)
+                        end
+                    end
+                end
+            end
+
+            return {old_snapshot, updated}
+            "#,
+        );
+
+        let expected_arg = expected_version.map(|v| v.to_string()).unwrap_or_default();
+        let result: Option<Vec<String>> = self
+            .run_script_with_retry_vec(
+                &patch_script,
+                &lookup_key,
+                &key_prefix,
+                &key_suffix,
+                &[
+                    &patch_json,
+                    delete_at_arg,
+                    &index_metadata_json,
+                    &expected_arg,
+                ],
+                "partial_update",
+            )
+            .await?;
+
+        let parts = result.ok_or_else(|| {
+            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
+        })?;
+
+        if parts.len() == 1 {
+            return Err(RepositoryError::ConcurrentUpdateConflict(tx_id));
+        }
+        if parts.len() != 2 {
+            return Err(RepositoryError::UnexpectedError(format!(
+                "partial_update script returned {} elements, expected 2",
+                parts.len()
+            )));
+        }
+
+        let old_json = &parts[0];
+        let new_json = &parts[1];
+
+        let original_tx =
+            self.deserialize_entity::<TransactionRepoModel>(old_json, &tx_id, "transaction")?;
+        let updated_tx =
+            self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
+
+        if old_json == new_json {
+            return Ok(updated_tx);
+        }
+
+        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
+        // Status sorted sets are excluded: the Lua script above already moved
+        // them atomically with the body write.
+        self.update_indexes(&updated_tx, Some(&original_tx), false)
+            .await?;
+
+        debug!(tx_id = %tx_id, "successfully updated transaction via patch");
+
+        // Track metrics only when the persisted status actually changed.
+        // The Lua script may silently reject a status patch on already-final
+        // transactions, so we compare the deserialized before/after states.
+        if original_tx.status != updated_tx.status {
+            self.track_status_change_metrics(
+                &original_tx,
+                &updated_tx,
+                &original_tx.status,
+                &updated_tx.status,
+            );
+        }
+
+        Ok(updated_tx)
+    }
+
     pub fn new(
         connections: Arc<RedisConnections>,
         key_prefix: String,
@@ -326,6 +567,8 @@ impl RedisTransactionRepository {
         const MAX_RETRIES: u32 = 3;
         const BASE_BACKOFF_MS: u64 = 100;
 
+        #[cfg(test)]
+        let mut discard_reply = DISCARD_PATCH_REPLY.with(|flag| flag.replace(false));
         let mut last_error = None;
 
         for attempt in 0..MAX_RETRIES {
@@ -359,7 +602,14 @@ impl RedisTransactionRepository {
                 .invoke_async::<Option<Vec<String>>>(&mut conn)
                 .await
             {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    #[cfg(test)]
+                    if discard_reply {
+                        discard_reply = false;
+                        continue;
+                    }
+                    return Ok(result);
+                }
                 Err(e) => {
                     last_error = Some(self.map_redis_error(e, op_name));
                     if attempt < MAX_RETRIES - 1 {
@@ -1996,6 +2246,38 @@ impl TransactionRepository for RedisTransactionRepository {
         }
     }
 
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let mut conn = self
+            .get_connection(self.connections.primary(), "find_by_nonce_on_primary")
+            .await?;
+        let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
+
+        // Get transaction ID with this nonce for this relayer (should be single value)
+        let tx_id: Option<String> = conn
+            .get(nonce_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, "find_by_nonce_on_primary"))?;
+
+        match tx_id {
+            Some(tx_id) => {
+                match self.get_by_id_on_primary(tx_id.clone()).await {
+                    Ok(tx) => Ok(Some(tx)),
+                    Err(RepositoryError::NotFound(_)) => {
+                        // Transaction was deleted but index wasn't cleaned up
+                        warn!(relayer_id = %relayer_id, nonce = %nonce, "stale nonce index found for relayer");
+                        Ok(None)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn get_nonce_occupancy(
         &self,
         relayer_id: &str,
@@ -2096,202 +2378,17 @@ impl TransactionRepository for RedisTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        // Serialize only the non-None fields as a JSON patch.
-        let patch_json = serde_json::to_string(&update).map_err(|e| {
-            RepositoryError::InvalidData(format!("Failed to serialize update patch: {e}"))
-        })?;
+        self.apply_patch(tx_id, update, None).await
+    }
 
-        // If the update sets a final status, compute delete_at in Rust (depends on server config)
-        // and include it in the patch so the Lua script applies it atomically.
-        let delete_at_value = if let Some(ref status) = update.status {
-            if FINAL_TRANSACTION_STATUSES.contains(status) {
-                let expiration_hours = ServerConfig::get_transaction_expiration_hours();
-                let seconds = (expiration_hours * 3600.0) as i64;
-                let delete_time = Utc::now() + chrono::Duration::seconds(seconds);
-                Some(delete_time.to_rfc3339())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let delete_at_arg = delete_at_value.as_deref().unwrap_or("");
-        // The Lua script only decodes ARGV[5] on a status change, so skip
-        // building the metadata for non-status patches.
-        let index_metadata_json = if update.status.is_some() {
-            self.partial_update_index_metadata(&tx_id, &update)?
-        } else {
-            String::new()
-        };
-
-        let (lookup_key, key_prefix, key_suffix) = self.tx_key_parts(&tx_id);
-
-        // Lua script: atomically applies a JSON patch to the stored transaction.
-        // Guards: rejects status changes on already-finalized transactions.
-        // Returns a two-element array {old_json, new_json} so Rust has the full
-        // pre-update state for index cleanup and metrics.
-        // Returns false if tx not found.
-        let patch_script = Script::new(
-            r#"
-            local relayer_id = redis.call('GET', KEYS[1])
-            if not relayer_id then return false end
-
-            local tx_key = ARGV[1] .. relayer_id .. ARGV[2]
-            local current = redis.call('GET', tx_key)
-            if not current then return false end
-
-            local tx = cjson.decode(current)
-            local patch = cjson.decode(ARGV[3])
-
-            -- Guard: reject status changes on finalized transactions.
-            -- A stale worker must not resurrect a tx that another worker
-            -- already moved to a terminal state.
-            local final_states = {confirmed=true, failed=true, expired=true, canceled=true}
-            if final_states[tx["status"]] and patch["status"] then
-                return {current, current}
-            end
-
-            local old_snapshot = current
-            local old_status = tx["status"]
-
-            -- lua-cjson cannot distinguish empty Lua tables from empty
-            -- arrays, so a decode/encode round-trip turns [] into {}.
-            -- Record which keys held [] in the stored doc and the patch
-            -- so we can restore them after cjson.encode.
-            -- NOTE: this relies on each array-typed field having a unique key
-            -- name across the entire JSON document (including nested objects).
-            -- If the model ever introduces duplicate key names at different
-            -- nesting levels (e.g. metadata.hashes), the gsub below could
-            -- restore the wrong occurrence.
-            local empty_arrs = {}
-            for k in string.gmatch(current, '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-            for k in string.gmatch(ARGV[3], '"([^"]+)"%s*:%s*%[%s*%]') do
-                empty_arrs[k] = true
-            end
-
-            for k, v in pairs(patch) do
-                tx[k] = v
-            end
-
-            -- Apply delete_at if transitioning to a final state and not already set
-            if ARGV[4] ~= '' and (not tx["delete_at"] or tx["delete_at"] == cjson.null) then
-                tx["delete_at"] = ARGV[4]
-            end
-
-            local updated = cjson.encode(tx)
-            local new_status = tx["status"]
-
-            -- Restore empty arrays that cjson.encode converted to {}
-            for k, _ in pairs(empty_arrs) do
-                updated = string.gsub(
-                    updated, '"'..k..'"%s*:%s*{}', '"'..k..'":[]', 1
-                )
-            end
-
-            local index_meta = nil
-            if patch["status"] and new_status ~= old_status then
-                index_meta = cjson.decode(ARGV[5])
-            end
-
-            redis.call('SET', tx_key, updated)
-
-            if index_meta then
-                local tx_id = index_meta["tx_id"]
-                local new_status_sorted_suffix = index_meta["sorted"][new_status]
-                local old_status_sorted_suffix = index_meta["sorted"][old_status]
-                local old_status_legacy_suffix = index_meta["legacy"][old_status]
-
-                if new_status_sorted_suffix then
-                    local score = nil
-                    if new_status == "confirmed" and index_meta["confirmed_score"] ~= "" then
-                        score = index_meta["confirmed_score"]
-                    else
-                        local created_key = ARGV[1] .. relayer_id .. index_meta["created_key_suffix"]
-                        score = redis.call('ZSCORE', created_key, tx_id)
-                        if not score then score = 0 end
-                    end
-
-                    redis.call('ZADD', ARGV[1] .. relayer_id .. new_status_sorted_suffix, score, tx_id)
-                end
-
-                if old_status_sorted_suffix then
-                    redis.call('ZREM', ARGV[1] .. relayer_id .. old_status_sorted_suffix, tx_id)
-                end
-                if old_status_legacy_suffix then
-                    redis.call('SREM', ARGV[1] .. relayer_id .. old_status_legacy_suffix, tx_id)
-                end
-
-                if final_states[new_status] then
-                    for _, status in ipairs(index_meta["nonfinal"]) do
-                        local sorted_suffix = index_meta["sorted"][status]
-                        local legacy_suffix = index_meta["legacy"][status]
-                        if sorted_suffix then
-                            redis.call('ZREM', ARGV[1] .. relayer_id .. sorted_suffix, tx_id)
-                        end
-                        if legacy_suffix then
-                            redis.call('SREM', ARGV[1] .. relayer_id .. legacy_suffix, tx_id)
-                        end
-                    end
-                end
-            end
-
-            return {old_snapshot, updated}
-            "#,
-        );
-
-        let result: Option<Vec<String>> = self
-            .run_script_with_retry_vec(
-                &patch_script,
-                &lookup_key,
-                &key_prefix,
-                &key_suffix,
-                &[&patch_json, delete_at_arg, &index_metadata_json],
-                "partial_update",
-            )
-            .await?;
-
-        let parts = result.ok_or_else(|| {
-            RepositoryError::NotFound(format!("Transaction with ID {tx_id} not found"))
-        })?;
-
-        if parts.len() != 2 {
-            return Err(RepositoryError::UnexpectedError(format!(
-                "partial_update script returned {} elements, expected 2",
-                parts.len()
-            )));
-        }
-
-        let old_json = &parts[0];
-        let new_json = &parts[1];
-
-        let original_tx =
-            self.deserialize_entity::<TransactionRepoModel>(old_json, &tx_id, "transaction")?;
-        let updated_tx =
-            self.deserialize_entity::<TransactionRepoModel>(new_json, &tx_id, "transaction")?;
-
-        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
-        // Status sorted sets are excluded: the Lua script above already moved
-        // them atomically with the body write.
-        self.update_indexes(&updated_tx, Some(&original_tx), false)
-            .await?;
-
-        debug!(tx_id = %tx_id, "successfully updated transaction via patch");
-
-        // Track metrics only when the persisted status actually changed.
-        // The Lua script may silently reject a status patch on already-final
-        // transactions, so we compare the deserialized before/after states.
-        if original_tx.status != updated_tx.status {
-            self.track_status_change_metrics(
-                &original_tx,
-                &updated_tx,
-                &original_tx.status,
-                &updated_tx.status,
-            );
-        }
-
-        Ok(updated_tx)
+    async fn partial_update_if_version(
+        &self,
+        tx_id: String,
+        expected_version: u64,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.apply_patch(tx_id, update, Some(expected_version))
+            .await
     }
 
     async fn reconcile_stale_status_indexes(
@@ -2829,6 +2926,7 @@ mod tests {
     // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
@@ -5473,5 +5571,223 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn version_guard_rejects_stale_patch() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-conflict"))
+            .await
+            .unwrap();
+        let patch = TransactionUpdateRequest {
+            status_reason: Some("winner".into()),
+            ..Default::default()
+        };
+        let winner = repo
+            .partial_update_if_version(tx.id.clone(), 0, patch)
+            .await
+            .unwrap();
+        assert_eq!(winner.version, 1);
+        let result = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConcurrentUpdateConflict(_))
+        ));
+        let stored = repo.get_by_id(tx.id).await.unwrap();
+        assert_eq!(stored.status, tx.status);
+        assert_eq!(stored.status_reason.as_deref(), Some("winner"));
+        assert_eq!(stored.version, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn plain_patch_increments_version() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-plain"))
+            .await
+            .unwrap();
+        let updated = repo
+            .partial_update(tx.id, TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn failure_counters_preserve_version() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-counters"))
+            .await
+            .unwrap();
+        let tx = repo
+            .partial_update(tx.id, TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx.id.clone())
+            .await
+            .unwrap();
+        let counted = repo.get_by_id(tx.id.clone()).await.unwrap();
+        assert_eq!(counted.version, tx.version);
+        assert_eq!(counted.metadata.unwrap().consecutive_failures, 1);
+        repo.reset_status_check_consecutive_failures(tx.id.clone())
+            .await
+            .unwrap();
+        let reset = repo.get_by_id(tx.id).await.unwrap();
+        assert_eq!(reset.version, tx.version);
+        assert_eq!(reset.metadata.unwrap().consecutive_failures, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn version_guard_preserves_final_status() {
+        let repo = setup_test_repo().await;
+        let mut tx = create_test_transaction("version-final");
+        tx.status = TransactionStatus::Failed;
+        let tx = repo.create(tx).await.unwrap();
+        let updated = repo
+            .partial_update_if_version(
+                tx.id,
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Sent),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TransactionStatus::Failed);
+        assert_eq!(updated.version, 0);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn stale_patch_does_not_change_indexes() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-index"))
+            .await
+            .unwrap();
+        repo.partial_update(tx.id.clone(), TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+        data.nonce = Some(99);
+        let result = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    network_data: Some(NetworkTransactionData::Evm(data)),
+                    status: Some(TransactionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConcurrentUpdateConflict(_))
+        ));
+        assert!(repo
+            .find_by_nonce_on_primary(&tx.relayer_id, 99)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .find_by_nonce_on_primary(&tx.relayer_id, 1)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(status_member_exists(&repo, &tx.relayer_id, &tx.status, &tx.id).await);
+        assert!(
+            !status_member_exists(&repo, &tx.relayer_id, &TransactionStatus::Failed, &tx.id).await
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn legacy_record_starts_at_version_zero() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-legacy"))
+            .await
+            .unwrap();
+        let mut value = serde_json::to_value(&tx).unwrap();
+        value.as_object_mut().unwrap().remove("version");
+        let mut conn = repo
+            .get_connection(repo.connections.primary(), "legacy")
+            .await
+            .unwrap();
+        conn.set::<_, _, ()>(repo.tx_key(&tx.relayer_id, &tx.id), value.to_string())
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_by_id_on_primary(tx.id.clone())
+                .await
+                .unwrap()
+                .version,
+            0
+        );
+        assert_eq!(
+            repo.partial_update_if_version(tx.id, 0, TransactionUpdateRequest::default())
+                .await
+                .unwrap()
+                .version,
+            1
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn lost_presign_reply_keeps_claim_visible_to_heal() {
+        let repo = setup_test_repo().await;
+        let mut tx = create_test_transaction("version-lost-reply");
+        let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+        data.nonce = None;
+        tx.network_data = NetworkTransactionData::Evm(data.clone());
+        let tx = repo.create(tx).await.unwrap();
+        data.nonce = Some(7);
+        DISCARD_PATCH_REPLY.with(|flag| flag.set(true));
+        let result = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    network_data: Some(NetworkTransactionData::Evm(data)),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConcurrentUpdateConflict(_))
+        ));
+        let stored = repo
+            .find_by_nonce_on_primary(&tx.relayer_id, 7)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.id, tx.id);
+        assert_eq!(stored.version, 1);
+        assert_eq!(stored.status, TransactionStatus::Pending);
+        assert_eq!(
+            repo.get_nonce_occupancy(&tx.relayer_id, 7, 8)
+                .await
+                .unwrap(),
+            vec![(7, Some(TransactionStatus::Pending))]
+        );
     }
 }

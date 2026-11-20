@@ -664,6 +664,58 @@ where
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Retry a mutation with a fresh primary read after each version conflict.
+async fn retry_transaction_update<TR, F, Fut>(
+    repo: &TR,
+    transaction_id: &str,
+    mut apply: F,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    TR: TransactionRepository + Sync,
+    F: FnMut(TransactionRepoModel) -> Fut,
+    Fut: std::future::Future<Output = Result<TransactionRepoModel, ApiError>>,
+{
+    let mut attempts = 0;
+    loop {
+        let tx = repo
+            .get_by_id_on_primary(transaction_id.to_string())
+            .await?;
+        attempts += 1;
+        match apply(tx).await {
+            Err(ApiError::Conflict(_)) if attempts < 3 => continue,
+            result => return result,
+        }
+    }
+}
+
+/// Like `retry_transaction_update`, but a retry that finds the record already
+/// canceled returns it: the conflict may come from a lost reply on a cancel
+/// that applied, and a second cancel would build a second NOOP.
+async fn retry_cancel<TR, F, Fut>(
+    repo: &TR,
+    transaction_id: &str,
+    mut cancel: F,
+) -> Result<TransactionRepoModel, ApiError>
+where
+    TR: TransactionRepository + Sync,
+    F: FnMut(TransactionRepoModel) -> Fut,
+    Fut: std::future::Future<Output = Result<TransactionRepoModel, ApiError>>,
+{
+    let mut retry = false;
+    retry_transaction_update(repo, transaction_id, |tx| {
+        let already_canceled = std::mem::replace(&mut retry, true)
+            && (tx.status == TransactionStatus::Canceled || tx.is_canceled == Some(true));
+        let result = (!already_canceled).then(|| cancel(tx.clone()));
+        async move {
+            match result {
+                Some(fut) => fut.await,
+                None => Ok(tx),
+            }
+        }
+    })
+    .await
+}
+
 /// Cancels a specific transaction for a relayer.
 ///
 /// # Arguments
@@ -685,11 +737,17 @@ pub async fn cancel_transaction(
 
     let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
 
-    let transaction_to_cancel = get_tx_by_id(transaction_id, &state).await?;
-
-    let canceled_transaction = relayer_transaction
-        .cancel_transaction(transaction_to_cancel)
-        .await?;
+    let canceled_transaction = retry_cancel(
+        &*state.transaction_repository,
+        &transaction_id,
+        |tx| async {
+            relayer_transaction
+                .cancel_transaction(tx)
+                .await
+                .map_err(ApiError::from)
+        },
+    )
+    .await?;
 
     let transaction_response: TransactionResponse = canceled_transaction.into();
 
@@ -721,15 +779,20 @@ pub async fn replace_transaction(
         NetworkTransactionRequest::from_json(&relayer.network_type, request.clone())?;
     new_tx_request.validate(&relayer)?;
 
-    let transaction_to_replace = state
-        .transaction_repository
-        .get_by_id(transaction_id)
-        .await?;
-
     let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
-    let replaced_transaction = relayer_transaction
-        .replace_transaction(transaction_to_replace, new_tx_request)
-        .await?;
+    let replaced_transaction = retry_transaction_update(
+        &*state.transaction_repository,
+        &transaction_id,
+        |tx| async {
+            let request =
+                NetworkTransactionRequest::from_json(&relayer.network_type, request.clone())?;
+            relayer_transaction
+                .replace_transaction(tx, request)
+                .await
+                .map_err(ApiError::from)
+        },
+    )
+    .await?;
 
     let transaction_response: TransactionResponse = replaced_transaction.into();
 
@@ -2589,5 +2652,107 @@ mod tests {
         } else {
             panic!("Expected ForbiddenError for paused relayer");
         }
+    }
+}
+
+#[cfg(test)]
+mod version_retry_tests {
+    use super::*;
+    use crate::models::TransactionUpdateRequest;
+    use crate::repositories::InMemoryTransactionRepository;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn mutation_conflict_reloads_primary_and_retries() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
+        let calls = AtomicUsize::new(0);
+        let updated = retry_transaction_update(&repo, &tx.id, |snapshot| {
+            let repo = &repo;
+            let calls = &calls;
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(snapshot.version, attempt as u64);
+                if attempt < 2 {
+                    repo.partial_update(snapshot.id.clone(), TransactionUpdateRequest::default())
+                        .await?;
+                }
+                repo.partial_update_if_version(
+                    snapshot.id,
+                    snapshot.version,
+                    TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Canceled),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| crate::models::TransactionError::from(e).into())
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(updated.status, TransactionStatus::Canceled);
+        assert_eq!(updated.version, 3);
+    }
+
+    #[tokio::test]
+    async fn cancel_retry_after_applied_cancel_returns_record() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
+        let calls = AtomicUsize::new(0);
+        let result = retry_cancel(&repo, &tx.id, |snapshot| {
+            let repo = &repo;
+            calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                // The cancel applies, but its reply is lost.
+                repo.partial_update(
+                    snapshot.id,
+                    TransactionUpdateRequest {
+                        status: Some(TransactionStatus::Canceled),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                Err(ApiError::Conflict("lost reply".into()))
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no second cancel");
+        assert_eq!(result.status, TransactionStatus::Canceled);
+    }
+
+    #[tokio::test]
+    async fn cancel_of_already_canceled_record_still_fails_first_time() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = TransactionRepoModel {
+            status: TransactionStatus::Canceled,
+            ..Default::default()
+        };
+        let tx = repo.create(tx).await.unwrap();
+        let result = retry_cancel(&repo, &tx.id, |_| {
+            std::future::ready(Err(ApiError::BadRequest("cannot cancel".into())))
+        })
+        .await;
+        assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn mutation_conflict_returns_409_after_three_attempts() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
+        let calls = AtomicUsize::new(0);
+        let result = retry_transaction_update(&repo, &tx.id, |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err(ApiError::Conflict("busy".into())))
+        })
+        .await;
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        use actix_web::ResponseError;
+        assert_eq!(
+            result.unwrap_err().error_response().status(),
+            actix_web::http::StatusCode::CONFLICT
+        );
     }
 }

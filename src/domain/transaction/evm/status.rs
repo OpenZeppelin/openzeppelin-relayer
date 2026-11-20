@@ -684,10 +684,7 @@ where
             "preparing transaction NOOP before resubmission"
         );
         let update = self.prepare_noop_update_request(tx, false, reason).await?;
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update)
-            .await?;
+        let updated_tx = self.cas_update(tx, update).await?;
 
         let res = self.send_transaction_update_notification(&updated_tx).await;
         if let Err(e) = res {
@@ -709,23 +706,19 @@ where
     ) -> Result<TransactionRepoModel, TransactionError> {
         let (should_noop, reason) = self.should_noop(&tx).await?;
         if should_noop {
-            // For Pending state transactions, nonces are not yet assigned, so we mark as Failed
-            // instead of NOOP. This matches prepare_transaction behavior.
+            // A prior prepare can have stored a nonce. The guarded write schedules its repair.
             debug!(
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
                 reason = %reason.as_ref().unwrap_or(&"unknown".to_string()),
-                "marking pending transaction as Failed (nonce not assigned, no NOOP needed)"
+                "marking pending transaction as Failed"
             );
             let update = TransactionUpdateRequest {
                 status: Some(TransactionStatus::Failed),
                 status_reason: reason,
                 ..Default::default()
             };
-            let updated_tx = self
-                .transaction_repository()
-                .partial_update(tx.id.clone(), update)
-                .await?;
+            let updated_tx = self.cas_update(&tx, update).await?;
 
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
@@ -796,10 +789,7 @@ where
             ..Default::default()
         };
 
-        let updated_tx = self
-            .transaction_repository()
-            .partial_update(tx.id.clone(), update)
-            .await?;
+        let updated_tx = self.cas_update(&tx, update).await?;
 
         // Send notification (best effort)
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
@@ -874,6 +864,7 @@ where
                 Ok(None) => {
                     // No historical hash found — continue
                 }
+                Err(e) if e.is_concurrent_update_conflict() => return Err(e),
                 Err(e) => {
                     warn!(
                         tx_id = %tx.id,
@@ -981,11 +972,11 @@ where
 
         match tx.status {
             TransactionStatus::Pending => {
-                // Pending: no nonce assigned yet - safe to mark as Failed
+                // The guarded failure write also schedules repair of an assigned nonce.
                 debug!(
                     tx_id = %tx.id,
                     relayer_id = %tx.relayer_id,
-                    "circuit breaker: Pending transaction (no nonce) - safe to mark as Failed"
+                    "circuit breaker: marking Pending transaction as Failed"
                 );
                 self.mark_as_failed(tx, reason).await
             }
@@ -1136,6 +1127,7 @@ where
                                 "nonce recovery did not resolve transaction, continuing normal flow"
                             );
                         }
+                        Err(e) if e.is_concurrent_update_conflict() => return Err(e),
                         Err(e) => {
                             // Recovery failed — log and continue with normal flow
                             warn!(
@@ -1174,8 +1166,9 @@ where
                 relayer_id = %tx.relayer_id,
                 "status changed during check, reloading transaction from DB to ensure fresh data"
             );
+            // Primary: a lagging replica would make the next guarded write lose.
             self.transaction_repository()
-                .get_by_id(tx.id.clone())
+                .get_by_id_on_primary(tx.id.clone())
                 .await?
         } else {
             tx
@@ -1375,10 +1368,7 @@ where
                 "preparing NOOP for sent transaction"
             );
             let update = self.prepare_noop_update_request(&tx, false, reason).await?;
-            let updated_tx = self
-                .transaction_repository()
-                .partial_update(tx.id.clone(), update)
-                .await?;
+            let updated_tx = self.cas_update(&tx, update).await?;
 
             self.send_transaction_submit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
@@ -1565,9 +1555,8 @@ where
         corrected_data.hash = Some(correct_hash.to_string());
 
         let updated_tx = self
-            .transaction_repository()
-            .partial_update(
-                tx.id.clone(),
+            .cas_update(
+                tx,
                 TransactionUpdateRequest {
                     network_data: Some(NetworkTransactionData::Evm(corrected_data)),
                     status: Some(status),
@@ -1725,6 +1714,7 @@ mod tests {
     /// then updates them based on the provided status or overrides.
     pub fn make_test_transaction(status: TransactionStatus) -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test-tx-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status,
@@ -2479,8 +2469,8 @@ mod tests {
             // Mock partial_update to return a transaction with new status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -2509,12 +2499,12 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| {
                     update.status == Some(TransactionStatus::Failed)
                         && update.status_reason == Some("Transaction reverted on-chain".to_string())
                 })
-                .returning(|_, update| {
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -3264,13 +3254,13 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(move |id, update| {
+                .expect_partial_update_if_version()
+                .withf(move |id, _, update| {
                     id == "test-tx-id"
                         && update.status == Some(TransactionStatus::Failed)
                         && update.status_reason.is_some()
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -3314,8 +3304,8 @@ mod tests {
             // Expect partial_update to update the transaction status to Mined.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3343,8 +3333,8 @@ mod tests {
             // Expect partial_update to update status to Confirmed.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3367,8 +3357,8 @@ mod tests {
             // Expect partial_update to update status to Failed with status_reason.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -3394,8 +3384,8 @@ mod tests {
             // Expect partial_update to update status to Expired.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3442,8 +3432,8 @@ mod tests {
             // Expect update_transaction_status_if_needed to update status to Submitted.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3485,16 +3475,16 @@ mod tests {
                 .job_producer
                 .expect_produce_send_notification_job()
                 .returning(|_, _| Box::pin(async { Ok(()) }));
-            // Expect get_by_id to reload the transaction after status change
-            mocks.tx_repo.expect_get_by_id().returning(|_| {
+            // Expect a primary read to reload the transaction after status change
+            mocks.tx_repo.expect_get_by_id_on_primary().returning(|_| {
                 let updated_tx = make_test_transaction(TransactionStatus::Mined);
                 Ok(updated_tx)
             });
             // Expect update_transaction_status_if_needed to update status to Mined.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3516,8 +3506,8 @@ mod tests {
             // so we expect partial_update to update the transaction status to Confirmed.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3537,8 +3527,8 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3582,21 +3572,24 @@ mod tests {
 
             // Mock get_by_id for the DB reload after status change.
             let tx_clone = tx.clone();
-            mocks.tx_repo.expect_get_by_id().returning(move |_| {
-                let mut reloaded = tx_clone.clone();
-                reloaded.status = TransactionStatus::Submitted;
-                Ok(reloaded)
-            });
+            mocks
+                .tx_repo
+                .expect_get_by_id_on_primary()
+                .returning(move |_| {
+                    let mut reloaded = tx_clone.clone();
+                    reloaded.status = TransactionStatus::Submitted;
+                    Ok(reloaded)
+                });
 
             // Expect partial_update with status=Failed and a status_reason.
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| {
                     update.status == Some(TransactionStatus::Failed)
                         && update.status_reason.is_some()
                 })
-                .returning(|_, update| {
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -3627,8 +3620,8 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -3698,15 +3691,15 @@ mod tests {
         /// DB reload after the status change, plus a partial_update that captures the
         /// status_reason onto the returned transaction so assertions can inspect it.
         fn expect_reload_and_capture(mocks: &mut TestMocks) {
-            mocks.tx_repo.expect_get_by_id().returning(|_| {
+            mocks.tx_repo.expect_get_by_id_on_primary().returning(|_| {
                 let mut reloaded = failing_submitted_tx();
                 reloaded.status = TransactionStatus::Submitted;
                 Ok(reloaded)
             });
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -3992,9 +3985,9 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -4029,9 +4022,9 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Sent);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -4071,8 +4064,8 @@ mod tests {
             // Expect partial_update to be called with NOOP indicator
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -4138,8 +4131,8 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -4166,9 +4159,9 @@ mod tests {
             // Expect partial_update to be called with Failed status
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| update.status == Some(TransactionStatus::Failed))
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Pending);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     updated_tx.status_reason = update.status_reason.clone();
@@ -4222,8 +4215,8 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -4270,8 +4263,8 @@ mod tests {
 
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(|_, update| {
+                .expect_partial_update_if_version()
+                .returning(|_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     updated_tx.status = update.status.unwrap_or(updated_tx.status);
                     Ok(updated_tx)
@@ -4460,8 +4453,8 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     if let Some(status) = update.status {
                         updated_tx.status = status;
@@ -4528,8 +4521,8 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     if let Some(status) = update.status {
                         updated_tx.status = status;
@@ -4569,8 +4562,8 @@ mod tests {
             // Mock partial_update
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     let mut updated_tx = make_test_transaction(TransactionStatus::Submitted);
                     if let Some(status) = update.status {
                         updated_tx.status = status;
@@ -4716,8 +4709,8 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| {
                     update.status == Some(TransactionStatus::Failed)
                         && update
                             .status_reason
@@ -4725,7 +4718,7 @@ mod tests {
                             .map(|r| r.contains("consumed externally"))
                             .unwrap_or(false)
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
                     updated_tx.status_reason = update.status_reason.clone();
@@ -4894,8 +4887,8 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     if let Some(status) = update.status {
                         updated_tx.status = status;
@@ -4949,8 +4942,8 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     if let Some(status) = update.status {
                         updated_tx.status = status;
@@ -4997,9 +4990,9 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| update.status == Some(TransactionStatus::Failed))
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
                     Ok(updated_tx)
@@ -5028,9 +5021,9 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, update| update.status == Some(TransactionStatus::Failed))
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .withf(|_, _, update| update.status == Some(TransactionStatus::Failed))
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.status = update.status.unwrap();
                     Ok(updated_tx)
@@ -5048,3 +5041,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "reprepare_tests.rs"]
+mod reprepare_tests;
