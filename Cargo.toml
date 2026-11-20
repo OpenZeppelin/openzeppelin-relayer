@@ -69,6 +69,9 @@ oz-keystore = { version = "0.1.4"}
 hex = { version = "0.4"}
 bytes = { version = "1.9" }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "zstd"] }
+# alloy-transport-http 1.7.4+ uses reqwest 0.13 with default features off; turn on
+# `http2` there so the HTTP/2 keep-alive settings in build_alloy_rpc_http_client compile.
+reqwest-http2 = { package = "reqwest", version = "0.13", default-features = false, features = ["http2"] }
 base64 = { version =  "0.22" }
 hmac = { version = "0.12" }
 sha2 = { version = "0.10" }
