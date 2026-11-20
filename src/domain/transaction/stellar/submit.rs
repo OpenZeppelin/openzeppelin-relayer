@@ -1359,6 +1359,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1419,6 +1420,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1507,6 +1509,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1564,6 +1567,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 4,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1620,6 +1624,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1634,6 +1639,7 @@ mod tests {
                 insufficient_fee_retries: 0,
                 try_again_later_retries: 0,
                 nonce_too_high_retries: 0,
+                nonce_used_seen_at_block: None,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -1747,6 +1753,7 @@ mod tests {
                         insufficient_fee_retries: 1,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1816,6 +1823,7 @@ mod tests {
                         insufficient_fee_retries: 3,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1890,6 +1898,7 @@ mod tests {
                         insufficient_fee_retries: STELLAR_INSUFFICIENT_FEE_MAX_RETRIES + 1,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1948,6 +1957,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1962,6 +1972,7 @@ mod tests {
                 insufficient_fee_retries: 0,
                 try_again_later_retries: 0,
                 nonce_too_high_retries: 0,
+                nonce_used_seen_at_block: None,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -2007,6 +2018,7 @@ mod tests {
                         insufficient_fee_retries: 1,
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -2077,6 +2089,7 @@ mod tests {
                         insufficient_fee_retries: 0,
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
+                        nonce_used_seen_at_block: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
