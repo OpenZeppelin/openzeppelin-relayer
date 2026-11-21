@@ -283,7 +283,8 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "create_network_pipeline"))?;
 
-        // Update indexes
+        // update_indexes obtains another pooled connection.
+        drop(conn);
         self.update_indexes(&entity, None).await?;
 
         debug!(network_id = %entity.id, "successfully created network");
@@ -425,16 +426,15 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             )));
         }
 
-        let key = self.network_key(&id);
-        let mut conn = self
-            .get_connection(self.connections.primary(), "update")
-            .await?;
-
         debug!(network_id = %id, "updating network");
 
         // Get the old network for index cleanup
         let old_network = self.get_by_id(id.clone()).await?;
 
+        let key = self.network_key(&id);
+        let mut conn = self
+            .get_connection(self.connections.primary(), "update")
+            .await?;
         let value = self.serialize_entity(&entity, |n| &n.id, "network")?;
 
         let _: () = conn
@@ -442,7 +442,7 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "update_network"))?;
 
-        // Update indexes
+        drop(conn);
         self.update_indexes(&entity, Some(&old_network)).await?;
 
         debug!(network_id = %id, "successfully updated network");
@@ -456,17 +456,16 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             ));
         }
 
-        let key = self.network_key(&id);
-        let network_list_key = self.network_list_key();
-        let mut conn = self
-            .get_connection(self.connections.primary(), "delete_by_id")
-            .await?;
-
         debug!(network_id = %id, "deleting network");
 
         // Get network for index cleanup
         let network = self.get_by_id(id.clone()).await?;
 
+        let key = self.network_key(&id);
+        let network_list_key = self.network_list_key();
+        let mut conn = self
+            .get_connection(self.connections.primary(), "delete_by_id")
+            .await?;
         // Use Redis pipeline for atomic operations
         let mut pipe = redis::pipe();
         pipe.del(&key);
@@ -476,7 +475,8 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
             .await
             .map_err(|e| self.map_redis_error(e, "delete_network_pipeline"))?;
 
-        // Remove indexes (log errors but don't fail the delete)
+        // remove_all_indexes obtains another pooled connection.
+        drop(conn);
         if let Err(e) = self.remove_all_indexes(&network).await {
             error!(network_id = %id, error = %e, "failed to remove indexes for deleted network");
         }
@@ -545,7 +545,8 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
 
         debug!(count = %network_ids.len(), "found networks to clean up");
 
-        // Get all networks to clean up their indexes properly
+        // get_networks_by_ids obtains another pooled connection.
+        drop(conn);
         let networks_result = self.get_networks_by_ids(&network_ids).await?;
         let networks = networks_result.results;
 
@@ -575,6 +576,9 @@ impl Repository<NetworkRepoModel, String> for RedisNetworkRepository {
         // Delete the network list
         pipe.del(&network_list_key);
 
+        let mut conn = self
+            .get_connection(self.connections.primary(), "drop_all_entries")
+            .await?;
         // Execute all deletions
         pipe.exec_async(&mut conn).await.map_err(|e| {
             error!(error = %e, "failed to execute cleanup pipeline");
@@ -738,8 +742,9 @@ mod tests {
         }
     }
 
-    async fn setup_test_repo() -> RedisNetworkRepository {
-        let redis_url = "redis://localhost:6379";
+    async fn setup_test_repo_with_pool_size(pool_size: usize) -> RedisNetworkRepository {
+        let redis_url =
+            std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
         let random_id = Uuid::new_v4().to_string();
         let key_prefix = format!("test_prefix_{random_id}");
 
@@ -747,7 +752,7 @@ mod tests {
         let pool = Arc::new(
             cfg.builder()
                 .expect("Failed to create pool builder")
-                .max_size(16)
+                .max_size(pool_size)
                 .runtime(deadpool_redis::Runtime::Tokio1)
                 .build()
                 .expect("Failed to build Redis pool"),
@@ -756,6 +761,10 @@ mod tests {
 
         RedisNetworkRepository::new(connections, key_prefix.to_string())
             .expect("Failed to create repository")
+    }
+
+    async fn setup_test_repo() -> RedisNetworkRepository {
+        setup_test_repo_with_pool_size(16).await
     }
 
     #[tokio::test]
@@ -772,6 +781,148 @@ mod tests {
         assert_eq!(created.id, network.id);
         assert_eq!(created.name, network.name);
         assert_eq!(created.network_type, network.network_type);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_create_network_with_single_connection() {
+        let repo = setup_test_repo_with_pool_size(1).await;
+        let network = create_test_network(&Uuid::new_v4().to_string(), NetworkType::Evm);
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            repo.create(network.clone()),
+        )
+        .await
+        .expect("network creation must not wait for a second connection")
+        .expect("network creation failed");
+
+        let indexed = repo
+            .get_by_name(NetworkType::Evm, &network.name)
+            .await
+            .unwrap();
+        assert_eq!(indexed.unwrap().id, network.id);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_update_network_with_single_connection() {
+        let repo = setup_test_repo().await;
+        let network = create_test_network(&Uuid::new_v4().to_string(), NetworkType::Evm);
+        repo.create(network.clone()).await.unwrap();
+        // Use a fresh pool: shrinking a populated pool can retain idle connections.
+        let single_connection_repo = setup_test_repo_with_pool_size(1).await;
+        let repo = RedisNetworkRepository::new(single_connection_repo.connections, repo.key_prefix)
+            .expect("Failed to create single-connection repository");
+        let mut updated = network.clone();
+        updated.name = Uuid::new_v4().to_string();
+        if let NetworkConfigData::Evm(ref mut config) = updated.config {
+            config.chain_id = Some(42161);
+        }
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            repo.update(network.id.clone(), updated.clone()),
+        )
+        .await
+        .expect("network update must not wait for a second connection")
+        .expect("network update failed");
+
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &network.name)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get_by_chain_id(NetworkType::Evm, 1)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            repo.get_by_name(NetworkType::Evm, &updated.name)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            network.id
+        );
+        assert_eq!(
+            repo.get_by_chain_id(NetworkType::Evm, 42161)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            network.id
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_delete_network_with_single_connection() {
+        let repo = setup_test_repo().await;
+        let network = create_test_network(&Uuid::new_v4().to_string(), NetworkType::Evm);
+        repo.create(network.clone()).await.unwrap();
+        // Use a fresh pool: shrinking a populated pool can retain idle connections.
+        let single_connection_repo = setup_test_repo_with_pool_size(1).await;
+        let repo = RedisNetworkRepository::new(single_connection_repo.connections, repo.key_prefix)
+            .expect("Failed to create single-connection repository");
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            repo.delete_by_id(network.id.clone()),
+        )
+        .await
+        .expect("network deletion must not wait for a second connection")
+        .expect("network deletion failed");
+
+        assert_eq!(repo.count().await.unwrap(), 0);
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &network.name)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get_by_chain_id(NetworkType::Evm, 1)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            repo.get_by_id(network.id).await,
+            Err(RepositoryError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_drop_all_networks_with_single_connection() {
+        let repo = setup_test_repo().await;
+        let network = create_test_network(&Uuid::new_v4().to_string(), NetworkType::Evm);
+        repo.create(network.clone()).await.unwrap();
+        // Use a fresh pool: shrinking a populated pool can retain idle connections.
+        let single_connection_repo = setup_test_repo_with_pool_size(1).await;
+        let repo = RedisNetworkRepository::new(single_connection_repo.connections, repo.key_prefix)
+            .expect("Failed to create single-connection repository");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), repo.drop_all_entries())
+            .await
+            .expect("network cleanup must not wait for a second connection")
+            .expect("network cleanup failed");
+
+        assert_eq!(repo.count().await.unwrap(), 0);
+        assert!(repo
+            .get_by_name(NetworkType::Evm, &network.name)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .get_by_chain_id(NetworkType::Evm, 1)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            repo.get_by_id(network.id).await,
+            Err(RepositoryError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
