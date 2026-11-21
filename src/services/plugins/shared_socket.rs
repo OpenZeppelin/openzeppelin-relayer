@@ -234,7 +234,7 @@ impl Drop for ExecutionGuard {
         // This prevents double-decrement: if a long-running execution is GC'd by the
         // stale entry cleanup task (which decrements the counter), and then the guard
         // drops later, we must NOT decrement again.
-        if self.registered && self.executions.remove(&self.execution_id).is_some() {
+        if self.registered && self.executions.remove_sync(&self.execution_id).is_some() {
             self.active_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
@@ -317,7 +317,7 @@ impl SharedSocketService {
                 let now = Instant::now();
                 // scc::HashMap retain is lock-free per entry
                 let mut removed = 0usize;
-                executions_clone.retain(|_, ctx| {
+                executions_clone.retain_sync(|_, ctx| {
                     let keep = now.duration_since(ctx.created_at) < Duration::from_secs(300);
                     if !keep {
                         removed += 1;
@@ -370,7 +370,7 @@ impl SharedSocketService {
         };
 
         // scc::HashMap insert - returns Ok if new, Err if key existed (duplicate)
-        let registered = match self.executions.insert(execution_id.clone(), ctx) {
+        let registered = match self.executions.insert_sync(execution_id.clone(), ctx) {
             Ok(_) => {
                 self.active_count.fetch_add(1, Ordering::AcqRel);
                 true
@@ -699,7 +699,7 @@ impl SharedSocketService {
                         // Validate execution_id exists in registry and check if tracing is enabled
                         // scc::HashMap read() is lock-free
                         if let Some(has_traces) =
-                            executions.read(&execution_id, |_, ctx| ctx.traces_tx.is_some())
+                            executions.read_sync(&execution_id, |_, ctx| ctx.traces_tx.is_some())
                         {
                             traces_enabled = has_traces;
                         } else {
@@ -805,7 +805,7 @@ impl SharedSocketService {
                         // scc::HashMap read() is lock-free
                         if let Some(ref id) = candidate_id {
                             if let Some(has_traces) =
-                                executions.read(id, |_, ctx| ctx.traces_tx.is_some())
+                                executions.read_sync(id, |_, ctx| ctx.traces_tx.is_some())
                             {
                                 traces_enabled = has_traces;
                                 bound_execution_id = candidate_id;
@@ -841,7 +841,7 @@ impl SharedSocketService {
             if let Some(exec_id) = bound_execution_id {
                 // Get the sender from execution context (lock-free read)
                 let traces_tx = executions
-                    .read(&exec_id, |_, ctx| ctx.traces_tx.clone())
+                    .read_sync(&exec_id, |_, ctx| ctx.traces_tx.clone())
                     .flatten();
 
                 if let Some(tx) = traces_tx {
@@ -1804,35 +1804,39 @@ mod tests {
         service.shutdown().await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_stale_execution_cleanup() {
         let temp_dir = tempdir().unwrap();
         let socket_path = temp_dir.path().join("shared_stale_cleanup.sock");
 
-        let service = Arc::new(SharedSocketService::new(socket_path.to_str().unwrap()).unwrap());
+        let service = SharedSocketService::new(socket_path.to_str().unwrap()).unwrap();
 
-        // Register an execution manually with old timestamp
-        let execution_id = "stale-exec".to_string();
-        let (tx, _rx) = mpsc::channel(1);
-        // scc::HashMap insert
-        let _ = service.executions.insert(
-            execution_id.clone(),
-            ExecutionContext {
-                traces_tx: Some(tx),
-                created_at: Instant::now() - Duration::from_secs(400), // 6+ minutes old
-                bound_execution_id: execution_id.clone(),
-            },
-        );
+        // Let the cleanup task take its first tick, which fires immediately
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // Verify it's registered using scc's contains()
-        assert!(service.executions.contains(&execution_id));
+        let stale_id = "stale-exec".to_string();
+        let fresh_id = "fresh-exec".to_string();
+        for (id, age) in [(&stale_id, 400), (&fresh_id, 0)] {
+            let (tx, _rx) = mpsc::channel(1);
+            let _ = service.executions.insert_sync(
+                id.clone(),
+                ExecutionContext {
+                    traces_tx: Some(tx),
+                    created_at: Instant::now() - Duration::from_secs(age),
+                    bound_execution_id: id.clone(),
+                },
+            );
+        }
+        service.active_count.fetch_add(2, Ordering::AcqRel);
 
-        // Wait for cleanup task to run (it runs every 60 seconds, but we can't wait that long)
-        // Instead, we verify the cleanup logic by checking the code in new()
-        // The actual cleanup test would require mocking time or waiting 60+ seconds
+        // The next cleanup tick is 60 seconds after the first one
+        tokio::time::sleep(Duration::from_secs(60)).await;
 
-        // For this test, we just verify the logic exists and doesn't panic
-        drop(service);
+        assert!(!service.executions.contains_sync(&stale_id));
+        assert!(service.executions.contains_sync(&fresh_id));
+        assert_eq!(service.active_count.load(Ordering::Acquire), 1);
+
+        service.shutdown().await;
     }
 
     #[tokio::test]
