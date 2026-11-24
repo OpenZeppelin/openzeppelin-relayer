@@ -1467,8 +1467,9 @@ where
             .partial_update(tx.id.clone(), update)
             .await?;
 
-        // Submit the updated transaction to the network using the resubmit job
-        self.send_transaction_resubmit_job(&updated_tx).await?;
+        // The resubmit job signs and sends the NOOP (deferred on Arbitrum while a
+        // Sent NOOP is above the chain head).
+        self.send_noop_resubmit_job(&updated_tx).await?;
 
         // Send notification for the updated transaction
         if let Err(e) = self.send_transaction_update_notification(&updated_tx).await {
@@ -4793,6 +4794,65 @@ mod tests {
             ..test_tx.network_data.get_evm_transaction_data().unwrap()
         });
         test_tx
+    }
+
+    /// Arbitrum: cancelling a Sent tx persists the NOOP but defers its resubmit while
+    /// the nonce is above the chain head; at the head it is resubmitted.
+    #[tokio::test]
+    async fn test_cancel_arbitrum_sent_noop_resubmits_only_at_head() {
+        for (on_chain_nonce, expect_job) in [(40u64, false), (42u64, true)] {
+            let mut test_tx = create_arbitrum_submit_tx();
+            test_tx.sent_at = None;
+
+            let mut mock_provider = MockEvmProviderTrait::new();
+            mock_provider
+                .expect_get_transaction_count()
+                .times(1)
+                .returning(move |_| Box::pin(async move { Ok(on_chain_nonce) }));
+
+            let mut mock_transaction = MockTransactionRepository::new();
+            let test_tx_clone = test_tx.clone();
+            mock_transaction
+                .expect_partial_update()
+                .times(1)
+                .returning(move |_, update| {
+                    let mut updated_tx = test_tx_clone.clone();
+                    updated_tx.network_data =
+                        update.network_data.unwrap_or(updated_tx.network_data);
+                    updated_tx.is_canceled = update.is_canceled.or(updated_tx.is_canceled);
+                    updated_tx.noop_count = update.noop_count;
+                    Ok(updated_tx)
+                });
+
+            let mut mock_job_producer = MockJobProducerTrait::new();
+            mock_job_producer
+                .expect_produce_submit_transaction_job()
+                .times(usize::from(expect_job))
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+            mock_job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(ready(Ok(()))));
+
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: create_test_relayer(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(MockRelayerRepository::new()),
+                network_repository: Arc::new(arbitrum_mock_network()),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+                job_producer: Arc::new(mock_job_producer),
+                price_calculator: MockPriceCalculator::new(),
+                signer: MockSigner::new(),
+            };
+
+            let cancelled = evm_transaction.cancel_transaction(test_tx).await.unwrap();
+            assert_eq!(cancelled.status, TransactionStatus::Sent);
+            assert_eq!(cancelled.is_canceled, Some(true));
+            assert!(
+                cancelled.noop_count.unwrap_or(0) > 0,
+                "NOOP must be persisted"
+            );
+        }
     }
 
     /// Runs a successful Arbitrum submit at nonce 42 with `next_record` stored at

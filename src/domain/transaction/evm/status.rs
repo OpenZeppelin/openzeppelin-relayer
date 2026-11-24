@@ -1029,7 +1029,7 @@ where
                     let updated_tx = self.process_noop_transaction(&tx, noop_reason).await?;
                     // Must use resubmit (not submit): make_noop dropped the signed bytes,
                     // and resubmit signs the NOOP with new gas pricing.
-                    self.send_transaction_resubmit_job(&updated_tx).await?;
+                    self.send_noop_resubmit_job(&updated_tx).await?;
                     Ok(updated_tx)
                 } else {
                     // Defensive: Sent without nonce shouldn't normally happen
@@ -1399,17 +1399,7 @@ where
 
             // Resubmit, not submit: make_noop dropped the signed bytes, and the
             // resubmit path re-prices and signs the NOOP.
-            // On Arbitrum a NOOP above the head would be rejected: it stays persisted
-            // and is sent by the chain link or by a later check once it is the head.
-            if self.is_above_arbitrum_head(&updated_tx).await {
-                debug!(
-                    tx_id = %updated_tx.id,
-                    relayer_id = %updated_tx.relayer_id,
-                    "Sent NOOP is above the chain head on Arbitrum; deferring resubmit"
-                );
-            } else {
-                self.send_transaction_resubmit_job(&updated_tx).await?;
-            }
+            self.send_noop_resubmit_job(&updated_tx).await?;
             let res = self.send_transaction_update_notification(&updated_tx).await;
             if let Err(e) = res {
                 error!(
@@ -1490,6 +1480,25 @@ where
 
         // Compare first, so the network lookup only runs for a tx behind the head.
         tx_nonce > on_chain_nonce && self.is_arbitrum_network(tx).await
+    }
+
+    /// Queues the resubmit job that signs and sends a NOOP replacement. On Arbitrum, a
+    /// `Sent` NOOP above the chain head would be rejected: it stays persisted and is
+    /// sent by the chain link, or by a later status check once it is the head. Other
+    /// networks always get the job.
+    pub(super) async fn send_noop_resubmit_job(
+        &self,
+        tx: &TransactionRepoModel,
+    ) -> Result<(), TransactionError> {
+        if tx.status == TransactionStatus::Sent && self.is_above_arbitrum_head(tx).await {
+            debug!(
+                tx_id = %tx.id,
+                relayer_id = %tx.relayer_id,
+                "Sent NOOP is above the chain head on Arbitrum; deferring resubmit"
+            );
+            return Ok(());
+        }
+        self.send_transaction_resubmit_job(tx).await
     }
 
     /// Arbitrum only: fetches the on-chain nonce and returns `true` when the tx nonce
@@ -5347,6 +5356,13 @@ mod tests {
                     Ok(updated_tx)
                 });
 
+            // Non-Arbitrum by name: the NOOP resubmit is never deferred.
+            mocks
+                .network_repo
+                .expect_get_by_name()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+            mocks.provider.expect_get_transaction_count().never();
+
             // Should produce a submit job (for the NOOP)
             mocks
                 .job_producer
@@ -5363,6 +5379,63 @@ mod tests {
                 .handle_circuit_breaker_safely(tx, &ctx)
                 .await;
             assert!(result.is_ok());
+        }
+
+        /// Arbitrum: the circuit breaker persists a Sent NOOP but defers its resubmit
+        /// while the nonce is above the chain head; at the head it is resubmitted.
+        #[tokio::test]
+        async fn arbitrum_circuit_breaker_sent_noop_resubmits_only_at_head() {
+            for (on_chain_nonce, expect_job) in [(5u64, false), (7u64, true)] {
+                let mut mocks = default_test_mocks_with_network();
+                let relayer = create_test_relayer();
+
+                let mut tx = make_test_transaction(TransactionStatus::Sent);
+                tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+                    nonce: Some(7),
+                    hash: Some("0xhash".to_string()),
+                    raw: Some(vec![1, 2, 3]),
+                    ..tx.network_data.get_evm_transaction_data().unwrap()
+                });
+                tx.sent_at = Some(Utc::now().to_rfc3339());
+
+                mocks
+                    .network_repo
+                    .expect_get_by_name()
+                    .with(
+                        mockall::predicate::eq(NetworkType::Evm),
+                        mockall::predicate::eq(relayer.network.clone()),
+                    )
+                    .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+                mocks
+                    .provider
+                    .expect_get_transaction_count()
+                    .times(1)
+                    .returning(move |_| Box::pin(async move { Ok(on_chain_nonce) }));
+
+                let tx_clone = tx.clone();
+                mocks
+                    .tx_repo
+                    .expect_partial_update()
+                    .times(1)
+                    .returning(move |_, update| {
+                        let mut updated_tx = tx_clone.clone();
+                        updated_tx.noop_count = update.noop_count;
+                        Ok(updated_tx)
+                    });
+                mocks
+                    .job_producer
+                    .expect_produce_submit_transaction_job()
+                    .times(usize::from(expect_job))
+                    .returning(|_, _| Box::pin(async { Ok(()) }));
+
+                let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+                let ctx = StatusCheckContext::new(100, 200, 250, 15, 45, NetworkType::Evm);
+                let result = evm_transaction
+                    .handle_circuit_breaker_safely(tx, &ctx)
+                    .await
+                    .unwrap();
+                assert!(result.noop_count.unwrap_or(0) > 0, "NOOP must be persisted");
+            }
         }
 
         /// Test circuit breaker on Sent tx without nonce → marks Failed
