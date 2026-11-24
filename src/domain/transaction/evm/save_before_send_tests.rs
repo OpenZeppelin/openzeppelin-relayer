@@ -50,6 +50,7 @@ struct Events {
     signs: Vec<Vec<u8>>,
     sent: Vec<Vec<u8>>,
     jobs: Vec<TransactionCommand>,
+    job_tx_ids: Vec<String>,
     notifications: usize,
     health: usize,
     error: Option<&'static str>,
@@ -314,6 +315,7 @@ impl Harness {
                     let mut events = e.lock().unwrap();
                     if !events.fail_enqueue {
                         events.jobs.push(job.command);
+                        events.job_tx_ids.push(job.transaction_id);
                     }
                     events.fail_enqueue
                 };
@@ -1752,8 +1754,12 @@ async fn arbitrum_post_send_conflict_still_links_successor() {
             "resubmit={resubmit}: {:?}",
             events.jobs
         );
+        assert_eq!(events.job_tx_ids, ["next"], "resubmit={resubmit}");
     }
 }
+
+/// Far beyond the test's runtime, so wall time cannot close the skew.
+const SKEW_MS: i64 = 60_000;
 
 fn in_ms(ms: i64) -> String {
     (Utc::now() + Duration::milliseconds(ms)).to_rfc3339()
@@ -1783,13 +1789,13 @@ async fn replace_then_submit(
     h
 }
 
-/// The last send was recorded by an instance whose clock runs 500 ms fast; the
+/// The last send was recorded by an instance whose clock runs a minute fast; the
 /// replacement is saved 100 ms later on an accurate one. The replacement is
 /// still unsent, and its submit job broadcasts it once.
 #[tokio::test]
 async fn replace_after_send_from_fast_clock_is_broadcast() {
     let priced = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
-    let h = replace_then_submit(priced, Some(in_ms(500)), None).await;
+    let h = replace_then_submit(priced, Some(in_ms(SKEW_MS)), None).await;
     assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
     assert!(!is_unsent(&h.stored().await).unwrap());
 }
@@ -1798,7 +1804,7 @@ async fn replace_after_send_from_fast_clock_is_broadcast() {
 /// `priced_at`) after a send from a fast clock.
 #[tokio::test]
 async fn first_replacement_of_base_record_is_broadcast() {
-    let h = replace_then_submit(None, Some(in_ms(500)), None).await;
+    let h = replace_then_submit(None, Some(in_ms(SKEW_MS)), None).await;
     assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
 }
 
@@ -1808,7 +1814,7 @@ async fn first_replacement_of_base_record_is_broadcast() {
 async fn replacement_near_expiry_is_broadcast_before_noop() {
     let priced = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
     let valid_until = Some((Utc::now() + Duration::seconds(10)).to_rfc3339());
-    let h = replace_then_submit(priced, Some(in_ms(500)), valid_until).await;
+    let h = replace_then_submit(priced, Some(in_ms(SKEW_MS)), valid_until).await;
     assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
     let data = h
         .stored()
@@ -1825,7 +1831,7 @@ async fn replacement_near_expiry_is_broadcast_before_noop() {
 #[tokio::test]
 async fn send_after_price_from_fast_clock_is_recorded_as_sent() {
     let mut record = tx(TransactionStatus::Sent);
-    record.priced_at = Some(in_ms(500));
+    record.priced_at = Some(in_ms(SKEW_MS));
     let h = Harness::new(record, false, None).await;
     h.run_job(TransactionCommand::Submit).await;
     assert!(!is_unsent(&h.stored().await).unwrap());
