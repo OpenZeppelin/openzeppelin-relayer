@@ -1457,6 +1457,14 @@ where
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
+        // A job queued before `valid_until` can run after it. Neither a resend nor a
+        // repriced copy may broadcast an expired transaction; the status checker
+        // replaces it with a NOOP. A NOOP never expires.
+        if !is_noop(&evm_data) && !is_transaction_valid(&tx.created_at, &tx.valid_until) {
+            info!(tx_id = %tx.id, "transaction expired; skipping resubmit");
+            return Ok(tx);
+        }
+
         // Duplicate jobs must not sign again before the current price expires.
         // Saved bytes that no node accepted yet are sent again instead.
         let resend_unsent = evm_data.raw.is_some() && is_unsent(&tx)?;
@@ -5456,6 +5464,41 @@ mod tests {
             tx.sent_at = sent_at;
             tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
             let returned = submit_expired(tx).await;
+            assert_eq!(returned.status, TransactionStatus::Submitted, "{case}");
+        }
+    }
+
+    /// A resubmit job queued before `valid_until` and run after it must not send
+    /// the stored bytes or a repriced copy; the status checker NOOPs the tx.
+    #[tokio::test]
+    async fn test_resubmit_skips_expired_transaction() {
+        let earlier = (Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+        for (case, sent_at) in [("unsent", None), ("accepted", Some(earlier.clone()))] {
+            let mut tx = create_arbitrum_submit_tx();
+            tx.status = TransactionStatus::Submitted;
+            tx.priced_at = Some(earlier.clone());
+            tx.sent_at = sent_at;
+            tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+
+            let mut mock_provider = MockEvmProviderTrait::new();
+            mock_provider.expect_send_raw_transaction().never();
+            let mut mock_transaction = MockTransactionRepository::new();
+            mock_transaction.expect_partial_update_if_version().never();
+            let mut mock_signer = MockSigner::new();
+            mock_signer.expect_sign_transaction().never();
+
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: create_test_relayer(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(MockRelayerRepository::new()),
+                network_repository: Arc::new(default_mock_network()),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+                job_producer: Arc::new(MockJobProducerTrait::new()),
+                price_calculator: MockPriceCalculator::new(),
+                signer: mock_signer,
+            };
+            let returned = evm_transaction.resubmit_transaction(tx).await.unwrap();
             assert_eq!(returned.status, TransactionStatus::Submitted, "{case}");
         }
     }
