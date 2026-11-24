@@ -1392,6 +1392,12 @@ where
             return Ok(tx);
         }
 
+        // A duplicate job must not resend accepted bytes; that would move the
+        // reprice timer and the accepted count.
+        if tx.status == TransactionStatus::Submitted && !is_unsent(&tx)? {
+            return Ok(tx);
+        }
+
         let (tx, outcome) = self.send_stored_payload(tx).await?;
         outcome.finish(tx)
     }
@@ -4505,7 +4511,9 @@ mod tests {
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
         test_tx.status = TransactionStatus::Submitted;
-        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        // Repriced after the last accepted send, so these bytes are unsent.
+        test_tx.sent_at = Some((Utc::now() - chrono::Duration::seconds(60)).to_rfc3339());
+        test_tx.priced_at = Some(Utc::now().to_rfc3339());
         test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
             nonce: Some(42),
             hash: Some("0xhash".to_string()),

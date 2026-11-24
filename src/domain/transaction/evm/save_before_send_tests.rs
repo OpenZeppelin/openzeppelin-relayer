@@ -1493,3 +1493,16 @@ async fn failed_reprice_after_net_sends_saved_bytes() {
     assert_eq!(after.hashes, before.hashes);
     assert!(!is_unsent(&h.stored().await).unwrap());
 }
+
+#[tokio::test]
+async fn duplicate_submit_after_acceptance_sends_nothing() {
+    let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+    h.run_job(TransactionCommand::Submit).await;
+    let accepted = h.stored().await;
+    assert!(!is_unsent(&accepted).unwrap());
+    h.run_job(TransactionCommand::Submit).await;
+    let after = h.stored().await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+    assert_eq!(after.sent_at, accepted.sent_at);
+    assert_eq!(after.metadata, accepted.metadata);
+}
