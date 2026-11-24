@@ -1438,3 +1438,25 @@ async fn refused_bump_after_rejected_probe_sends_once() {
     assert!(h.events.lock().unwrap().signs.is_empty());
     assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
 }
+
+#[tokio::test]
+async fn expired_unsent_submitted_becomes_noop_without_send() {
+    let mut initial = tx(TransactionStatus::Submitted);
+    initial.valid_until = Some((Utc::now() - Duration::seconds(1)).to_rfc3339());
+    let h = Harness::new(initial, false, None).await;
+    h.age_payload(30).await;
+    h.cycle().await;
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Resubmit]
+    ));
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(is_noop(&data));
+    assert!(data.raw.is_none());
+    assert!(h.events.lock().unwrap().sent.is_empty());
+}

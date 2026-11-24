@@ -710,6 +710,13 @@ where
         }
 
         if is_unsent(&tx)? && get_age_since_priced(&tx)? > get_evm_resend_timeout() {
+            // No node accepted these bytes yet, so check expiry before sending them.
+            let (should_noop, reason) = self.should_noop(&tx).await?;
+            if should_noop {
+                let noop_tx = self.process_noop_transaction(&tx, reason).await?;
+                self.send_transaction_resubmit_job(&noop_tx).await?;
+                return Ok(noop_tx);
+            }
             // A nonce gap below this tx makes a resend futile; the detector
             // schedules the nonce health job itself.
             if self
