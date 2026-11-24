@@ -17,7 +17,7 @@ use crate::{
         GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
-        evm::{has_signed_payload, is_noop, is_reprice_net_due, is_unsent},
+        evm::{has_signed_payload, is_noop, is_reprice_net_due, is_unsent, timestamp_not_before},
         transaction::{
             evm::{
                 ensure_status, ensure_status_one_of, is_transaction_valid, PriceCalculator,
@@ -460,7 +460,12 @@ where
             TransactionUpdateRequest {
                 network_data: Some(NetworkTransactionData::Evm(data)),
                 hashes: Some(hashes),
-                priced_at: Some(Utc::now().to_rfc3339()),
+                // Later than the stored send, whatever this clock reads: the new
+                // bytes must look unsent.
+                priced_at: Some(timestamp_not_before(
+                    tx.sent_at.as_deref(),
+                    chrono::Duration::milliseconds(1),
+                )),
                 status,
                 ..Default::default()
             },
@@ -483,7 +488,12 @@ where
             tx,
             TransactionUpdateRequest {
                 status: Some(TransactionStatus::Submitted),
-                sent_at: Some(Utc::now().to_rfc3339()),
+                // Not before the stored price, whatever this clock reads: the sent
+                // bytes must not look unsent.
+                sent_at: Some(timestamp_not_before(
+                    tx.priced_at.as_deref(),
+                    chrono::Duration::zero(),
+                )),
                 metadata: Some(metadata),
                 ..Default::default()
             },

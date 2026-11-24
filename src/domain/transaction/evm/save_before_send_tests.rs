@@ -1754,3 +1754,81 @@ async fn arbitrum_post_send_conflict_still_links_successor() {
         );
     }
 }
+
+fn in_ms(ms: i64) -> String {
+    (Utc::now() + Duration::milliseconds(ms)).to_rfc3339()
+}
+
+/// Replaces a `Submitted` record whose stored timestamps are `priced_at` and
+/// `sent_at`, then runs the queued submit job. Returns the harness.
+async fn replace_then_submit(
+    priced_at: Option<String>,
+    sent_at: Option<String>,
+    valid_until: Option<String>,
+) -> Harness {
+    let mut record = tx(TransactionStatus::Submitted);
+    record.priced_at = priced_at;
+    record.sent_at = sent_at;
+    record.valid_until = valid_until;
+    let h = Harness::new(record, false, None).await;
+    h.worker
+        .replace_transaction(h.stored().await, replacement())
+        .await
+        .unwrap();
+    assert!(
+        is_unsent(&h.stored().await).unwrap(),
+        "replacement bytes must look unsent"
+    );
+    h.run_job(TransactionCommand::Submit).await;
+    h
+}
+
+/// The last send was recorded by an instance whose clock runs 500 ms fast; the
+/// replacement is saved 100 ms later on an accurate one. The replacement is
+/// still unsent, and its submit job broadcasts it once.
+#[tokio::test]
+async fn replace_after_send_from_fast_clock_is_broadcast() {
+    let priced = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+    let h = replace_then_submit(priced, Some(in_ms(500)), None).await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
+    assert!(!is_unsent(&h.stored().await).unwrap());
+}
+
+/// The first replacement of a record from the previous release (no
+/// `priced_at`) after a send from a fast clock.
+#[tokio::test]
+async fn first_replacement_of_base_record_is_broadcast() {
+    let h = replace_then_submit(None, Some(in_ms(500)), None).await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
+}
+
+/// A replacement that expires before its first reprice interval is broadcast
+/// by its submit job, not left to become a NOOP unsent.
+#[tokio::test]
+async fn replacement_near_expiry_is_broadcast_before_noop() {
+    let priced = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+    let valid_until = Some((Utc::now() + Duration::seconds(10)).to_rfc3339());
+    let h = replace_then_submit(priced, Some(in_ms(500)), valid_until).await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(!is_noop(&data));
+}
+
+/// The reverse skew: the payload was priced by an instance whose clock runs
+/// 500 ms fast. After an accepted send it no longer looks unsent, so a
+/// duplicate submit job sends nothing.
+#[tokio::test]
+async fn send_after_price_from_fast_clock_is_recorded_as_sent() {
+    let mut record = tx(TransactionStatus::Sent);
+    record.priced_at = Some(in_ms(500));
+    let h = Harness::new(record, false, None).await;
+    h.run_job(TransactionCommand::Submit).await;
+    assert!(!is_unsent(&h.stored().await).unwrap());
+    h.run_job(TransactionCommand::Submit).await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+}

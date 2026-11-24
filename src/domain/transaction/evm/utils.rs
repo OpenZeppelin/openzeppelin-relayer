@@ -260,6 +260,20 @@ pub fn get_age_since_priced(tx: &TransactionRepoModel) -> Result<Duration, Trans
     Ok(Utc::now().signed_duration_since(time))
 }
 
+/// The current time, or `gap` after `floor` if this clock reads earlier.
+///
+/// `priced_at` and `sent_at` are written by different instances, whose clocks
+/// can disagree. Each write takes the stored other timestamp as its floor, so
+/// their order follows the record's write chain: after a save `sent_at` is
+/// earlier than `priced_at`, and after a recorded send it is not.
+pub fn timestamp_not_before(floor: Option<&str>, gap: Duration) -> String {
+    let now = Utc::now();
+    floor
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map_or(now, |t| now.max(t.with_timezone(&Utc) + gap))
+        .to_rfc3339()
+}
+
 /// A previous payload's send time does not prove that the current bytes were sent.
 pub fn is_unsent(tx: &TransactionRepoModel) -> Result<bool, TransactionError> {
     let Some(sent_at) = &tx.sent_at else {
