@@ -69,6 +69,46 @@ pub fn is_noop(evm_data: &EvmTransactionData) -> bool {
         && evm_data.speed.is_some()
 }
 
+/// Whether the record holds signed bytes that may be sent as they are.
+///
+/// A NOOP's bytes must describe the NOOP: records converted before NOOP
+/// conversion cleared `raw` still carry the original transfer's bytes under
+/// NOOP fields, and those must be signed again, never sent. Other records
+/// always save fields and bytes together.
+pub fn has_signed_payload(evm_data: &EvmTransactionData) -> bool {
+    evm_data.raw.is_some() && (!is_noop(evm_data) || stored_payload_matches(evm_data))
+}
+
+/// Whether the stored signed bytes describe this record: the same recipient,
+/// value, calldata and nonce. Missing or undecodable bytes do not.
+pub fn stored_payload_matches(evm_data: &EvmTransactionData) -> bool {
+    use alloy::consensus::{Transaction, TxEnvelope};
+    use alloy::eips::eip2718::Decodable2718;
+    use alloy::primitives::{Address, Bytes, TxKind};
+    use std::str::FromStr;
+
+    let (Some(raw), Some(nonce)) = (evm_data.raw.as_deref(), evm_data.nonce) else {
+        return false;
+    };
+    let Ok(envelope) = TxEnvelope::decode_2718_exact(raw) else {
+        return false;
+    };
+    let to = match evm_data.to.as_deref().map(Address::from_str) {
+        Some(Ok(address)) => TxKind::Call(address),
+        Some(Err(_)) => return false,
+        None => TxKind::Create,
+    };
+    let input = match evm_data.data.as_deref().map(Bytes::from_str) {
+        Some(Ok(bytes)) => bytes,
+        Some(Err(_)) => return false,
+        None => Bytes::new(),
+    };
+    envelope.nonce() == nonce
+        && envelope.kind() == to
+        && envelope.value() == evm_data.value
+        && *envelope.input() == input
+}
+
 /// Checks if a transaction has too many attempts
 pub fn too_many_attempts(tx: &TransactionRepoModel) -> bool {
     tx.metadata.as_ref().map_or(0, |m| m.accepted_sends) > MAXIMUM_TX_ATTEMPTS as u64
@@ -286,6 +326,73 @@ mod tests {
     use crate::models::{evm::Speed, EvmTransactionData, NetworkTransactionData, U256};
     use crate::services::provider::{MockEvmProviderTrait, ProviderError};
     use crate::utils::mocks::mockutils::create_mock_transaction;
+
+    #[test]
+    fn stored_payload_matches_only_bytes_of_the_record() {
+        use crate::domain::transaction::evm::test_helpers::test_utils::signed_raw;
+        let record = EvmTransactionData {
+            chain_id: 1,
+            from: "0x0000000000000000000000000000000000000001".into(),
+            to: Some("0x0000000000000000000000000000000000000002".into()),
+            value: U256::from(5),
+            data: Some("0xabcd".into()),
+            nonce: Some(7),
+            speed: Some(Speed::Fast),
+            ..Default::default()
+        };
+        let with_raw = |data: &EvmTransactionData, raw: Vec<u8>| EvmTransactionData {
+            raw: Some(raw),
+            ..data.clone()
+        };
+        let raw = signed_raw(&record, 0);
+        assert!(stored_payload_matches(&with_raw(&record, raw.clone())));
+        assert!(!stored_payload_matches(&record), "no bytes");
+        assert!(!stored_payload_matches(&with_raw(&record, vec![1, 2, 3])));
+        let mut trailing = raw.clone();
+        trailing.push(0);
+        assert!(!stored_payload_matches(&with_raw(&record, trailing)));
+        for changed in [
+            EvmTransactionData {
+                nonce: Some(8),
+                ..record.clone()
+            },
+            EvmTransactionData {
+                nonce: None,
+                ..record.clone()
+            },
+            EvmTransactionData {
+                to: Some(record.from.clone()),
+                ..record.clone()
+            },
+            EvmTransactionData {
+                to: None,
+                ..record.clone()
+            },
+            EvmTransactionData {
+                value: U256::ZERO,
+                ..record.clone()
+            },
+            EvmTransactionData {
+                data: Some("0x".into()),
+                ..record.clone()
+            },
+        ] {
+            assert!(!stored_payload_matches(&with_raw(&changed, raw.clone())));
+        }
+
+        // Only a NOOP's bytes are checked against its fields.
+        let noop = EvmTransactionData {
+            to: Some(record.from.clone()),
+            value: U256::ZERO,
+            data: Some("0x".into()),
+            ..record.clone()
+        };
+        assert!(is_noop(&noop));
+        assert!(!has_signed_payload(&with_raw(&noop, raw.clone())));
+        assert!(has_signed_payload(&with_raw(&noop, signed_raw(&noop, 0))));
+        assert!(has_signed_payload(&with_raw(&record, vec![1])));
+        assert!(!has_signed_payload(&record));
+    }
 
     fn create_standard_network() -> EvmNetwork {
         EvmNetwork {

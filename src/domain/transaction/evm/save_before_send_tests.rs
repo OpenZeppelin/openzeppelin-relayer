@@ -1,4 +1,5 @@
 //! Tests use the in-memory version check and inject faults at write boundaries.
+use super::super::test_helpers::test_utils::signed_raw;
 use super::tests::{
     create_test_network_model, create_test_no_mempool_network_model, make_mock_receipt,
 };
@@ -259,32 +260,35 @@ impl Harness {
             });
         let mut signer = MockSigner::new();
         let e = events.clone();
-        signer.expect_sign_transaction().returning(move |_| {
-            let raw = {
+        signer.expect_sign_transaction().returning(move |data| {
+            let (tag, raw) = {
                 let mut events = e.lock().unwrap();
-                let raw = vec![if events.same_signature {
+                let tag = if events.same_signature {
                     0
                 } else {
                     (events.signs.len() + 1) as u8
-                }];
+                };
+                // A NOOP's bytes are sent only if they decode to the NOOP.
+                let data = data.get_evm_transaction_data().unwrap();
+                let raw = if is_noop(&data) {
+                    signed_raw(&data, tag.into())
+                } else {
+                    vec![tag]
+                };
                 events.signs.push(raw.clone());
-                raw
+                (tag, raw)
             };
-            let pause = if raw == vec![1] {
-                pause_sign.clone()
-            } else {
-                None
-            };
+            let pause = if tag == 1 { pause_sign.clone() } else { None };
             Box::pin(async move {
                 if let Some((reached, release)) = pause {
                     reached.notify_one();
                     release.notified().await;
                 }
                 Ok(SignTransactionResponse::Evm(SignTransactionResponseEvm {
-                    hash: if raw == vec![0] {
+                    hash: if tag == 0 {
                         "A".into()
                     } else {
-                        format!("H{}", raw[0])
+                        format!("H{tag}")
                     },
                     raw,
                     signature: EvmTransactionDataSignature {
@@ -654,7 +658,9 @@ async fn cancel_failed_enqueue_and_lost_cancel_reply_recover_without_wait() {
             [TransactionCommand::Resubmit]
         ));
         h.run_job(TransactionCommand::Resubmit).await;
-        assert_eq!(h.events.lock().unwrap().sent, [vec![1]]);
+        let events = h.events.lock().unwrap();
+        assert_eq!(events.sent, [events.signs[0].clone()]);
+        drop(events);
         assert_eq!(h.stored().await.hashes, ["A", "H1"]);
         assert!(h.stored().await.sent_at.is_some());
         assert!(h.stored().await.priced_at.is_some());
@@ -681,13 +687,10 @@ async fn stale_submit_after_clean_cancel_sends_only_noop() {
     ] {
         h.run_job(command).await;
     }
-    assert!(h
-        .events
-        .lock()
-        .unwrap()
-        .sent
-        .iter()
-        .all(|raw| raw == &vec![1]));
+    let events = h.events.lock().unwrap();
+    assert_eq!(events.signs.len(), 1);
+    assert!(events.sent.iter().all(|raw| raw == &events.signs[0]));
+    drop(events);
     assert!(is_noop(
         &h.stored()
             .await
@@ -982,7 +985,8 @@ async fn cancel_while_signing_prevents_save_and_broadcast() {
     assert!(resubmit.unwrap_err().is_concurrent_update_conflict());
     assert!(h.events.lock().unwrap().sent.is_empty());
     h.recover(true).await;
-    assert_eq!(h.events.lock().unwrap().sent, [vec![2]]);
+    let events = h.events.lock().unwrap();
+    assert_eq!(events.sent, [events.signs[1].clone()]);
 }
 
 #[test]
@@ -1565,4 +1569,127 @@ async fn total_failure_limit_still_noops_never_accepted_payload() {
         .unwrap();
     assert!(is_noop(&data));
     assert!(h.events.lock().unwrap().sent.is_empty());
+}
+
+/// A cancel converted by the previous release: NOOP fields, but `raw`, hash and
+/// signature still belong to the original transfer. Built from JSON without the
+/// fields this release added, as the new code reads it from storage.
+fn legacy_cancel(
+    status: TransactionStatus,
+    priced_at: Option<String>,
+    sent_at: Option<String>,
+) -> (TransactionRepoModel, Vec<u8>) {
+    let mut record = tx(status);
+    let mut data = record.network_data.get_evm_transaction_data().unwrap();
+    let transfer_raw = signed_raw(&data, 99);
+    data.raw = Some(transfer_raw.clone());
+    data.signature = Some(EvmTransactionDataSignature {
+        r: "r".into(),
+        s: "s".into(),
+        v: 1,
+        sig: "sig".into(),
+    });
+    data.to = Some(data.from.clone());
+    data.value = U256::from(0);
+    data.data = Some("0x".into());
+    assert!(is_noop(&data));
+    record.network_data = NetworkTransactionData::Evm(data);
+    record.is_canceled = Some(true);
+    record.priced_at = priced_at;
+    record.sent_at = sent_at;
+    let mut json = serde_json::to_value(&record).unwrap();
+    let object = json.as_object_mut().unwrap();
+    object.remove("version");
+    object.remove("metadata");
+    (serde_json::from_value(json).unwrap(), transfer_raw)
+}
+
+fn assert_only_noop_bytes_sent(h: &Harness, transfer_raw: &[u8]) {
+    let events = h.events.lock().unwrap();
+    assert!(
+        events.sent.iter().all(|raw| raw.as_slice() != transfer_raw),
+        "the canceled transfer was broadcast"
+    );
+    assert!(events.sent.iter().all(|raw| events.signs.contains(raw)));
+}
+
+/// A direct submit of a legacy cancel does not send the transfer's bytes.
+#[tokio::test]
+async fn legacy_cancel_submit_does_not_send_transfer_bytes() {
+    let (record, transfer_raw) = legacy_cancel(TransactionStatus::Sent, None, None);
+    let h = Harness::new(record, false, None).await;
+    h.worker.submit_transaction(h.stored().await).await.unwrap();
+    assert!(h.events.lock().unwrap().sent.is_empty());
+    assert_only_noop_bytes_sent(&h, &transfer_raw);
+}
+
+/// A young legacy `Sent` cancel signs the NOOP on its resubmit instead of
+/// resending the stored bytes.
+#[tokio::test]
+async fn legacy_cancel_young_resubmit_signs_noop() {
+    let priced = Some((Utc::now() - Duration::seconds(10)).to_rfc3339());
+    let (record, transfer_raw) = legacy_cancel(TransactionStatus::Sent, priced, None);
+    let h = Harness::new(record, false, None).await;
+    h.run_job(TransactionCommand::Resubmit).await;
+    assert_eq!(h.events.lock().unwrap().signs.len(), 1);
+    assert_eq!(h.events.lock().unwrap().sent.len(), 1);
+    assert_only_noop_bytes_sent(&h, &transfer_raw);
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(is_noop(&data));
+    assert_eq!(data.raw.as_ref(), h.events.lock().unwrap().sent.last());
+}
+
+/// An old legacy cancel whose reprice fails (price cap or balance) must not
+/// fall back to sending the stored transfer bytes.
+#[tokio::test]
+async fn legacy_cancel_failed_reprice_does_not_send_transfer_bytes() {
+    for low_balance in [false, true] {
+        let (record, transfer_raw) = legacy_cancel(TransactionStatus::Sent, None, None);
+        let h = Harness::new(record, false, None).await;
+        {
+            let mut events = h.events.lock().unwrap();
+            events.cap_hit = !low_balance;
+            events.low_balance = low_balance;
+        }
+        let result = h.worker.resubmit_transaction(h.stored().await).await;
+        assert_eq!(result.is_err(), low_balance, "{result:?}");
+        assert!(h.events.lock().unwrap().sent.is_empty());
+        assert_only_noop_bytes_sent(&h, &transfer_raw);
+    }
+}
+
+/// A legacy `Submitted` cancel whose last send is recent signs the NOOP on the
+/// first resubmit; it does not wait for the price to age.
+#[tokio::test]
+async fn legacy_submitted_cancel_signs_noop_on_first_resubmit() {
+    let priced = Some((Utc::now() - Duration::seconds(10)).to_rfc3339());
+    let sent = Some((Utc::now() - Duration::seconds(5)).to_rfc3339());
+    let (record, transfer_raw) = legacy_cancel(TransactionStatus::Submitted, priced, sent);
+    let h = Harness::new(record, false, None).await;
+    h.run_job(TransactionCommand::Resubmit).await;
+    assert_eq!(h.events.lock().unwrap().signs.len(), 1);
+    assert_eq!(h.events.lock().unwrap().sent.len(), 1);
+    assert_only_noop_bytes_sent(&h, &transfer_raw);
+}
+
+/// A gap filler whose bytes match its NOOP fields stays deliverable.
+#[tokio::test]
+async fn signed_gap_filler_is_sent_as_stored() {
+    let mut record = tx(TransactionStatus::Sent);
+    let mut data = record.network_data.get_evm_transaction_data().unwrap();
+    data.to = Some(data.from.clone());
+    data.value = U256::from(0);
+    data.data = Some("0x".into());
+    let raw = signed_raw(&data, 50);
+    data.raw = Some(raw.clone());
+    record.network_data = NetworkTransactionData::Evm(data);
+    let h = Harness::new(record, false, None).await;
+    h.worker.submit_transaction(h.stored().await).await.unwrap();
+    assert_eq!(h.events.lock().unwrap().sent, [raw]);
+    assert!(h.events.lock().unwrap().signs.is_empty());
 }

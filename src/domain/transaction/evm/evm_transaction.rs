@@ -17,7 +17,7 @@ use crate::{
         GAS_LIMIT_BUFFER_MULTIPLIER, MAX_NONCE_TOO_HIGH_RETRIES, NONCE_TOO_HIGH_PATTERNS,
     },
     domain::{
-        evm::{is_noop, is_reprice_net_due, is_unsent},
+        evm::{has_signed_payload, is_noop, is_reprice_net_due, is_unsent},
         transaction::{
             evm::{
                 ensure_status, ensure_status_one_of, is_transaction_valid, PriceCalculator,
@@ -1380,12 +1380,13 @@ where
 
         // A tx can change while its job is queued:
         // - Converted to a NOOP: make_noop dropped the original signed bytes, and the
-        //   resubmit path (cancel, status checker or chain link) signs the NOOP.
+        //   resubmit path (cancel, status checker or chain link) signs the NOOP. An
+        //   older record can still hold the original bytes; they count as unsigned.
         // - Expired before any node accepted its bytes (never sent, or released for a
         //   send that failed): the status checker replaces it with a NOOP.
         // A signed NOOP (a gap filler) never expires: its purpose is to fill the nonce.
         if is_noop(&evm_tx_data) {
-            if evm_tx_data.raw.is_none() {
+            if !has_signed_payload(&evm_tx_data) {
                 info!(tx_id = %tx.id, "NOOP not signed yet; resubmit delivers it");
                 return Ok(tx);
             }
@@ -1466,9 +1467,11 @@ where
         }
 
         // Duplicate jobs must not sign again before the current price expires.
-        // Saved bytes that no node accepted yet are sent again instead.
-        let resend_unsent = evm_data.raw.is_some() && is_unsent(&tx)?;
-        if evm_data.raw.is_some() && !self.should_resubmit(&tx).await? {
+        // Saved bytes that no node accepted yet are sent again instead. Bytes
+        // that do not describe the record (an older NOOP conversion) are unsigned.
+        let signed = has_signed_payload(&evm_data);
+        let resend_unsent = signed && is_unsent(&tx)?;
+        if signed && !self.should_resubmit(&tx).await? {
             return if resend_unsent {
                 self.submit_transaction(tx).await
             } else {
@@ -5571,17 +5574,22 @@ mod tests {
         let mut tx = create_arbitrum_submit_tx();
         tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
         let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+        data.from = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e".to_string();
         data.to = Some(data.from.clone());
         data.value = U256::from(0);
         data.data = Some("0x".to_string());
         data.speed = Some(Speed::Fast);
         assert!(is_noop(&data));
+        let noop_raw =
+            crate::domain::transaction::evm::test_helpers::test_utils::signed_raw(&data, 0);
+        data.raw = Some(noop_raw.clone());
         tx.network_data = NetworkTransactionData::Evm(data);
 
         let mut mock_provider = MockEvmProviderTrait::new();
         mock_provider
             .expect_send_raw_transaction()
             .times(1)
+            .withf(move |raw| raw == noop_raw.as_slice())
             .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
         let mut mock_transaction = MockTransactionRepository::new();
         expect_lifecycle_updates(&mut mock_transaction, &tx, 2);

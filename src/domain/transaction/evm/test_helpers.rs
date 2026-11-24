@@ -19,6 +19,34 @@ pub mod test_utils {
     use chrono::Utc;
     use std::sync::Arc;
 
+    /// Real EIP-2718 bytes of a legacy transaction with `data`'s chain id,
+    /// nonce, price, recipient, value and calldata. `tag` goes into the
+    /// signature's `r`, so different tags give different bytes. The signature
+    /// is not valid for any key; decoding does not check it.
+    pub fn signed_raw(data: &EvmTransactionData, tag: u64) -> Vec<u8> {
+        use alloy::consensus::{SignableTransaction, TxEnvelope, TxLegacy};
+        use alloy::eips::eip2718::Encodable2718;
+        use alloy::primitives::{Address, Bytes, Signature, TxKind};
+        use std::str::FromStr;
+
+        let tx = TxLegacy {
+            chain_id: Some(data.chain_id),
+            nonce: data.nonce.unwrap_or_default(),
+            gas_price: data.gas_price.unwrap_or(1),
+            gas_limit: data.gas_limit.unwrap_or(21_000),
+            to: data.to.as_deref().map_or(TxKind::Create, |to| {
+                TxKind::Call(Address::from_str(to).unwrap())
+            }),
+            value: data.value,
+            input: data
+                .data
+                .as_deref()
+                .map_or_else(Bytes::new, |d| Bytes::from_str(d).unwrap()),
+        };
+        let signature = Signature::new(U256::from(tag + 1), U256::from(1), false);
+        TxEnvelope::from(tx.into_signed(signature)).encoded_2718()
+    }
+
     /// Helper struct holding all the mocks we often need
     pub struct TestMocks {
         pub provider: MockEvmProviderTrait,
