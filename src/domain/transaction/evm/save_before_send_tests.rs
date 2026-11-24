@@ -1460,3 +1460,16 @@ async fn expired_unsent_submitted_becomes_noop_without_send() {
     assert!(data.raw.is_none());
     assert!(h.events.lock().unwrap().sent.is_empty());
 }
+
+#[tokio::test]
+async fn release_saves_hash_of_bytes_from_older_version() {
+    let mut initial = tx(TransactionStatus::Sent);
+    if let NetworkTransactionData::Evm(ref mut data) = initial.network_data {
+        data.hash = Some("B".into());
+        data.raw = Some(vec![9]);
+    }
+    let h = Harness::new(initial, false, None).await;
+    h.run_job(TransactionCommand::Submit).await;
+    assert_eq!(h.stored().await.hashes, ["A", "B"]);
+    assert_eq!(h.events.lock().unwrap().sent, [vec![9]]);
+}

@@ -204,11 +204,22 @@ where
         };
 
         // Release before every send, including a resend of Submitted bytes.
+        // Bytes saved by an older version can lack their hash; add it here.
+        let hashes = evm_tx_data
+            .hash
+            .as_ref()
+            .filter(|hash| !tx.hashes.contains(hash))
+            .map(|hash| {
+                let mut hashes = tx.hashes.clone();
+                hashes.push(hash.clone());
+                hashes
+            });
         let tx = self
             .cas_update(
                 &tx,
                 TransactionUpdateRequest {
                     status: Some(TransactionStatus::Submitted),
+                    hashes,
                     ..Default::default()
                 },
             )
