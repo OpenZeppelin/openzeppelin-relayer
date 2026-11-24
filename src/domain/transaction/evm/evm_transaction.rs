@@ -4701,6 +4701,7 @@ mod tests {
                 })
             });
 
+        expect_release_write(&mut mock_transaction, &test_tx);
         // The guarded status_reason write loses to another writer
         let test_tx_clone = test_tx.clone();
         mock_transaction
@@ -4750,8 +4751,8 @@ mod tests {
         mock_network
             .expect_get_by_name()
             .with(eq(NetworkType::Evm), eq("mainnet"))
-            // Retry-delay lookup, then the Arbitrum check after the accepted send.
-            .times(2)
+            // Retry-delay lookup; "nonce too low" returns before the chain link.
+            .times(1)
             .returning(move |_, _| Ok(Some(network_model.clone())));
 
         let relayer = create_test_relayer();
@@ -5263,16 +5264,8 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
 
-        let test_tx_clone = test_tx.clone();
-        mock_transaction
-            .expect_partial_update_if_version()
-            .times(1)
-            .returning(move |_, _, update| {
-                let mut updated_tx = test_tx_clone.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                updated_tx.sent_at = update.sent_at.clone();
-                Ok(updated_tx)
-            });
+        // The release write, then the accepted-send write.
+        expect_lifecycle_updates(&mut mock_transaction, &test_tx, 2);
 
         // Successors are allocated up to nonce 49.
         counter_service
@@ -5492,16 +5485,7 @@ mod tests {
             .times(1)
             .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
         let mut mock_transaction = MockTransactionRepository::new();
-        let tx_clone = tx.clone();
-        mock_transaction
-            .expect_partial_update_if_version()
-            .times(1)
-            .returning(move |_, _, update| {
-                let mut updated_tx = tx_clone.clone();
-                updated_tx.status = update.status.clone().unwrap();
-                updated_tx.sent_at = update.sent_at.clone();
-                Ok(updated_tx)
-            });
+        expect_lifecycle_updates(&mut mock_transaction, &tx, 2);
         let mut mock_job_producer = MockJobProducerTrait::new();
         mock_job_producer
             .expect_produce_send_notification_job()

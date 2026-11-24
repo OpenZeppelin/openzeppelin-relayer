@@ -3172,7 +3172,10 @@ pub(super) mod tests {
             let relayer = create_test_relayer();
 
             let mut tx = make_test_transaction(TransactionStatus::Sent);
-            tx.hashes = vec!["0xHash1".to_string(); crate::constants::MAXIMUM_TX_ATTEMPTS + 1];
+            tx.metadata = Some(crate::models::TransactionMetadata {
+                accepted_sends: crate::constants::MAXIMUM_TX_ATTEMPTS as u64 + 1,
+                ..Default::default()
+            });
             tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
 
             // should_noop + prepare_noop_update_request both look the network up.
@@ -3230,7 +3233,10 @@ pub(super) mod tests {
                 let relayer = create_test_relayer();
 
                 let mut tx = make_test_transaction(TransactionStatus::Sent);
-                tx.hashes = vec!["0xHash1".to_string(); crate::constants::MAXIMUM_TX_ATTEMPTS + 1];
+                tx.metadata = Some(crate::models::TransactionMetadata {
+                    accepted_sends: crate::constants::MAXIMUM_TX_ATTEMPTS as u64 + 1,
+                    ..Default::default()
+                });
                 tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
                 tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
                     nonce: Some(7),
@@ -6558,7 +6564,8 @@ pub(super) mod tests {
         }
 
         /// C1 end to end: plain check -> resubmit -> "nonce too low" -> hinted check
-        /// -> observation window, without further resubmits once the marker is stored.
+        /// -> observation window. The resubmit saved its payload before sending, so
+        /// the reprice timer restarted and no further resubmit follows.
         #[tokio::test]
         async fn c1_sequence_resubmit_nonce_too_low_then_wait() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
@@ -6567,15 +6574,16 @@ pub(super) mod tests {
             let sizes = simulate(&evm, &state, &c, 3).await;
             assert_eq!(state.lock().unwrap().status, TransactionStatus::Submitted);
             assert_eq!(c.failed_writes.load(Ordering::SeqCst), 0);
-            assert_eq!(sizes, vec![2, 3, 3]);
+            assert_eq!(sizes, vec![2, 2, 2]);
         }
 
         // ---------------------------------------------------------------- C2
 
-        /// C2: the NonceTooLow branch of resubmit does not refresh sent_at and does
-        /// not append a hash, so should_resubmit stays true right after it.
+        /// C2: the NonceTooLow branch of resubmit does not refresh sent_at. The new
+        /// payload was saved before the send (#1006), so its hash is recorded and the
+        /// reprice timer restarts: no immediate second resubmit.
         #[tokio::test]
-        async fn c2_nonce_too_low_resubmit_keeps_should_resubmit_true() {
+        async fn c2_nonce_too_low_resubmit_saves_payload_and_waits() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
             let sent_before = tx.sent_at.clone();
             let (evm, state, c) = lagging_pool(tx.clone(), 10);
@@ -6584,29 +6592,30 @@ pub(super) mod tests {
 
             let after = state.lock().unwrap().clone();
             assert_eq!(after.sent_at, sent_before, "sent_at not refreshed");
-            assert_eq!(after.hashes, vec!["0xh1".to_string()], "no hash appended");
+            assert_eq!(
+                after.hashes,
+                vec!["0xh1".to_string(), "0xresigned0".to_string()],
+                "saved payload's hash recorded"
+            );
             assert_eq!(c.hinted_status_jobs.load(Ordering::SeqCst), 1);
-            assert!(evm.should_resubmit(&after).await.unwrap());
+            assert!(!evm.should_resubmit(&after).await.unwrap());
         }
 
         /// C2 (fan-out): when the hinted reconcile defers (here: the pool's nonce count
         /// lags, so it reports the nonce as not consumed while send says "nonce too
-        /// low"), every live status job resubmits and every resubmit adds one hinted
-        /// status job. The pool doubles every cycle.
-        ///
-        /// KNOWN DEFECT, older than this change: the doubling is not intended. This
-        /// test pins today's behaviour so a change to it is noticed; when the fan-out
-        /// is fixed, replace the expected sizes with a bounded pool.
+        /// low"), a resubmit adds one hinted status job. Before save-before-send
+        /// (#1006) every live job resubmitted again and the pool doubled each cycle;
+        /// now the saved payload restarts the reprice timer, so the pool stays bounded.
         #[tokio::test]
-        async fn c2_status_job_fanout_when_reconcile_defers() {
+        async fn c2_status_job_pool_bounded_when_reconcile_defers() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
             let (evm, state, c) = lagging_pool(tx, TX_NONCE);
 
             let sizes = simulate(&evm, &state, &c, 5).await;
-            assert_eq!(sizes, vec![2, 4, 8, 16, 32], "known fan-out defect");
+            assert_eq!(sizes, vec![2, 2, 2, 2, 2], "no fan-out");
             assert_eq!(c.failed_writes.load(Ordering::SeqCst), 0);
             let after = state.lock().unwrap().clone();
-            assert_eq!(after.hashes.len(), 1, "attempt count never grows");
+            assert_eq!(after.hashes.len(), 2, "one saved resubmit payload");
         }
 
         // ---------------------------------------------------------------- C3

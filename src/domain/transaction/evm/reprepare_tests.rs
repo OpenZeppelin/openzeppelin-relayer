@@ -1399,9 +1399,13 @@ async fn lost_reply_on_nonce_too_low_write_still_queues_recovery() {
         &jobs,
     );
 
+    // The lost reply hits the release write (#1006); it and the nonce-too-low
+    // reason write must each apply once.
     crate::repositories::discard_next_patch_reply();
     e.submit_transaction(tx).await.unwrap();
 
-    assert_eq!(stored(&repo).await.0.version, 1, "applied once");
+    let (record, _) = stored(&repo).await;
+    assert_eq!(record.version, 2, "release and reason each applied once");
+    assert!(record.status_reason.is_some());
     assert_eq!(jobs.status_checks.load(Ordering::SeqCst), 1);
 }
