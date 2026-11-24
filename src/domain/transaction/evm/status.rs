@@ -1048,23 +1048,38 @@ where
                     },
                 )
                 .await?;
+            // If another key used the nonce, the counter is behind the chain. Resync it
+            // now rather than after the wait, so later transactions do not reuse used
+            // nonces. Harmless when our own transaction used it. Best-effort.
+            if let Err(e) = self.schedule_relayer_nonce_health_job(tx).await {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce recovery: failed to schedule nonce health on first sighting"
+                );
+            }
             return Ok(Some(updated_tx));
         };
-        let network_model = self
+        // A network config error gives no verdict; hold rather than feed the breaker.
+        let network = match self
             .network_repository()
             .get_by_chain_id(NetworkType::Evm, evm_data.chain_id)
-            .await?
-            .ok_or_else(|| {
-                TransactionError::UnexpectedError(format!(
-                    "Network with chain id {} not found",
-                    evm_data.chain_id
-                ))
-            })?;
-        let network = EvmNetwork::try_from(network_model).map_err(|e| {
-            TransactionError::UnexpectedError(format!(
-                "Error converting network model to EvmNetwork: {e}"
-            ))
-        })?;
+            .await
+        {
+            Ok(Some(model)) => EvmNetwork::try_from(model).map_err(|e| e.to_string()),
+            Ok(None) => Err(format!(
+                "network with chain id {} not found",
+                evm_data.chain_id
+            )),
+            Err(e) => Err(e.to_string()),
+        };
+        let network = match network {
+            Ok(network) => network,
+            Err(error) => {
+                warn!(tx_id = %tx.id, %error, "nonce recovery: network lookup failed, holding");
+                return Ok(Some(tx.clone()));
+            }
+        };
         let span =
             nonce_used_failure_span(network.required_confirmations, network.average_blocktime_ms);
         // Both the block span and the wall-clock minimum must pass: blocks bound
@@ -6456,7 +6471,7 @@ mod tests {
             mocks
                 .job_producer
                 .expect_produce_relayer_health_check_job()
-                .times(1)
+                .times(2)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let mut first = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
@@ -6502,6 +6517,11 @@ mod tests {
                 .job_producer
                 .expect_produce_submit_transaction_job()
                 .times(0);
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let first = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
             block.store(124, Ordering::SeqCst);
@@ -6537,6 +6557,11 @@ mod tests {
                     .in_sequence(&mut sequence)
                     .returning(|_| Box::pin(async { Ok(None) }));
             }
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
             repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
@@ -6685,7 +6710,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn missing_blocktime_is_an_error_not_a_verdict() {
+        async fn missing_blocktime_holds_without_verdict() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
             tx.metadata.as_mut().unwrap().nonce_used_seen_at =
@@ -6708,7 +6733,8 @@ mod tests {
             );
             mocks.tx_repo.expect_partial_update().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
-            assert!(evm.reconcile_tx_nonce_state(&tx).await.is_err());
+            let held = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            assert_eq!(held.status, TransactionStatus::Submitted);
         }
 
         /// #991 review: the block span alone is about 60 s on Base; #817 saw a
@@ -6763,6 +6789,11 @@ mod tests {
                 Arc::new(AtomicU64::new(10_000)),
                 Arc::new(AtomicBool::new(false)),
             );
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
