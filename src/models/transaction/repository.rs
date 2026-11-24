@@ -78,6 +78,9 @@ pub struct TransactionMetadata {
     /// First block observed with a used EVM nonce and no receipt.
     #[serde(default)]
     pub nonce_used_seen_at_block: Option<u64>,
+    /// When the used EVM nonce was first observed (RFC 3339).
+    #[serde(default)]
+    pub nonce_used_seen_at: Option<String>,
 }
 
 impl TransactionMetadata {
@@ -1306,6 +1309,7 @@ mod tests {
             try_again_later_retries: 3,
             nonce_too_high_retries: 0,
             nonce_used_seen_at_block: None,
+            nonce_used_seen_at: None,
         };
         assert!(metadata.with_nonce_retries_reset().is_none());
     }
@@ -1319,6 +1323,7 @@ mod tests {
             try_again_later_retries: 3,
             nonce_too_high_retries: 3,
             nonce_used_seen_at_block: None,
+            nonce_used_seen_at: None,
         };
         let result = metadata.with_nonce_retries_reset();
         assert!(result.is_some());

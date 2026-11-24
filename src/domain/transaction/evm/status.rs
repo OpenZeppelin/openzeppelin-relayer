@@ -21,9 +21,10 @@ use super::{
     too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
-    get_evm_min_age_for_hash_recovery, get_evm_pending_recovery_trigger_timeout,
-    get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
-    DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
+    get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_min_age,
+    get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
+    ARBITRUM_TIME_TO_RESUBMIT, DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY,
+    MAX_GAP_SCAN_RANGE,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -59,24 +60,36 @@ const REVERT_REASON_GENERIC: &str = "Transaction reverted on-chain (receipt stat
 const MAX_REVERT_DATA_HEX_LEN: usize = 4096;
 
 /// Wait at least twice the confirmation depth, 12 blocks, and one minute.
-fn nonce_used_failure_span(required_confirmations: u64, average_blocktime_ms: Option<u64>) -> u64 {
-    let minute_in_blocks = average_blocktime_ms
-        .filter(|&ms| ms > 0)
-        .map_or(0, |ms| 60_000_u64.div_ceil(ms));
+fn nonce_used_failure_span(required_confirmations: u64, average_blocktime_ms: u64) -> u64 {
+    let minute_in_blocks = match average_blocktime_ms {
+        0 => 0,
+        ms => 60_000_u64.div_ceil(ms),
+    };
     required_confirmations
         .saturating_mul(2)
         .max(12)
         .max(minute_in_blocks)
 }
 
-/// Metadata with the "nonce used" block cleared, or `None` when it is not set.
-/// A receipt or an unused nonce ends the wait; a stale block would let a later
+/// Whether a "nonce used, no receipt" sighting is recorded.
+fn has_nonce_used_seen(tx: &TransactionRepoModel) -> bool {
+    tx.metadata.as_ref().is_some_and(|metadata| {
+        metadata.nonce_used_seen_at_block.is_some() || metadata.nonce_used_seen_at.is_some()
+    })
+}
+
+/// Metadata with the "nonce used" sighting cleared, or `None` when it is not set.
+/// A receipt or an unused nonce ends the wait; a stale sighting would let a later
 /// empty receipt mark a mined transaction `Failed` without a new wait.
 fn without_nonce_used_seen(
     tx: &TransactionRepoModel,
 ) -> Option<crate::models::TransactionMetadata> {
+    if !has_nonce_used_seen(tx) {
+        return None;
+    }
     let mut metadata = tx.metadata.clone()?;
-    metadata.nonce_used_seen_at_block.take()?;
+    metadata.nonce_used_seen_at_block = None;
+    metadata.nonce_used_seen_at = None;
     Some(metadata)
 }
 
@@ -241,7 +254,21 @@ where
             }
         };
 
-        let receipt_result = self.provider().get_transaction_receipt(tx_hash).await?;
+        let receipt_result = match self.provider().get_transaction_receipt(tx_hash).await {
+            Ok(receipt) => receipt,
+            // A Sent check must not depend on the RPC: an error leaves it Sent.
+            Err(e) if tx.status == TransactionStatus::Sent => {
+                warn!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    tx_hash = %tx_hash,
+                    error = %e,
+                    "receipt lookup failed for Sent transaction; keeping Sent"
+                );
+                return Ok(TransactionStatus::Sent);
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         if let Some(receipt) = receipt_result {
             if !receipt.inner.status() {
@@ -893,17 +920,39 @@ where
         let Some(tx_nonce) = evm_data.nonce else {
             return Ok(None);
         };
-        let on_chain_nonce = self
+        // A failed nonce or block read is inconclusive: let the normal flow read receipts.
+        let on_chain_nonce = match self
             .provider()
             .get_transaction_count(&self.relayer().address)
-            .await?;
+            .await
+        {
+            Ok(nonce) => nonce,
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce recovery: nonce read failed, using normal status flow"
+                );
+                return Ok(None);
+            }
+        };
         if on_chain_nonce <= tx_nonce {
             // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
             self.clear_nonce_used_seen(tx).await?;
             return Ok(None);
         }
         // Keep this read after the nonce and before every receipt lookup.
-        let block_number = self.provider().get_block_number().await?;
+        let block_number = match self.provider().get_block_number().await {
+            Ok(block) => block,
+            Err(e) => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "nonce recovery: block read failed, using normal status flow"
+                );
+                return Ok(None);
+            }
+        };
         let mut had_rpc_errors = false;
 
         // A current receipt returns to the normal status flow.
@@ -947,8 +996,14 @@ where
         }
 
         let mut metadata = tx.metadata.clone().unwrap_or_default();
-        let Some(seen_at_block) = metadata.nonce_used_seen_at_block else {
+        let seen_at = metadata
+            .nonce_used_seen_at
+            .as_deref()
+            .and_then(|at| DateTime::parse_from_rfc3339(at).ok());
+        let (Some(seen_at_block), Some(seen_at)) = (metadata.nonce_used_seen_at_block, seen_at)
+        else {
             metadata.nonce_used_seen_at_block = Some(block_number);
+            metadata.nonce_used_seen_at = Some(Utc::now().to_rfc3339());
             let updated_tx = self
                 .transaction_repository()
                 .partial_update(
@@ -971,20 +1026,19 @@ where
                     evm_data.chain_id
                 ))
             })?;
-        // Read the config directly: EvmNetwork conversion requires a block time.
-        let crate::models::NetworkConfigData::Evm(config) = network_model.config else {
-            return Err(TransactionError::UnexpectedError(
-                "Expected EVM network config".to_string(),
-            ));
-        };
-        let required_confirmations = config.required_confirmations.ok_or_else(|| {
-            TransactionError::UnexpectedError(
-                "EVM network has no required_confirmations".to_string(),
-            )
+        let network = EvmNetwork::try_from(network_model).map_err(|e| {
+            TransactionError::UnexpectedError(format!(
+                "Error converting network model to EvmNetwork: {e}"
+            ))
         })?;
         let span =
-            nonce_used_failure_span(required_confirmations, config.common.average_blocktime_ms);
-        if block_number.saturating_sub(seen_at_block) < span {
+            nonce_used_failure_span(network.required_confirmations, network.average_blocktime_ms);
+        // Both the block span and the wall-clock minimum must pass: blocks bound
+        // reorgs and confirmations, time bounds provider lag on fast chains.
+        let waited = Utc::now().signed_duration_since(seen_at);
+        if block_number.saturating_sub(seen_at_block) < span
+            || waited < get_evm_nonce_used_failure_min_age()
+        {
             return Ok(Some(tx.clone()));
         }
 
@@ -1180,10 +1234,7 @@ where
             .as_ref()
             .and_then(|ctx| ctx.job_metadata.as_ref())
             .is_some_and(|metadata| metadata.contains_key(TX_NONCE_RECONCILE_TRIGGER));
-        let nonce_used_seen = tx
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| metadata.nonce_used_seen_at_block.is_some());
+        let nonce_used_seen = has_nonce_used_seen(&tx);
         // Continue the observation window on ordinary status jobs too.
         if has_recovery_hint || nonce_used_seen {
             if let Some(recovered_tx) = self.reconcile_tx_nonce_state(&tx).await? {
@@ -1567,12 +1618,19 @@ where
             return Ok(false);
         }
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-        if !tx.hashes.is_empty()
-            && (tx.status == TransactionStatus::Sent
-                || !tx
-                    .hashes
-                    .iter()
-                    .any(|hash| Some(hash) == evm_data.hash.as_ref()))
+        // Nothing to recover when the only saved hash is the current one.
+        if !tx
+            .hashes
+            .iter()
+            .any(|hash| Some(hash) != evm_data.hash.as_ref())
+        {
+            return Ok(false);
+        }
+        if tx.status == TransactionStatus::Sent
+            || !tx
+                .hashes
+                .iter()
+                .any(|hash| Some(hash) == evm_data.hash.as_ref())
         {
             return Ok(true);
         }
@@ -1605,7 +1663,7 @@ where
         tx: &TransactionRepoModel,
         evm_data: &crate::models::EvmTransactionData,
     ) -> Result<HistoricalHashRecovery, TransactionError> {
-        warn!(
+        debug!(
             tx_id = %tx.id,
             relayer_id = %tx.relayer_id,
             current_hash = ?evm_data.hash,
@@ -5272,6 +5330,7 @@ mod tests {
 
             tx.metadata = Some(crate::models::TransactionMetadata {
                 nonce_used_seen_at_block: Some(76),
+                nonce_used_seen_at: Some((Utc::now() - Duration::hours(2)).to_rfc3339()),
                 ..Default::default()
             });
             mocks
@@ -5519,6 +5578,7 @@ mod tests {
 
             tx.metadata = Some(crate::models::TransactionMetadata {
                 nonce_used_seen_at_block: Some(76),
+                nonce_used_seen_at: Some((Utc::now() - Duration::hours(2)).to_rfc3339()),
                 ..Default::default()
             });
             mocks
@@ -6092,14 +6152,17 @@ mod tests {
         /// lags, so it reports the nonce as not consumed while send says "nonce too
         /// low"), every live status job resubmits and every resubmit adds one hinted
         /// status job. The pool doubles every cycle.
+        ///
+        /// KNOWN DEFECT, older than this change: the doubling is not intended. This
+        /// test pins today's behaviour so a change to it is noticed; when the fan-out
+        /// is fixed, replace the expected sizes with a bounded pool.
         #[tokio::test]
         async fn c2_status_job_fanout_when_reconcile_defers() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
             let (evm, state, c) = lagging_pool(tx, TX_NONCE);
 
             let sizes = simulate(&evm, &state, &c, 5).await;
-            println!("C2 defer: live status jobs per cycle = {sizes:?}");
-            assert_eq!(sizes, vec![2, 4, 8, 16, 32]);
+            assert_eq!(sizes, vec![2, 4, 8, 16, 32], "known fan-out defect");
             assert_eq!(c.failed_writes.load(Ordering::SeqCst), 0);
             let after = state.lock().unwrap().clone();
             assert_eq!(after.hashes.len(), 1, "attempt count never grows");
@@ -6157,6 +6220,7 @@ mod tests {
             let mut tx = stuck_tx(&["0xold", "0xcur"], Duration::seconds(30));
             tx.metadata = Some(crate::models::TransactionMetadata {
                 nonce_used_seen_at_block: Some(1),
+                nonce_used_seen_at: Some((Utc::now() - Duration::hours(2)).to_rfc3339()),
                 ..Default::default()
             });
             mocks
@@ -6256,14 +6320,13 @@ mod tests {
         fn span_covers_confirmation_depth_floor_and_one_minute() {
             use super::super::nonce_used_failure_span;
             for (confirmations, blocktime, expected) in [
-                (12, Some(12_000), 24),
-                (1, Some(12_000), 12),
-                (1, Some(260), 231),
-                (1, Some(2_000), 30),
-                (1, None, 12),
-                (20, None, 40),
-                (1, Some(0), 12),
-                (u64::MAX, Some(1), u64::MAX),
+                (12, 12_000, 24),
+                (1, 12_000, 12),
+                (1, 260, 231),
+                (1, 2_000, 30),
+                (20, 0, 40),
+                (1, 0, 12),
+                (u64::MAX, 1, u64::MAX),
             ] {
                 assert_eq!(nonce_used_failure_span(confirmations, blocktime), expected);
             }
@@ -6349,7 +6412,7 @@ mod tests {
             let mut mocks = default_test_mocks_with_network();
             let block = Arc::new(AtomicU64::new(100));
             reads(&mut mocks, block.clone(), Arc::new(AtomicBool::new(false)));
-            repository(&mut mocks, &tx);
+            let state = repository(&mut mocks, &tx);
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -6360,13 +6423,29 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
-            let first = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            let mut first = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
             assert_eq!(first.status, TransactionStatus::Submitted);
             assert_eq!(
                 first.metadata.as_ref().unwrap().nonce_used_seen_at_block,
                 Some(100)
             );
+            assert!(first
+                .metadata
+                .as_ref()
+                .unwrap()
+                .nonce_used_seen_at
+                .is_some());
             assert_eq!(first.metadata.as_ref().unwrap().total_failures, 7);
+            // Pass the wall-clock minimum so only the block span decides below.
+            let long_ago = Some((Utc::now() - Duration::hours(2)).to_rfc3339());
+            first.metadata.as_mut().unwrap().nonce_used_seen_at = long_ago.clone();
+            state
+                .lock()
+                .unwrap()
+                .metadata
+                .as_mut()
+                .unwrap()
+                .nonce_used_seen_at = long_ago;
             block.store(123, Ordering::SeqCst);
             let before_span = evm.handle_status_impl(first, None).await.unwrap();
             assert_eq!(before_span.status, TransactionStatus::Submitted);
@@ -6432,6 +6511,8 @@ mod tests {
         async fn current_lookup_error_after_span_never_fails() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(1);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks();
             mocks
                 .provider
@@ -6568,9 +6649,11 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn missing_blocktime_uses_confirmation_span() {
+        async fn missing_blocktime_is_an_error_not_a_verdict() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks();
             mocks
                 .network_repo
@@ -6584,23 +6667,165 @@ mod tests {
                 });
             reads(
                 &mut mocks,
-                Arc::new(AtomicU64::new(124)),
+                Arc::new(AtomicU64::new(10_000)),
                 Arc::new(AtomicBool::new(false)),
             );
-            repository(&mut mocks, &tx);
+            mocks.tx_repo.expect_partial_update().times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.is_err());
+        }
+
+        /// #991 review: the block span alone is about 60 s on Base; #817 saw a
+        /// 45-minute receipt lag. Failed also needs the wall-clock minimum.
+        #[tokio::test]
+        async fn block_span_without_wall_clock_minimum_keeps_waiting() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at = Some(
+                (Utc::now() - crate::constants::get_evm_nonce_used_failure_min_age()
+                    + Duration::minutes(1))
+                .to_rfc3339(),
+            );
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(10_000)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            mocks.tx_repo.expect_partial_update().times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        #[tokio::test]
+        async fn wall_clock_minimum_without_block_span_keeps_waiting() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::days(1)).to_rfc3339());
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(123)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            mocks.tx_repo.expect_partial_update().times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            assert_eq!(result.status, TransactionStatus::Submitted);
+        }
+
+        /// A sighting saved without its time restarts the wait instead of failing.
+        #[tokio::test]
+        async fn sighting_without_time_restarts_wait() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(1);
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(10_000)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            assert_eq!(result.status, TransactionStatus::Submitted);
+            assert_eq!(seen_at(&state), Some(10_000));
+            assert!(state
+                .lock()
+                .unwrap()
+                .metadata
+                .as_ref()
+                .unwrap()
+                .nonce_used_seen_at
+                .is_some());
+        }
+
+        /// #991 review: a failed nonce or block read must not stop the receipt path.
+        #[tokio::test]
+        async fn nonce_read_error_falls_through_to_normal_flow() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
+            let mut mocks = default_test_mocks();
             mocks
-                .job_producer
-                .expect_produce_relayer_health_check_job()
-                .returning(|_, _| Box::pin(async { Ok(()) }));
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| {
+                    Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                });
+            mocks.provider.expect_get_block_number().times(0);
+            mocks.tx_repo.expect_partial_update().times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn block_read_error_falls_through_to_normal_flow() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(6) }));
+            mocks.provider.expect_get_block_number().returning(|| {
+                Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+            });
+            mocks.provider.expect_get_transaction_receipt().times(0);
+            mocks.tx_repo.expect_partial_update().times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+        }
+
+        /// #991 review: a Sent check must not count an RPC outage as a failure.
+        #[tokio::test]
+        async fn sent_receipt_lookup_error_keeps_sent() {
+            let mut tx = transaction();
+            tx.status = TransactionStatus::Sent;
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| {
+                    Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                });
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert_eq!(
-                evm.reconcile_tx_nonce_state(&tx)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .status,
-                TransactionStatus::Failed
+                evm.check_transaction_status(&tx).await.unwrap(),
+                TransactionStatus::Sent
             );
+        }
+
+        #[tokio::test]
+        async fn submitted_receipt_lookup_error_still_errors() {
+            let tx = transaction();
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| {
+                    Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
+                });
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.check_transaction_status(&tx).await.is_err());
+        }
+
+        /// #991 review: no hash recovery (and no WARN log) when the only saved
+        /// hash is the current one.
+        #[test]
+        fn no_hash_recovery_when_only_current_hash_is_saved() {
+            let mut tx = transaction();
+            tx.status = TransactionStatus::Sent;
+            let evm =
+                make_test_evm_relayer_transaction(create_test_relayer(), default_test_mocks());
+            assert!(!evm.should_try_hash_recovery(&tx).unwrap());
+            tx.hashes = vec!["0xoriginal".to_string(), "0xcurrent".to_string()];
+            assert!(evm.should_try_hash_recovery(&tx).unwrap());
         }
 
         /// #991 review: a recovered receipt ends the wait, so one later empty
@@ -6610,6 +6835,8 @@ mod tests {
             let mut tx = transaction();
             tx.hashes = vec!["0xoriginal".to_string(), "0xcurrent".to_string()];
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks_with_network();
             let block = Arc::new(AtomicU64::new(110));
             let original_visible = Arc::new(AtomicBool::new(true));
@@ -6661,6 +6888,8 @@ mod tests {
         async fn current_receipt_clears_seen_block() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks_with_network();
             reads(
                 &mut mocks,
@@ -6687,6 +6916,8 @@ mod tests {
         async fn unused_nonce_clears_seen_block() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks();
             mocks
                 .provider

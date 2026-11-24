@@ -1360,6 +1360,7 @@ mod tests {
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1421,6 +1422,7 @@ mod tests {
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1510,6 +1512,7 @@ mod tests {
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1568,6 +1571,7 @@ mod tests {
                         try_again_later_retries: 4,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1625,6 +1629,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1640,6 +1645,7 @@ mod tests {
                 try_again_later_retries: 0,
                 nonce_too_high_retries: 0,
                 nonce_used_seen_at_block: None,
+                nonce_used_seen_at: None,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -1754,6 +1760,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1824,6 +1831,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1899,6 +1907,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1958,6 +1967,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1973,6 +1983,7 @@ mod tests {
                 try_again_later_retries: 0,
                 nonce_too_high_retries: 0,
                 nonce_used_seen_at_block: None,
+                nonce_used_seen_at: None,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -2019,6 +2030,7 @@ mod tests {
                         try_again_later_retries: 0,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -2090,6 +2102,7 @@ mod tests {
                         try_again_later_retries: 1,
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
+                        nonce_used_seen_at: None,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
