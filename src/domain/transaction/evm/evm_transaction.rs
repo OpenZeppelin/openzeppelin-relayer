@@ -319,7 +319,11 @@ where
 
         let updated_tx = match self.record_send(&tx, accepted).await {
             Ok(tx) => tx,
-            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+            Err(e) if e.is_concurrent_update_conflict() => {
+                // The bytes went out; the next nonce still needs its link.
+                self.enqueue_next_nonce_submit(&tx).await;
+                return Err(e);
+            }
             Err(e) => {
                 error!(
                     tx_id = %tx.id,
@@ -1637,7 +1641,11 @@ where
 
         let updated_tx = match self.record_send(&tx, accepted).await {
             Ok(tx) => tx,
-            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+            Err(e) if e.is_concurrent_update_conflict() => {
+                // The bytes went out; the next nonce still needs its link.
+                self.enqueue_next_nonce_submit(&tx).await;
+                return Err(e);
+            }
             Err(e) => {
                 error!(
                     error = %e,

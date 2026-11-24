@@ -67,6 +67,7 @@ struct Events {
 struct Harness {
     repo: Arc<InMemoryTransactionRepository>,
     events: Arc<Mutex<Events>>,
+    counter: Arc<InMemoryTransactionCounter>,
     worker: Worker,
 }
 
@@ -116,6 +117,7 @@ impl Harness {
     ) -> Self {
         let repo = Arc::new(InMemoryTransactionRepository::new());
         repo.create(initial).await.unwrap();
+        let counter = Arc::new(InMemoryTransactionCounter::new());
         let events = Arc::new(Mutex::new(Events::default()));
         let mut mock_repo = MockTransactionRepository::new();
         let r = repo.clone();
@@ -162,6 +164,10 @@ impl Harness {
         mock_repo
             .expect_get_by_id_on_primary()
             .returning(move |id| block_on(r.get_by_id_on_primary(id)));
+        let r = repo.clone();
+        mock_repo
+            .expect_find_by_nonce()
+            .returning(move |relayer, nonce| block_on(r.find_by_nonce(relayer, nonce)));
         let mut provider = MockEvmProviderTrait::new();
         let e = events.clone();
         provider.expect_get_balance().returning(move |_| {
@@ -386,7 +392,7 @@ impl Harness {
             Arc::new(MockRelayerRepository::new()),
             Arc::new(network),
             Arc::new(mock_repo),
-            Arc::new(InMemoryTransactionCounter::new()),
+            counter.clone(),
             Arc::new(jobs),
             calc,
             signer,
@@ -395,6 +401,7 @@ impl Harness {
         Self {
             repo,
             events,
+            counter,
             worker,
         }
     }
@@ -1692,4 +1699,58 @@ async fn signed_gap_filler_is_sent_as_stored() {
     h.worker.submit_transaction(h.stored().await).await.unwrap();
     assert_eq!(h.events.lock().unwrap().sent, [raw]);
     assert!(h.events.lock().unwrap().signs.is_empty());
+}
+
+/// An unsent successor at nonce 8, old enough for the Arbitrum chain link.
+async fn add_arbitrum_successor(h: &Harness) {
+    use crate::repositories::TransactionCounterTrait;
+    let mut next = tx(TransactionStatus::Sent);
+    next.id = "next".into();
+    let mut data = next.network_data.get_evm_transaction_data().unwrap();
+    data.nonce = Some(8);
+    data.hash = Some("N".into());
+    next.network_data = NetworkTransactionData::Evm(data);
+    next.hashes = vec!["N".into()];
+    h.repo.create(next).await.unwrap();
+    h.counter
+        .set("relayer", "0x0000000000000000000000000000000000000001", 9)
+        .await
+        .unwrap();
+}
+
+/// Arbitrum: when the write after an accepted send loses to a concurrent write,
+/// the successor still gets its delivery job, on the submit and resubmit paths.
+#[tokio::test]
+async fn arbitrum_post_send_conflict_still_links_successor() {
+    for resubmit in [false, true] {
+        let mut record = tx(if resubmit {
+            TransactionStatus::Submitted
+        } else {
+            TransactionStatus::Sent
+        });
+        if resubmit {
+            // Accepted long ago: the resubmit reprices.
+            record.sent_at = Some((Utc::now() - Duration::minutes(59)).to_rfc3339());
+        }
+        let h = Harness::new(record, true, None).await;
+        add_arbitrum_successor(&h).await;
+        h.events.lock().unwrap().fault = Some(("post", false));
+        let stored = h.stored().await;
+        let result = if resubmit {
+            h.worker.resubmit_transaction(stored).await
+        } else {
+            h.worker.submit_transaction(stored).await
+        };
+        assert!(
+            result.unwrap_err().is_concurrent_update_conflict(),
+            "resubmit={resubmit}"
+        );
+        let events = h.events.lock().unwrap();
+        assert_eq!(events.sent.len(), 1, "resubmit={resubmit}");
+        assert!(
+            matches!(events.jobs.as_slice(), [TransactionCommand::Submit]),
+            "resubmit={resubmit}: {:?}",
+            events.jobs
+        );
+    }
 }
