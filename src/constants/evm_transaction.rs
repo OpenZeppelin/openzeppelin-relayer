@@ -83,6 +83,10 @@ pub const EVM_MIN_AGE_FOR_HASH_RECOVERY_MINUTES: i64 = 2;
 /// provider receipt lag; #817 reported a lag window of about 45 minutes.
 pub const EVM_NONCE_USED_FAILURE_MIN_AGE_MINUTES: i64 = 60;
 
+/// Time after which a used nonce without a receipt is marked Failed even if
+/// the head has not advanced by the block span (in hours).
+pub const EVM_NONCE_USED_FAILURE_MAX_AGE_HOURS: i64 = 24;
+
 /// Minimum number of hashes required before attempting hash recovery
 pub const EVM_MIN_HASHES_FOR_RECOVERY: usize = 2;
 
@@ -114,6 +118,11 @@ pub fn get_evm_min_age_for_hash_recovery() -> Duration {
 /// Get the minimum time a used nonce must stay without a receipt before Failed
 pub fn get_evm_nonce_used_failure_min_age() -> Duration {
     Duration::minutes(EVM_NONCE_USED_FAILURE_MIN_AGE_MINUTES)
+}
+
+/// Get the time after which a used nonce is marked Failed without the block span
+pub fn get_evm_nonce_used_failure_max_age() -> Duration {
+    Duration::hours(EVM_NONCE_USED_FAILURE_MAX_AGE_HOURS)
 }
 
 /// Error message patterns indicating a transaction was already submitted or its nonce consumed.

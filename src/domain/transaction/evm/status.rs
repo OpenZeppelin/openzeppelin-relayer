@@ -21,10 +21,10 @@ use super::{
     too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
-    get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_min_age,
-    get_evm_pending_recovery_trigger_timeout, get_evm_prepare_timeout, get_evm_resend_timeout,
-    ARBITRUM_TIME_TO_RESUBMIT, DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY,
-    MAX_GAP_SCAN_RANGE,
+    get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_max_age,
+    get_evm_nonce_used_failure_min_age, get_evm_pending_recovery_trigger_timeout,
+    get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
+    DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
 use crate::domain::transaction::common::{
     get_age_of_sent_at, is_final_state, is_pending_transaction,
@@ -256,7 +256,7 @@ where
 
         let receipt_result = match self.provider().get_transaction_receipt(tx_hash).await {
             Ok(receipt) => receipt,
-            // A Sent check must not depend on the RPC: an error leaves it Sent.
+            // An RPC error must not count toward the circuit breaker for Sent.
             Err(e) if tx.status == TransactionStatus::Sent => {
                 warn!(
                     tx_id = %tx.id,
@@ -274,7 +274,21 @@ where
             if !receipt.inner.status() {
                 return Ok(TransactionStatus::Failed);
             }
-            let last_block_number = self.provider().get_block_number().await?;
+            let last_block_number = match self.provider().get_block_number().await {
+                Ok(block) => block,
+                // The receipt proves a Sent transaction mined; confirm it on a later check.
+                Err(e) if tx.status == TransactionStatus::Sent => {
+                    warn!(
+                        tx_id = %tx.id,
+                        relayer_id = %tx.relayer_id,
+                        tx_hash = %tx_hash,
+                        error = %e,
+                        "block read failed after receipt for Sent transaction; marking Mined"
+                    );
+                    return Ok(TransactionStatus::Mined);
+                }
+                Err(e) => return Err(e.into()),
+            };
             let tx_block_number = receipt
                 .block_number
                 .ok_or(TransactionError::UnexpectedError(
@@ -907,7 +921,10 @@ where
     ///
     /// This is the fast-path reconciliation triggered by nonce errors during submission.
     /// Reads the nonce, block number, then receipts. A used nonce without a receipt
-    /// must remain unresolved for the network's block span before it can fail.
+    /// must remain unresolved for the network's block span and a wall-clock minimum
+    /// before it can fail. A failed nonce or block read gives no verdict: with a
+    /// recorded sighting it holds the transaction after checking receipts, otherwise
+    /// it returns to the normal flow.
     ///
     /// Returns `Some(tx)` if recovery handled the transaction (caller should return early),
     /// or `None` to continue with normal status flow.
@@ -920,13 +937,20 @@ where
         let Some(tx_nonce) = evm_data.nonce else {
             return Ok(None);
         };
-        // A failed nonce or block read is inconclusive: let the normal flow read receipts.
+        // A failed nonce or block read is inconclusive. While a sighting is recorded
+        // the nonce is known to be used, so check receipts and hold; resubmitting or
+        // replacing with a NOOP cannot help. Without a sighting, use the normal flow.
+        let holding = has_nonce_used_seen(tx);
         let on_chain_nonce = match self
             .provider()
             .get_transaction_count(&self.relayer().address)
             .await
         {
-            Ok(nonce) => nonce,
+            Ok(nonce) => Some(nonce),
+            Err(e) if holding => {
+                warn!(tx_id = %tx.id, error = %e, "nonce recovery: nonce read failed, holding");
+                None
+            }
             Err(e) => {
                 warn!(
                     tx_id = %tx.id,
@@ -936,22 +960,29 @@ where
                 return Ok(None);
             }
         };
-        if on_chain_nonce <= tx_nonce {
+        if on_chain_nonce.is_some_and(|nonce| nonce <= tx_nonce) {
             // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
             self.clear_nonce_used_seen(tx).await?;
             return Ok(None);
         }
         // Keep this read after the nonce and before every receipt lookup.
-        let block_number = match self.provider().get_block_number().await {
-            Ok(block) => block,
-            Err(e) => {
-                warn!(
-                    tx_id = %tx.id,
-                    error = %e,
-                    "nonce recovery: block read failed, using normal status flow"
-                );
-                return Ok(None);
-            }
+        let block_number = match on_chain_nonce {
+            None => None,
+            Some(_) => match self.provider().get_block_number().await {
+                Ok(block) => Some(block),
+                Err(e) if holding => {
+                    warn!(tx_id = %tx.id, error = %e, "nonce recovery: block read failed, holding");
+                    None
+                }
+                Err(e) => {
+                    warn!(
+                        tx_id = %tx.id,
+                        error = %e,
+                        "nonce recovery: block read failed, using normal status flow"
+                    );
+                    return Ok(None);
+                }
+            },
         };
         let mut had_rpc_errors = false;
 
@@ -991,6 +1022,9 @@ where
             HistoricalHashRecovery::Incomplete => had_rpc_errors = true,
         }
 
+        let (Some(on_chain_nonce), Some(block_number)) = (on_chain_nonce, block_number) else {
+            return Ok(Some(tx.clone()));
+        };
         if had_rpc_errors {
             return Ok(Some(tx.clone()));
         }
@@ -1034,10 +1068,12 @@ where
         let span =
             nonce_used_failure_span(network.required_confirmations, network.average_blocktime_ms);
         // Both the block span and the wall-clock minimum must pass: blocks bound
-        // reorgs and confirmations, time bounds provider lag on fast chains.
+        // reorgs and confirmations, time bounds provider lag on fast chains. The
+        // maximum age ends the wait on a head that stopped advancing.
         let waited = Utc::now().signed_duration_since(seen_at);
-        if block_number.saturating_sub(seen_at_block) < span
-            || waited < get_evm_nonce_used_failure_min_age()
+        let span_passed = block_number.saturating_sub(seen_at_block) >= span;
+        if waited < get_evm_nonce_used_failure_max_age()
+            && (!span_passed || waited < get_evm_nonce_used_failure_min_age())
         {
             return Ok(Some(tx.clone()));
         }
@@ -1751,7 +1787,7 @@ where
         Ok(HistoricalHashRecovery::NotFound)
     }
 
-    /// Clears the "nonce used" block, if set. See `without_nonce_used_seen`.
+    /// Clears the "nonce used" sighting, if set. See `without_nonce_used_seen`.
     async fn clear_nonce_used_seen(
         &self,
         tx: &TransactionRepoModel,
@@ -6703,7 +6739,7 @@ mod tests {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
             tx.metadata.as_mut().unwrap().nonce_used_seen_at =
-                Some((Utc::now() - Duration::days(1)).to_rfc3339());
+                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
             let mut mocks = default_test_mocks_with_network();
             reads(
                 &mut mocks,
@@ -6742,44 +6778,130 @@ mod tests {
                 .is_some());
         }
 
-        /// #991 review: a failed nonce or block read must not stop the receipt path.
+        /// A head that stops advancing ends the wait after the maximum age.
         #[tokio::test]
-        async fn nonce_read_error_falls_through_to_normal_flow() {
+        async fn stalled_head_fails_after_maximum_age() {
             let mut tx = transaction();
             tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
-            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
-                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at = Some(
+                (Utc::now()
+                    - crate::constants::get_evm_nonce_used_failure_max_age()
+                    - Duration::minutes(1))
+                .to_rfc3339(),
+            );
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(100)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            repository(&mut mocks, &tx);
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+            assert_eq!(result.status, TransactionStatus::Failed);
+        }
+
+        fn timeout() -> crate::services::provider::ProviderError {
+            crate::services::provider::ProviderError::Timeout
+        }
+
+        /// #991 review: without a recorded sighting, a failed nonce or block read
+        /// returns to the normal flow, which still reads receipts.
+        #[tokio::test]
+        async fn nonce_read_error_without_sighting_uses_normal_flow() {
+            let tx = transaction();
             let mut mocks = default_test_mocks();
             mocks
                 .provider
                 .expect_get_transaction_count()
-                .returning(|_| {
-                    Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
-                });
+                .returning(|_| Box::pin(async { Err(timeout()) }));
             mocks.provider.expect_get_block_number().times(0);
+            mocks.provider.expect_get_transaction_receipt().times(0);
             mocks.tx_repo.expect_partial_update().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
         }
 
         #[tokio::test]
-        async fn block_read_error_falls_through_to_normal_flow() {
-            let mut tx = transaction();
-            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
-            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
-                Some((Utc::now() - Duration::hours(2)).to_rfc3339());
+        async fn block_read_error_without_sighting_uses_normal_flow() {
+            let tx = transaction();
             let mut mocks = default_test_mocks();
             mocks
                 .provider
                 .expect_get_transaction_count()
                 .returning(|_| Box::pin(async { Ok(6) }));
-            mocks.provider.expect_get_block_number().returning(|| {
-                Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
-            });
+            mocks
+                .provider
+                .expect_get_block_number()
+                .returning(|| Box::pin(async { Err(timeout()) }));
             mocks.provider.expect_get_transaction_receipt().times(0);
             mocks.tx_repo.expect_partial_update().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+        }
+
+        /// During the wait the nonce is known to be used: a failed read still checks
+        /// receipts but gives no verdict and keeps the normal flow (resubmit, NOOP) out.
+        #[tokio::test]
+        async fn read_errors_during_wait_hold_after_checking_receipts() {
+            for nonce_fails in [true, false] {
+                let mut tx = transaction();
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(1);
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                    Some((Utc::now() - Duration::days(2)).to_rfc3339());
+                let mut mocks = default_test_mocks();
+                mocks
+                    .provider
+                    .expect_get_transaction_count()
+                    .returning(move |_| {
+                        Box::pin(async move {
+                            if nonce_fails {
+                                Err(timeout())
+                            } else {
+                                Ok(6)
+                            }
+                        })
+                    });
+                mocks
+                    .provider
+                    .expect_get_block_number()
+                    .times(usize::from(!nonce_fails))
+                    .returning(|| Box::pin(async { Err(timeout()) }));
+                mocks
+                    .provider
+                    .expect_get_transaction_receipt()
+                    .times(1)
+                    .returning(|_| Box::pin(async { Ok(None) }));
+                mocks.tx_repo.expect_partial_update().times(0);
+                let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+                let held = evm.reconcile_tx_nonce_state(&tx).await.unwrap().unwrap();
+                assert_eq!(held.status, TransactionStatus::Submitted);
+            }
+        }
+
+        #[tokio::test]
+        async fn receipt_during_wait_recovers_despite_nonce_read_error() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(1);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::days(2)).to_rfc3339());
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Err(timeout()) }));
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
+            assert_eq!(seen_at(&state), None);
         }
 
         /// #991 review: a Sent check must not count an RPC outage as a failure.
@@ -6798,6 +6920,26 @@ mod tests {
             assert_eq!(
                 evm.check_transaction_status(&tx).await.unwrap(),
                 TransactionStatus::Sent
+            );
+        }
+
+        #[tokio::test]
+        async fn sent_block_read_error_after_receipt_gives_mined() {
+            let mut tx = transaction();
+            tx.status = TransactionStatus::Sent;
+            let mut mocks = default_test_mocks();
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .returning(|| Box::pin(async { Err(timeout()) }));
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            assert_eq!(
+                evm.check_transaction_status(&tx).await.unwrap(),
+                TransactionStatus::Mined
             );
         }
 
