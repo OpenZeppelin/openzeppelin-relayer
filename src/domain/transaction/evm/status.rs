@@ -1434,7 +1434,8 @@ where
                 .transaction_repository()
                 .get_by_id_on_primary(tx.id.clone())
                 .await?;
-            // Only hash recovery above changes the record here, and it writes Mined.
+            // Hash recovery above writes Mined. A newer Mined record is accepted
+            // because handle_mined_state then writes nothing; keep it that way.
             // Any other change means the status was read for older data.
             let own_recovery =
                 status == TransactionStatus::Mined && stored.status == TransactionStatus::Mined;

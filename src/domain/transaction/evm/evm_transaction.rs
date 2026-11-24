@@ -4539,7 +4539,7 @@ mod tests {
                 })
             });
 
-        // Should persist status_reason (nonce recovery path)
+        // The guarded status_reason write loses to another writer
         let test_tx_clone = test_tx.clone();
         mock_transaction
             .expect_partial_update_if_version()
