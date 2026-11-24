@@ -17,11 +17,11 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1  # v2.21.1
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -40,7 +40,7 @@ jobs:
           message: Starting generating sbom for ${{ github.repository }} with tag ${{ inputs.tag }}......
         if: always()
       - name: Run SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         with:
           upload-artifact-retention: 7
           upload-release-assets: false

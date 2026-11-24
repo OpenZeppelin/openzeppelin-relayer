@@ -26,11 +26,11 @@ jobs:
       SLACK_CHANNEL: '#oss-releases'
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1  # v2.21.1
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -119,11 +119,11 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created == 'false' &&  needs.release-please.outputs.pr_created == 'true' }}
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1  # v2.21.1
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -158,7 +158,7 @@ jobs:
           fi
       - name: Commit cargo update
         if: steps.lock-file-commit.outputs.cargo_changed == 'true'
-        uses: iarekylew00t/verified-bot-commit@42a042b0407248f3c0acac00c389e729e3476e86  # v2.3.5
+        uses: iarekylew00t/verified-bot-commit@1ee4374942e5c5f814e9b3121d766cbe45cea360  # v2.3.6
         with:
           message: 'chore: Updating lock file'
           token: ${{ steps.gh-app-token.outputs.token }}
@@ -174,11 +174,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (Audit all outbound calls)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1  # v2.21.1
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
         with:
           egress-policy: audit
       - name: Get github app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510  # v3.3.0
         id: gh-app-token
         with:
           app-id: ${{ vars.GH_APP_ID }}
@@ -214,7 +214,7 @@ jobs:
           fi
       - name: Commit openapi spec file
         if: steps.update-openapi-spec-commit.outputs.openapi_changed == 'true'
-        uses: iarekylew00t/verified-bot-commit@42a042b0407248f3c0acac00c389e729e3476e86  # v2.3.5
+        uses: iarekylew00t/verified-bot-commit@1ee4374942e5c5f814e9b3121d766cbe45cea360  # v2.3.6
         with:
           message: 'chore: Updating openapi spec file and bumping version'
           token: ${{ steps.gh-app-token.outputs.token }}
