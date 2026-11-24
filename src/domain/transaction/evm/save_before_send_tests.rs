@@ -13,7 +13,7 @@ use crate::{
         },
         SignTransactionResponse, SignTransactionResponseEvm,
     },
-    jobs::{MockJobProducerTrait, TransactionCommand},
+    jobs::{MockJobProducerTrait, StatusCheckContext, TransactionCommand},
     models::{
         evm::Speed, EvmTransactionData, EvmTransactionDataSignature, EvmTransactionRequest,
         NetworkTransactionData, NetworkTransactionRequest, NetworkType, RelayerRepoModel,
@@ -60,6 +60,7 @@ struct Events {
     cancel_in_send: bool,
     cap_hit: bool,
     low_balance: bool,
+    receipt_error: bool,
 }
 
 struct Harness {
@@ -184,8 +185,16 @@ impl Harness {
         provider
             .expect_get_transaction_receipt()
             .returning(move |_| {
-                let receipt = e.lock().unwrap().receipt;
-                Box::pin(async move { Ok(receipt.then(|| make_mock_receipt(true, Some(100)))) })
+                let (receipt, fail) = {
+                    let events = e.lock().unwrap();
+                    (events.receipt, events.receipt_error)
+                };
+                Box::pin(async move {
+                    if fail {
+                        return Err(ProviderError::Timeout);
+                    }
+                    Ok(receipt.then(|| make_mock_receipt(true, Some(100))))
+                })
             });
         provider
             .expect_get_block_number()
@@ -1505,4 +1514,55 @@ async fn duplicate_submit_after_acceptance_sends_nothing() {
     assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
     assert_eq!(after.sent_at, accepted.sent_at);
     assert_eq!(after.metadata, accepted.metadata);
+}
+
+fn breaker_context(consecutive: u32, total: u32) -> StatusCheckContext {
+    StatusCheckContext::new(consecutive, total, total, 25, 75, NetworkType::Evm)
+}
+
+#[tokio::test]
+async fn outage_breaker_keeps_never_accepted_payload() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.age_payload(30).await;
+    h.events.lock().unwrap().receipt_error = true;
+    let result = h
+        .worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(25, 25)))
+        .await;
+    assert!(result.is_err());
+    let kept = h.stored().await;
+    let data = kept.network_data.get_evm_transaction_data().unwrap();
+    assert!(!is_noop(&data));
+    assert_eq!(data.raw, Some(vec![0]));
+    assert!(kept.noop_count.is_none());
+    // The outage ends: the next check resends the saved bytes.
+    h.events.lock().unwrap().receipt_error = false;
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(26, 26)))
+        .await
+        .unwrap();
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Submit]
+    ));
+    h.run_job(TransactionCommand::Submit).await;
+    assert!(!is_unsent(&h.stored().await).unwrap());
+}
+
+#[tokio::test]
+async fn total_failure_limit_still_noops_never_accepted_payload() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.events.lock().unwrap().receipt_error = true;
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(25, 75)))
+        .await
+        .unwrap();
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(is_noop(&data));
+    assert!(h.events.lock().unwrap().sent.is_empty());
 }

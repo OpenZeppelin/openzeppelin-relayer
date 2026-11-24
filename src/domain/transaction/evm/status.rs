@@ -1393,7 +1393,22 @@ where
                 .map(|data| is_noop(&data))
                 .unwrap_or(false);
 
-            if ctx.should_force_finalize() && !is_noop_tx {
+            // No node accepted these bytes yet, so a run of failed checks
+            // (an RPC outage) is no reason to cancel them. The total limit
+            // still applies, so the breaker fires in the end.
+            let never_accepted = tx.status == TransactionStatus::Submitted
+                && tx.sent_at.is_none()
+                && !ctx.triggered_by_total();
+            if never_accepted && ctx.should_force_finalize() {
+                warn!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    relayer_id = %tx.relayer_id,
+                    "circuit breaker skipped: no node accepted the transaction yet"
+                );
+            }
+
+            if ctx.should_force_finalize() && !is_noop_tx && !never_accepted {
                 warn!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,
