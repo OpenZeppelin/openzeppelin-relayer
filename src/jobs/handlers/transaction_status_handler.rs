@@ -570,6 +570,8 @@ mod tests {
                     insufficient_fee_retries: 2,
                     try_again_later_retries: 1,
                     nonce_too_high_retries: 0,
+                    nonce_used_seen_at_block: None,
+                    nonce_used_seen_at: None,
                 }),
                 should_retry_on_error: true,
             };
@@ -619,6 +621,8 @@ mod tests {
                     insufficient_fee_retries: 1,
                     try_again_later_retries: 0,
                     nonce_too_high_retries: 0,
+                    nonce_used_seen_at_block: None,
+                    nonce_used_seen_at: None,
                 }),
                 should_retry_on_error: true,
             };

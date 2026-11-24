@@ -2435,6 +2435,8 @@ mod tests {
             insufficient_fee_retries: 0,
             try_again_later_retries: 0,
             nonce_too_high_retries: 0,
+            nonce_used_seen_at_block: None,
+            nonce_used_seen_at: None,
         });
         repo.create(tx).await.unwrap();
 

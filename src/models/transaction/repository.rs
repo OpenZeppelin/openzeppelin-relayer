@@ -75,6 +75,12 @@ pub struct TransactionMetadata {
     /// Number of submission retries triggered by EVM "nonce too high" errors
     #[serde(default)]
     pub nonce_too_high_retries: u32,
+    /// First block observed with a used EVM nonce and no receipt.
+    #[serde(default)]
+    pub nonce_used_seen_at_block: Option<u64>,
+    /// When the used EVM nonce was first observed (RFC 3339).
+    #[serde(default)]
+    pub nonce_used_seen_at: Option<String>,
 }
 
 impl TransactionMetadata {
@@ -1267,6 +1273,7 @@ mod tests {
     fn test_transaction_metadata_nonce_too_high_retries_default() {
         let metadata = TransactionMetadata::default();
         assert_eq!(metadata.nonce_too_high_retries, 0);
+        assert_eq!(metadata.nonce_used_seen_at_block, None);
         assert_eq!(metadata.consecutive_failures, 0);
         assert_eq!(metadata.total_failures, 0);
         assert_eq!(metadata.insufficient_fee_retries, 0);
@@ -1290,6 +1297,7 @@ mod tests {
         assert_eq!(metadata.try_again_later_retries, 4);
         // Missing field should default to 0
         assert_eq!(metadata.nonce_too_high_retries, 0);
+        assert_eq!(metadata.nonce_used_seen_at_block, None);
     }
 
     #[test]
@@ -1300,6 +1308,8 @@ mod tests {
             insufficient_fee_retries: 1,
             try_again_later_retries: 3,
             nonce_too_high_retries: 0,
+            nonce_used_seen_at_block: None,
+            nonce_used_seen_at: None,
         };
         assert!(metadata.with_nonce_retries_reset().is_none());
     }
@@ -1312,6 +1322,8 @@ mod tests {
             insufficient_fee_retries: 1,
             try_again_later_retries: 3,
             nonce_too_high_retries: 3,
+            nonce_used_seen_at_block: None,
+            nonce_used_seen_at: None,
         };
         let result = metadata.with_nonce_retries_reset();
         assert!(result.is_some());
