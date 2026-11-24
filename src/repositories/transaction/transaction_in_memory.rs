@@ -17,9 +17,24 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, MutexGuard};
 
+#[cfg(test)]
+thread_local! {
+    static DISCARD_PATCH_REPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the next patch on this thread apply twice with one token, as the
+/// Redis script retry does after a lost reply.
+#[cfg(test)]
+pub(crate) fn discard_next_patch_reply() {
+    DISCARD_PATCH_REPLY.with(|flag| flag.set(true));
+}
+
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
+    /// Token of the latest patch per transaction (the Redis script stores it on the record).
+    /// Boxed to keep `TransactionRepositoryStorage` variants close in size.
+    write_tokens: Box<Mutex<HashMap<String, String>>>,
     /// Idempotency records with their expiry time, keyed by `relayer_id:key`.
     idempotency: Mutex<HashMap<String, (IdempotencyRecord, Instant)>>,
 }
@@ -38,8 +53,15 @@ impl Clone for InMemoryTransactionRepository {
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| HashMap::new());
 
+        let write_tokens = self
+            .write_tokens
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
         Self {
             store: Mutex::new(data),
+            write_tokens: Box::new(Mutex::new(write_tokens)),
             idempotency: Mutex::new(idempotency),
         }
     }
@@ -52,15 +74,39 @@ impl InMemoryTransactionRepository {
         update: TransactionUpdateRequest,
         expected_version: Option<u64>,
     ) -> Result<TransactionRepoModel, RepositoryError> {
+        let token = uuid::Uuid::new_v4().to_string();
+        #[cfg(test)]
+        if DISCARD_PATCH_REPLY.with(|flag| flag.replace(false)) {
+            let _ = self
+                .apply_patch_once(tx_id.clone(), update.clone(), expected_version, &token)
+                .await;
+        }
+        self.apply_patch_once(tx_id, update, expected_version, &token)
+            .await
+    }
+
+    async fn apply_patch_once(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+        expected_version: Option<u64>,
+        token: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
         let mut store = Self::acquire_lock(&self.store).await?;
+        let mut write_tokens = Self::acquire_lock(&self.write_tokens).await?;
 
         if let Some(tx) = store.get_mut(&tx_id) {
             if expected_version.is_some_and(|v| v != tx.version) {
+                // A retry after a lost reply finds its own write as the latest one.
+                if write_tokens.get(&tx_id).is_some_and(|t| t == token) {
+                    return Ok(tx.clone());
+                }
                 return Err(RepositoryError::ConcurrentUpdateConflict(tx_id));
             }
             if crate::domain::is_final_state(&tx.status) && update.status.is_some() {
                 return Ok(tx.clone());
             }
+            write_tokens.insert(tx_id.clone(), token.to_string());
             tx.version += 1;
             // Apply partial updates using the model's business logic
             tx.apply_partial_update(update);
@@ -75,6 +121,7 @@ impl InMemoryTransactionRepository {
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
+            write_tokens: Box::new(Mutex::new(HashMap::new())),
             idempotency: Mutex::new(HashMap::new()),
         }
     }

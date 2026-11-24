@@ -614,7 +614,8 @@ where
         {
             Ok(updated) => updated,
             Err(e @ crate::models::RepositoryError::ConcurrentUpdateConflict(_)) => {
-                // A lost reply can report a conflict for a write that applied.
+                // A write that applied can still report a conflict if its reply
+                // was lost and another write followed before the retry.
                 // Heal from the stored record so a final write still frees its nonce.
                 // Best effort: the caller must still see the conflict.
                 match self

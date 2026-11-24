@@ -125,6 +125,8 @@ impl RedisTransactionRepository {
             local tx = cjson.decode(current)
             local patch = cjson.decode(ARGV[3])
             if ARGV[6] ~= '' and (tx["version"] or 0) ~= tonumber(ARGV[6]) then
+                -- A retry after a lost reply finds its own write as the latest one.
+                if tx["write_token"] == ARGV[7] then return {current, current} end
                 return {current}
             end
 
@@ -172,6 +174,7 @@ impl RedisTransactionRepository {
             end
 
             tx["version"] = (tx["version"] or 0) + 1
+            tx["write_token"] = ARGV[7]
             local updated = cjson.encode(tx)
             local new_status = tx["status"]
 
@@ -244,6 +247,8 @@ impl RedisTransactionRepository {
         );
 
         let expected_arg = expected_version.map(|v| v.to_string()).unwrap_or_default();
+        // Stored with the write; the script retry uses it to recognise its own write.
+        let write_token = uuid::Uuid::new_v4().to_string();
         let result: Option<Vec<String>> = self
             .run_script_with_retry_vec(
                 &patch_script,
@@ -255,6 +260,7 @@ impl RedisTransactionRepository {
                     delete_at_arg,
                     &index_metadata_json,
                     &expected_arg,
+                    &write_token,
                 ],
                 "partial_update",
             )
@@ -5752,7 +5758,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "Requires active Redis instance"]
-    async fn lost_presign_reply_keeps_claim_visible_to_heal() {
+    async fn lost_presign_reply_is_applied_and_claim_visible() {
         let repo = setup_test_repo().await;
         let mut tx = create_test_transaction("version-lost-reply");
         let mut data = tx.network_data.get_evm_transaction_data().unwrap();
@@ -5771,10 +5777,8 @@ mod tests {
                 },
             )
             .await;
-        assert!(matches!(
-            result,
-            Err(RepositoryError::ConcurrentUpdateConflict(_))
-        ));
+        // The retry recognises its own applied write.
+        assert_eq!(result.unwrap().version, 1);
         let stored = repo
             .find_by_nonce_on_primary(&tx.relayer_id, 7)
             .await
@@ -5789,5 +5793,41 @@ mod tests {
                 .unwrap(),
             vec![(7, Some(TransactionStatus::Pending))]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn lost_final_reply_returns_applied_write() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-lost-final"))
+            .await
+            .unwrap();
+        DISCARD_PATCH_REPLY.with(|flag| flag.set(true));
+        let updated = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TransactionStatus::Failed);
+        assert_eq!(updated.version, 1);
+
+        // Another writer's write clears the token: the same stale version conflicts.
+        repo.partial_update(tx.id.clone(), TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        let result = repo
+            .partial_update_if_version(tx.id, 1, TransactionUpdateRequest::default())
+            .await;
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConcurrentUpdateConflict(_))
+        ));
     }
 }

@@ -182,6 +182,7 @@ struct Jobs {
     notifications: Arc<AtomicUsize>,
     submit: Arc<AtomicUsize>,
     request: Arc<AtomicUsize>,
+    status_checks: Arc<AtomicUsize>,
     health_hints: Arc<Mutex<Vec<Option<String>>>>,
 }
 
@@ -197,6 +198,12 @@ fn job_producer(jobs: &Jobs) -> MockJobProducerTrait {
     j.expect_produce_transaction_request_job()
         .returning(move |_, _| {
             request.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        });
+    let status_checks = jobs.status_checks.clone();
+    j.expect_produce_check_transaction_status_job()
+        .returning(move |_, _| {
+            status_checks.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         });
     let hints = jobs.health_hints.clone();
@@ -286,6 +293,9 @@ fn evm<TCR: TransactionCounterTrait + Send + Sync + 'static>(
     let mut network = MockNetworkRepository::new();
     network
         .expect_get_by_chain_id()
+        .returning(|_, _| Ok(Some(create_test_network_model())));
+    network
+        .expect_get_by_name()
         .returning(|_, _| Ok(Some(create_test_network_model())));
     EvmRelayerTransaction::new(
         relayer(),
@@ -1299,4 +1309,65 @@ async fn replaced_gap_fill_record_failure_still_heals() {
 
     assert_eq!(r.status, TransactionStatus::Failed);
     assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("5".into())]);
+}
+
+#[tokio::test]
+async fn lost_reply_on_final_write_still_notifies() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let tx = repo
+        .create(pending_tx(Some(3), Duration::seconds(30)))
+        .await
+        .unwrap();
+    let mut p = block_ok();
+    p.expect_get_balance()
+        .returning(|_| Box::pin(async { Ok(U256::from(0u64)) }));
+    let e = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        p,
+        MockSigner::new(),
+        &jobs,
+    );
+
+    crate::repositories::discard_next_patch_reply();
+    let r = e.prepare_transaction(tx).await.unwrap();
+
+    assert_eq!(r.status, TransactionStatus::Failed);
+    assert_eq!(stored(&repo).await.0.version, 1, "applied once");
+    assert_eq!(jobs.notifications.load(Ordering::SeqCst), 1);
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("3".into())]);
+}
+
+#[tokio::test]
+async fn lost_reply_on_nonce_too_low_write_still_queues_recovery() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let mut tx = pending_tx(Some(7), Duration::seconds(30));
+    tx.status = TransactionStatus::Sent;
+    if let NetworkTransactionData::Evm(ref mut d) = tx.network_data {
+        d.raw = Some(vec![1, 2, 3]);
+    }
+    let tx = repo.create(tx).await.unwrap();
+    let mut p = block_ok();
+    p.expect_send_raw_transaction().returning(|_| {
+        Box::pin(async {
+            Err(crate::services::provider::ProviderError::Other(
+                "nonce too low".to_string(),
+            ))
+        })
+    });
+    let e = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        p,
+        MockSigner::new(),
+        &jobs,
+    );
+
+    crate::repositories::discard_next_patch_reply();
+    e.submit_transaction(tx).await.unwrap();
+
+    assert_eq!(stored(&repo).await.0.version, 1, "applied once");
+    assert_eq!(jobs.status_checks.load(Ordering::SeqCst), 1);
 }
