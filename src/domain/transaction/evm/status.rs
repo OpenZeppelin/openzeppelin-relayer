@@ -1041,20 +1041,32 @@ where
             }
         };
         if on_chain_nonce.is_some_and(|nonce| nonce <= tx_nonce) {
-            // While holding, an unused nonce is trusted only from a node at or past the
-            // sighting's head (a reorg); an older node lags, so hold instead of letting
-            // the normal flow resubmit and add another hinted job.
-            let seen_at_block = tx
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.nonce_used_seen_at_block);
-            let trusted = match seen_at_block {
+            // While holding, trust an unused nonce only when the head is at or past the
+            // sighting's block (a reorg) and a second nonce read agrees; otherwise a node
+            // lags, so hold instead of letting the normal flow resubmit and add another
+            // hinted job. Heuristic: a load balancer may still answer from different
+            // nodes. After the maximum age, trust it so the hold cannot last forever.
+            let metadata = tx.metadata.as_ref();
+            let held_past_max_age = metadata
+                .and_then(|metadata| metadata.nonce_used_seen_at.as_deref())
+                .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+                .is_some_and(|at| {
+                    Utc::now().signed_duration_since(at) >= get_evm_nonce_used_failure_max_age()
+                });
+            let trusted = match metadata.and_then(|metadata| metadata.nonce_used_seen_at_block) {
                 None => true,
-                Some(seen) => self
-                    .provider()
-                    .get_block_number()
-                    .await
-                    .is_ok_and(|head| head >= seen),
+                Some(_) if held_past_max_age => true,
+                Some(seen) => {
+                    self.provider()
+                        .get_block_number()
+                        .await
+                        .is_ok_and(|head| head >= seen)
+                        && self
+                            .provider()
+                            .get_transaction_count(&self.relayer().address)
+                            .await
+                            .is_ok_and(|nonce| nonce <= tx_nonce)
+                }
             };
             if trusted {
                 // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
@@ -1063,7 +1075,7 @@ where
             }
             warn!(
                 tx_id = %tx.id,
-                "nonce recovery: unused nonce from a lagging node, holding"
+                "nonce recovery: unused nonce not confirmed at the sighting's head, holding"
             );
             on_chain_nonce = None;
         }
@@ -1866,7 +1878,9 @@ where
                     );
 
                     // The stored payload may be a later replacement or NOOP; publish the
-                    // payload that actually mined with its hash. Retry on a failed read.
+                    // payload that actually mined with its hash. If it cannot be read,
+                    // still record Mined with the stored payload: dropping the receipt
+                    // would let the normal flow resubmit or NOOP a mined transaction.
                     let mined_data = match self.payload_for_hash(evm_data, historical_hash).await {
                         Ok(data) => data,
                         Err(error) => {
@@ -1874,10 +1888,9 @@ where
                                 tx_id = %tx.id,
                                 hash = %historical_hash,
                                 %error,
-                                "could not read the mined payload; retrying recovery later"
+                                "could not read the mined payload; keeping the stored payload"
                             );
-                            had_lookup_error = true;
-                            continue;
+                            evm_data.clone()
                         }
                     };
 
@@ -7181,6 +7194,40 @@ mod tests {
             assert_eq!(seen_at(&state), None);
         }
 
+        /// A failed head read cannot confirm an unused nonce: hold. After the maximum
+        /// age the unused nonce is trusted, so the hold cannot last forever.
+        #[tokio::test]
+        async fn unconfirmed_unused_nonce_holds_until_maximum_age() {
+            for (age, clears) in [(Duration::minutes(5), false), (Duration::days(2), true)] {
+                let mut tx = transaction();
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                    Some((Utc::now() - age).to_rfc3339());
+                let mut mocks = default_test_mocks();
+                mocks
+                    .provider
+                    .expect_get_transaction_count()
+                    .returning(|_| Box::pin(async { Ok(5) }));
+                mocks
+                    .provider
+                    .expect_get_block_number()
+                    .returning(|| Box::pin(async { Err(timeout()) }));
+                mocks
+                    .provider
+                    .expect_get_transaction_receipt()
+                    .returning(|_| Box::pin(async { Ok(None) }));
+                let state = repository(&mut mocks, &tx);
+                let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+                let result = evm
+                    .reconcile_tx_nonce_state(&tx)
+                    .await
+                    .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
+                    .unwrap();
+                assert_eq!(result.is_none(), clears);
+                assert_eq!(seen_at(&state).is_none(), clears);
+            }
+        }
+
         /// An unused-nonce answer from a node behind the sighting's head is lag, not a
         /// reorg: hold (after checking receipts) instead of clearing the sighting.
         #[tokio::test]
@@ -7390,9 +7437,10 @@ mod tests {
             assert!(saved.signature.is_none());
         }
 
-        /// Without the mined payload the recovery is retried, not written half-right.
+        /// Without the mined payload, recovery still records Mined (stored payload,
+        /// corrected hash): a dropped receipt would let the normal flow resubmit.
         #[tokio::test]
-        async fn unreadable_mined_payload_leaves_recovery_incomplete() {
+        async fn unreadable_mined_payload_still_records_mined() {
             let mut tx = transaction();
             if let NetworkTransactionData::Evm(ref mut data) = tx.network_data {
                 data.hash = Some("0xreplacement".to_string());
@@ -7403,20 +7451,33 @@ mod tests {
             mocks
                 .provider
                 .expect_get_transaction_receipt()
-                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+                .returning(|hash| {
+                    let receipt =
+                        (hash == "0xoriginal").then(|| make_mock_receipt(true, Some(100)));
+                    Box::pin(async move { Ok(receipt) })
+                });
             mocks
                 .provider
                 .expect_raw_request_dyn()
                 .returning(|_, _| Box::pin(async { Ok(serde_json::Value::Null) }));
-            mocks.tx_repo.expect_partial_update().times(0);
+            let state = repository(&mut mocks, &tx);
+            mocks
+                .job_producer
+                .expect_produce_send_notification_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
-            let data = tx.network_data.get_evm_transaction_data().unwrap();
-            assert!(matches!(
-                evm.try_recover_with_historical_hashes(&tx, &data)
-                    .await
-                    .unwrap(),
-                super::super::HistoricalHashRecovery::Incomplete
-            ));
+            assert_eq!(
+                evm.check_transaction_status(&tx).await.unwrap(),
+                TransactionStatus::Mined
+            );
+            let saved = state
+                .lock()
+                .unwrap()
+                .network_data
+                .get_evm_transaction_data()
+                .unwrap();
+            assert_eq!(saved.hash.as_deref(), Some("0xoriginal"));
+            assert_eq!(saved.to.as_deref(), Some("0xRecipient"));
         }
 
         /// A recovered NOOP keeps the stored `from` spelling, so `to == from` holds.
