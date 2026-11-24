@@ -59,6 +59,7 @@ struct Events {
     receipt: bool,
     cancel_in_send: bool,
     cap_hit: bool,
+    low_balance: bool,
 }
 
 struct Harness {
@@ -160,9 +161,15 @@ impl Harness {
             .expect_get_by_id_on_primary()
             .returning(move |id| block_on(r.get_by_id_on_primary(id)));
         let mut provider = MockEvmProviderTrait::new();
-        provider
-            .expect_get_balance()
-            .returning(|_| Box::pin(async { Ok(U256::from(10u128.pow(19))) }));
+        let e = events.clone();
+        provider.expect_get_balance().returning(move |_| {
+            let balance = if e.lock().unwrap().low_balance {
+                U256::ZERO
+            } else {
+                U256::from(10u128.pow(19))
+            };
+            Box::pin(async move { Ok(balance) })
+        });
         provider.expect_get_block_by_number().returning(|| {
             Box::pin(async {
                 let mut b: alloy::rpc::types::Block = alloy::rpc::types::Block::default();
@@ -1472,4 +1479,17 @@ async fn release_saves_hash_of_bytes_from_older_version() {
     h.run_job(TransactionCommand::Submit).await;
     assert_eq!(h.stored().await.hashes, ["A", "B"]);
     assert_eq!(h.events.lock().unwrap().sent, [vec![9]]);
+}
+
+#[tokio::test]
+async fn failed_reprice_after_net_sends_saved_bytes() {
+    let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+    h.age_payload(10000).await;
+    h.events.lock().unwrap().low_balance = true;
+    let before = h.stored().await;
+    let after = h.worker.resubmit_transaction(before.clone()).await.unwrap();
+    assert!(h.events.lock().unwrap().signs.is_empty());
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+    assert_eq!(after.hashes, before.hashes);
+    assert!(!is_unsent(&h.stored().await).unwrap());
 }

@@ -1493,43 +1493,59 @@ where
             tx
         };
 
-        // Calculate bumped gas price
-        // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
-        let bumped_price_params = self
-            .price_calculator
-            .calculate_bumped_gas_price(&evm_data, self.relayer(), is_noop(&evm_data))
-            .await?;
+        let repriced = async {
+            // Calculate bumped gas price
+            // For noop transactions, force_bump=true to skip gas price cap and ensure bump succeeds
+            let bumped_price_params = self
+                .price_calculator
+                .calculate_bumped_gas_price(&evm_data, self.relayer(), is_noop(&evm_data))
+                .await?;
 
-        if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
-            warn!(
-                tx_id = %tx.id,
-                relayer_id = %tx.relayer_id,
-                price_params = ?bumped_price_params,
-                "bumped gas price does not meet minimum requirement, skipping resubmission"
-            );
-            // A reprice that is not possible must not strand saved bytes.
-            // A probe in this job has just sent them.
-            return if resend_unsent && !probed {
-                self.submit_transaction(tx).await
-            } else {
-                Ok(tx)
-            };
+            if !bumped_price_params.is_min_bumped.is_some_and(|b| b) {
+                warn!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    price_params = ?bumped_price_params,
+                    "bumped gas price does not meet minimum requirement, skipping resubmission"
+                );
+                return Ok(None);
+            }
+
+            // Validate the relayer has sufficient balance
+            self.ensure_sufficient_balance(bumped_price_params.total_cost)
+                .await?;
+
+            // Create new transaction data with bumped gas price
+            let updated_evm_data = evm_data.with_price_params(bumped_price_params);
+
+            // Sign the transaction
+            let sig_result = self
+                .signer
+                .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
+                .await?;
+
+            Ok::<_, TransactionError>(Some(
+                updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?),
+            ))
         }
+        .await;
 
-        // Validate the relayer has sufficient balance
-        self.ensure_sufficient_balance(bumped_price_params.total_cost)
-            .await?;
-
-        // Create new transaction data with bumped gas price
-        let updated_evm_data = evm_data.with_price_params(bumped_price_params.clone());
-
-        // Sign the transaction
-        let sig_result = self
-            .signer
-            .sign_transaction(NetworkTransactionData::Evm(updated_evm_data.clone()))
-            .await?;
-
-        let final_evm_data = updated_evm_data.with_signed_transaction_data(sig_result.into_evm()?);
+        // A reprice that is not possible must not strand saved bytes.
+        // A probe in this job has just sent them.
+        let final_evm_data = match repriced {
+            Ok(Some(data)) => data,
+            Ok(None) if resend_unsent && !probed => return self.submit_transaction(tx).await,
+            Ok(None) => return Ok(tx),
+            Err(e) if resend_unsent && !probed => {
+                warn!(
+                    tx_id = %tx.id,
+                    error = %e,
+                    "reprice failed, sending saved bytes"
+                );
+                return self.submit_transaction(tx).await;
+            }
+            Err(e) => return Err(e),
+        };
 
         let raw_tx = final_evm_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
