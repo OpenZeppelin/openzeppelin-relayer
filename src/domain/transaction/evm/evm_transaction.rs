@@ -5198,6 +5198,13 @@ mod tests {
                 .returning(move |_| Box::pin(async move { Ok(on_chain_nonce) }));
 
             let mut mock_transaction = MockTransactionRepository::new();
+            mock_transaction
+                .expect_get_nonce_occupancy()
+                .returning(|_, from, to| {
+                    Ok((from..to)
+                        .map(|n| (n, Some(TransactionStatus::Sent)))
+                        .collect())
+                });
             let test_tx_clone = test_tx.clone();
             mock_transaction
                 .expect_partial_update_if_version()
