@@ -156,6 +156,12 @@ impl RedisTransactionRepository {
                 empty_arrs[k] = true
             end
 
+            -- Read the old nonce before the patch replaces network_data.
+            local function evm_nonce(data)
+                if data and data["network_data"] == "Evm" then return data["data"]["nonce"] end
+            end
+            local old_nonce = evm_nonce(tx["network_data"])
+
             for k, v in pairs(patch) do
                 tx[k] = v
             end
@@ -182,11 +188,6 @@ impl RedisTransactionRepository {
             end
 
             -- Persist nonce ownership with the body, including after a lost reply.
-            local old_tx = cjson.decode(old_snapshot)
-            local function evm_nonce(data)
-                if data and data["network_data"] == "Evm" then return data["data"]["nonce"] end
-            end
-            local old_nonce = evm_nonce(old_tx["network_data"])
             local new_nonce = evm_nonce(tx["network_data"])
             local nonce_prefix = ARGV[1] .. relayer_id .. ':nonce:'
             if old_nonce and old_nonce ~= cjson.null and old_nonce ~= new_nonce then
@@ -471,6 +472,39 @@ impl RedisTransactionRepository {
                     "Transaction with ID {id} not found"
                 )))
             }
+        }
+    }
+
+    /// Like [`TransactionRepository::find_by_nonce`], but reading through the given pool.
+    async fn find_by_nonce_on(
+        &self,
+        pool: &Arc<deadpool_redis::Pool>,
+        relayer_id: &str,
+        nonce: u64,
+        context: &str,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        let mut conn = self.get_connection(pool, context).await?;
+        let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
+
+        // Get transaction ID with this nonce for this relayer (should be single value)
+        let tx_id: Option<String> = conn
+            .get(nonce_key)
+            .await
+            .map_err(|e| self.map_redis_error(e, context))?;
+        // Release before the nested lookup takes a connection from the same pool.
+        drop(conn);
+
+        match tx_id {
+            Some(tx_id) => match self.get_by_id_on(pool, tx_id, context).await {
+                Ok(tx) => Ok(Some(tx)),
+                Err(RepositoryError::NotFound(_)) => {
+                    // Transaction was deleted but index wasn't cleaned up
+                    warn!(relayer_id = %relayer_id, nonce = %nonce, "stale nonce index found for relayer");
+                    Ok(None)
+                }
+                Err(e) => Err(e),
+            },
+            None => Ok(None),
         }
     }
 
@@ -2219,31 +2253,13 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .get_connection(self.connections.reader(), "find_by_nonce")
-            .await?;
-        let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
-
-        // Get transaction ID with this nonce for this relayer (should be single value)
-        let tx_id: Option<String> = conn
-            .get(nonce_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "find_by_nonce"))?;
-
-        match tx_id {
-            Some(tx_id) => {
-                match self.get_by_id(tx_id.clone()).await {
-                    Ok(tx) => Ok(Some(tx)),
-                    Err(RepositoryError::NotFound(_)) => {
-                        // Transaction was deleted but index wasn't cleaned up
-                        warn!(relayer_id = %relayer_id, nonce = %nonce, "stale nonce index found for relayer");
-                        Ok(None)
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            None => Ok(None),
-        }
+        self.find_by_nonce_on(
+            self.connections.reader(),
+            relayer_id,
+            nonce,
+            "find_by_nonce",
+        )
+        .await
     }
 
     async fn find_by_nonce_on_primary(
@@ -2251,31 +2267,13 @@ impl TransactionRepository for RedisTransactionRepository {
         relayer_id: &str,
         nonce: u64,
     ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
-        let mut conn = self
-            .get_connection(self.connections.primary(), "find_by_nonce_on_primary")
-            .await?;
-        let nonce_key = self.relayer_nonce_key(relayer_id, nonce);
-
-        // Get transaction ID with this nonce for this relayer (should be single value)
-        let tx_id: Option<String> = conn
-            .get(nonce_key)
-            .await
-            .map_err(|e| self.map_redis_error(e, "find_by_nonce_on_primary"))?;
-
-        match tx_id {
-            Some(tx_id) => {
-                match self.get_by_id_on_primary(tx_id.clone()).await {
-                    Ok(tx) => Ok(Some(tx)),
-                    Err(RepositoryError::NotFound(_)) => {
-                        // Transaction was deleted but index wasn't cleaned up
-                        warn!(relayer_id = %relayer_id, nonce = %nonce, "stale nonce index found for relayer");
-                        Ok(None)
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            None => Ok(None),
-        }
+        self.find_by_nonce_on(
+            self.connections.primary(),
+            relayer_id,
+            nonce,
+            "find_by_nonce_on_primary",
+        )
+        .await
     }
 
     async fn get_nonce_occupancy(
