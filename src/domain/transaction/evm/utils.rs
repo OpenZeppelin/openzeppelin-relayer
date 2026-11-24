@@ -24,6 +24,10 @@ pub async fn make_noop<P: EvmProviderTrait>(
     evm_data.data = Some("0x".to_string());
     evm_data.to = Some(evm_data.from.clone());
     evm_data.speed = Some(DEFAULT_TRANSACTION_SPEED);
+    // The stored signed bytes are the original payload; drop them so they can
+    // never be broadcast for the NOOP. The resubmit path signs the NOOP afresh.
+    evm_data.raw = None;
+    evm_data.signature = None;
 
     // Set gas limit based on network type
     if network.is_arbitrum() {
@@ -311,6 +315,9 @@ mod tests {
         assert_eq!(evm_data.data.unwrap(), "0x"); // Empty data
         assert_eq!(evm_data.nonce, Some(42)); // Original nonce preserved
         assert_eq!(evm_data.speed, Some(DEFAULT_TRANSACTION_SPEED));
+        // The original signed bytes are dropped; the NOOP is signed by resubmit.
+        assert_eq!(evm_data.raw, None);
+        assert_eq!(evm_data.signature, None);
     }
 
     #[tokio::test]

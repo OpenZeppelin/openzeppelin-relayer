@@ -412,12 +412,12 @@ where
     /// Best-effort: failures only log, and the status checker remains the fallback
     /// driver.
     ///
-    /// The successor is linked only when it shows it is stuck (a recorded
-    /// nonce-too-high, or signed longer ago than the resubmit age floor). A `Sent` tx without
-    /// `sent_at` may just have its first submit job queued, and a duplicate send of an
-    /// already-sequenced tx is answered "nonce too low" on Nitro, which triggers nonce
-    /// recovery on a healthy tx. A NOOP successor gets a resubmit job, because its
-    /// stored raw bytes still hold the original payload; an expired non-NOOP successor
+    /// The successor is linked only when it shows it is stuck: a recorded
+    /// nonce-too-high, or a nonce assigned (`priced_at`) longer ago than the resubmit
+    /// age floor. A `Sent` tx without `sent_at` may just have its first submit job
+    /// queued, and Nitro answers a duplicate send of an already-sequenced tx with
+    /// "nonce too low", which triggers nonce recovery on a healthy tx. A NOOP
+    /// successor gets a resubmit job, which signs it; an expired non-NOOP successor
     /// is left to the status checker, which replaces it with a NOOP.
     pub(super) async fn enqueue_next_nonce_submit(&self, tx: &TransactionRepoModel) {
         let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
@@ -472,8 +472,9 @@ where
             .metadata
             .as_ref()
             .is_some_and(|m| m.nonce_too_high_retries > 0);
-        // Age since the nonce was assigned (`priced_at`, set just before signing), not
-        // since creation: a tx can wait in Pending far longer than its submit job.
+        // Age since the nonce was assigned (`priced_at`), not since creation: a tx can
+        // wait in Pending far longer than its submit job. A signing retry can still
+        // make a just-signed tx look old; that residual duplicate is tolerated.
         let priced_at = next_tx.priced_at.as_deref().unwrap_or(&next_tx.created_at);
         let old_enough = DateTime::parse_from_rfc3339(priced_at).is_ok_and(|t| {
             Utc::now().signed_duration_since(t)
@@ -1054,15 +1055,21 @@ where
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
 
-        // A never-broadcast tx can expire while its job is queued. Leave it to the
-        // status checker, which replaces it with a NOOP. A NOOP is never skipped: its
-        // purpose is to fill the nonce, and a fresh one (gap filler) has valid bytes.
-        if tx.status == TransactionStatus::Sent
-            && !is_noop(&evm_tx_data)
-            && !is_transaction_valid(&tx.created_at, &tx.valid_until)
-        {
-            info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
-            return Ok(tx);
+        // A never-broadcast tx can change while its job is queued:
+        // - Converted to a NOOP: make_noop dropped the original signed bytes, and the
+        //   resubmit path (cancel, status checker or chain link) signs the NOOP.
+        // - Expired: the status checker replaces it with a NOOP.
+        // A signed NOOP (a gap filler) is never skipped: its purpose is to fill the nonce.
+        if tx.status == TransactionStatus::Sent {
+            if is_noop(&evm_tx_data) {
+                if evm_tx_data.raw.is_none() {
+                    info!(tx_id = %tx.id, "NOOP not signed yet; resubmit delivers it");
+                    return Ok(tx);
+                }
+            } else if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
+                info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
+                return Ok(tx);
+            }
         }
 
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
@@ -4960,6 +4967,42 @@ mod tests {
     async fn test_submit_skips_expired_sent() {
         let mut tx = create_arbitrum_submit_tx();
         tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+
+        let mut mock_provider = MockEvmProviderTrait::new();
+        mock_provider.expect_send_raw_transaction().never();
+        let mut mock_transaction = MockTransactionRepository::new();
+        mock_transaction.expect_partial_update().never();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: create_test_relayer(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(MockRelayerRepository::new()),
+            network_repository: Arc::new(default_mock_network()),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+            job_producer: Arc::new(MockJobProducerTrait::new()),
+            price_calculator: MockPriceCalculator::new(),
+            signer: MockSigner::new(),
+        };
+
+        let returned = evm_transaction.submit_transaction(tx).await.unwrap();
+        assert_eq!(returned.status, TransactionStatus::Sent);
+    }
+
+    /// A Sent tx converted to a NOOP after its submit job was queued has no signed
+    /// bytes (make_noop drops them): the worker sends nothing and does not fail.
+    #[tokio::test]
+    async fn test_submit_skips_unsigned_sent_noop() {
+        let mut tx = create_arbitrum_submit_tx();
+        let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+        data.to = Some(data.from.clone());
+        data.value = U256::from(0);
+        data.data = Some("0x".to_string());
+        data.speed = Some(Speed::Fast);
+        data.raw = None;
+        data.signature = None;
+        assert!(is_noop(&data));
+        tx.network_data = NetworkTransactionData::Evm(data);
 
         let mut mock_provider = MockEvmProviderTrait::new();
         mock_provider.expect_send_raw_transaction().never();
