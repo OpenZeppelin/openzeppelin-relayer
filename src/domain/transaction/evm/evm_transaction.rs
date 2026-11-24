@@ -646,16 +646,17 @@ where
     }
 
     /// Arbitrum chained delivery (no-op on other networks): after a successful broadcast
-    /// at nonce N, enqueue delivery of a never-broadcast `Sent` tx at N+1. A jammed
-    /// region then drains at job+RPC latency instead of one tx per resubmit cycle.
-    /// Best-effort: failures only log, and the status checker remains the fallback
-    /// driver.
+    /// at nonce N, enqueue delivery of a tx at N+1 whose current bytes no node has
+    /// accepted (`is_unsent`): a never-sent `Sent` tx, or a `Submitted` tx released
+    /// for a send that failed. A jammed region then drains at job+RPC latency instead
+    /// of one tx per resubmit cycle. Best-effort: failures only log, and the status
+    /// checker remains the fallback driver.
     ///
     /// The successor is linked only when it shows it is stuck: a recorded
     /// nonce-too-high, or a nonce assigned (`priced_at`) longer ago than the resubmit
-    /// age floor. A `Sent` tx without `sent_at` may just have its first submit job
-    /// queued, and Nitro answers a duplicate send of an already-sequenced tx with
-    /// "nonce too low", which triggers nonce recovery on a healthy tx. A NOOP
+    /// age floor. An unsent tx may just have its first submit job queued, and Nitro
+    /// answers a duplicate send of an already-sequenced tx with "nonce too low",
+    /// which triggers nonce recovery on a healthy tx. A NOOP
     /// successor gets a resubmit job, which signs it; an expired non-NOOP successor
     /// is left to the status checker, which replaces it with a NOOP.
     pub(super) async fn enqueue_next_nonce_submit(&self, tx: &TransactionRepoModel) {
@@ -693,7 +694,10 @@ where
             .await
         {
             Ok(Some(next_tx))
-                if next_tx.status == TransactionStatus::Sent && next_tx.sent_at.is_none() =>
+                if matches!(
+                    next_tx.status,
+                    TransactionStatus::Sent | TransactionStatus::Submitted
+                ) && is_unsent(&next_tx).unwrap_or(false) =>
             {
                 next_tx
             }
@@ -1377,18 +1381,16 @@ where
         // A tx can change while its job is queued:
         // - Converted to a NOOP: make_noop dropped the original signed bytes, and the
         //   resubmit path (cancel, status checker or chain link) signs the NOOP.
-        // - Expired before its first broadcast: the status checker replaces it with
-        //   a NOOP.
-        // A signed NOOP (a gap filler) is never skipped: its purpose is to fill the nonce.
+        // - Expired before any node accepted its bytes (never sent, or released for a
+        //   send that failed): the status checker replaces it with a NOOP.
+        // A signed NOOP (a gap filler) never expires: its purpose is to fill the nonce.
         if is_noop(&evm_tx_data) {
             if evm_tx_data.raw.is_none() {
                 info!(tx_id = %tx.id, "NOOP not signed yet; resubmit delivers it");
                 return Ok(tx);
             }
-        } else if tx.status == TransactionStatus::Sent
-            && !is_transaction_valid(&tx.created_at, &tx.valid_until)
-        {
-            info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
+        } else if is_unsent(&tx)? && !is_transaction_valid(&tx.created_at, &tx.valid_until) {
+            info!(tx_id = %tx.id, "transaction expired before a node accepted it; skipping submit");
             return Ok(tx);
         }
 
@@ -5341,6 +5343,32 @@ mod tests {
         }
     }
 
+    /// Arbitrum chain link: a successor released to `Submitted` for a send that failed
+    /// (save-before-send, #1006) has bytes no node accepted; the link delivers it.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_delivers_released_submitted() {
+        use crate::jobs::TransactionCommand;
+
+        let earlier = (Utc::now() - chrono::Duration::minutes(2)).to_rfc3339();
+        for (case, sent_at) in [("never accepted", None), ("repriced", Some(earlier))] {
+            let mut next_tx = arbitrum_successor(60, 0);
+            next_tx.status = TransactionStatus::Submitted;
+            next_tx.sent_at = sent_at;
+            let jobs = run_arbitrum_chain_link(Some(next_tx)).await;
+            assert_eq!(jobs.len(), 1, "{case}");
+            assert!(matches!(jobs[0], TransactionCommand::Submit), "{case}");
+        }
+    }
+
+    /// A `Submitted` successor whose current bytes a node accepted is not linked.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_skips_accepted_submitted() {
+        let mut next_tx = arbitrum_successor(60, 1);
+        next_tx.status = TransactionStatus::Submitted;
+        next_tx.sent_at = Some(Utc::now().to_rfc3339());
+        assert!(run_arbitrum_chain_link(Some(next_tx)).await.is_empty());
+    }
+
     /// Arbitrum chain link: a NOOP successor gets a resubmit job, which signs it.
     #[tokio::test]
     async fn test_submit_arbitrum_chain_link_resubmits_noop_successor() {
@@ -5404,7 +5432,29 @@ mod tests {
     async fn test_submit_skips_expired_sent() {
         let mut tx = create_arbitrum_submit_tx();
         tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+        let status = tx.status.clone();
+        assert_eq!(submit_expired(tx).await.status, status);
+    }
 
+    /// Released for a send that failed, then expired: no node accepted the bytes, so
+    /// the worker leaves the tx to the status checker's NOOP like a never-sent one.
+    #[tokio::test]
+    async fn test_submit_skips_expired_unsent_submitted() {
+        let earlier = (Utc::now() - chrono::Duration::minutes(2)).to_rfc3339();
+        let later = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+        for (case, sent_at) in [("released", None), ("repriced", Some(earlier.clone()))] {
+            let mut tx = create_arbitrum_submit_tx();
+            tx.status = TransactionStatus::Submitted;
+            tx.priced_at = Some(later.clone());
+            tx.sent_at = sent_at;
+            tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+            let returned = submit_expired(tx).await;
+            assert_eq!(returned.status, TransactionStatus::Submitted, "{case}");
+        }
+    }
+
+    /// Submits `tx` expecting no send and no write.
+    async fn submit_expired(tx: TransactionRepoModel) -> TransactionRepoModel {
         let mut mock_provider = MockEvmProviderTrait::new();
         mock_provider.expect_send_raw_transaction().never();
         let mut mock_transaction = MockTransactionRepository::new();
@@ -5422,8 +5472,7 @@ mod tests {
             signer: MockSigner::new(),
         };
 
-        let returned = evm_transaction.submit_transaction(tx).await.unwrap();
-        assert_eq!(returned.status, TransactionStatus::Sent);
+        evm_transaction.submit_transaction(tx).await.unwrap()
     }
 
     /// A tx converted to a NOOP after its job was queued has no signed bytes
