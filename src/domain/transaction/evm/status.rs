@@ -17,8 +17,8 @@ use super::super::common::is_active_nonce_status;
 use super::EvmRelayerTransaction;
 use super::{
     ensure_status_one_of, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_priced,
-    has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, is_unsent,
-    make_noop, too_many_attempts, too_many_noop_attempts,
+    has_enough_confirmations, has_signed_payload, is_noop, is_too_early_to_resubmit,
+    is_transaction_valid, is_unsent, make_noop, too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_max_age,
@@ -689,7 +689,7 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
-        if tx.network_data.get_evm_transaction_data()?.raw.is_none() {
+        if !has_signed_payload(&tx.network_data.get_evm_transaction_data()?) {
             // An unsigned NOOP deferred above the Arbitrum head stays deferred.
             self.send_noop_resubmit_job(&tx).await?;
             return Ok(tx);
@@ -1498,12 +1498,14 @@ where
         // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
         // if the transaction is too young. Just update status and return.
         // For other states (Mined/Confirmed/Failed/etc), process immediately regardless of age.
-        if is_too_early_to_resubmit(&tx)?
-            && is_pending_transaction(&status)
-            && !(matches!(
+        // No sendable bytes (unsigned, or a NOOP holding stale bytes): the state
+        // handlers queue its signing at once.
+        let unsigned_in_flight =
+            matches!(
                 status,
                 TransactionStatus::Sent | TransactionStatus::Submitted
-            ) && tx.network_data.get_evm_transaction_data()?.raw.is_none())
+            ) && !has_signed_payload(&tx.network_data.get_evm_transaction_data()?);
+        if is_too_early_to_resubmit(&tx)? && is_pending_transaction(&status) && !unsigned_in_flight
         {
             // Update status if it changed, then return
             return self
@@ -1715,7 +1717,7 @@ where
         // Transaction was prepared but submission job may have failed
         // Re-queue a resend job if it's been stuck for a while
         let age_since_sent = get_age_since_priced(&tx)?;
-        let missing_raw = tx.network_data.get_evm_transaction_data()?.raw.is_none();
+        let missing_raw = !has_signed_payload(&tx.network_data.get_evm_transaction_data()?);
 
         if missing_raw {
             // An unsigned NOOP deferred above the Arbitrum head stays deferred.

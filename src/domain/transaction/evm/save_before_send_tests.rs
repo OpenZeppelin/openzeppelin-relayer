@@ -1838,3 +1838,29 @@ async fn send_after_price_from_fast_clock_is_recorded_as_sent() {
     h.run_job(TransactionCommand::Submit).await;
     assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
 }
+
+/// A legacy cancel whose resubmit job was lost: the status checker alone
+/// gets the NOOP signed, before the price is due, and never sends the
+/// transfer's bytes.
+#[tokio::test]
+async fn legacy_cancel_status_check_queues_noop_signing() {
+    let priced = Some((Utc::now() - Duration::seconds(10)).to_rfc3339());
+    let sent = Some((Utc::now() - Duration::seconds(5)).to_rfc3339());
+    for (status, sent_at) in [
+        (TransactionStatus::Sent, None),
+        (TransactionStatus::Submitted, sent),
+    ] {
+        let (record, transfer_raw) = legacy_cancel(status.clone(), priced.clone(), sent_at);
+        let h = Harness::new(record, false, None).await;
+        h.cycle().await;
+        let jobs = h.events.lock().unwrap().jobs.clone();
+        assert!(
+            matches!(jobs.as_slice(), [TransactionCommand::Resubmit]),
+            "{status:?}: {jobs:?}"
+        );
+        h.run_job(TransactionCommand::Resubmit).await;
+        assert_eq!(h.events.lock().unwrap().signs.len(), 1, "{status:?}");
+        assert_eq!(h.events.lock().unwrap().sent.len(), 1, "{status:?}");
+        assert_only_noop_bytes_sent(&h, &transfer_raw);
+    }
+}
