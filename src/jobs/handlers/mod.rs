@@ -39,15 +39,6 @@ pub use system_cleanup_handler::*;
 mod relayer_health_check_handler;
 pub use relayer_health_check_handler::*;
 
-/// Returns `true` when retrying the job can never succeed, so it should be
-/// aborted immediately instead of consuming the retry budget.
-///
-/// A `NotFound` for the entity a job operates on (e.g. a transaction that was
-/// deleted or expired from the repository) will never reappear by re-running
-/// the same job. On standard SQS queues this is critical: each retry
-/// re-enqueues a fresh message with `ApproximateReceiveCount` reset to 1, so
-/// the attempt counter never advances and the job would otherwise loop
-/// forever, also bypassing the SQS dead-letter redrive policy.
 /// A version conflict means another writer won; the status job decides again.
 fn is_concurrent_update_conflict(err: &Report) -> bool {
     err.downcast_ref::<TransactionError>()
@@ -58,6 +49,15 @@ fn is_concurrent_update_conflict(err: &Report) -> bool {
         )
 }
 
+/// Returns `true` when retrying the job can never succeed, so it should be
+/// aborted immediately instead of consuming the retry budget.
+///
+/// A `NotFound` for the entity a job operates on (e.g. a transaction that was
+/// deleted or expired from the repository) will never reappear by re-running
+/// the same job. On standard SQS queues this is critical: each retry
+/// re-enqueues a fresh message with `ApproximateReceiveCount` reset to 1, so
+/// the attempt counter never advances and the job would otherwise loop
+/// forever, also bypassing the SQS dead-letter redrive policy.
 fn is_terminal_error(err: &Report) -> bool {
     if let Some(api_err) = err.downcast_ref::<ApiError>() {
         if matches!(api_err, ApiError::NotFound(_)) {

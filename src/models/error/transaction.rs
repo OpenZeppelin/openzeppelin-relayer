@@ -123,7 +123,9 @@ impl From<TransactionError> for ApiError {
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
-            TransactionError::ConcurrentUpdateConflict(msg) => ApiError::Conflict(msg),
+            TransactionError::ConcurrentUpdateConflict(tx_id) => ApiError::Conflict(format!(
+                "Concurrent transaction update ({tx_id}); retry the request"
+            )),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
             TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
             TransactionError::SimulationFailed(msg) => ApiError::BadRequest(msg),
@@ -280,8 +282,10 @@ mod tests {
                 ApiError::BadRequest("boom".to_string()),
             ),
             (
-                TransactionError::ConcurrentUpdateConflict("conflict".to_string()),
-                ApiError::Conflict("conflict".to_string()),
+                TransactionError::ConcurrentUpdateConflict("tx-1".to_string()),
+                ApiError::Conflict(
+                    "Concurrent transaction update (tx-1); retry the request".to_string(),
+                ),
             ),
         ];
 
