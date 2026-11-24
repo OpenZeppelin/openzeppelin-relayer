@@ -502,9 +502,10 @@ where
         )));
     }
     // validation purpose only, checks if relayer exists
-    get_relayer_by_id(relayer_id, &state).await?;
+    get_relayer_by_id(relayer_id.clone(), &state).await?;
 
     let transaction = get_tx_by_id(transaction_id, &state).await?;
+    ensure_owned_by(&transaction, &relayer_id)?;
 
     let transaction_response: TransactionResponse = transaction.into();
 
@@ -664,9 +665,24 @@ where
     Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
 }
 
+/// Reports a transaction of another relayer as missing, so a route cannot
+/// read or act on a record its relayer does not own.
+fn ensure_owned_by(tx: &TransactionRepoModel, relayer_id: &str) -> Result<(), ApiError> {
+    if tx.relayer_id == relayer_id {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound(format!(
+            "Transaction with ID {} not found",
+            tx.id
+        )))
+    }
+}
+
 /// Retry a mutation with a fresh primary read after each version conflict.
+/// A record owned by another relayer is reported as missing before `apply`.
 async fn retry_transaction_update<TR, F, Fut>(
     repo: &TR,
+    relayer_id: &str,
     transaction_id: &str,
     mut apply: F,
 ) -> Result<TransactionRepoModel, ApiError>
@@ -680,6 +696,7 @@ where
         let tx = repo
             .get_by_id_on_primary(transaction_id.to_string())
             .await?;
+        ensure_owned_by(&tx, relayer_id)?;
         attempts += 1;
         match apply(tx).await {
             Err(ApiError::Conflict(_)) if attempts < 3 => continue,
@@ -693,6 +710,7 @@ where
 /// that applied, and a second cancel would build a second NOOP.
 async fn retry_cancel<TR, F, Fut>(
     repo: &TR,
+    relayer_id: &str,
     transaction_id: &str,
     mut cancel: F,
 ) -> Result<TransactionRepoModel, ApiError>
@@ -702,7 +720,7 @@ where
     Fut: std::future::Future<Output = Result<TransactionRepoModel, ApiError>>,
 {
     let mut retry = false;
-    retry_transaction_update(repo, transaction_id, |tx| {
+    retry_transaction_update(repo, relayer_id, transaction_id, |tx| {
         let already_canceled = std::mem::replace(&mut retry, true)
             && (tx.status == TransactionStatus::Canceled || tx.is_canceled == Some(true));
         let result = (!already_canceled).then(|| cancel(tx.clone()));
@@ -739,6 +757,7 @@ pub async fn cancel_transaction(
 
     let canceled_transaction = retry_cancel(
         &*state.transaction_repository,
+        &relayer_id,
         &transaction_id,
         |tx| async {
             relayer_transaction
@@ -782,6 +801,7 @@ pub async fn replace_transaction(
     let relayer_transaction = get_relayer_transaction_by_model(relayer.clone(), &state).await?;
     let replaced_transaction = retry_transaction_update(
         &*state.transaction_repository,
+        &relayer_id,
         &transaction_id,
         |tx| async {
             let request =
@@ -2667,7 +2687,7 @@ mod version_retry_tests {
         let repo = InMemoryTransactionRepository::new();
         let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
         let calls = AtomicUsize::new(0);
-        let updated = retry_transaction_update(&repo, &tx.id, |snapshot| {
+        let updated = retry_transaction_update(&repo, &tx.relayer_id, &tx.id, |snapshot| {
             let repo = &repo;
             let calls = &calls;
             async move {
@@ -2701,7 +2721,7 @@ mod version_retry_tests {
         let repo = InMemoryTransactionRepository::new();
         let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
         let calls = AtomicUsize::new(0);
-        let result = retry_cancel(&repo, &tx.id, |snapshot| {
+        let result = retry_cancel(&repo, &tx.relayer_id, &tx.id, |snapshot| {
             let repo = &repo;
             calls.fetch_add(1, Ordering::SeqCst);
             async move {
@@ -2731,11 +2751,92 @@ mod version_retry_tests {
             ..Default::default()
         };
         let tx = repo.create(tx).await.unwrap();
-        let result = retry_cancel(&repo, &tx.id, |_| {
+        let result = retry_cancel(&repo, &tx.relayer_id, &tx.id, |_| {
             std::future::ready(Err(ApiError::BadRequest("cannot cancel".into())))
         })
         .await;
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
+    }
+
+    fn owned_by(relayer_id: &str, status: TransactionStatus) -> TransactionRepoModel {
+        TransactionRepoModel {
+            relayer_id: relayer_id.to_string(),
+            status,
+            ..Default::default()
+        }
+    }
+
+    /// Replace: a record of another relayer is missing to this route, and the
+    /// mutation (signing, writes, jobs) never runs.
+    #[tokio::test]
+    async fn replace_of_other_relayers_record_is_not_found() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo
+            .create(owned_by("relayer-b", TransactionStatus::Submitted))
+            .await
+            .unwrap();
+        let calls = AtomicUsize::new(0);
+        let result = retry_transaction_update(&repo, "relayer-a", &tx.id, |snapshot| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok(snapshot))
+        })
+        .await;
+        assert!(matches!(result, Err(ApiError::NotFound(_))), "{result:?}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "mutation must not run");
+        let stored = repo.get_by_id(tx.id).await.unwrap();
+        assert_eq!(stored.version, tx.version, "no write");
+    }
+
+    /// Cancel: same, and the check precedes the already-canceled return, so
+    /// another relayer's canceled record is not returned either.
+    #[tokio::test]
+    async fn cancel_of_other_relayers_record_is_not_found() {
+        for status in [TransactionStatus::Submitted, TransactionStatus::Canceled] {
+            let repo = InMemoryTransactionRepository::new();
+            let tx = repo.create(owned_by("relayer-b", status)).await.unwrap();
+            let calls = AtomicUsize::new(0);
+            let result = retry_cancel(&repo, "relayer-a", &tx.id, |snapshot| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                // A lost-reply conflict would make the retry take the
+                // already-canceled return.
+                let _ = snapshot;
+                std::future::ready(Err(ApiError::Conflict("lost reply".into())))
+            })
+            .await;
+            assert!(matches!(result, Err(ApiError::NotFound(_))), "{result:?}");
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "cancel must not run");
+            let stored = repo.get_by_id(tx.id).await.unwrap();
+            assert_eq!(stored.version, tx.version, "no write");
+        }
+    }
+
+    /// GET by ID: a record of another relayer is not returned.
+    #[actix_web::test]
+    async fn get_by_id_of_other_relayers_record_is_not_found() {
+        use crate::utils::mocks::mockutils::{create_mock_app_state, create_mock_relayer};
+        let relayers = vec![
+            create_mock_relayer("relayer-a".to_string(), false),
+            create_mock_relayer("relayer-b".to_string(), false),
+        ];
+        let tx = TransactionRepoModel {
+            id: "tx-of-b".to_string(),
+            ..owned_by("relayer-b", TransactionStatus::Submitted)
+        };
+        let app_state =
+            create_mock_app_state(None, Some(relayers), None, None, None, Some(vec![tx])).await;
+        let state = web::ThinData(app_state);
+
+        let result = get_transaction_by_id(
+            "relayer-a".to_string(),
+            "tx-of-b".to_string(),
+            state.clone(),
+        )
+        .await;
+        assert!(matches!(result, Err(ApiError::NotFound(_))));
+
+        let owner =
+            get_transaction_by_id("relayer-b".to_string(), "tx-of-b".to_string(), state).await;
+        assert_eq!(owner.unwrap().status(), 200);
     }
 
     #[tokio::test]
@@ -2743,7 +2844,7 @@ mod version_retry_tests {
         let repo = InMemoryTransactionRepository::new();
         let tx = repo.create(TransactionRepoModel::default()).await.unwrap();
         let calls = AtomicUsize::new(0);
-        let result = retry_transaction_update(&repo, &tx.id, |_| {
+        let result = retry_transaction_update(&repo, &tx.relayer_id, &tx.id, |_| {
             calls.fetch_add(1, Ordering::SeqCst);
             std::future::ready(Err(ApiError::Conflict("busy".into())))
         })
