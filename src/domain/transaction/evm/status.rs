@@ -1881,7 +1881,12 @@ where
                     // payload that actually mined with its hash. If it cannot be read,
                     // still record Mined with the stored payload: dropping the receipt
                     // would let the normal flow resubmit or NOOP a mined transaction.
-                    let mined_data = match self.payload_for_hash(evm_data, historical_hash).await {
+                    let mut mined_data = self.payload_for_hash(evm_data, historical_hash).await;
+                    if mined_data.is_err() {
+                        // One retry: a lagging node may not have the transaction yet.
+                        mined_data = self.payload_for_hash(evm_data, historical_hash).await;
+                    }
+                    let mined_data = match mined_data {
                         Ok(data) => data,
                         Err(error) => {
                             warn!(
@@ -1890,7 +1895,11 @@ where
                                 %error,
                                 "could not read the mined payload; keeping the stored payload"
                             );
-                            evm_data.clone()
+                            // The stored signature and raw bytes belong to another attempt.
+                            let mut data = evm_data.clone();
+                            data.signature = None;
+                            data.raw = None;
+                            data
                         }
                     };
 
@@ -7194,6 +7203,50 @@ mod tests {
             assert_eq!(seen_at(&state), None);
         }
 
+        /// The head is past the sighting but a second nonce read shows the nonce used:
+        /// the first answer was stale, so hold and keep the sighting.
+        #[tokio::test]
+        async fn second_nonce_read_must_confirm_unused_nonce() {
+            let mut tx = transaction();
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+            tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+            let mut mocks = default_test_mocks();
+            let mut sequence = mockall::Sequence::new();
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(5) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|| Box::pin(async { Ok(101) }));
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .times(1)
+                .in_sequence(&mut sequence)
+                .returning(|_| Box::pin(async { Ok(6) }));
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(None) }));
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let held = evm
+                .reconcile_tx_nonce_state(&tx)
+                .await
+                .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
+                .unwrap()
+                .unwrap();
+            assert_eq!(held.status, TransactionStatus::Submitted);
+            assert_eq!(seen_at(&state), Some(100));
+        }
+
         /// A failed head read cannot confirm an unused nonce: hold. After the maximum
         /// age the unused nonce is trusted, so the hold cannot last forever.
         #[tokio::test]
@@ -7444,6 +7497,9 @@ mod tests {
             let mut tx = transaction();
             if let NetworkTransactionData::Evm(ref mut data) = tx.network_data {
                 data.hash = Some("0xreplacement".to_string());
+                data.to = Some("0xStoredRecipient".to_string());
+                data.value = U256::from(7);
+                data.raw = Some(vec![1, 2, 3]);
             }
             tx.hashes = vec!["0xoriginal".to_string()];
             let mut mocks = default_test_mocks();
@@ -7459,6 +7515,7 @@ mod tests {
             mocks
                 .provider
                 .expect_raw_request_dyn()
+                .times(2)
                 .returning(|_, _| Box::pin(async { Ok(serde_json::Value::Null) }));
             let state = repository(&mut mocks, &tx);
             mocks
@@ -7477,7 +7534,9 @@ mod tests {
                 .get_evm_transaction_data()
                 .unwrap();
             assert_eq!(saved.hash.as_deref(), Some("0xoriginal"));
-            assert_eq!(saved.to.as_deref(), Some("0xRecipient"));
+            assert_eq!(saved.to.as_deref(), Some("0xStoredRecipient"));
+            assert_eq!(saved.value, U256::from(7));
+            assert!(saved.raw.is_none());
         }
 
         /// A recovered NOOP keeps the stored `from` spelling, so `to == from` holds.
