@@ -164,8 +164,22 @@ impl RedisTransactionRepository {
             end
             local old_nonce = evm_nonce(tx["network_data"])
 
+            -- Breaker counters are written only by their own scripts, which do
+            -- not bump the version. Keep the stored values so a metadata patch
+            -- built from an older snapshot cannot roll them back.
+            local kept_cf, kept_tf = 0, 0
+            if type(tx["metadata"]) == 'table' then
+                kept_cf = tx["metadata"]["consecutive_failures"] or 0
+                kept_tf = tx["metadata"]["total_failures"] or 0
+            end
+
             for k, v in pairs(patch) do
                 tx[k] = v
+            end
+
+            if type(patch["metadata"]) == 'table' then
+                tx["metadata"]["consecutive_failures"] = kept_cf
+                tx["metadata"]["total_failures"] = kept_tf
             end
 
             -- Apply delete_at if transitioning to a final state and not already set
@@ -5102,6 +5116,123 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── metadata patches keep breaker counters ──────────────────────
+
+    fn breaker_meta(consecutive: u32, total: u32) -> crate::models::TransactionMetadata {
+        crate::models::TransactionMetadata {
+            consecutive_failures: consecutive,
+            total_failures: total,
+            ..Default::default()
+        }
+    }
+
+    /// A reset lands between a sender's snapshot and its metadata patch: the
+    /// patch must not restore the old consecutive count.
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_metadata_patch_keeps_reset_counter() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo.get_by_id(tx_id.clone()).await.unwrap();
+
+        repo.reset_status_check_consecutive_failures(tx_id.clone())
+            .await
+            .unwrap();
+
+        let mut meta = snapshot.metadata.clone().unwrap();
+        meta.nonce_too_high_retries = 3;
+        let updated = repo
+            .partial_update_if_version(
+                tx_id.clone(),
+                snapshot.version,
+                TransactionUpdateRequest {
+                    metadata: Some(meta),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        for stored in [updated, repo.get_by_id(tx_id).await.unwrap()] {
+            let meta = stored.metadata.unwrap();
+            assert_eq!(meta.consecutive_failures, 0);
+            assert_eq!(meta.total_failures, 40);
+            assert_eq!(meta.nonce_too_high_retries, 3);
+        }
+    }
+
+    /// An increment between snapshot and patch survives the patch.
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_metadata_patch_keeps_incremented_counters() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo.get_by_id(tx_id.clone()).await.unwrap();
+
+        repo.increment_status_check_failures(tx_id.clone())
+            .await
+            .unwrap();
+
+        repo.partial_update_if_version(
+            tx_id.clone(),
+            snapshot.version,
+            TransactionUpdateRequest {
+                metadata: snapshot.metadata.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let meta = repo.get_by_id(tx_id).await.unwrap().metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 25);
+        assert_eq!(meta.total_failures, 41);
+    }
+
+    /// A record with no stored metadata keeps zero counters whatever the
+    /// patch carries.
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn test_metadata_patch_on_record_without_metadata() {
+        let _lock = ENV_MUTEX.lock().await;
+        let repo = setup_test_repo().await;
+        let relayer_id = Uuid::new_v4().to_string();
+        let tx_id = Uuid::new_v4().to_string();
+        let mut tx =
+            create_test_transaction_with_status(&tx_id, &relayer_id, TransactionStatus::Submitted);
+        tx.metadata = None;
+        repo.create(tx).await.unwrap();
+
+        let mut meta = breaker_meta(7, 9);
+        meta.nonce_too_high_retries = 2;
+        repo.partial_update(
+            tx_id.clone(),
+            TransactionUpdateRequest {
+                metadata: Some(meta),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let meta = repo.get_by_id(tx_id).await.unwrap().metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+        assert_eq!(meta.nonce_too_high_retries, 2);
     }
 
     // ── record_stellar_insufficient_fee_retry ───────────────────────

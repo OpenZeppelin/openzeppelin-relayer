@@ -223,7 +223,13 @@ impl TransactionRepoModel {
         if let Some(delete_at) = update.delete_at {
             self.delete_at = Some(delete_at);
         }
-        if let Some(metadata) = update.metadata {
+        if let Some(mut metadata) = update.metadata {
+            // Breaker counters are written only by their own repository calls,
+            // which do not bump the version. Keep the stored values so a patch
+            // built from an older snapshot cannot roll them back.
+            let stored = self.metadata.as_ref();
+            metadata.consecutive_failures = stored.map_or(0, |m| m.consecutive_failures);
+            metadata.total_failures = stored.map_or(0, |m| m.total_failures);
             self.metadata = Some(metadata);
         }
     }

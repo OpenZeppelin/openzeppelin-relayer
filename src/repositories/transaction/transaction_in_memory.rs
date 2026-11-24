@@ -2544,6 +2544,110 @@ mod tests {
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
     }
 
+    // ── metadata patches keep breaker counters ──────────────────────
+
+    fn breaker_meta(consecutive: u32, total: u32) -> crate::models::TransactionMetadata {
+        crate::models::TransactionMetadata {
+            consecutive_failures: consecutive,
+            total_failures: total,
+            ..Default::default()
+        }
+    }
+
+    /// A reset lands between a sender's snapshot and its metadata patch: the
+    /// patch must not restore the old consecutive count.
+    #[tokio::test]
+    async fn test_metadata_patch_keeps_reset_counter() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-breaker-reset");
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo
+            .get_by_id("tx-breaker-reset".to_string())
+            .await
+            .unwrap();
+
+        repo.reset_status_check_consecutive_failures("tx-breaker-reset".to_string())
+            .await
+            .unwrap();
+
+        let mut meta = snapshot.metadata.clone().unwrap();
+        meta.nonce_too_high_retries = 3;
+        let updated = repo
+            .partial_update_if_version(
+                "tx-breaker-reset".to_string(),
+                snapshot.version,
+                TransactionUpdateRequest {
+                    metadata: Some(meta),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 40);
+        assert_eq!(meta.nonce_too_high_retries, 3);
+    }
+
+    /// An increment between snapshot and patch survives the patch.
+    #[tokio::test]
+    async fn test_metadata_patch_keeps_incremented_counters() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-breaker-inc");
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo.get_by_id("tx-breaker-inc".to_string()).await.unwrap();
+
+        repo.increment_status_check_failures("tx-breaker-inc".to_string())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .partial_update_if_version(
+                "tx-breaker-inc".to_string(),
+                snapshot.version,
+                TransactionUpdateRequest {
+                    metadata: snapshot.metadata.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 25);
+        assert_eq!(meta.total_failures, 41);
+    }
+
+    /// A record with no stored metadata keeps zero counters whatever the
+    /// patch carries.
+    #[tokio::test]
+    async fn test_metadata_patch_on_record_without_metadata() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("tx-breaker-none");
+        repo.create(tx).await.unwrap();
+
+        let mut meta = breaker_meta(7, 9);
+        meta.nonce_too_high_retries = 2;
+        let updated = repo
+            .partial_update(
+                "tx-breaker-none".to_string(),
+                TransactionUpdateRequest {
+                    metadata: Some(meta),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+        assert_eq!(meta.nonce_too_high_retries, 2);
+    }
+
     // ── record_stellar_insufficient_fee_retry ───────────────────────
 
     #[tokio::test]
