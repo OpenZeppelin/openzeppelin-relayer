@@ -941,7 +941,7 @@ where
         // the nonce is known to be used, so check receipts and hold; resubmitting or
         // replacing with a NOOP cannot help. Without a sighting, use the normal flow.
         let holding = has_nonce_used_seen(tx);
-        let on_chain_nonce = match self
+        let mut on_chain_nonce = match self
             .provider()
             .get_transaction_count(&self.relayer().address)
             .await
@@ -961,9 +961,31 @@ where
             }
         };
         if on_chain_nonce.is_some_and(|nonce| nonce <= tx_nonce) {
-            // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
-            self.clear_nonce_used_seen(tx).await?;
-            return Ok(None);
+            // While holding, an unused nonce is trusted only from a node at or past the
+            // sighting's head (a reorg); an older node lags, so hold instead of letting
+            // the normal flow resubmit and add another hinted job.
+            let seen_at_block = tx
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.nonce_used_seen_at_block);
+            let trusted = match seen_at_block {
+                None => true,
+                Some(seen) => self
+                    .provider()
+                    .get_block_number()
+                    .await
+                    .is_ok_and(|head| head >= seen),
+            };
+            if trusted {
+                // No saved payload can be mined while the nonce is unused; the normal flow checks receipts.
+                self.clear_nonce_used_seen(tx).await?;
+                return Ok(None);
+            }
+            warn!(
+                tx_id = %tx.id,
+                "nonce recovery: unused nonce from a lagging node, holding"
+            );
+            on_chain_nonce = None;
         }
         // Keep this read after the nonce and before every receipt lookup.
         let block_number = match on_chain_nonce {
@@ -6935,6 +6957,43 @@ mod tests {
             assert_eq!(seen_at(&state), None);
         }
 
+        /// An unused-nonce answer from a node behind the sighting's head is lag, not a
+        /// reorg: hold (after checking receipts) instead of clearing the sighting.
+        #[tokio::test]
+        async fn lagging_unused_nonce_during_wait_holds() {
+            for (head, clears) in [(99_u64, false), (100, true)] {
+                let mut tx = transaction();
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at_block = Some(100);
+                tx.metadata.as_mut().unwrap().nonce_used_seen_at =
+                    Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+                let mut mocks = default_test_mocks();
+                mocks
+                    .provider
+                    .expect_get_transaction_count()
+                    .returning(|_| Box::pin(async { Ok(5) }));
+                mocks
+                    .provider
+                    .expect_get_block_number()
+                    .times(1)
+                    .returning(move || Box::pin(async move { Ok(head) }));
+                mocks
+                    .provider
+                    .expect_get_transaction_receipt()
+                    .times(usize::from(!clears))
+                    .returning(|_| Box::pin(async { Ok(None) }));
+                let state = repository(&mut mocks, &tx);
+                let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+                let result = evm.reconcile_tx_nonce_state(&tx).await.unwrap();
+                if clears {
+                    assert!(result.is_none());
+                    assert_eq!(seen_at(&state), None);
+                } else {
+                    assert_eq!(result.unwrap().status, TransactionStatus::Submitted);
+                    assert_eq!(seen_at(&state), Some(100));
+                }
+            }
+        }
+
         /// #991 review: a Sent check must not count an RPC outage as a failure.
         #[tokio::test]
         async fn sent_receipt_lookup_error_keeps_sent() {
@@ -7096,6 +7155,10 @@ mod tests {
                 .provider
                 .expect_get_transaction_count()
                 .returning(|_| Box::pin(async { Ok(5) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .returning(|| Box::pin(async { Ok(100) }));
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm.reconcile_tx_nonce_state(&tx).await.unwrap().is_none());
