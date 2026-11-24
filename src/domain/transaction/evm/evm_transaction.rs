@@ -1055,21 +1055,22 @@ where
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
 
-        // A never-broadcast tx can change while its job is queued:
+        // A tx can change while its job is queued:
         // - Converted to a NOOP: make_noop dropped the original signed bytes, and the
         //   resubmit path (cancel, status checker or chain link) signs the NOOP.
-        // - Expired: the status checker replaces it with a NOOP.
+        // - Expired before its first broadcast: the status checker replaces it with
+        //   a NOOP.
         // A signed NOOP (a gap filler) is never skipped: its purpose is to fill the nonce.
-        if tx.status == TransactionStatus::Sent {
-            if is_noop(&evm_tx_data) {
-                if evm_tx_data.raw.is_none() {
-                    info!(tx_id = %tx.id, "NOOP not signed yet; resubmit delivers it");
-                    return Ok(tx);
-                }
-            } else if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
-                info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
+        if is_noop(&evm_tx_data) {
+            if evm_tx_data.raw.is_none() {
+                info!(tx_id = %tx.id, "NOOP not signed yet; resubmit delivers it");
                 return Ok(tx);
             }
+        } else if tx.status == TransactionStatus::Sent
+            && !is_transaction_valid(&tx.created_at, &tx.valid_until)
+        {
+            info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
+            return Ok(tx);
         }
 
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
@@ -4903,8 +4904,7 @@ mod tests {
         }
     }
 
-    /// Arbitrum chain link: a NOOP successor gets a resubmit job, which re-signs it.
-    /// Its stored raw bytes still hold the original payload.
+    /// Arbitrum chain link: a NOOP successor gets a resubmit job, which signs it.
     #[tokio::test]
     async fn test_submit_arbitrum_chain_link_resubmits_noop_successor() {
         use crate::jobs::TransactionCommand;
@@ -4989,40 +4989,43 @@ mod tests {
         assert_eq!(returned.status, TransactionStatus::Sent);
     }
 
-    /// A Sent tx converted to a NOOP after its submit job was queued has no signed
-    /// bytes (make_noop drops them): the worker sends nothing and does not fail.
+    /// A tx converted to a NOOP after its job was queued has no signed bytes
+    /// (make_noop drops them): the worker sends nothing and does not fail.
     #[tokio::test]
-    async fn test_submit_skips_unsigned_sent_noop() {
-        let mut tx = create_arbitrum_submit_tx();
-        let mut data = tx.network_data.get_evm_transaction_data().unwrap();
-        data.to = Some(data.from.clone());
-        data.value = U256::from(0);
-        data.data = Some("0x".to_string());
-        data.speed = Some(Speed::Fast);
-        data.raw = None;
-        data.signature = None;
-        assert!(is_noop(&data));
-        tx.network_data = NetworkTransactionData::Evm(data);
+    async fn test_submit_skips_unsigned_noop() {
+        for status in [TransactionStatus::Sent, TransactionStatus::Submitted] {
+            let mut tx = create_arbitrum_submit_tx();
+            tx.status = status.clone();
+            let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+            data.to = Some(data.from.clone());
+            data.value = U256::from(0);
+            data.data = Some("0x".to_string());
+            data.speed = Some(Speed::Fast);
+            data.raw = None;
+            data.signature = None;
+            assert!(is_noop(&data));
+            tx.network_data = NetworkTransactionData::Evm(data);
 
-        let mut mock_provider = MockEvmProviderTrait::new();
-        mock_provider.expect_send_raw_transaction().never();
-        let mut mock_transaction = MockTransactionRepository::new();
-        mock_transaction.expect_partial_update().never();
+            let mut mock_provider = MockEvmProviderTrait::new();
+            mock_provider.expect_send_raw_transaction().never();
+            let mut mock_transaction = MockTransactionRepository::new();
+            mock_transaction.expect_partial_update().never();
 
-        let evm_transaction = EvmRelayerTransaction {
-            relayer: create_test_relayer(),
-            provider: mock_provider,
-            relayer_repository: Arc::new(MockRelayerRepository::new()),
-            network_repository: Arc::new(default_mock_network()),
-            transaction_repository: Arc::new(mock_transaction),
-            transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
-            job_producer: Arc::new(MockJobProducerTrait::new()),
-            price_calculator: MockPriceCalculator::new(),
-            signer: MockSigner::new(),
-        };
+            let evm_transaction = EvmRelayerTransaction {
+                relayer: create_test_relayer(),
+                provider: mock_provider,
+                relayer_repository: Arc::new(MockRelayerRepository::new()),
+                network_repository: Arc::new(default_mock_network()),
+                transaction_repository: Arc::new(mock_transaction),
+                transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
+                job_producer: Arc::new(MockJobProducerTrait::new()),
+                price_calculator: MockPriceCalculator::new(),
+                signer: MockSigner::new(),
+            };
 
-        let returned = evm_transaction.submit_transaction(tx).await.unwrap();
-        assert_eq!(returned.status, TransactionStatus::Sent);
+            let returned = evm_transaction.submit_transaction(tx).await.unwrap();
+            assert_eq!(returned.status, status);
+        }
     }
 
     /// A freshly signed NOOP (a nonce-health gap filler) is broadcast by its first

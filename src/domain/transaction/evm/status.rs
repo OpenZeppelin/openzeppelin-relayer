@@ -1027,9 +1027,8 @@ where
                         "{reason}. Replacing with NOOP to clear nonce slot (Sent state with assigned nonce)."
                     ));
                     let updated_tx = self.process_noop_transaction(&tx, noop_reason).await?;
-                    // Must use resubmit (not submit) — resubmit re-signs with new gas pricing,
-                    // producing fresh `raw` bytes for the NOOP. submit_transaction would
-                    // broadcast the stale `raw` bytes which still contain the original tx.
+                    // Must use resubmit (not submit): make_noop dropped the signed bytes,
+                    // and resubmit signs the NOOP with new gas pricing.
                     self.send_transaction_resubmit_job(&updated_tx).await?;
                     Ok(updated_tx)
                 } else {
@@ -1398,9 +1397,8 @@ where
                 .partial_update(tx.id.clone(), update)
                 .await?;
 
-            // Resubmit, not submit: the NOOP rewrote the logical fields, but the
-            // stored raw/signature still hold the original payload. The resubmit
-            // path re-prices and re-signs, so the NOOP is what gets broadcast.
+            // Resubmit, not submit: make_noop dropped the signed bytes, and the
+            // resubmit path re-prices and signs the NOOP.
             // On Arbitrum a NOOP above the head would be rejected: it stays persisted
             // and is sent by the chain link or by a later check once it is the head.
             if self.is_above_arbitrum_head(&updated_tx).await {
