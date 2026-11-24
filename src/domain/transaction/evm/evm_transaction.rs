@@ -354,7 +354,16 @@ where
             status_reason: Some(format!("Nonce too high (attempt {new_count})")),
             ..Default::default()
         };
-        self.cas_update(tx, update).await?;
+        match self.cas_update(tx, update).await {
+            Ok(_) => {}
+            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+            // A transient store error must not skip the escalation below.
+            Err(e) => warn!(
+                tx_id = %tx.id,
+                error = %e,
+                "failed to persist nonce_too_high_retries metadata {context}"
+            ),
+        }
 
         if new_count >= MAX_NONCE_TOO_HIGH_RETRIES {
             warn!(
@@ -1202,16 +1211,14 @@ where
                             status_reason: Some(reason),
                             ..Default::default()
                         };
-                        if let Err(update_err) = self
-                            .transaction_repository
-                            .partial_update(tx.id.clone(), update)
-                            .await
-                        {
-                            warn!(
+                        match self.cas_update(&tx, update).await {
+                            Ok(_) => {}
+                            Err(e) if e.is_concurrent_update_conflict() => return Err(e),
+                            Err(update_err) => warn!(
                                 tx_id = %tx.id,
                                 error = %update_err,
                                 "failed to persist status_reason for nonce error"
-                            );
+                            ),
                         }
 
                         // Schedule nonce recovery status check (best effort)
@@ -1586,6 +1593,12 @@ where
             ],
             Some("replace_transaction"),
         )?;
+        // A canceled Sent/Submitted record keeps its status until the NOOP mines.
+        if old_tx.is_canceled == Some(true) {
+            return Err(TransactionError::ValidationError(
+                "Cannot replace a canceled transaction".to_string(),
+            ));
+        }
 
         // Extract EVM data from both old transaction and new request
         let old_evm_data = old_tx.network_data.get_evm_transaction_data()?;
@@ -1728,11 +1741,17 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
     PriceCalculator<EvmGasPriceService<EvmProvider>>,
 >;
 /// A final record that was never sent but holds a nonce leaves a gap.
+///
+/// A gap-fill NOOP is skipped: healing it creates the next NOOP at the same
+/// nonce, which fails the same way (for example, while the relayer has no
+/// funds). The gap-ahead detector catches the gap later.
 fn holds_unused_nonce(tx: &TransactionRepoModel) -> bool {
+    let is_gap_fill_noop = tx.noop_count.is_some() && tx.is_canceled != Some(true);
     matches!(
         tx.status,
         TransactionStatus::Failed | TransactionStatus::Canceled
-    ) && tx.sent_at.is_none()
+    ) && !is_gap_fill_noop
+        && tx.sent_at.is_none()
         && tx
             .network_data
             .get_evm_transaction_data()
@@ -4356,10 +4375,10 @@ mod tests {
         // Should persist status_reason
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| update.status_reason.is_some())
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
+            .withf(|_, _, update| update.status_reason.is_some())
+            .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         // Should schedule nonce recovery status check
         mock_job_producer
@@ -4441,10 +4460,10 @@ mod tests {
         // Should persist status_reason (nonce recovery path)
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .withf(|_, update| update.status_reason.is_some())
-            .returning(move |_, _| Ok(test_tx_clone.clone()));
+            .withf(|_, _, update| update.status_reason.is_some())
+            .returning(move |_, _, _| Ok(test_tx_clone.clone()));
 
         // Should schedule nonce recovery status check
         mock_job_producer

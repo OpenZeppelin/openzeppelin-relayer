@@ -1159,3 +1159,90 @@ async fn stale_noop_stops_without_notification() {
     assert_eq!(jobs.submit.load(Ordering::SeqCst), 0);
     assert_eq!(jobs.notifications.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn gap_fill_noop_prepare_failure_does_not_heal() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let mut tx = pending_tx(Some(3), Duration::seconds(30));
+    tx.noop_count = Some(1);
+    repo.create(tx.clone()).await.unwrap();
+    let mut p = block_ok();
+    p.expect_get_balance()
+        .returning(|_| Box::pin(async { Ok(U256::from(0u64)) }));
+    let e = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        p,
+        MockSigner::new(),
+        &jobs,
+    );
+
+    let r = e.prepare_transaction(tx).await.unwrap();
+
+    assert_eq!(r.status, TransactionStatus::Failed);
+    assert!(
+        jobs.health_hints.lock().unwrap().is_empty(),
+        "a failed gap-fill NOOP must not queue the next one"
+    );
+}
+
+#[tokio::test]
+async fn nonce_too_high_store_error_still_escalates() {
+    // Not in the repository, so the guarded write fails with a non-conflict error.
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let mut tx = pending_tx(Some(7), Duration::seconds(30));
+    tx.metadata = Some(crate::models::TransactionMetadata {
+        nonce_too_high_retries: crate::constants::MAX_NONCE_TOO_HIGH_RETRIES - 1,
+        ..Default::default()
+    });
+    let e = evm(
+        repo,
+        Arc::new(InMemoryTransactionCounter::new()),
+        block_ok(),
+        MockSigner::new(),
+        &jobs,
+    );
+
+    e.handle_nonce_too_high(&tx, "test").await.unwrap();
+
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("7".into())]);
+}
+
+#[tokio::test]
+async fn replace_of_canceled_transaction_is_rejected() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let mut tx = pending_tx(Some(7), Duration::seconds(30));
+    tx.status = TransactionStatus::Submitted;
+    tx.sent_at = Some(Utc::now().to_rfc3339());
+    tx.is_canceled = Some(true);
+    tx.noop_count = Some(1);
+    let tx = repo.create(tx).await.unwrap();
+    let e = evm(
+        repo.clone(),
+        Arc::new(InMemoryTransactionCounter::new()),
+        provider(None),
+        MockSigner::new(),
+        &jobs,
+    );
+    let request =
+        crate::models::NetworkTransactionRequest::Evm(crate::models::EvmTransactionRequest {
+            to: Some("0xReplacement".into()),
+            gas_limit: Some(21000),
+            ..Default::default()
+        });
+
+    let err = e
+        .replace_transaction(tx.clone(), request)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::models::TransactionError::ValidationError(_)
+    ));
+    assert_eq!(stored(&repo).await.0.version, tx.version);
+    assert_eq!(jobs.submit.load(Ordering::SeqCst), 0);
+}
