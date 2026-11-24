@@ -1164,8 +1164,7 @@ async fn stale_noop_stops_without_notification() {
 async fn gap_fill_noop_prepare_failure_does_not_heal() {
     let repo = Arc::new(InMemoryTransactionRepository::new());
     let jobs = Jobs::default();
-    let mut tx = pending_tx(Some(3), Duration::seconds(30));
-    tx.noop_count = Some(1);
+    let tx = gap_fill_noop(3);
     repo.create(tx.clone()).await.unwrap();
     let mut p = block_ok();
     p.expect_get_balance()
@@ -1245,4 +1244,59 @@ async fn replace_of_canceled_transaction_is_rejected() {
     ));
     assert_eq!(stored(&repo).await.0.version, tx.version);
     assert_eq!(jobs.submit.load(Ordering::SeqCst), 0);
+}
+
+fn gap_fill_noop(nonce: u64) -> TransactionRepoModel {
+    let mut tx = pending_tx(Some(nonce), Duration::seconds(30));
+    tx.noop_count = Some(1);
+    if let NetworkTransactionData::Evm(ref mut d) = tx.network_data {
+        d.value = U256::from(0u64);
+        d.data = Some("0x".into());
+        d.to = Some(ADDR.into());
+    }
+    tx
+}
+
+#[tokio::test]
+async fn cancel_pending_gap_fill_noop_still_heals() {
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let tx = repo.create(gap_fill_noop(4)).await.unwrap();
+    let e = evm(
+        repo,
+        Arc::new(InMemoryTransactionCounter::new()),
+        block_ok(),
+        MockSigner::new(),
+        &jobs,
+    );
+
+    let r = e.cancel_transaction(tx).await.unwrap();
+
+    assert_eq!(r.status, TransactionStatus::Canceled);
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("4".into())]);
+}
+
+#[tokio::test]
+async fn replaced_gap_fill_record_failure_still_heals() {
+    // A replace keeps noop_count but swaps in a real payload.
+    let repo = Arc::new(InMemoryTransactionRepository::new());
+    let jobs = Jobs::default();
+    let mut tx = pending_tx(Some(5), Duration::seconds(30));
+    tx.noop_count = Some(1);
+    repo.create(tx.clone()).await.unwrap();
+    let mut p = block_ok();
+    p.expect_get_balance()
+        .returning(|_| Box::pin(async { Ok(U256::from(0u64)) }));
+    let e = evm(
+        repo,
+        Arc::new(InMemoryTransactionCounter::new()),
+        p,
+        MockSigner::new(),
+        &jobs,
+    );
+
+    let r = e.prepare_transaction(tx).await.unwrap();
+
+    assert_eq!(r.status, TransactionStatus::Failed);
+    assert_eq!(*jobs.health_hints.lock().unwrap(), vec![Some("5".into())]);
 }

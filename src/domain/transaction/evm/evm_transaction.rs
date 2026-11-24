@@ -1742,20 +1742,23 @@ pub type DefaultEvmTransaction = EvmRelayerTransaction<
 >;
 /// A final record that was never sent but holds a nonce leaves a gap.
 ///
-/// A gap-fill NOOP is skipped: healing it creates the next NOOP at the same
-/// nonce, which fails the same way (for example, while the relayer has no
+/// A failed gap-fill NOOP is skipped: healing it creates the next NOOP at the
+/// same nonce, which fails the same way (for example, while the relayer has no
 /// funds). The gap-ahead detector catches the gap later.
 fn holds_unused_nonce(tx: &TransactionRepoModel) -> bool {
-    let is_gap_fill_noop = tx.noop_count.is_some() && tx.is_canceled != Some(true);
+    let Ok(data) = tx.network_data.get_evm_transaction_data() else {
+        return false;
+    };
+    let failed_gap_fill_noop = tx.status == TransactionStatus::Failed
+        && tx.noop_count.is_some()
+        && tx.is_canceled != Some(true)
+        && is_noop(&data);
     matches!(
         tx.status,
         TransactionStatus::Failed | TransactionStatus::Canceled
-    ) && !is_gap_fill_noop
+    ) && !failed_gap_fill_noop
         && tx.sent_at.is_none()
-        && tx
-            .network_data
-            .get_evm_transaction_data()
-            .is_ok_and(|data| data.nonce.is_some())
+        && data.nonce.is_some()
 }
 
 #[cfg(test)]
@@ -4499,6 +4502,75 @@ mod tests {
         // Status should remain Sent — reconciliation happens via status checker
         let returned_tx = result.unwrap();
         assert_eq!(returned_tx.status, TransactionStatus::Sent);
+    }
+
+    #[tokio::test]
+    async fn test_submit_transaction_nonce_too_low_conflict_stops() {
+        let mut mock_transaction = MockTransactionRepository::new();
+        let mock_relayer = MockRelayerRepository::new();
+        let mut mock_provider = MockEvmProviderTrait::new();
+        let mock_signer = MockSigner::new();
+        let mut mock_job_producer = MockJobProducerTrait::new();
+        let mock_price_calculator = MockPriceCalculator::new();
+        let counter_service = MockTransactionCounterTrait::new();
+        let mut mock_network = MockNetworkRepository::new();
+        mock_network.expect_get_by_name().never();
+
+        let relayer = create_test_relayer();
+        let mut test_tx = create_test_transaction();
+        test_tx.status = TransactionStatus::Sent;
+        test_tx.sent_at = Some(Utc::now().to_rfc3339());
+        test_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(42),
+            hash: Some("0xhash".to_string()),
+            raw: Some(vec![1, 2, 3]),
+            ..test_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+
+        // Provider returns "nonce too low" error
+        mock_provider
+            .expect_send_raw_transaction()
+            .times(1)
+            .returning(|_| {
+                Box::pin(async {
+                    Err(crate::services::provider::ProviderError::Other(
+                        "nonce too low".to_string(),
+                    ))
+                })
+            });
+
+        // Should persist status_reason (nonce recovery path)
+        let test_tx_clone = test_tx.clone();
+        mock_transaction
+            .expect_partial_update_if_version()
+            .times(1)
+            .withf(|_, _, update| update.status_reason.is_some())
+            .returning(|id, _, _| {
+                Err(crate::models::RepositoryError::ConcurrentUpdateConflict(id))
+            });
+        mock_transaction
+            .expect_get_by_id_on_primary()
+            .returning(move |_| Ok(test_tx_clone.clone()));
+
+        // A stale job stops: no recovery job.
+        mock_job_producer
+            .expect_produce_check_transaction_status_job()
+            .never();
+
+        let evm_transaction = EvmRelayerTransaction {
+            relayer: relayer.clone(),
+            provider: mock_provider,
+            relayer_repository: Arc::new(mock_relayer),
+            network_repository: Arc::new(mock_network),
+            transaction_repository: Arc::new(mock_transaction),
+            transaction_counter_service: Arc::new(counter_service),
+            job_producer: Arc::new(mock_job_producer),
+            price_calculator: mock_price_calculator,
+            signer: mock_signer,
+        };
+
+        let result = evm_transaction.submit_transaction(test_tx).await;
+        assert!(result.unwrap_err().is_concurrent_update_conflict());
     }
 
     /// Test resubmit_transaction with NonceTooLow schedules recovery and treats as already submitted

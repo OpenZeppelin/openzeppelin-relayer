@@ -4352,6 +4352,45 @@ mod tests {
             assert!(err.is_concurrent_update_conflict());
         }
 
+        /// Hash recovery in the status check writes the same status it returns.
+        #[tokio::test]
+        async fn test_impl_status_after_own_recovery_proceeds() {
+            let mut mocks = default_test_mocks();
+            let relayer = create_test_relayer();
+            let mut tx = make_test_transaction(TransactionStatus::Submitted);
+            tx.created_at = (Utc::now() - Duration::minutes(1)).to_rfc3339();
+            if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
+                evm_data.hash = Some("0xHash".to_string());
+            }
+            mocks
+                .provider
+                .expect_get_transaction_receipt()
+                .returning(|_| Box::pin(async { Ok(Some(make_mock_receipt(true, Some(100)))) }));
+            mocks
+                .provider
+                .expect_get_block_number()
+                .return_once(|| Box::pin(async { Ok(100) }));
+            mocks
+                .network_repo
+                .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
+            let recovered = {
+                let mut r = tx.clone();
+                r.version = tx.version + 1;
+                r.status = TransactionStatus::Mined;
+                r
+            };
+            mocks
+                .tx_repo
+                .expect_get_by_id_on_primary()
+                .returning(move |_| Ok(recovered.clone()));
+            mocks.tx_repo.expect_partial_update_if_version().never();
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            let result = evm_transaction.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Mined);
+        }
+
         #[tokio::test]
         async fn test_impl_final_confirmed_branch() {
             let mut mocks = default_test_mocks();
