@@ -1481,7 +1481,7 @@ where
         };
 
         // Compare first, so the network lookup only runs for a tx behind the head.
-        tx_nonce > on_chain_nonce && self.is_arbitrum_network(tx, evm_data.chain_id).await
+        tx_nonce > on_chain_nonce && self.is_arbitrum_network(tx).await
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
@@ -2934,6 +2934,10 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_network_model())));
+            mocks
+                .network_repo
+                .expect_get_by_name()
+                .returning(|_, _| Ok(Some(create_test_network_model())));
 
             mocks.provider.expect_get_block_by_number().returning(|| {
                 Box::pin(async {
@@ -2998,6 +3002,10 @@ mod tests {
                 .network_repo
                 .expect_get_by_chain_id()
                 .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+            mocks
+                .network_repo
+                .expect_get_by_name()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
 
             mocks.provider.expect_get_block_by_number().returning(|| {
                 Box::pin(async {
@@ -3059,6 +3067,10 @@ mod tests {
             mocks
                 .network_repo
                 .expect_get_by_chain_id()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+            mocks
+                .network_repo
+                .expect_get_by_name()
                 .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
 
             mocks.provider.expect_get_block_by_number().returning(|| {

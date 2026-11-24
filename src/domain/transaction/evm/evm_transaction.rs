@@ -19,7 +19,10 @@ use crate::{
     domain::{
         evm::is_noop,
         transaction::{
-            evm::{ensure_status, ensure_status_one_of, PriceCalculator, PriceCalculatorTrait},
+            evm::{
+                ensure_status, ensure_status_one_of, is_too_early_to_resubmit,
+                is_transaction_valid, PriceCalculator, PriceCalculatorTrait,
+            },
             Transaction,
         },
         EvmTransactionValidationError, EvmTransactionValidator,
@@ -382,16 +385,15 @@ where
         }
     }
 
-    /// Returns `true` when the chain is tagged Arbitrum. A failed lookup returns `false`,
-    /// so the default (non-Arbitrum) behaviour applies.
-    pub(super) async fn is_arbitrum_network(
-        &self,
-        tx: &TransactionRepoModel,
-        chain_id: u64,
-    ) -> bool {
+    /// Returns `true` when the relayer's network is tagged Arbitrum. A failed lookup
+    /// returns `false`, so the default (non-Arbitrum) behaviour applies.
+    ///
+    /// Resolves by the relayer's network name, not by chain id: two network entries
+    /// can share a chain id with different tags.
+    pub(super) async fn is_arbitrum_network(&self, tx: &TransactionRepoModel) -> bool {
         let network = match self
             .network_repository
-            .get_by_chain_id(NetworkType::Evm, chain_id)
+            .get_by_name(NetworkType::Evm, &self.relayer.network)
             .await
         {
             Ok(Some(model)) => EvmNetwork::try_from(model).ok(),
@@ -404,11 +406,19 @@ where
         network.is_some_and(|n| n.is_arbitrum())
     }
 
-    /// Arbitrum chained delivery (no-op on other networks): after a successful broadcast at nonce N, enqueue the
-    /// submit job for a never-broadcast `Sent` tx at N+1. A jammed region then drains
-    /// at job+RPC latency instead of one tx per resubmit cycle. Best-effort: failures
-    /// only log, and the status checker remains the fallback driver. Duplicate links
-    /// are safe because re-submitting already-broadcast bytes yields `AlreadyKnown`.
+    /// Arbitrum chained delivery (no-op on other networks): after a successful broadcast
+    /// at nonce N, enqueue delivery of a never-broadcast `Sent` tx at N+1. A jammed
+    /// region then drains at job+RPC latency instead of one tx per resubmit cycle.
+    /// Best-effort: failures only log, and the status checker remains the fallback
+    /// driver.
+    ///
+    /// The successor is linked only when it shows it is stuck (a recorded
+    /// nonce-too-high, or older than the resubmit age floor). A `Sent` tx without
+    /// `sent_at` may just have its first submit job queued, and a duplicate send of an
+    /// already-sequenced tx is answered "nonce too low" on Nitro, which triggers nonce
+    /// recovery on a healthy tx. A NOOP successor gets a resubmit job, because its
+    /// stored raw bytes still hold the original payload; an expired non-NOOP successor
+    /// is left to the status checker, which replaces it with a NOOP.
     pub(super) async fn enqueue_next_nonce_submit(&self, tx: &TransactionRepoModel) {
         let Ok(evm_data) = tx.network_data.get_evm_transaction_data() else {
             return;
@@ -416,7 +426,7 @@ where
         let Some(nonce) = evm_data.nonce else {
             return;
         };
-        if !self.is_arbitrum_network(tx, evm_data.chain_id).await {
+        if !self.is_arbitrum_network(tx).await {
             return;
         }
 
@@ -438,37 +448,68 @@ where
             return;
         }
 
-        match self
+        let next_tx = match self
             .transaction_repository
             .find_by_nonce(&tx.relayer_id, nonce + 1)
             .await
         {
             Ok(Some(next_tx))
-                if next_tx.status == TransactionStatus::Sent
-                    && next_tx.sent_at.is_none()
-                    && next_tx
-                        .network_data
-                        .get_evm_transaction_data()
-                        .is_ok_and(|data| !is_noop(&data)) =>
+                if next_tx.status == TransactionStatus::Sent && next_tx.sent_at.is_none() =>
             {
-                info!(
-                    relayer_id = %tx.relayer_id,
-                    next_nonce = nonce + 1,
-                    next_tx_id = %next_tx.id,
-                    "drain chain advanced: enqueueing submit for next nonce"
-                );
-                if let Err(e) = self.send_transaction_submit_job(&next_tx).await {
-                    warn!(
-                        tx_id = %next_tx.id,
-                        error = %e,
-                        "chain link: failed to enqueue submit job for next nonce"
-                    );
-                }
+                next_tx
             }
-            Ok(_) => {}
+            Ok(_) => return,
             Err(e) => {
                 debug!(tx_id = %tx.id, error = %e, "chain link: find_by_nonce lookup failed");
+                return;
             }
+        };
+        let Ok(next_data) = next_tx.network_data.get_evm_transaction_data() else {
+            return;
+        };
+
+        let nonce_too_high_seen = next_tx
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.nonce_too_high_retries > 0);
+        let old_enough = is_too_early_to_resubmit(&next_tx).is_ok_and(|too_early| !too_early);
+        if !nonce_too_high_seen && !old_enough {
+            debug!(
+                next_tx_id = %next_tx.id,
+                "chain link: successor may still have its first submit queued; skipping"
+            );
+            return;
+        }
+
+        let enqueued = if is_noop(&next_data) {
+            info!(
+                relayer_id = %tx.relayer_id,
+                next_nonce = nonce + 1,
+                next_tx_id = %next_tx.id,
+                "drain chain advanced: enqueueing resubmit for NOOP at next nonce"
+            );
+            self.send_transaction_resubmit_job(&next_tx).await
+        } else if !is_transaction_valid(&next_tx.created_at, &next_tx.valid_until) {
+            debug!(
+                next_tx_id = %next_tx.id,
+                "chain link: successor expired; status checker will replace it with a NOOP"
+            );
+            return;
+        } else {
+            info!(
+                relayer_id = %tx.relayer_id,
+                next_nonce = nonce + 1,
+                next_tx_id = %next_tx.id,
+                "drain chain advanced: enqueueing submit for next nonce"
+            );
+            self.send_transaction_submit_job(&next_tx).await
+        };
+        if let Err(e) = enqueued {
+            warn!(
+                tx_id = %next_tx.id,
+                error = %e,
+                "chain link: failed to enqueue delivery job for next nonce"
+            );
         }
     }
 
@@ -1006,6 +1047,25 @@ where
         }
 
         let evm_tx_data = tx.network_data.get_evm_transaction_data()?;
+
+        // A never-broadcast tx may have changed while its job was queued. A NOOP
+        // replacement still holds the original signed bytes; its resubmit job
+        // (queued by every NOOP path) re-signs and sends it. An expired tx is left
+        // to the status checker, which replaces it with a NOOP.
+        if tx.status == TransactionStatus::Sent {
+            if is_noop(&evm_tx_data) {
+                info!(
+                    tx_id = %tx.id,
+                    "NOOP replacement is delivered by resubmit; skipping stale raw bytes"
+                );
+                return Ok(tx);
+            }
+            if !is_transaction_valid(&tx.created_at, &tx.valid_until) {
+                info!(tx_id = %tx.id, "transaction expired before broadcast; skipping submit");
+                return Ok(tx);
+            }
+        }
+
         let raw_tx = evm_tx_data.raw.as_ref().ok_or_else(|| {
             TransactionError::InvalidType("Raw transaction data is missing".to_string())
         })?;
@@ -1652,8 +1712,9 @@ mod tests {
         }
     }
 
-    /// MockNetworkRepository resolving any chain id to a plain (non-rollup) network.
-    fn default_mock_network() -> MockNetworkRepository {
+    /// MockNetworkRepository resolving any chain id to a plain (non-rollup) network,
+    /// leaving name lookups for the test to set up.
+    fn chain_id_mock_network() -> MockNetworkRepository {
         let mut mock_network = MockNetworkRepository::new();
         mock_network
             .expect_get_by_chain_id()
@@ -1661,15 +1722,32 @@ mod tests {
         mock_network
     }
 
-    /// MockNetworkRepository resolving any chain id to an Arbitrum-based rollup network.
+    /// MockNetworkRepository resolving any chain id or name to a plain (non-rollup) network.
+    fn default_mock_network() -> MockNetworkRepository {
+        let mut mock_network = chain_id_mock_network();
+        mock_network
+            .expect_get_by_name()
+            .returning(|_, _| Ok(Some(create_test_network_model_with_tags(vec![]))));
+        mock_network
+    }
+
+    /// MockNetworkRepository resolving the relayer's network name to an Arbitrum-based
+    /// rollup network. The chain-id lookup returns a plain network, so a test using
+    /// this mock fails if Arbitrum detection resolves by chain id.
     fn arbitrum_mock_network() -> MockNetworkRepository {
         let mut mock_network = MockNetworkRepository::new();
-        mock_network.expect_get_by_chain_id().returning(|_, _| {
-            Ok(Some(create_test_network_model_with_tags(vec![
-                "rollup".to_string(),
-                "arbitrum-based".to_string(),
-            ])))
-        });
+        mock_network
+            .expect_get_by_chain_id()
+            .returning(|_, _| Ok(Some(create_test_network_model_with_tags(vec![]))));
+        mock_network
+            .expect_get_by_name()
+            .with(eq(NetworkType::Evm), eq("mainnet"))
+            .returning(|_, _| {
+                Ok(Some(create_test_network_model_with_tags(vec![
+                    "rollup".to_string(),
+                    "arbitrum-based".to_string(),
+                ])))
+            });
         mock_network
     }
 
@@ -4124,7 +4202,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = default_mock_network();
+        let mut mock_network = chain_id_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
@@ -4208,7 +4286,7 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = default_mock_network();
+        let mut mock_network = chain_id_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
@@ -4293,13 +4371,14 @@ mod tests {
         let mut mock_job_producer = MockJobProducerTrait::new();
         let mut mock_price_calculator = MockPriceCalculator::new();
         let counter_service = MockTransactionCounterTrait::new();
-        let mut mock_network = default_mock_network();
+        let mut mock_network = chain_id_mock_network();
         let network_model = create_test_network_repo_model("mainnet", Some(5));
         mock_network
             .expect_get_by_name()
             .with(eq(NetworkType::Evm), eq("mainnet"))
-            .times(1)
-            .return_once(move |_, _| Ok(Some(network_model)));
+            // Retry-delay lookup, then the Arbitrum check after the accepted send.
+            .times(2)
+            .returning(move |_, _| Ok(Some(network_model.clone())));
 
         let relayer = create_test_relayer();
         let mut test_tx = create_test_transaction();
@@ -4709,10 +4788,13 @@ mod tests {
         test_tx
     }
 
-    /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for
-    /// the never-broadcast Sent transaction at N+1.
-    #[tokio::test]
-    async fn test_submit_arbitrum_chain_link_enqueues_next_nonce() {
+    /// Runs a successful Arbitrum submit at nonce 42 with `next_record` stored at
+    /// nonce 43, and returns the delivery jobs produced for the successor.
+    async fn run_arbitrum_chain_link(
+        next_record: Option<TransactionRepoModel>,
+    ) -> Vec<crate::jobs::TransactionCommand> {
+        use std::sync::Mutex;
+
         let mut mock_transaction = MockTransactionRepository::new();
         let mock_relayer = MockRelayerRepository::new();
         let mut mock_provider = MockEvmProviderTrait::new();
@@ -4746,27 +4828,21 @@ mod tests {
             .expect_get()
             .returning(|_, _| Box::pin(ready(Ok(Some(50)))));
 
-        // Nonce 43 holds a Sent, never-broadcast transaction.
-        let mut next_tx = create_arbitrum_submit_tx();
-        next_tx.id = "next-tx-id".to_string();
-        next_tx.sent_at = None;
-        next_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
-            nonce: Some(43),
-            ..next_tx.network_data.get_evm_transaction_data().unwrap()
-        });
         mock_transaction
             .expect_find_by_nonce()
             .times(1)
             .withf(|relayer_id, nonce| relayer_id == "test-relayer-id" && *nonce == 43)
-            .returning(move |_, _| Ok(Some(next_tx.clone())));
+            .returning(move |_, _| Ok(next_record.clone()));
 
-        // The chain link enqueues the successor's submit job.
+        let jobs = Arc::new(Mutex::new(Vec::new()));
+        let jobs_clone = jobs.clone();
         mock_job_producer
             .expect_produce_submit_transaction_job()
-            .times(1)
             .withf(|job, _| job.transaction_id == "next-tx-id")
-            .returning(|_, _| Box::pin(ready(Ok(()))));
-
+            .returning(move |job, _| {
+                jobs_clone.lock().unwrap().push(job.command.clone());
+                Box::pin(ready(Ok(())))
+            });
         mock_job_producer
             .expect_produce_send_notification_job()
             .returning(|_, _| Box::pin(ready(Ok(()))));
@@ -4785,93 +4861,138 @@ mod tests {
 
         let result = evm_transaction.submit_transaction(test_tx).await;
         assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+        let jobs = jobs.lock().unwrap().clone();
+        jobs
     }
 
-    /// Skip successors that are already sent, are NOOPs, or do not exist.
+    /// A never-broadcast Sent successor at nonce 43, created `age_secs` ago.
+    fn arbitrum_successor(age_secs: i64, nonce_too_high_retries: u32) -> TransactionRepoModel {
+        let mut next_tx = create_arbitrum_submit_tx();
+        next_tx.id = "next-tx-id".to_string();
+        next_tx.sent_at = None;
+        next_tx.created_at = (Utc::now() - chrono::Duration::seconds(age_secs)).to_rfc3339();
+        next_tx.metadata = Some(TransactionMetadata {
+            nonce_too_high_retries,
+            ..Default::default()
+        });
+        next_tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
+            nonce: Some(43),
+            ..next_tx.network_data.get_evm_transaction_data().unwrap()
+        });
+        next_tx
+    }
+
+    /// Arbitrum chain link: broadcast success at nonce N enqueues a submit job for a
+    /// stuck, never-broadcast Sent tx at N+1. Stuck means a recorded nonce-too-high,
+    /// or older than the resubmit age floor (a send that failed on a transport error).
     #[tokio::test]
-    async fn test_submit_arbitrum_chain_link_skips_broadcast_noop_or_missing_next() {
-        for next_record in [
-            // Already broadcast → skip.
-            Some({
-                let mut next_tx = create_arbitrum_submit_tx();
-                next_tx.id = "next-tx-id".to_string();
-                next_tx.sent_at = Some(Utc::now().to_rfc3339());
-                next_tx
-            }),
-            // A NOOP must be signed again by a resubmit job.
-            Some({
-                let mut next_tx = create_arbitrum_submit_tx();
-                next_tx.sent_at = None;
-                let mut data = next_tx.network_data.get_evm_transaction_data().unwrap();
-                data.to = Some(data.from.clone());
-                data.value = U256::from(0);
-                data.data = Some("0x".to_string());
-                data.speed = Some(Speed::Fast);
-                assert!(is_noop(&data));
-                next_tx.network_data = NetworkTransactionData::Evm(data);
-                next_tx
-            }),
-            // Missing record → skip.
-            None,
+    async fn test_submit_arbitrum_chain_link_enqueues_next_nonce() {
+        use crate::jobs::TransactionCommand;
+
+        for next_tx in [arbitrum_successor(1, 1), arbitrum_successor(60, 0)] {
+            let jobs = run_arbitrum_chain_link(Some(next_tx)).await;
+            assert_eq!(jobs.len(), 1);
+            assert!(matches!(jobs[0], TransactionCommand::Submit));
+        }
+    }
+
+    /// Arbitrum chain link: a NOOP successor gets a resubmit job, which re-signs it.
+    /// Its stored raw bytes still hold the original payload.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_resubmits_noop_successor() {
+        use crate::jobs::TransactionCommand;
+
+        let mut next_tx = arbitrum_successor(60, 0);
+        // Expired, as a status-driven NOOP is: the NOOP branch must not check expiry.
+        next_tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+        let mut data = next_tx.network_data.get_evm_transaction_data().unwrap();
+        data.to = Some(data.from.clone());
+        data.value = U256::from(0);
+        data.data = Some("0x".to_string());
+        data.speed = Some(Speed::Fast);
+        assert!(is_noop(&data));
+        next_tx.network_data = NetworkTransactionData::Evm(data);
+
+        let jobs = run_arbitrum_chain_link(Some(next_tx)).await;
+        assert_eq!(jobs.len(), 1);
+        assert!(matches!(jobs[0], TransactionCommand::Resubmit));
+    }
+
+    /// No successor job when the successor is already sent, missing, may still have
+    /// its own first submit queued, or has expired.
+    #[tokio::test]
+    async fn test_submit_arbitrum_chain_link_skips_ineligible_next() {
+        let already_sent = {
+            let mut next_tx = arbitrum_successor(60, 1);
+            next_tx.sent_at = Some(Utc::now().to_rfc3339());
+            next_tx
+        };
+        let fresh_no_evidence = arbitrum_successor(1, 0);
+        let expired = {
+            let mut next_tx = arbitrum_successor(60, 1);
+            next_tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+            next_tx
+        };
+        for (case, next_record) in [
+            ("already sent", Some(already_sent)),
+            ("missing", None),
+            ("fresh, no stuck evidence", Some(fresh_no_evidence)),
+            ("expired", Some(expired)),
         ] {
-            let mut mock_transaction = MockTransactionRepository::new();
-            let mock_relayer = MockRelayerRepository::new();
+            let jobs = run_arbitrum_chain_link(next_record).await;
+            assert!(
+                jobs.is_empty(),
+                "{case}: expected no successor job, got {jobs:?}"
+            );
+        }
+    }
+
+    /// The submit worker re-checks a never-broadcast tx before sending its stored
+    /// bytes: a NOOP replacement (raw still holds the original payload) and an
+    /// expired tx are not broadcast.
+    #[tokio::test]
+    async fn test_submit_skips_sent_noop_or_expired() {
+        let noop = {
+            let mut tx = create_arbitrum_submit_tx();
+            let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+            data.to = Some(data.from.clone());
+            data.value = U256::from(0);
+            data.data = Some("0x".to_string());
+            data.speed = Some(Speed::Fast);
+            assert!(is_noop(&data));
+            tx.network_data = NetworkTransactionData::Evm(data);
+            tx
+        };
+        let expired = {
+            let mut tx = create_arbitrum_submit_tx();
+            tx.valid_until = Some((Utc::now() - chrono::Duration::seconds(5)).to_rfc3339());
+            tx
+        };
+        for (case, tx) in [("noop", noop), ("expired", expired)] {
             let mut mock_provider = MockEvmProviderTrait::new();
-            let mock_signer = MockSigner::new();
+            mock_provider.expect_send_raw_transaction().never();
+            let mut mock_transaction = MockTransactionRepository::new();
+            mock_transaction.expect_partial_update().never();
             let mut mock_job_producer = MockJobProducerTrait::new();
-            let mock_price_calculator = MockPriceCalculator::new();
-            let mut counter_service = MockTransactionCounterTrait::new();
-            let mock_network = arbitrum_mock_network();
-
-            let relayer = create_test_relayer();
-            let test_tx = create_arbitrum_submit_tx();
-
-            mock_provider
-                .expect_send_raw_transaction()
-                .times(1)
-                .returning(|_| Box::pin(async { Ok("0xhash".to_string()) }));
-
-            let test_tx_clone = test_tx.clone();
-            mock_transaction
-                .expect_partial_update()
-                .times(1)
-                .returning(move |_, update| {
-                    let mut updated_tx = test_tx_clone.clone();
-                    updated_tx.status = update.status.clone().unwrap();
-                    Ok(updated_tx)
-                });
-
-            counter_service
-                .expect_get()
-                .returning(|_, _| Box::pin(ready(Ok(Some(50)))));
-
-            mock_transaction
-                .expect_find_by_nonce()
-                .times(1)
-                .returning(move |_, _| Ok(next_record.clone()));
-
-            // No successor submit job may be produced.
             mock_job_producer
                 .expect_produce_submit_transaction_job()
                 .never();
-            mock_job_producer
-                .expect_produce_send_notification_job()
-                .returning(|_, _| Box::pin(ready(Ok(()))));
 
             let evm_transaction = EvmRelayerTransaction {
-                relayer: relayer.clone(),
+                relayer: create_test_relayer(),
                 provider: mock_provider,
-                relayer_repository: Arc::new(mock_relayer),
-                network_repository: Arc::new(mock_network),
+                relayer_repository: Arc::new(MockRelayerRepository::new()),
+                network_repository: Arc::new(default_mock_network()),
                 transaction_repository: Arc::new(mock_transaction),
-                transaction_counter_service: Arc::new(counter_service),
+                transaction_counter_service: Arc::new(MockTransactionCounterTrait::new()),
                 job_producer: Arc::new(mock_job_producer),
-                price_calculator: mock_price_calculator,
-                signer: mock_signer,
+                price_calculator: MockPriceCalculator::new(),
+                signer: MockSigner::new(),
             };
 
-            let result = evm_transaction.submit_transaction(test_tx).await;
-            assert!(result.is_ok(), "Expected Ok, got: {result:?}");
+            let result = evm_transaction.submit_transaction(tx).await;
+            let returned = result.unwrap_or_else(|e| panic!("{case}: expected Ok, got {e:?}"));
+            assert_eq!(returned.status, TransactionStatus::Sent, "{case}");
         }
     }
 }
