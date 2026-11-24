@@ -1,7 +1,7 @@
 //! This defines the Middleware to collect metrics for the application.
 //! This middleware will increment the request counter for each request for each endpoint.
 
-use crate::metrics::{ERROR_COUNTER, RAW_REQUEST_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
+use crate::metrics::{ERROR_COUNTER, REQUEST_COUNTER, REQUEST_LATENCY};
 use actix_web::{
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error,
@@ -11,6 +11,20 @@ use std::{
     task::{Context, Poll},
     time::Instant,
 };
+
+/// Label value shared by every request that matches no registered route.
+pub const UNMATCHED_ROUTE_LABEL: &str = "unmatched";
+
+/// Returns the endpoint label for a request: its matched route pattern (for example
+/// `/api/v1/relayers/{relayer_id}/transactions/{transaction_id}`), never the raw path.
+///
+/// Labelling by raw path creates a new, never-released series for every resource id
+/// (and for every path a scanner probes), so the registry and each scrape grow without
+/// bound. Requests that match no route share [`UNMATCHED_ROUTE_LABEL`].
+pub fn route_label(req: &ServiceRequest) -> String {
+    req.match_pattern()
+        .unwrap_or_else(|| UNMATCHED_ROUTE_LABEL.to_string())
+}
 
 pub struct MetricsMiddleware;
 
@@ -52,18 +66,10 @@ where
 
     // Call function to increment the request counter.
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        // Get the registered routes for the request.
-
-        // If not available, fall back to the raw path.
-        let endpoint = req
-            .match_pattern()
-            .unwrap_or_else(|| req.path().to_string());
+        let endpoint = route_label(&req);
 
         // Get the HTTP method.
         let method = req.method().to_string();
-
-        // Capture the raw URI.
-        let raw_uri = req.path().to_string();
 
         // Start timer for latency.
         let start_time = Instant::now();
@@ -98,11 +104,77 @@ where
                         .inc();
                 }
             }
-            // May be cardinality explosion here, but it's useful for debugging.
-            RAW_REQUEST_COUNTER
-                .with_label_values(&[&raw_uri, &method, &status])
-                .inc();
             res
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::REGISTRY;
+    use actix_web::{test, web, App, HttpResponse};
+
+    /// Every label value recorded so far, across every registered metric.
+    fn label_values() -> Vec<String> {
+        REGISTRY
+            .gather()
+            .iter()
+            .flat_map(|family| family.get_metric().iter())
+            .flat_map(|metric| metric.get_label().iter())
+            .map(|label| label.value().to_string())
+            .collect()
+    }
+
+    #[actix_rt::test]
+    async fn test_requests_for_different_ids_share_one_route_series() {
+        let pattern = "/cardinality-test/relayers/{relayer_id}/transactions/{transaction_id}";
+        let app = test::init_service(App::new().wrap(MetricsMiddleware).route(
+            pattern,
+            web::get().to(|| async { HttpResponse::Ok().finish() }),
+        ))
+        .await;
+
+        let before = REQUEST_COUNTER
+            .with_label_values(&[pattern, "GET", "200 OK"])
+            .get();
+        for tx in ["card-tx-a1", "card-tx-b2", "card-tx-c3"] {
+            let uri = format!("/cardinality-test/relayers/card-relayer-7f/transactions/{tx}");
+            let req = test::TestRequest::get().uri(&uri).to_request();
+            assert!(test::call_service(&app, req).await.status().is_success());
+        }
+
+        let after = REQUEST_COUNTER
+            .with_label_values(&[pattern, "GET", "200 OK"])
+            .get();
+        assert_eq!(after - before, 3.0);
+        let values = label_values();
+        assert!(
+            !values
+                .iter()
+                .any(|v| v.contains("card-tx-") || v.contains("card-relayer-7f")),
+            "no metric may carry a resource id: {values:?}"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn test_unmatched_paths_share_one_label() {
+        let app = test::init_service(App::new().wrap(MetricsMiddleware).route(
+            "/known",
+            web::get().to(|| async { HttpResponse::Ok().finish() }),
+        ))
+        .await;
+
+        for uri in ["/unmatched-probe-1", "/unmatched-probe-2/x"] {
+            let req = test::TestRequest::get().uri(uri).to_request();
+            assert_eq!(test::call_service(&app, req).await.status().as_u16(), 404);
+        }
+
+        let values = label_values();
+        assert!(values.iter().any(|v| v == UNMATCHED_ROUTE_LABEL));
+        assert!(
+            !values.iter().any(|v| v.contains("unmatched-probe")),
+            "unmatched paths must not become labels: {values:?}"
+        );
     }
 }
