@@ -5018,9 +5018,9 @@ mod tests {
             let mut mock_transaction = MockTransactionRepository::new();
             let test_tx_clone = test_tx.clone();
             mock_transaction
-                .expect_partial_update()
+                .expect_partial_update_if_version()
                 .times(1)
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = test_tx_clone.clone();
                     updated_tx.network_data =
                         update.network_data.unwrap_or(updated_tx.network_data);
@@ -5086,9 +5086,9 @@ mod tests {
 
         let test_tx_clone = test_tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = test_tx_clone.clone();
                 updated_tx.status = update.status.clone().unwrap();
                 updated_tx.sent_at = update.sent_at.clone();
@@ -5236,7 +5236,7 @@ mod tests {
         let mut mock_provider = MockEvmProviderTrait::new();
         mock_provider.expect_send_raw_transaction().never();
         let mut mock_transaction = MockTransactionRepository::new();
-        mock_transaction.expect_partial_update().never();
+        mock_transaction.expect_partial_update_if_version().never();
 
         let evm_transaction = EvmRelayerTransaction {
             relayer: create_test_relayer(),
@@ -5274,7 +5274,7 @@ mod tests {
             let mut mock_provider = MockEvmProviderTrait::new();
             mock_provider.expect_send_raw_transaction().never();
             let mut mock_transaction = MockTransactionRepository::new();
-            mock_transaction.expect_partial_update().never();
+            mock_transaction.expect_partial_update_if_version().never();
 
             let evm_transaction = EvmRelayerTransaction {
                 relayer: create_test_relayer(),
@@ -5315,9 +5315,9 @@ mod tests {
         let mut mock_transaction = MockTransactionRepository::new();
         let tx_clone = tx.clone();
         mock_transaction
-            .expect_partial_update()
+            .expect_partial_update_if_version()
             .times(1)
-            .returning(move |_, update| {
+            .returning(move |_, _, update| {
                 let mut updated_tx = tx_clone.clone();
                 updated_tx.status = update.status.clone().unwrap();
                 updated_tx.sent_at = update.sent_at.clone();

@@ -998,9 +998,10 @@ where
     ///
     /// Returns `Handled(tx)` if reconciliation decided this check (caller returns early),
     /// `Receipt` when the current hash is mined, or `Continue` for the normal flow.
+    /// Clearing a sighting updates `tx` to the stored record.
     async fn reconcile_tx_nonce_state(
         &self,
-        tx: &TransactionRepoModel,
+        tx: &mut TransactionRepoModel,
     ) -> Result<NonceReconcile, TransactionError> {
         let evm_data = tx.network_data.get_evm_transaction_data()?;
 
@@ -1145,9 +1146,8 @@ where
             metadata.nonce_used_seen_at_block = Some(block_number);
             metadata.nonce_used_seen_at = Some(Utc::now().to_rfc3339());
             let updated_tx = self
-                .transaction_repository()
-                .partial_update(
-                    tx.id.clone(),
+                .cas_update(
+                    tx,
                     TransactionUpdateRequest {
                         metadata: Some(metadata),
                         ..Default::default()
@@ -1334,7 +1334,7 @@ where
     /// including resubmission, NOOP replacement, timeout detection, and updating status.
     pub async fn handle_status_impl(
         &self,
-        tx: TransactionRepoModel,
+        mut tx: TransactionRepoModel,
         context: Option<StatusCheckContext>,
     ) -> Result<TransactionRepoModel, TransactionError> {
         debug!(
@@ -1395,7 +1395,7 @@ where
         // Continue the observation window on ordinary status jobs too.
         let mut receipt = None;
         if has_recovery_hint || nonce_used_seen {
-            match self.reconcile_tx_nonce_state(&tx).await? {
+            match self.reconcile_tx_nonce_state(&mut tx).await? {
                 NonceReconcile::Handled(recovered_tx) => return Ok(*recovered_tx),
                 NonceReconcile::Receipt(found) => receipt = Some(found),
                 NonceReconcile::Continue => {}
@@ -1948,15 +1948,17 @@ where
         Ok(HistoricalHashRecovery::NotFound)
     }
 
-    /// Clears the "nonce used" sighting, if set. See `without_nonce_used_seen`.
+    /// Clears the "nonce used" sighting, if set, and replaces `tx` with the stored
+    /// record so the caller's next guarded write is not refused by this one.
+    /// See `without_nonce_used_seen`.
     async fn clear_nonce_used_seen(
         &self,
-        tx: &TransactionRepoModel,
+        tx: &mut TransactionRepoModel,
     ) -> Result<(), TransactionError> {
         if let Some(metadata) = without_nonce_used_seen(tx) {
-            self.transaction_repository()
-                .partial_update(
-                    tx.id.clone(),
+            *tx = self
+                .cas_update(
+                    tx,
                     TransactionUpdateRequest {
                         metadata: Some(metadata),
                         ..Default::default()
@@ -2423,9 +2425,9 @@ mod tests {
                 });
             mocks
                 .tx_repo
-                .expect_partial_update()
+                .expect_partial_update_if_version()
                 .times(1)
-                .returning(|_, _| {
+                .returning(|_, _, _| {
                     Err(crate::models::RepositoryError::ConnectionError(
                         "redis down".to_string(),
                     ))
@@ -3123,16 +3125,16 @@ mod tests {
             let tx_clone = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
+                .expect_partial_update_if_version()
                 .times(1)
-                .withf(|_, update| {
+                .withf(|_, _, update| {
                     update.network_data.as_ref().is_some_and(|data| {
                         data.get_evm_transaction_data().is_ok_and(|d| {
                             d.value == U256::ZERO && d.to.as_deref() == Some(&d.from)
                         })
                     })
                 })
-                .returning(move |_, update| {
+                .returning(move |_, _, update| {
                     let mut updated_tx = tx_clone.clone();
                     updated_tx.network_data = update.network_data.clone().unwrap();
                     updated_tx.noop_count = update.noop_count;
@@ -3196,9 +3198,9 @@ mod tests {
                 let tx_clone = tx.clone();
                 mocks
                     .tx_repo
-                    .expect_partial_update()
+                    .expect_partial_update_if_version()
                     .times(1)
-                    .returning(move |_, update| {
+                    .returning(move |_, _, update| {
                         let mut updated_tx = tx_clone.clone();
                         updated_tx.network_data = update.network_data.clone().unwrap();
                         updated_tx.noop_count = update.noop_count;
@@ -5742,7 +5744,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled);
 
@@ -5786,11 +5788,11 @@ mod tests {
                 .provider
                 .expect_get_block_number()
                 .returning(|| Box::pin(async { Ok(100) }));
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled);
 
@@ -5832,7 +5834,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled);
 
@@ -5876,7 +5878,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled);
 
@@ -5923,7 +5925,7 @@ mod tests {
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
             let result = evm_transaction
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled);
 
@@ -6098,9 +6100,9 @@ mod tests {
                 let tx_clone = tx.clone();
                 mocks
                     .tx_repo
-                    .expect_partial_update()
+                    .expect_partial_update_if_version()
                     .times(1)
-                    .returning(move |_, update| {
+                    .returning(move |_, _, update| {
                         let mut updated_tx = tx_clone.clone();
                         updated_tx.noop_count = update.noop_count;
                         Ok(updated_tx)
@@ -6361,8 +6363,8 @@ mod tests {
             let failed = c.failed_writes.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, update| {
                     if update.status == Some(TransactionStatus::Failed) {
                         failed.fetch_add(1, Ordering::SeqCst);
                     }
@@ -6552,7 +6554,7 @@ mod tests {
                 .provider
                 .expect_get_transaction_count()
                 .returning(|_| Box::pin(async { Ok(10) }));
-            let tx = stuck_tx(&["0xold", "0xcur"], Duration::seconds(30));
+            let mut tx = stuck_tx(&["0xold", "0xcur"], Duration::seconds(30));
             mocks
                 .provider
                 .expect_get_block_number()
@@ -6573,17 +6575,17 @@ mod tests {
             let base = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .withf(|_, u| u.status == Some(TransactionStatus::Mined))
+                .expect_partial_update_if_version()
+                .withf(|_, _, u| u.status == Some(TransactionStatus::Mined))
                 .times(1)
-                .returning(move |_, u| {
+                .returning(move |_, _, u| {
                     let mut t = base.clone();
                     apply_update(&mut t, &u);
                     Ok(t)
                 });
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let out = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6622,10 +6624,10 @@ mod tests {
                 .provider
                 .expect_get_transaction_count()
                 .returning(|_| Box::pin(async { Ok(10) }));
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let out = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6670,8 +6672,8 @@ mod tests {
             let base = tx.clone();
             mocks
                 .tx_repo
-                .expect_partial_update()
-                .returning(move |_, u| {
+                .expect_partial_update_if_version()
+                .returning(move |_, _, u| {
                     let mut t = base.clone();
                     apply_update(&mut t, &u);
                     Ok(t)
@@ -6682,7 +6684,7 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let out = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6741,11 +6743,14 @@ mod tests {
         ) -> Arc<Mutex<TransactionRepoModel>> {
             let state = Arc::new(Mutex::new(tx.clone()));
             let updated = state.clone();
-            mocks
-                .tx_repo
-                .expect_partial_update()
-                .returning(move |_, update| {
+            mocks.tx_repo.expect_partial_update_if_version().returning(
+                move |_, expected, update| {
                     let mut tx = updated.lock().unwrap();
+                    if tx.version != expected {
+                        return Err(crate::models::RepositoryError::ConcurrentUpdateConflict(
+                            tx.id.clone(),
+                        ));
+                    }
                     if let Some(status) = update.status {
                         tx.status = status;
                     }
@@ -6755,9 +6760,11 @@ mod tests {
                     if let Some(data) = update.network_data {
                         tx.network_data = data;
                     }
+                    tx.version += 1;
                     Ok(tx.clone())
-                });
-            mocks.tx_repo.expect_get_by_id().returning({
+                },
+            );
+            mocks.tx_repo.expect_get_by_id_on_primary().returning({
                 let state = state.clone();
                 move |_| Ok(state.lock().unwrap().clone())
             });
@@ -6796,7 +6803,7 @@ mod tests {
 
         #[tokio::test]
         async fn used_nonce_waits_until_span_without_resubmitting() {
-            let tx = transaction();
+            let mut tx = transaction();
             let mut mocks = default_test_mocks_with_network();
             let block = Arc::new(AtomicU64::new(100));
             reads(&mut mocks, block.clone(), Arc::new(AtomicBool::new(false)));
@@ -6812,7 +6819,7 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let mut first = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6849,7 +6856,7 @@ mod tests {
 
         #[tokio::test]
         async fn receipt_between_sightings_confirms() {
-            let tx = transaction();
+            let mut tx = transaction();
             let mut mocks = default_test_mocks_with_network();
             let block = Arc::new(AtomicU64::new(100));
             let visible = Arc::new(AtomicBool::new(false));
@@ -6866,7 +6873,7 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let first = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6912,7 +6919,7 @@ mod tests {
             repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -6941,7 +6948,7 @@ mod tests {
                 .returning(|_| {
                     Box::pin(async { Err(crate::services::provider::ProviderError::Timeout) })
                 });
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             mocks
                 .job_producer
                 .expect_produce_submit_transaction_job()
@@ -6976,9 +6983,9 @@ mod tests {
                 });
             mocks
                 .tx_repo
-                .expect_partial_update()
+                .expect_partial_update_if_version()
                 .times(1)
-                .returning(|_, _| {
+                .returning(|_, _, _| {
                     Err(crate::models::RepositoryError::ConnectionError(
                         "redis down".to_string(),
                     ))
@@ -7083,10 +7090,10 @@ mod tests {
                 Arc::new(AtomicU64::new(10_000)),
                 Arc::new(AtomicBool::new(false)),
             );
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let held = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7111,10 +7118,10 @@ mod tests {
                 Arc::new(AtomicU64::new(10_000)),
                 Arc::new(AtomicBool::new(false)),
             );
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7134,10 +7141,10 @@ mod tests {
                 Arc::new(AtomicU64::new(123)),
                 Arc::new(AtomicBool::new(false)),
             );
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7164,7 +7171,7 @@ mod tests {
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7205,12 +7212,123 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let result = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
                 .unwrap();
             assert_eq!(result.status, TransactionStatus::Failed);
+        }
+
+        /// Records that another job already wrote `status`, one version ahead of `tx`.
+        fn written_by_other_job(state: &Mutex<TransactionRepoModel>, status: TransactionStatus) {
+            let mut stored = state.lock().unwrap();
+            stored.status = status;
+            stored.version += 1;
+        }
+
+        /// A stale job's Failed verdict must not overwrite another job's Mined.
+        #[tokio::test]
+        async fn stale_failed_verdict_does_not_overwrite_mined() {
+            let mut tx = transaction();
+            let metadata = tx.metadata.as_mut().unwrap();
+            metadata.nonce_used_seen_at_block = Some(100);
+            metadata.nonce_used_seen_at = Some(
+                (Utc::now()
+                    - crate::constants::get_evm_nonce_used_failure_max_age()
+                    - Duration::minutes(1))
+                .to_rfc3339(),
+            );
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(100)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let state = repository(&mut mocks, &tx);
+            written_by_other_job(&state, TransactionStatus::Mined);
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let err = evm.reconcile_tx_nonce_state(&mut tx).await.unwrap_err();
+            assert!(err.is_concurrent_update_conflict());
+            let stored = state.lock().unwrap();
+            assert_eq!(stored.status, TransactionStatus::Mined);
+            assert_eq!(stored.status_reason, None);
+        }
+
+        /// A stale first sighting must not overwrite another job's Mined record.
+        #[tokio::test]
+        async fn stale_first_sighting_does_not_overwrite_mined() {
+            let mut tx = transaction();
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(100)),
+                Arc::new(AtomicBool::new(false)),
+            );
+            let state = repository(&mut mocks, &tx);
+            written_by_other_job(&state, TransactionStatus::Mined);
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(0);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let err = evm.reconcile_tx_nonce_state(&mut tx).await.unwrap_err();
+            assert!(err.is_concurrent_update_conflict());
+            let stored = state.lock().unwrap();
+            assert_eq!(stored.status, TransactionStatus::Mined);
+            assert!(!super::super::has_nonce_used_seen(&stored));
+        }
+
+        /// A stale job that finds the receipt clears its sighting first; once another
+        /// job wrote Failed, that write is refused, so no Mined overwrites it either.
+        #[tokio::test]
+        async fn stale_receipt_does_not_overwrite_failed() {
+            let mut tx = transaction();
+            let metadata = tx.metadata.as_mut().unwrap();
+            metadata.nonce_used_seen_at_block = Some(100);
+            metadata.nonce_used_seen_at = Some(Utc::now().to_rfc3339());
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(124)),
+                Arc::new(AtomicBool::new(true)),
+            );
+            let state = repository(&mut mocks, &tx);
+            written_by_other_job(&state, TransactionStatus::Failed);
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let err = evm.handle_status_impl(tx, None).await.unwrap_err();
+            assert!(err.is_concurrent_update_conflict());
+            assert_eq!(state.lock().unwrap().status, TransactionStatus::Failed);
+        }
+
+        /// Clearing the sighting must not make the same job's Mined write conflict.
+        #[tokio::test]
+        async fn receipt_after_sighting_confirms_in_one_check() {
+            let mut tx = transaction();
+            let metadata = tx.metadata.as_mut().unwrap();
+            metadata.nonce_used_seen_at_block = Some(100);
+            metadata.nonce_used_seen_at = Some(Utc::now().to_rfc3339());
+            let mut mocks = default_test_mocks_with_network();
+            reads(
+                &mut mocks,
+                Arc::new(AtomicU64::new(124)),
+                Arc::new(AtomicBool::new(true)),
+            );
+            let state = repository(&mut mocks, &tx);
+            let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
+            let result = evm.handle_status_impl(tx, None).await.unwrap();
+            assert_eq!(result.status, TransactionStatus::Confirmed);
+            let stored = state.lock().unwrap();
+            assert_eq!(stored.status, TransactionStatus::Confirmed);
+            assert!(!super::super::has_nonce_used_seen(&stored));
         }
 
         fn timeout() -> crate::services::provider::ProviderError {
@@ -7221,7 +7339,7 @@ mod tests {
         /// returns to the normal flow, which still reads receipts.
         #[tokio::test]
         async fn nonce_read_error_without_sighting_uses_normal_flow() {
-            let tx = transaction();
+            let mut tx = transaction();
             let mut mocks = default_test_mocks();
             mocks
                 .provider
@@ -7229,10 +7347,10 @@ mod tests {
                 .returning(|_| Box::pin(async { Err(timeout()) }));
             mocks.provider.expect_get_block_number().times(0);
             mocks.provider.expect_get_transaction_receipt().times(0);
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7241,7 +7359,7 @@ mod tests {
 
         #[tokio::test]
         async fn block_read_error_without_sighting_uses_normal_flow() {
-            let tx = transaction();
+            let mut tx = transaction();
             let mut mocks = default_test_mocks();
             mocks
                 .provider
@@ -7252,10 +7370,10 @@ mod tests {
                 .expect_get_block_number()
                 .returning(|| Box::pin(async { Err(timeout()) }));
             mocks.provider.expect_get_transaction_receipt().times(0);
-            mocks.tx_repo.expect_partial_update().times(0);
+            mocks.tx_repo.expect_partial_update_if_version().times(0);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7294,10 +7412,10 @@ mod tests {
                     .expect_get_transaction_receipt()
                     .times(1)
                     .returning(|_| Box::pin(async { Ok(None) }));
-                mocks.tx_repo.expect_partial_update().times(0);
+                mocks.tx_repo.expect_partial_update_if_version().times(0);
                 let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
                 let held = evm
-                    .reconcile_tx_nonce_state(&tx)
+                    .reconcile_tx_nonce_state(&mut tx)
                     .await
                     .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                     .unwrap()
@@ -7324,7 +7442,7 @@ mod tests {
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7367,7 +7485,7 @@ mod tests {
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             let held = evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7401,7 +7519,7 @@ mod tests {
                 let state = repository(&mut mocks, &tx);
                 let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
                 let result = evm
-                    .reconcile_tx_nonce_state(&tx)
+                    .reconcile_tx_nonce_state(&mut tx)
                     .await
                     .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                     .unwrap();
@@ -7437,7 +7555,7 @@ mod tests {
                 let state = repository(&mut mocks, &tx);
                 let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
                 let result = evm
-                    .reconcile_tx_nonce_state(&tx)
+                    .reconcile_tx_nonce_state(&mut tx)
                     .await
                     .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                     .unwrap();
@@ -7785,7 +7903,7 @@ mod tests {
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
@@ -7821,7 +7939,7 @@ mod tests {
             let state = repository(&mut mocks, &tx);
             let evm = make_test_evm_relayer_transaction(create_test_relayer(), mocks);
             assert!(evm
-                .reconcile_tx_nonce_state(&tx)
+                .reconcile_tx_nonce_state(&mut tx)
                 .await
                 .map(crate::domain::transaction::evm::status::NonceReconcile::handled)
                 .unwrap()
