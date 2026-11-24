@@ -114,6 +114,7 @@ pub mod mockutils {
                 symbol: Some("testETH".to_string()),
                 chain_id: Some(1),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             }),
         }
     }

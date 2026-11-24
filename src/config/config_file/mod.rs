@@ -41,7 +41,8 @@ pub use plugin::*;
 pub mod network;
 pub use network::{
     EvmNetworkConfig, GasPriceCacheConfig, NetworkConfigCommon, NetworkFileConfig,
-    NetworksFileConfig, SolanaNetworkConfig, StatusCheckConfig, StellarNetworkConfig,
+    NetworksFileConfig, OptimismFeeCacheConfig, SolanaNetworkConfig, StatusCheckConfig,
+    StellarNetworkConfig,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
@@ -283,6 +284,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             })])
             .expect("Failed to create NetworksFileConfig for test"),
             plugins: Some(vec![PluginFileConfig {
@@ -329,6 +331,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -360,6 +363,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -929,6 +933,7 @@ mod tests {
             features: None,
             symbol: Some("ETH".to_string()),
             gas_price_cache: None,
+            optimism_fee_cache: None,
         })];
 
         let config = NetworksFileConfig::new(networks).unwrap();
@@ -1285,6 +1290,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
@@ -1323,6 +1329,7 @@ mod tests {
                 features: None,
                 symbol: Some("ETH".to_string()),
                 gas_price_cache: None,
+                optimism_fee_cache: None,
             })])
             .unwrap(),
             plugins: Some(vec![]),
