@@ -307,16 +307,18 @@ impl RedisTransactionRepository {
             return Ok(updated_tx);
         }
 
-        // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
-        // Status sorted sets are excluded: the Lua script above already moved
-        // them atomically with the body write.
-        let indexed = self
-            .update_indexes(&updated_tx, Some(&original_tx), false)
-            .await;
+        // Refresh the relayer list and created_at indexes. The Lua script above
+        // already wrote the status sets and the nonce key with the body, so
+        // they are left out: a late pipeline must not restore an old owner.
         #[cfg(test)]
-        let indexed = match FAIL_PATCH_INDEXES.with(|flag| flag.replace(false)) {
-            true => Err(RepositoryError::ConnectionError("injected".into())),
-            false => indexed,
+        let inject = FAIL_PATCH_INDEXES.with(|flag| flag.replace(false));
+        #[cfg(not(test))]
+        let inject = false;
+        let indexed = if inject {
+            Err(RepositoryError::ConnectionError("injected".into()))
+        } else {
+            self.update_indexes(&updated_tx, Some(&original_tx), false)
+                .await
         };
         // The script already wrote the body, status sets and nonce key, and
         // create wrote the rest. Report the applied write: a caller that sees
@@ -1150,6 +1152,7 @@ impl RedisTransactionRepository {
         &self,
         tx: &TransactionRepoModel,
         old_tx: Option<&TransactionRepoModel>,
+        // false after a patch: its Lua script owns the status sets and nonce key.
         include_status_indexes: bool,
     ) -> Result<(), RepositoryError> {
         let mut conn = self
@@ -1177,7 +1180,10 @@ impl RedisTransactionRepository {
             debug!(tx_id = %tx.id, status = %tx.status, score = %status_score, "added transaction to status sorted set");
         }
 
-        if let Some(nonce) = self.extract_nonce(&tx.network_data) {
+        if let Some(nonce) = self
+            .extract_nonce(&tx.network_data)
+            .filter(|_| include_status_indexes)
+        {
             let nonce_key = self.relayer_nonce_key(&tx.relayer_id, nonce);
             pipe.set(&nonce_key, &tx.id);
             debug!(tx_id = %tx.id, nonce = %nonce, "added nonce index for transaction");
@@ -1204,7 +1210,10 @@ impl RedisTransactionRepository {
             }
 
             // Handle nonce index cleanup
-            if let Some(old_nonce) = self.extract_nonce(&old.network_data) {
+            if let Some(old_nonce) = self
+                .extract_nonce(&old.network_data)
+                .filter(|_| include_status_indexes)
+            {
                 let new_nonce = self.extract_nonce(&tx.network_data);
                 if Some(old_nonce) != new_nonce {
                     let old_nonce_key = self.relayer_nonce_key(&old.relayer_id, old_nonce);
@@ -5951,19 +5960,32 @@ mod tests {
             .create(create_test_transaction("version-index-refresh"))
             .await
             .unwrap();
+        let NetworkTransactionData::Evm(mut data) = tx.network_data.clone() else {
+            panic!("evm test transaction");
+        };
+        let new_nonce = data.nonce.unwrap_or(0) + 1000;
+        data.nonce = Some(new_nonce);
         FAIL_PATCH_INDEXES.with(|flag| flag.set(true));
-        // The pre-broadcast release write: its caller sends only on Ok.
+        // A release write that also moves the nonce: its caller sends only on Ok.
         let released = repo
             .partial_update_if_version(
                 tx.id.clone(),
                 0,
                 TransactionUpdateRequest {
                     status: Some(TransactionStatus::Submitted),
+                    network_data: Some(NetworkTransactionData::Evm(data)),
                     ..Default::default()
                 },
             )
             .await
             .unwrap();
+        // The refresh never ran; the script alone indexed the new nonce.
+        let by_nonce = repo
+            .find_by_nonce_on_primary(&tx.relayer_id, new_nonce)
+            .await
+            .unwrap()
+            .expect("nonce indexed by the patch script");
+        assert_eq!(by_nonce.id, tx.id);
         assert_eq!(released.status, TransactionStatus::Submitted);
         assert_eq!(released.version, 1);
         let stored = repo.get_by_id_on_primary(tx.id.clone()).await.unwrap();
