@@ -1397,11 +1397,12 @@ where
                 .map(|data| is_noop(&data))
                 .unwrap_or(false);
 
-            // No node accepted these bytes yet, so a run of failed checks
-            // (an RPC outage) is no reason to cancel them. The total limit
-            // still applies, so the breaker fires in the end.
-            let never_accepted = tx.status == TransactionStatus::Submitted
-                && tx.sent_at.is_none()
+            // No node accepted these bytes yet (Sent, or Submitted with no
+            // sent_at), so a run of failed checks (an RPC or store outage) is
+            // no reason to cancel them. The total limit still applies, so the
+            // breaker fires in the end.
+            let never_accepted = (tx.status == TransactionStatus::Sent
+                || (tx.status == TransactionStatus::Submitted && tx.sent_at.is_none()))
                 && !ctx.triggered_by_total();
             if never_accepted && ctx.should_force_finalize() {
                 warn!(
@@ -5244,7 +5245,8 @@ pub(super) mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let ctx = create_triggered_context();
+            // A Sent transaction is spared until the total limit.
+            let ctx = create_total_triggered_context();
 
             let result = evm_transaction
                 .handle_status_impl(tx, Some(ctx))

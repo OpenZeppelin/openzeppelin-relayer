@@ -1562,6 +1562,35 @@ async fn outage_breaker_keeps_never_accepted_payload() {
     assert!(!is_unsent(&h.stored().await).unwrap());
 }
 
+/// A `Sent` record whose submit job has not run yet: a store or queue outage of
+/// 25 checks does not cancel it, the total limit still does.
+#[tokio::test]
+async fn outage_breaker_keeps_never_sent_payload() {
+    let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(25, 25)))
+        .await
+        .unwrap();
+    let kept = h.stored().await;
+    let data = kept.network_data.get_evm_transaction_data().unwrap();
+    assert!(!is_noop(&data));
+    assert_eq!(data.raw, Some(vec![0]));
+    assert!(kept.noop_count.is_none());
+
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(25, 75)))
+        .await
+        .unwrap();
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(is_noop(&data));
+    assert!(h.events.lock().unwrap().sent.is_empty());
+}
+
 #[tokio::test]
 async fn total_failure_limit_still_noops_never_accepted_payload() {
     let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
