@@ -30,6 +30,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(test)]
 thread_local! {
     static DISCARD_PATCH_REPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_PATCH_INDEXES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 const RELAYER_PREFIX: &str = "relayer";
@@ -309,8 +310,24 @@ impl RedisTransactionRepository {
         // Update the auxiliary indexes (nonce, relayer list, tx_by_created_at).
         // Status sorted sets are excluded: the Lua script above already moved
         // them atomically with the body write.
-        self.update_indexes(&updated_tx, Some(&original_tx), false)
-            .await?;
+        let indexed = self
+            .update_indexes(&updated_tx, Some(&original_tx), false)
+            .await;
+        #[cfg(test)]
+        let indexed = match FAIL_PATCH_INDEXES.with(|flag| flag.replace(false)) {
+            true => Err(RepositoryError::ConnectionError("injected".into())),
+            false => indexed,
+        };
+        // The script already wrote the body, status sets and nonce key, and
+        // create wrote the rest. Report the applied write: a caller that sees
+        // an error stops, and a release write would then skip its send.
+        if let Err(e) = indexed {
+            warn!(
+                tx_id = %tx_id,
+                error = %e,
+                "patch applied but index refresh failed; returning the applied write"
+            );
+        }
 
         debug!(tx_id = %tx_id, "successfully updated transaction via patch");
 
@@ -5924,6 +5941,34 @@ mod tests {
                 .unwrap(),
             vec![(7, Some(TransactionStatus::Pending))]
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires active Redis instance"]
+    async fn failed_index_refresh_returns_applied_release() {
+        let repo = setup_test_repo().await;
+        let tx = repo
+            .create(create_test_transaction("version-index-refresh"))
+            .await
+            .unwrap();
+        FAIL_PATCH_INDEXES.with(|flag| flag.set(true));
+        // The pre-broadcast release write: its caller sends only on Ok.
+        let released = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Submitted),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(released.status, TransactionStatus::Submitted);
+        assert_eq!(released.version, 1);
+        let stored = repo.get_by_id_on_primary(tx.id.clone()).await.unwrap();
+        assert_eq!(stored.version, 1);
+        assert_eq!(stored.status, TransactionStatus::Submitted);
     }
 
     #[tokio::test]
