@@ -925,6 +925,11 @@ fn doc_delete_pending_transactions() {}
             })
         ),
         (
+            status = 409,
+            description = "Concurrent transaction update; retry the request",
+            body = ApiResponse<String>
+        ),
+        (
             status = 429,
             description = "Too Many Requests",
             body = ApiResponse<String>,
@@ -994,6 +999,11 @@ fn doc_cancel_transaction() {}
                 "message": "Not found",
                 "data": null
             })
+        ),
+        (
+            status = 409,
+            description = "Concurrent transaction update; retry the request",
+            body = ApiResponse<String>
         ),
         (
             status = 429,

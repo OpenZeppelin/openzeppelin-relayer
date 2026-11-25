@@ -51,6 +51,7 @@ pub mod test_utils {
     /// then updates them based on the provided status or overrides.
     pub fn make_test_transaction(status: TransactionStatus) -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test-tx-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status,

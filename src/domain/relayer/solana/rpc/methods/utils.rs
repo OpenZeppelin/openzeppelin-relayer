@@ -2797,6 +2797,7 @@ mod tests {
 
         // Create a mock transaction
         let tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx-id".to_string(),
             relayer_id: "test-relayer-id".to_string(),
             status: crate::models::TransactionStatus::Submitted,

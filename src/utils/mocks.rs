@@ -139,6 +139,7 @@ pub mod mockutils {
 
     pub fn create_mock_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test".to_string(),
             relayer_id: "test".to_string(),
             status: TransactionStatus::Pending,
@@ -160,6 +161,7 @@ pub mod mockutils {
 
     pub fn create_mock_solana_transaction() -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: "test".to_string(),
             relayer_id: "test".to_string(),
             status: TransactionStatus::Pending,

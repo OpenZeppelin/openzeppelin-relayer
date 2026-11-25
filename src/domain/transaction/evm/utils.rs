@@ -505,6 +505,7 @@ mod tests {
     #[test]
     fn test_too_many_attempts() {
         let mut tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,
@@ -553,6 +554,7 @@ mod tests {
     #[test]
     fn test_too_many_noop_attempts() {
         let mut tx = TransactionRepoModel {
+            version: 0,
             id: "test-tx".to_string(),
             relayer_id: "test-relayer".to_string(),
             status: TransactionStatus::Pending,

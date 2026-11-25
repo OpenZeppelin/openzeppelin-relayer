@@ -254,6 +254,7 @@ pub fn create_test_transaction(relayer_id: &str) -> TransactionRepoModel {
         transaction_result_xdr: None,
     };
     TransactionRepoModel {
+        version: 0,
         id: "tx-1".to_string(),
         relayer_id: relayer_id.to_string(),
         status: TransactionStatus::Pending,

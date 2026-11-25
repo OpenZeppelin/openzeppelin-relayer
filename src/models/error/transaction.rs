@@ -123,7 +123,9 @@ impl From<TransactionError> for ApiError {
             }
             TransactionError::NotSupported(msg) => ApiError::BadRequest(msg),
             TransactionError::UnexpectedError(msg) => ApiError::InternalError(msg),
-            TransactionError::ConcurrentUpdateConflict(msg) => ApiError::InternalError(msg),
+            TransactionError::ConcurrentUpdateConflict(tx_id) => ApiError::Conflict(format!(
+                "Concurrent transaction update ({tx_id}); retry the request"
+            )),
             TransactionError::SignerError(msg) => ApiError::InternalError(msg),
             TransactionError::InsufficientBalance(msg) => ApiError::BadRequest(msg),
             TransactionError::SimulationFailed(msg) => ApiError::BadRequest(msg),
@@ -280,8 +282,10 @@ mod tests {
                 ApiError::BadRequest("boom".to_string()),
             ),
             (
-                TransactionError::ConcurrentUpdateConflict("conflict".to_string()),
-                ApiError::InternalError("conflict".to_string()),
+                TransactionError::ConcurrentUpdateConflict("tx-1".to_string()),
+                ApiError::Conflict(
+                    "Concurrent transaction update (tx-1); retry the request".to_string(),
+                ),
             ),
         ];
 
@@ -292,7 +296,8 @@ mod tests {
                 (ApiError::BadRequest(actual), ApiError::BadRequest(expected)) => {
                     assert_eq!(actual, expected);
                 }
-                (ApiError::InternalError(actual), ApiError::InternalError(expected)) => {
+                (ApiError::Conflict(actual), ApiError::Conflict(expected))
+                | (ApiError::InternalError(actual), ApiError::InternalError(expected)) => {
                     assert_eq!(actual, expected);
                 }
                 _ => panic!("Error types don't match: {api_error:?} vs {expected_api_error:?}"),
@@ -324,7 +329,7 @@ mod tests {
         );
 
         let api_error = ApiError::from(error);
-        assert!(matches!(api_error, ApiError::InternalError(_)));
+        assert!(matches!(api_error, ApiError::Conflict(_)));
     }
 
     #[test]

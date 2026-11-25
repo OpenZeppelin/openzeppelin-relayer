@@ -347,6 +347,7 @@ mod tests {
 
         // Create test transaction
         let test_transaction = TransactionRepoModel {
+            version: 0,
             id: "tx-123".to_string(),
             relayer_id: "test-id".to_string(),
             status: TransactionStatus::Pending,

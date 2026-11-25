@@ -17,9 +17,24 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, MutexGuard};
 
+#[cfg(test)]
+thread_local! {
+    static DISCARD_PATCH_REPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Makes the next patch on this thread apply twice with one token, as the
+/// Redis script retry does after a lost reply.
+#[cfg(test)]
+pub(crate) fn discard_next_patch_reply() {
+    DISCARD_PATCH_REPLY.with(|flag| flag.set(true));
+}
+
 #[derive(Debug)]
 pub struct InMemoryTransactionRepository {
     store: Mutex<HashMap<String, TransactionRepoModel>>,
+    /// Token of the latest patch per transaction (the Redis script stores it on the record).
+    /// Boxed to keep `TransactionRepositoryStorage` variants close in size.
+    write_tokens: Box<Mutex<HashMap<String, String>>>,
     /// Idempotency records with their expiry time, keyed by `relayer_id:key`.
     idempotency: Mutex<HashMap<String, (IdempotencyRecord, Instant)>>,
 }
@@ -38,17 +53,75 @@ impl Clone for InMemoryTransactionRepository {
             .map(|guard| guard.clone())
             .unwrap_or_else(|_| HashMap::new());
 
+        let write_tokens = self
+            .write_tokens
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| HashMap::new());
+
         Self {
             store: Mutex::new(data),
+            write_tokens: Box::new(Mutex::new(write_tokens)),
             idempotency: Mutex::new(idempotency),
         }
     }
 }
 
 impl InMemoryTransactionRepository {
+    async fn apply_patch(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+        expected_version: Option<u64>,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let token = uuid::Uuid::new_v4().to_string();
+        #[cfg(test)]
+        if DISCARD_PATCH_REPLY.with(|flag| flag.replace(false)) {
+            let _ = self
+                .apply_patch_once(tx_id.clone(), update.clone(), expected_version, &token)
+                .await;
+        }
+        self.apply_patch_once(tx_id, update, expected_version, &token)
+            .await
+    }
+
+    async fn apply_patch_once(
+        &self,
+        tx_id: String,
+        update: TransactionUpdateRequest,
+        expected_version: Option<u64>,
+        token: &str,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        let mut store = Self::acquire_lock(&self.store).await?;
+        let mut write_tokens = Self::acquire_lock(&self.write_tokens).await?;
+
+        if let Some(tx) = store.get_mut(&tx_id) {
+            if expected_version.is_some_and(|v| v != tx.version) {
+                // A retry after a lost reply finds its own write as the latest one.
+                if write_tokens.get(&tx_id).is_some_and(|t| t == token) {
+                    return Ok(tx.clone());
+                }
+                return Err(RepositoryError::ConcurrentUpdateConflict(tx_id));
+            }
+            if crate::domain::is_final_state(&tx.status) && update.status.is_some() {
+                return Ok(tx.clone());
+            }
+            write_tokens.insert(tx_id.clone(), token.to_string());
+            tx.version += 1;
+            // Apply partial updates using the model's business logic
+            tx.apply_partial_update(update);
+            Ok(tx.clone())
+        } else {
+            Err(RepositoryError::NotFound(format!(
+                "Transaction with ID {tx_id} not found"
+            )))
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             store: Mutex::new(HashMap::new()),
+            write_tokens: Box::new(Mutex::new(HashMap::new())),
             idempotency: Mutex::new(HashMap::new()),
         }
     }
@@ -400,6 +473,14 @@ impl TransactionRepository for InMemoryTransactionRepository {
         Ok(filtered.into_iter().next())
     }
 
+    async fn find_by_nonce_on_primary(
+        &self,
+        relayer_id: &str,
+        nonce: u64,
+    ) -> Result<Option<TransactionRepoModel>, RepositoryError> {
+        self.find_by_nonce(relayer_id, nonce).await
+    }
+
     async fn get_nonce_occupancy(
         &self,
         relayer_id: &str,
@@ -431,17 +512,17 @@ impl TransactionRepository for InMemoryTransactionRepository {
         tx_id: String,
         update: TransactionUpdateRequest,
     ) -> Result<TransactionRepoModel, RepositoryError> {
-        let mut store = Self::acquire_lock(&self.store).await?;
+        self.apply_patch(tx_id, update, None).await
+    }
 
-        if let Some(tx) = store.get_mut(&tx_id) {
-            // Apply partial updates using the model's business logic
-            tx.apply_partial_update(update);
-            Ok(tx.clone())
-        } else {
-            Err(RepositoryError::NotFound(format!(
-                "Transaction with ID {tx_id} not found"
-            )))
-        }
+    async fn partial_update_if_version(
+        &self,
+        tx_id: String,
+        expected_version: u64,
+        update: TransactionUpdateRequest,
+    ) -> Result<TransactionRepoModel, RepositoryError> {
+        self.apply_patch(tx_id, update, Some(expected_version))
+            .await
     }
 
     async fn update_network_data(
@@ -690,6 +771,7 @@ mod tests {
     // Helper function to create test transactions
     fn create_test_transaction(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
@@ -726,6 +808,7 @@ mod tests {
 
     fn create_test_transaction_pending_state(id: &str) -> TransactionRepoModel {
         TransactionRepoModel {
+            version: 0,
             id: id.to_string(),
             relayer_id: "relayer-1".to_string(),
             status: TransactionStatus::Pending,
@@ -978,8 +1061,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify the status was updated
-        assert_eq!(updated.status, TransactionStatus::Failed);
+        // Final states cannot be overwritten.
+        assert_eq!(updated.status, TransactionStatus::Confirmed);
 
         // Verify updating a non-existent transaction
         let result = repo
@@ -2127,8 +2210,9 @@ mod tests {
             "delete_at should not change on subsequent final status updates"
         );
 
-        // Status should be updated
-        assert_eq!(updated2.status, TransactionStatus::Failed);
+        // A refused final-status patch preserves both status and version.
+        assert_eq!(updated2.status, TransactionStatus::Confirmed);
+        assert_eq!(updated2.version, updated1.version);
 
         // Cleanup
         env::remove_var("TRANSACTION_EXPIRATION_HOURS");
@@ -2458,6 +2542,110 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(RepositoryError::NotFound(_))));
+    }
+
+    // ── metadata patches keep breaker counters ──────────────────────
+
+    fn breaker_meta(consecutive: u32, total: u32) -> crate::models::TransactionMetadata {
+        crate::models::TransactionMetadata {
+            consecutive_failures: consecutive,
+            total_failures: total,
+            ..Default::default()
+        }
+    }
+
+    /// A reset lands between a sender's snapshot and its metadata patch: the
+    /// patch must not restore the old consecutive count.
+    #[tokio::test]
+    async fn test_metadata_patch_keeps_reset_counter() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-breaker-reset");
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo
+            .get_by_id("tx-breaker-reset".to_string())
+            .await
+            .unwrap();
+
+        repo.reset_status_check_consecutive_failures("tx-breaker-reset".to_string())
+            .await
+            .unwrap();
+
+        let mut meta = snapshot.metadata.clone().unwrap();
+        meta.nonce_too_high_retries = 3;
+        let updated = repo
+            .partial_update_if_version(
+                "tx-breaker-reset".to_string(),
+                snapshot.version,
+                TransactionUpdateRequest {
+                    metadata: Some(meta),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 40);
+        assert_eq!(meta.nonce_too_high_retries, 3);
+    }
+
+    /// An increment between snapshot and patch survives the patch.
+    #[tokio::test]
+    async fn test_metadata_patch_keeps_incremented_counters() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction_pending_state("tx-breaker-inc");
+        tx.metadata = Some(breaker_meta(24, 40));
+        repo.create(tx).await.unwrap();
+        let snapshot = repo.get_by_id("tx-breaker-inc".to_string()).await.unwrap();
+
+        repo.increment_status_check_failures("tx-breaker-inc".to_string())
+            .await
+            .unwrap();
+
+        let updated = repo
+            .partial_update_if_version(
+                "tx-breaker-inc".to_string(),
+                snapshot.version,
+                TransactionUpdateRequest {
+                    metadata: snapshot.metadata.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 25);
+        assert_eq!(meta.total_failures, 41);
+    }
+
+    /// A record with no stored metadata keeps zero counters whatever the
+    /// patch carries.
+    #[tokio::test]
+    async fn test_metadata_patch_on_record_without_metadata() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = create_test_transaction_pending_state("tx-breaker-none");
+        repo.create(tx).await.unwrap();
+
+        let mut meta = breaker_meta(7, 9);
+        meta.nonce_too_high_retries = 2;
+        let updated = repo
+            .partial_update(
+                "tx-breaker-none".to_string(),
+                TransactionUpdateRequest {
+                    metadata: Some(meta),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let meta = updated.metadata.unwrap();
+        assert_eq!(meta.consecutive_failures, 0);
+        assert_eq!(meta.total_failures, 0);
+        assert_eq!(meta.nonce_too_high_retries, 2);
     }
 
     // ── record_stellar_insufficient_fee_retry ───────────────────────
@@ -2796,5 +2984,105 @@ mod tests {
             .unwrap();
         assert_eq!(record_1.fingerprint, "fp-1");
         assert_eq!(record_2.fingerprint, "fp-2");
+    }
+
+    #[tokio::test]
+
+    async fn version_guard_rejects_stale_patch() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo
+            .create(create_test_transaction("version-conflict"))
+            .await
+            .unwrap();
+        let patch = TransactionUpdateRequest {
+            status_reason: Some("winner".into()),
+            ..Default::default()
+        };
+        let winner = repo
+            .partial_update_if_version(tx.id.clone(), 0, patch)
+            .await
+            .unwrap();
+        assert_eq!(winner.version, 1);
+        let result = repo
+            .partial_update_if_version(
+                tx.id.clone(),
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RepositoryError::ConcurrentUpdateConflict(_))
+        ));
+        let stored = repo.get_by_id(tx.id).await.unwrap();
+        assert_eq!(stored.status, tx.status);
+        assert_eq!(stored.status_reason.as_deref(), Some("winner"));
+        assert_eq!(stored.version, 1);
+    }
+
+    #[tokio::test]
+
+    async fn plain_patch_increments_version() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo
+            .create(create_test_transaction("version-plain"))
+            .await
+            .unwrap();
+        let updated = repo
+            .partial_update(tx.id, TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(updated.version, 1);
+    }
+
+    #[tokio::test]
+
+    async fn failure_counters_preserve_version() {
+        let repo = InMemoryTransactionRepository::new();
+        let tx = repo
+            .create(create_test_transaction("version-counters"))
+            .await
+            .unwrap();
+        let tx = repo
+            .partial_update(tx.id, TransactionUpdateRequest::default())
+            .await
+            .unwrap();
+        repo.increment_status_check_failures(tx.id.clone())
+            .await
+            .unwrap();
+        let counted = repo.get_by_id(tx.id.clone()).await.unwrap();
+        assert_eq!(counted.version, tx.version);
+        assert_eq!(counted.metadata.unwrap().consecutive_failures, 1);
+        repo.reset_status_check_consecutive_failures(tx.id.clone())
+            .await
+            .unwrap();
+        let reset = repo.get_by_id(tx.id).await.unwrap();
+        assert_eq!(reset.version, tx.version);
+        assert_eq!(reset.metadata.unwrap().consecutive_failures, 0);
+    }
+
+    #[tokio::test]
+
+    async fn version_guard_preserves_final_status() {
+        let repo = InMemoryTransactionRepository::new();
+        let mut tx = create_test_transaction("version-final");
+        tx.status = TransactionStatus::Failed;
+        let tx = repo.create(tx).await.unwrap();
+        let updated = repo
+            .partial_update_if_version(
+                tx.id,
+                0,
+                TransactionUpdateRequest {
+                    status: Some(TransactionStatus::Sent),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status, TransactionStatus::Failed);
+        assert_eq!(updated.version, 0);
     }
 }
