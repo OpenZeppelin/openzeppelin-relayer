@@ -16,9 +16,9 @@ use tracing::{debug, error, info, warn};
 use super::super::common::is_active_nonce_status;
 use super::EvmRelayerTransaction;
 use super::{
-    ensure_status, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_status_change,
-    has_enough_confirmations, is_noop, is_too_early_to_resubmit, is_transaction_valid, make_noop,
-    too_many_attempts, too_many_noop_attempts,
+    ensure_status_one_of, evm_transaction::TX_NONCE_RECONCILE_TRIGGER, get_age_since_priced,
+    has_enough_confirmations, has_signed_payload, is_noop, is_too_early_to_resubmit,
+    is_transaction_valid, is_unsent, make_noop, too_many_attempts, too_many_noop_attempts,
 };
 use crate::constants::{
     get_evm_min_age_for_hash_recovery, get_evm_nonce_used_failure_max_age,
@@ -26,9 +26,7 @@ use crate::constants::{
     get_evm_prepare_timeout, get_evm_resend_timeout, ARBITRUM_TIME_TO_RESUBMIT,
     DEFAULT_EVM_INCLUDE_REVERT_DATA, EVM_MIN_HASHES_FOR_RECOVERY, MAX_GAP_SCAN_RANGE,
 };
-use crate::domain::transaction::common::{
-    get_age_of_sent_at, is_final_state, is_pending_transaction,
-};
+use crate::domain::transaction::common::{is_final_state, is_pending_transaction};
 use crate::domain::transaction::util::get_age_since_created;
 use crate::models::{EvmNetwork, NetworkRepoModel, NetworkType};
 use crate::repositories::{NetworkRepository, RelayerRepository};
@@ -371,6 +369,18 @@ where
                 }
             }
 
+            // A Mined record that lost its receipt: RPC lag, or a reorg that
+            // orphaned its block. Nothing returns it to delivery (#1007).
+            if tx.status == TransactionStatus::Mined {
+                warn!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    nonce = ?evm_data.nonce,
+                    tx_hash = %tx_hash,
+                    "mined transaction no longer has a receipt; RPC lag or a reorg"
+                );
+            }
+
             Ok(if tx.status == TransactionStatus::Sent {
                 TransactionStatus::Sent
             } else {
@@ -473,10 +483,14 @@ where
         tx: &TransactionRepoModel,
     ) -> Result<bool, TransactionError> {
         // Validate transaction is in correct state for resubmission
-        ensure_status(tx, TransactionStatus::Submitted, Some("should_resubmit"))?;
+        ensure_status_one_of(
+            tx,
+            &[TransactionStatus::Sent, TransactionStatus::Submitted],
+            Some("should_resubmit"),
+        )?;
 
         let evm_data = tx.network_data.get_evm_transaction_data()?;
-        let age = get_age_of_sent_at(tx)?;
+        let age = get_age_since_priced(tx)?;
 
         // Check if network lacks mempool and determine appropriate timeout
         let network_model = self
@@ -687,20 +701,49 @@ where
         &self,
         tx: TransactionRepoModel,
     ) -> Result<TransactionRepoModel, TransactionError> {
+        if !has_signed_payload(&tx.network_data.get_evm_transaction_data()?) {
+            // An unsigned NOOP deferred above the Arbitrum head stays deferred.
+            self.send_noop_resubmit_job(&tx).await?;
+            return Ok(tx);
+        }
         if self.should_resubmit(&tx).await? {
             // Before resubmitting, check if there's a nonce gap blocking this tx.
             // Only worth the RPC call when we're already going to resubmit (tx is stale).
-            if let Some(check) = self.detect_nonce_gap_ahead(&tx).await {
-                if check.has_gap {
-                    // Tx can't mine — nonce gap below it. Trigger health job, skip resubmit.
-                    return self
-                        .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
-                        .await;
-                }
+            let check = self.detect_nonce_gap_ahead(&tx).await;
+            // A gap: the detector triggers the health job. Unsent bytes above the
+            // Arbitrum head: repricing cannot help; the chain link delivers them.
+            if check.as_ref().is_some_and(|c| c.has_gap)
+                || self.held_behind_arbitrum_head(&tx, check.as_ref()).await?
+            {
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
+                    .await;
             }
 
             let resubmitted_tx = self.handle_resubmission(tx).await?;
             return Ok(resubmitted_tx);
+        }
+
+        if is_unsent(&tx)? && get_age_since_priced(&tx)? > get_evm_resend_timeout() {
+            // No node accepted these bytes yet, so check expiry before sending them.
+            let (should_noop, reason) = self.should_noop(&tx).await?;
+            if should_noop {
+                let noop_tx = self.process_noop_transaction(&tx, reason).await?;
+                self.send_noop_resubmit_job(&noop_tx).await?;
+                return Ok(noop_tx);
+            }
+            // A nonce gap below this tx makes a resend futile; the detector
+            // schedules the nonce health job itself. Above the Arbitrum head the
+            // sequencer rejects the resend; the chain link delivers it.
+            let check = self.detect_nonce_gap_ahead(&tx).await;
+            if check.as_ref().is_some_and(|c| c.has_gap)
+                || self.held_behind_arbitrum_head(&tx, check.as_ref()).await?
+            {
+                return self
+                    .update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
+                    .await;
+            }
+            self.send_transaction_submit_job(&tx).await?;
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Submitted, None)
@@ -844,14 +887,15 @@ where
 
         // Check if transaction gas limit exceeds block gas limit before resubmitting
         let (should_noop, reason) = self.should_noop(&tx).await?;
-        let tx_to_process = if should_noop {
-            self.process_noop_transaction(&tx, reason).await?
-        } else {
-            tx
-        };
+        if should_noop {
+            // A new NOOP above the Arbitrum head waits like any other unsent NOOP.
+            let noop_tx = self.process_noop_transaction(&tx, reason).await?;
+            self.send_noop_resubmit_job(&noop_tx).await?;
+            return Ok(noop_tx);
+        }
 
-        self.send_transaction_resubmit_job(&tx_to_process).await?;
-        Ok(tx_to_process)
+        self.send_transaction_resubmit_job(&tx).await?;
+        Ok(tx)
     }
 
     /// Handles NOOP transaction processing before resubmission
@@ -1312,7 +1356,7 @@ where
                     "{reason}. Replacing with NOOP to clear nonce slot."
                 ));
                 let updated_tx = self.process_noop_transaction(&tx, noop_reason).await?;
-                self.send_transaction_resubmit_job(&updated_tx).await?;
+                self.send_noop_resubmit_job(&updated_tx).await?;
                 Ok(updated_tx)
             }
             _ => {
@@ -1365,7 +1409,27 @@ where
                 .map(|data| is_noop(&data))
                 .unwrap_or(false);
 
-            if ctx.should_force_finalize() && !is_noop_tx {
+            // No node accepted these bytes yet (Sent, or Submitted with no
+            // sent_at), so a run of failed checks (an RPC or store outage) is
+            // no reason to cancel them. The total limit still applies, so the
+            // breaker fires in the end.
+            let never_accepted = (tx.status == TransactionStatus::Sent
+                || (tx.status == TransactionStatus::Submitted && tx.sent_at.is_none()))
+                && !ctx.triggered_by_total();
+            if never_accepted && ctx.should_force_finalize() {
+                warn!(
+                    tx_id = %tx.id,
+                    consecutive_failures = ctx.consecutive_failures,
+                    relayer_id = %tx.relayer_id,
+                    "circuit breaker skipped: no node accepted the transaction yet"
+                );
+            }
+
+            // A Mined record has a nonce that is used or about to be checked
+            // again; the normal check confirms it or returns it to delivery.
+            let is_mined = tx.status == TransactionStatus::Mined;
+
+            if ctx.should_force_finalize() && !is_noop_tx && !never_accepted && !is_mined {
                 warn!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,
@@ -1451,7 +1515,15 @@ where
         // For Pending/Sent/Submitted states, defer resubmission logic and timeout checks
         // if the transaction is too young. Just update status and return.
         // For other states (Mined/Confirmed/Failed/etc), process immediately regardless of age.
-        if is_too_early_to_resubmit(&tx)? && is_pending_transaction(&status) {
+        // No sendable bytes (unsigned, or a NOOP holding stale bytes): the state
+        // handlers queue its signing at once.
+        let unsigned_in_flight =
+            matches!(
+                status,
+                TransactionStatus::Sent | TransactionStatus::Submitted
+            ) && !has_signed_payload(&tx.network_data.get_evm_transaction_data()?);
+        if is_too_early_to_resubmit(&tx)? && is_pending_transaction(&status) && !unsigned_in_flight
+        {
             // Update status if it changed, then return
             return self
                 .update_transaction_status_if_needed(tx, status, None)
@@ -1661,7 +1733,14 @@ where
 
         // Transaction was prepared but submission job may have failed
         // Re-queue a resend job if it's been stuck for a while
-        let age_since_sent = get_age_since_status_change(&tx)?;
+        let age_since_sent = get_age_since_priced(&tx)?;
+        let missing_raw = !has_signed_payload(&tx.network_data.get_evm_transaction_data()?);
+
+        if missing_raw {
+            // An unsigned NOOP deferred above the Arbitrum head stays deferred.
+            self.send_noop_resubmit_job(&tx).await?;
+            return Ok(tx);
+        }
 
         if age_since_sent > get_evm_resend_timeout() {
             // A nonce gap below this tx makes any resubmit futile; the detector schedules
@@ -1698,11 +1777,15 @@ where
                 tx_id = %tx.id,
                 relayer_id = %tx.relayer_id,
                 age_seconds = age_since_sent.num_seconds(),
-                "transaction stuck in Sent, queuing resubmit job with repricing"
+                "transaction stuck in Sent, scheduling delivery"
             );
 
-            // Queue resubmit job to reprice the transaction for better acceptance
-            self.send_transaction_resubmit_job(&tx).await?;
+            // Reuse the stored bytes until the price timer is due.
+            if self.should_resubmit(&tx).await? {
+                self.send_transaction_resubmit_job(&tx).await?;
+            } else {
+                self.send_transaction_submit_job(&tx).await?;
+            }
         }
 
         self.update_transaction_status_if_needed(tx, TransactionStatus::Sent, None)
@@ -1729,50 +1812,49 @@ where
     }
 
     /// Queues the resubmit job that signs and sends a NOOP replacement. On Arbitrum, a
-    /// `Sent` NOOP above the chain head would be rejected: it stays persisted and is
-    /// sent by the chain link, or by a later status check once it is the head. Other
-    /// networks always get the job.
+    /// NOOP that no node has accepted (`Sent`, or `Submitted` with unsent bytes) above
+    /// the chain head would be rejected: it stays persisted and is sent by the chain
+    /// link, or by a later status check once it is the head. The gap check schedules
+    /// the nonce health job when no record fills a nonce below it, so a deferred NOOP
+    /// cannot wait on a slot nothing will send. Other networks always get the job; a
+    /// failed nonce read also sends it.
     pub(super) async fn send_noop_resubmit_job(
         &self,
         tx: &TransactionRepoModel,
     ) -> Result<(), TransactionError> {
-        if tx.status == TransactionStatus::Sent && self.is_above_arbitrum_head(tx).await {
-            debug!(
-                tx_id = %tx.id,
-                relayer_id = %tx.relayer_id,
-                "Sent NOOP is above the chain head on Arbitrum; deferring resubmit"
-            );
-            return Ok(());
+        let has_nonce = tx
+            .network_data
+            .get_evm_transaction_data()
+            .is_ok_and(|data| data.nonce.is_some());
+        let unsent = tx.status == TransactionStatus::Sent || is_unsent(tx)?;
+        if unsent && has_nonce && self.is_arbitrum_network(tx).await {
+            let check = self.detect_nonce_gap_ahead(tx).await;
+            if self.held_behind_arbitrum_head(tx, check.as_ref()).await? {
+                debug!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    has_gap = check.is_some_and(|c| c.has_gap),
+                    "unsent NOOP is above the chain head on Arbitrum; deferring resubmit"
+                );
+                return Ok(());
+            }
         }
         self.send_transaction_resubmit_job(tx).await
     }
 
-    /// Arbitrum only: fetches the on-chain nonce and returns `true` when the tx nonce
-    /// is above it. The network check runs first, so other networks pay no RPC call.
-    /// Lookup and RPC failures return `false`, so the caller still sends.
-    async fn is_above_arbitrum_head(&self, tx: &TransactionRepoModel) -> bool {
-        let Some(tx_nonce) = tx
-            .network_data
-            .get_evm_transaction_data()
-            .ok()
-            .and_then(|data| data.nonce)
-        else {
-            return false;
+    /// Arbitrum head gate for bytes no node has accepted (`Sent`, or `Submitted`
+    /// after a failed send): the sequencer rejects a nonce above the head, so only
+    /// the head is sent. A `Submitted` tx with accepted bytes was the head when sent.
+    async fn held_behind_arbitrum_head(
+        &self,
+        tx: &TransactionRepoModel,
+        check: Option<&NonceGapCheck>,
+    ) -> Result<bool, TransactionError> {
+        let Some(check) = check else {
+            return Ok(false);
         };
-        if !self.is_arbitrum_network(tx).await {
-            return false;
-        }
-        match self
-            .provider()
-            .get_transaction_count(&self.relayer().address)
-            .await
-        {
-            Ok(on_chain_nonce) => tx_nonce > on_chain_nonce,
-            Err(e) => {
-                debug!(tx_id = %tx.id, error = %e, "head check: failed to get on-chain nonce");
-                false
-            }
-        }
+        let unsent = tx.status == TransactionStatus::Sent || is_unsent(tx)?;
+        Ok(unsent && self.is_behind_arbitrum_head(tx, check.on_chain_nonce).await)
     }
 
     /// Determines if we should attempt hash recovery for a stuck transaction.
@@ -1810,7 +1892,7 @@ where
         }
 
         // Only try if transaction has been stuck for a while
-        let age = get_age_of_sent_at(tx)?;
+        let age = get_age_since_priced(tx)?;
         let min_age_for_recovery = get_evm_min_age_for_hash_recovery();
 
         if age < min_age_for_recovery {
@@ -2023,7 +2105,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use crate::{
         config::{EvmNetworkConfig, NetworkConfigCommon},
         domain::transaction::evm::{EvmRelayerTransaction, MockPriceCalculatorTrait},
@@ -2202,6 +2284,11 @@ mod tests {
     /// Allows quick creation of a test transaction with default fields,
     /// then updates them based on the provided status or overrides.
     pub fn make_test_transaction(status: TransactionStatus) -> TransactionRepoModel {
+        let raw = matches!(
+            status,
+            TransactionStatus::Sent | TransactionStatus::Submitted
+        )
+        .then(|| vec![1, 2, 3]);
         TransactionRepoModel {
             version: 0,
             id: "test-tx-id".to_string(),
@@ -2228,7 +2315,7 @@ mod tests {
                 signature: None,
                 hash: None,
                 speed: Some(Speed::Fast),
-                raw: None,
+                raw,
             }),
             priced_at: None,
             hashes: Vec::new(),
@@ -2284,7 +2371,7 @@ mod tests {
         }
     }
 
-    fn make_mock_receipt(status: bool, block_number: Option<u64>) -> TransactionReceipt {
+    pub(super) fn make_mock_receipt(status: bool, block_number: Option<u64>) -> TransactionReceipt {
         // Use some placeholder values for minimal completeness
         let tx_hash = TxHash::from(b256!(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -2911,8 +2998,10 @@ mod tests {
             if let NetworkTransactionData::Evm(ref mut evm_data) = tx.network_data {
                 evm_data.chain_id = 42161; // Arbitrum
             }
-            // Set enough hashes to trigger too_many_attempts (> 50)
-            tx.hashes = vec!["0xHash1".to_string(); 51];
+            tx.metadata = Some(crate::models::TransactionMetadata {
+                accepted_sends: 51,
+                ..Default::default()
+            });
 
             // Mock network repository to return Arbitrum network
             mocks
@@ -3106,7 +3195,10 @@ mod tests {
             let relayer = create_test_relayer();
 
             let mut tx = make_test_transaction(TransactionStatus::Sent);
-            tx.hashes = vec!["0xHash1".to_string(); crate::constants::MAXIMUM_TX_ATTEMPTS + 1];
+            tx.metadata = Some(crate::models::TransactionMetadata {
+                accepted_sends: crate::constants::MAXIMUM_TX_ATTEMPTS as u64 + 1,
+                ..Default::default()
+            });
             tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
 
             // should_noop + prepare_noop_update_request both look the network up.
@@ -3161,10 +3253,21 @@ mod tests {
         async fn arbitrum_sent_state_noop_resubmits_only_at_head() {
             for (on_chain_nonce, expect_job) in [(5u64, false), (7u64, true)] {
                 let mut mocks = default_test_mocks();
+                mocks
+                    .tx_repo
+                    .expect_get_nonce_occupancy()
+                    .returning(|_, from, to| {
+                        Ok((from..to)
+                            .map(|n| (n, Some(TransactionStatus::Sent)))
+                            .collect())
+                    });
                 let relayer = create_test_relayer();
 
                 let mut tx = make_test_transaction(TransactionStatus::Sent);
-                tx.hashes = vec!["0xHash1".to_string(); crate::constants::MAXIMUM_TX_ATTEMPTS + 1];
+                tx.metadata = Some(crate::models::TransactionMetadata {
+                    accepted_sends: crate::constants::MAXIMUM_TX_ATTEMPTS as u64 + 1,
+                    ..Default::default()
+                });
                 tx.sent_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
                 tx.network_data = NetworkTransactionData::Evm(EvmTransactionData {
                     nonce: Some(7),
@@ -3216,6 +3319,177 @@ mod tests {
                 let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
                 let result = evm_transaction.handle_sent_state(tx).await.unwrap();
                 assert!(result.noop_count.unwrap_or(0) > 0, "NOOP must be persisted");
+            }
+        }
+
+        /// Arbitrum: a NOOP whose resubmit was deferred above the head has no signed
+        /// bytes. Later status checks must keep deferring it, not resubmit it through
+        /// the missing-bytes path; at the head it is resubmitted.
+        #[tokio::test]
+        async fn arbitrum_unsigned_noop_stays_deferred_until_head() {
+            for status in [TransactionStatus::Sent, TransactionStatus::Submitted] {
+                for (on_chain_nonce, expect_job) in [(5u64, false), (7u64, true)] {
+                    let mut mocks = default_test_mocks();
+                    mocks
+                        .tx_repo
+                        .expect_get_nonce_occupancy()
+                        .returning(|_, from, to| {
+                            Ok((from..to)
+                                .map(|n| (n, Some(TransactionStatus::Sent)))
+                                .collect())
+                        });
+                    let relayer = create_test_relayer();
+
+                    let mut tx = make_test_transaction(status.clone());
+                    tx.noop_count = Some(1);
+                    tx.sent_at = None;
+                    tx.priced_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+                    let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+                    data.nonce = Some(7);
+                    data.to = Some(data.from.clone());
+                    data.value = U256::ZERO;
+                    data.data = Some("0x".to_string());
+                    data.raw = None;
+                    data.signature = None;
+                    assert!(crate::domain::transaction::evm::is_noop(&data));
+                    tx.network_data = NetworkTransactionData::Evm(data);
+
+                    mocks
+                        .network_repo
+                        .expect_get_by_name()
+                        .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+                    mocks
+                        .provider
+                        .expect_get_transaction_count()
+                        .times(1)
+                        .returning(move |_| Box::pin(async move { Ok(on_chain_nonce) }));
+                    mocks.tx_repo.expect_partial_update_if_version().never();
+                    mocks
+                        .job_producer
+                        .expect_produce_submit_transaction_job()
+                        .times(usize::from(expect_job))
+                        .returning(|_, _| Box::pin(async { Ok(()) }));
+
+                    let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+                    let result = match status {
+                        TransactionStatus::Sent => evm_transaction.handle_sent_state(tx).await,
+                        _ => evm_transaction.handle_submitted_state(tx).await,
+                    };
+                    assert!(result.is_ok(), "{status:?} at nonce {on_chain_nonce}");
+                }
+            }
+        }
+
+        /// Arbitrum: a NOOP deferred above the head with no record at a nonce below it
+        /// would wait forever (nothing sends that nonce, so the chain link never
+        /// fires). The deferral's gap check queues the nonce health job instead.
+        #[tokio::test]
+        async fn arbitrum_deferred_noop_over_gap_queues_nonce_health() {
+            let mut mocks = default_test_mocks();
+            let mut relayer = create_test_relayer();
+            relayer.id = "stack-deferred-noop-gap".to_string();
+
+            let mut tx = make_test_transaction(TransactionStatus::Sent);
+            tx.relayer_id = relayer.id.clone();
+            tx.noop_count = Some(1);
+            tx.sent_at = None;
+            tx.priced_at = Some((Utc::now() - Duration::seconds(60)).to_rfc3339());
+            let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+            data.nonce = Some(7);
+            data.to = Some(data.from.clone());
+            data.value = U256::ZERO;
+            data.data = Some("0x".to_string());
+            data.raw = None;
+            data.signature = None;
+            tx.network_data = NetworkTransactionData::Evm(data);
+
+            mocks
+                .network_repo
+                .expect_get_by_name()
+                .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+            mocks
+                .provider
+                .expect_get_transaction_count()
+                .returning(|_| Box::pin(async { Ok(5u64) }));
+            // Nonce 5 has no record; 6 is filled.
+            mocks
+                .tx_repo
+                .expect_get_nonce_occupancy()
+                .returning(|_, _, _| Ok(vec![(5, None), (6, Some(TransactionStatus::Sent))]));
+            mocks.tx_repo.expect_partial_update_if_version().never();
+            mocks
+                .job_producer
+                .expect_produce_submit_transaction_job()
+                .never();
+            mocks
+                .job_producer
+                .expect_produce_relayer_health_check_job()
+                .times(1)
+                .returning(|_, _| Box::pin(async { Ok(()) }));
+
+            let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+            evm_transaction.handle_sent_state(tx).await.unwrap();
+        }
+
+        /// Arbitrum: after a send rejected above the head, #1006 leaves the tx
+        /// Submitted with unsent bytes. The status checker must not resend or reprice
+        /// it while it is above the head; at the head it is delivered.
+        #[tokio::test]
+        async fn arbitrum_unsent_submitted_waits_for_head() {
+            for (on_chain_nonce, expect_job) in [(5u64, false), (7u64, true)] {
+                let mut mocks = default_test_mocks();
+                let relayer = create_test_relayer();
+
+                let mut tx = make_test_transaction(TransactionStatus::Submitted);
+                tx.sent_at = None;
+                tx.created_at = (Utc::now() - Duration::minutes(10)).to_rfc3339();
+                tx.priced_at = Some((Utc::now() - Duration::minutes(10)).to_rfc3339());
+                let mut data = tx.network_data.get_evm_transaction_data().unwrap();
+                data.nonce = Some(7);
+                data.raw = Some(vec![1, 2, 3]);
+                tx.network_data = NetworkTransactionData::Evm(data);
+
+                mocks
+                    .network_repo
+                    .expect_get_by_chain_id()
+                    .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+                mocks
+                    .network_repo
+                    .expect_get_by_name()
+                    .returning(|_, _| Ok(Some(create_test_arbitrum_network_model())));
+                mocks
+                    .provider
+                    .expect_get_transaction_count()
+                    .returning(move |_| Box::pin(async move { Ok(on_chain_nonce) }));
+                mocks.provider.expect_get_block_by_number().returning(|| {
+                    Box::pin(async {
+                        use alloy::{network::AnyRpcBlock, rpc::types::Block};
+                        let mut block: Block = Block::default();
+                        block.header.gas_limit = 30_000_000u64;
+                        Ok(AnyRpcBlock::from(block))
+                    })
+                });
+                mocks
+                    .tx_repo
+                    .expect_get_nonce_occupancy()
+                    .returning(|_, from, to| {
+                        Ok((from..to)
+                            .map(|n| (n, Some(TransactionStatus::Sent)))
+                            .collect())
+                    });
+                mocks.tx_repo.expect_partial_update_if_version().never();
+                mocks
+                    .job_producer
+                    .expect_produce_submit_transaction_job()
+                    .times(usize::from(expect_job))
+                    .returning(|_, _| Box::pin(async { Ok(()) }));
+
+                let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
+                let result = evm_transaction.handle_submitted_state(tx).await;
+                assert!(
+                    result.is_ok(),
+                    "on-chain nonce {on_chain_nonce}: {result:?}"
+                );
             }
         }
 
@@ -4987,7 +5261,8 @@ mod tests {
                 .returning(|_, _| Box::pin(async { Ok(()) }));
 
             let evm_transaction = make_test_evm_relayer_transaction(relayer, mocks);
-            let ctx = create_triggered_context();
+            // A Sent transaction is spared until the total limit.
+            let ctx = create_total_triggered_context();
 
             let result = evm_transaction
                 .handle_status_impl(tx, Some(ctx))
@@ -6072,6 +6347,14 @@ mod tests {
         async fn arbitrum_circuit_breaker_sent_noop_resubmits_only_at_head() {
             for (on_chain_nonce, expect_job) in [(5u64, false), (7u64, true)] {
                 let mut mocks = default_test_mocks_with_network();
+                mocks
+                    .tx_repo
+                    .expect_get_nonce_occupancy()
+                    .returning(|_, from, to| {
+                        Ok((from..to)
+                            .map(|n| (n, Some(TransactionStatus::Sent)))
+                            .collect())
+                    });
                 let relayer = create_test_relayer();
 
                 let mut tx = make_test_transaction(TransactionStatus::Sent);
@@ -6492,7 +6775,8 @@ mod tests {
         }
 
         /// C1 end to end: plain check -> resubmit -> "nonce too low" -> hinted check
-        /// -> observation window, without further resubmits once the marker is stored.
+        /// -> observation window. The resubmit saved its payload before sending, so
+        /// the reprice timer restarted and no further resubmit follows.
         #[tokio::test]
         async fn c1_sequence_resubmit_nonce_too_low_then_wait() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
@@ -6501,15 +6785,16 @@ mod tests {
             let sizes = simulate(&evm, &state, &c, 3).await;
             assert_eq!(state.lock().unwrap().status, TransactionStatus::Submitted);
             assert_eq!(c.failed_writes.load(Ordering::SeqCst), 0);
-            assert_eq!(sizes, vec![2, 3, 3]);
+            assert_eq!(sizes, vec![2, 2, 2]);
         }
 
         // ---------------------------------------------------------------- C2
 
-        /// C2: the NonceTooLow branch of resubmit does not refresh sent_at and does
-        /// not append a hash, so should_resubmit stays true right after it.
+        /// C2: the NonceTooLow branch of resubmit does not refresh sent_at. The new
+        /// payload was saved before the send (#1006), so its hash is recorded and the
+        /// reprice timer restarts: no immediate second resubmit.
         #[tokio::test]
-        async fn c2_nonce_too_low_resubmit_keeps_should_resubmit_true() {
+        async fn c2_nonce_too_low_resubmit_saves_payload_and_waits() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
             let sent_before = tx.sent_at.clone();
             let (evm, state, c) = lagging_pool(tx.clone(), 10);
@@ -6518,29 +6803,30 @@ mod tests {
 
             let after = state.lock().unwrap().clone();
             assert_eq!(after.sent_at, sent_before, "sent_at not refreshed");
-            assert_eq!(after.hashes, vec!["0xh1".to_string()], "no hash appended");
+            assert_eq!(
+                after.hashes,
+                vec!["0xh1".to_string(), "0xresigned0".to_string()],
+                "saved payload's hash recorded"
+            );
             assert_eq!(c.hinted_status_jobs.load(Ordering::SeqCst), 1);
-            assert!(evm.should_resubmit(&after).await.unwrap());
+            assert!(!evm.should_resubmit(&after).await.unwrap());
         }
 
         /// C2 (fan-out): when the hinted reconcile defers (here: the pool's nonce count
         /// lags, so it reports the nonce as not consumed while send says "nonce too
-        /// low"), every live status job resubmits and every resubmit adds one hinted
-        /// status job. The pool doubles every cycle.
-        ///
-        /// KNOWN DEFECT, older than this change: the doubling is not intended. This
-        /// test pins today's behaviour so a change to it is noticed; when the fan-out
-        /// is fixed, replace the expected sizes with a bounded pool.
+        /// low"), a resubmit adds one hinted status job. Before save-before-send
+        /// (#1006) every live job resubmitted again and the pool doubled each cycle;
+        /// now the saved payload restarts the reprice timer, so the pool stays bounded.
         #[tokio::test]
-        async fn c2_status_job_fanout_when_reconcile_defers() {
+        async fn c2_status_job_pool_bounded_when_reconcile_defers() {
             let tx = stuck_tx(&["0xh1"], Duration::minutes(4));
             let (evm, state, c) = lagging_pool(tx, TX_NONCE);
 
             let sizes = simulate(&evm, &state, &c, 5).await;
-            assert_eq!(sizes, vec![2, 4, 8, 16, 32], "known fan-out defect");
+            assert_eq!(sizes, vec![2, 2, 2, 2, 2], "no fan-out");
             assert_eq!(c.failed_writes.load(Ordering::SeqCst), 0);
             let after = state.lock().unwrap().clone();
-            assert_eq!(after.hashes.len(), 1, "attempt count never grows");
+            assert_eq!(after.hashes.len(), 2, "one saved resubmit payload");
         }
 
         // ---------------------------------------------------------------- C3
@@ -7963,3 +8249,7 @@ mod tests {
 #[cfg(test)]
 #[path = "reprepare_tests.rs"]
 mod reprepare_tests;
+
+#[cfg(test)]
+#[path = "save_before_send_tests.rs"]
+mod save_before_send_tests;

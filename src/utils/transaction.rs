@@ -36,7 +36,8 @@ pub fn get_resubmit_timeout_with_backoff(timeout: i64, attempts: usize) -> i64 {
     if attempts <= 1 {
         timeout
     } else {
-        timeout * 2_i64.pow((attempts - 1) as u32)
+        // Clamp only to keep the power of two representable; saturate the product.
+        timeout.saturating_mul(2_i64.pow((attempts - 1).min(62) as u32))
     }
 }
 

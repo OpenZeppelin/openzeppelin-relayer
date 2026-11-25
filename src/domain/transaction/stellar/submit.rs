@@ -1361,6 +1361,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1423,6 +1424,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1513,6 +1515,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1572,6 +1575,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 });
@@ -1630,6 +1634,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1646,6 +1651,7 @@ mod tests {
                 nonce_too_high_retries: 0,
                 nonce_used_seen_at_block: None,
                 nonce_used_seen_at: None,
+                accepted_sends: 0,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -1761,6 +1767,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1832,6 +1839,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1908,6 +1916,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1968,6 +1977,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -1984,6 +1994,7 @@ mod tests {
                 nonce_too_high_retries: 0,
                 nonce_used_seen_at_block: None,
                 nonce_used_seen_at: None,
+                accepted_sends: 0,
             });
             if let NetworkTransactionData::Stellar(ref mut data) = tx.network_data {
                 data.signatures.push(dummy_signature());
@@ -2031,6 +2042,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
@@ -2103,6 +2115,7 @@ mod tests {
                         nonce_too_high_retries: 0,
                         nonce_used_seen_at_block: None,
                         nonce_used_seen_at: None,
+                        accepted_sends: 0,
                     });
                     Ok::<_, RepositoryError>(tx)
                 })
