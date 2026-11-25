@@ -51,6 +51,8 @@ struct Events {
     sent: Vec<Vec<u8>>,
     jobs: Vec<TransactionCommand>,
     job_tx_ids: Vec<String>,
+    /// Status jobs queued: (transaction id, job metadata).
+    status_jobs: Vec<(String, Option<std::collections::HashMap<String, String>>)>,
     notifications: usize,
     health: usize,
     error: Option<&'static str>,
@@ -356,8 +358,15 @@ impl Harness {
                 e.lock().unwrap().health += 1;
                 Box::pin(async { Ok(()) })
             });
+        let e = events.clone();
         jobs.expect_produce_check_transaction_status_job()
-            .returning(|_, _| Box::pin(async { Ok(()) }));
+            .returning(move |job, _| {
+                e.lock()
+                    .unwrap()
+                    .status_jobs
+                    .push((job.transaction_id, job.metadata));
+                Box::pin(async { Ok(()) })
+            });
         let mut network = MockNetworkRepository::new();
         let model = move || {
             let mut model = if rollup {
@@ -1997,14 +2006,31 @@ async fn second_worker_nonce_too_low_on_arbitrum_never_fails_own_mined_tx() {
         .await
         .unwrap_err()
         .is_concurrent_update_conflict());
+    h.events.lock().unwrap().status_jobs.clear();
     h.events.lock().unwrap().error = Some("nonce too low");
     h.worker.submit_transaction(h.stored().await).await.unwrap();
     assert_eq!(h.events.lock().unwrap().sent.len(), 2);
+    // The second worker's "nonce too low" queues a hinted status job for this
+    // transaction; run the check with that job's own metadata.
+    let (job_tx, metadata) = h
+        .events
+        .lock()
+        .unwrap()
+        .status_jobs
+        .pop()
+        .expect("status job queued");
+    assert_eq!(job_tx, h.stored().await.id);
+    assert!(metadata.as_ref().is_some_and(|m| m.contains_key(
+        crate::domain::transaction::evm::evm_transaction::TX_NONCE_RECONCILE_TRIGGER
+    )));
 
     h.events.lock().unwrap().chain_nonce = Some(8);
     h.events.lock().unwrap().jobs.clear();
     h.worker
-        .handle_transaction_status(h.stored().await, Some(hinted_context()))
+        .handle_transaction_status(
+            h.stored().await,
+            Some(StatusCheckContext::default().with_job_metadata(metadata)),
+        )
         .await
         .unwrap();
     let stored = h.stored().await;
