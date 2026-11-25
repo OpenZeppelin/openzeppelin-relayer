@@ -1413,7 +1413,11 @@ where
                 );
             }
 
-            if ctx.should_force_finalize() && !is_noop_tx && !never_accepted {
+            // A Mined record has a nonce that is used or about to be checked
+            // again; the normal check confirms it or returns it to delivery.
+            let is_mined = tx.status == TransactionStatus::Mined;
+
+            if ctx.should_force_finalize() && !is_noop_tx && !never_accepted && !is_mined {
                 warn!(
                     tx_id = %tx.id,
                     consecutive_failures = ctx.consecutive_failures,

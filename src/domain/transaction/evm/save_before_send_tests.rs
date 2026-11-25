@@ -1609,6 +1609,31 @@ async fn total_failure_limit_still_noops_never_accepted_payload() {
     assert!(h.events.lock().unwrap().sent.is_empty());
 }
 
+/// A record whose payload a node accepted an hour ago and that a check marked
+/// Mined.
+fn mined() -> TransactionRepoModel {
+    let mut record = tx(TransactionStatus::Mined);
+    record.sent_at = Some((Utc::now() - Duration::minutes(59)).to_rfc3339());
+    record
+}
+
+/// The breaker skips a Mined record, so a record at either limit still
+/// confirms.
+#[tokio::test]
+async fn mined_record_at_total_failure_limit_is_still_checked() {
+    for ctx in [breaker_context(0, 75), breaker_context(25, 25)] {
+        let h = Harness::new(mined(), false, None).await;
+        h.events.lock().unwrap().receipt = true;
+        let result = h
+            .worker
+            .handle_transaction_status(h.stored().await, Some(ctx))
+            .await
+            .unwrap();
+        assert_eq!(result.status, TransactionStatus::Confirmed);
+        assert_eq!(h.stored().await.status, TransactionStatus::Confirmed);
+    }
+}
+
 /// A cancel converted by the previous release: NOOP fields, but `raw`, hash and
 /// signature still belong to the original transfer. Built from JSON without the
 /// fields this release added, as the new code reads it from storage.
