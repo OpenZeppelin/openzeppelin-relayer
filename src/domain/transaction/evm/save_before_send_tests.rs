@@ -63,6 +63,10 @@ struct Events {
     cap_hit: bool,
     low_balance: bool,
     receipt_error: bool,
+    /// The on-chain nonce; 7 (the record's nonce, unused) when unset.
+    chain_nonce: Option<u64>,
+    /// When set, only this hash has a receipt.
+    receipt_for: Option<&'static str>,
 }
 
 struct Harness {
@@ -186,16 +190,27 @@ impl Harness {
                 Ok(alloy::network::AnyRpcBlock::from(b))
             })
         });
+        let e = events.clone();
+        provider.expect_get_transaction_count().returning(move |_| {
+            let nonce = e.lock().unwrap().chain_nonce.unwrap_or(7);
+            Box::pin(async move { Ok(nonce) })
+        });
+        // The mined payload of a recovered hash is unreadable: recovery keeps
+        // the stored fields.
         provider
-            .expect_get_transaction_count()
-            .returning(|_| Box::pin(async { Ok(7) }));
+            .expect_raw_request_dyn()
+            .returning(|_, _| Box::pin(async { Err(ProviderError::Other("unavailable".into())) }));
         let e = events.clone();
         provider
             .expect_get_transaction_receipt()
-            .returning(move |_| {
+            .returning(move |hash| {
                 let (receipt, fail) = {
                     let events = e.lock().unwrap();
-                    (events.receipt, events.receipt_error)
+                    let receipt = match events.receipt_for {
+                        Some(mined) => hash == mined,
+                        None => events.receipt,
+                    };
+                    (receipt, events.receipt_error)
                 };
                 Box::pin(async move {
                     if fail {
@@ -1917,4 +1932,235 @@ async fn legacy_cancel_status_check_queues_noop_signing() {
         assert_eq!(h.events.lock().unwrap().sent.len(), 1, "{status:?}");
         assert_only_noop_bytes_sent(&h, &transfer_raw);
     }
+}
+
+/// A status check whose job carries the "nonce too low" hint.
+fn hinted_context() -> StatusCheckContext {
+    use crate::domain::transaction::evm::evm_transaction::TX_NONCE_RECONCILE_TRIGGER;
+    let metadata = [(TX_NONCE_RECONCILE_TRIGGER.to_string(), "NonceTooLow".into())];
+    StatusCheckContext::default().with_job_metadata(Some(metadata.into_iter().collect()))
+}
+
+/// The original mined during the nonce-used wait, then the user canceled. The
+/// NOOP's send answers "nonce too low"; the original's receipt ends the record
+/// Confirmed, never Failed or Canceled.
+#[tokio::test]
+async fn cancel_during_nonce_used_wait_ends_by_the_mined_original() {
+    let mut record = mined();
+    record.status = TransactionStatus::Submitted;
+    let metadata = record.metadata.get_or_insert_with(Default::default);
+    metadata.nonce_used_seen_at = Some((Utc::now() - Duration::minutes(5)).to_rfc3339());
+    metadata.nonce_used_seen_at_block = Some(110);
+    let h = Harness::new(record, false, None).await;
+    h.events.lock().unwrap().chain_nonce = Some(8);
+    h.worker.cancel_transaction(h.stored().await).await.unwrap();
+    let canceled = h.stored().await;
+    let data = canceled.network_data.get_evm_transaction_data().unwrap();
+    assert!(is_noop(&data) && data.raw.is_none());
+    assert_eq!(data.hash.as_deref(), Some("A"));
+
+    h.events.lock().unwrap().error = Some("nonce too low");
+    h.run_job(TransactionCommand::Resubmit).await;
+    assert_eq!(h.stored().await.hashes, ["A", "H1"]);
+
+    h.events.lock().unwrap().receipt_for = Some("A");
+    for _ in 0..2 {
+        h.worker
+            .handle_transaction_status(h.stored().await, Some(hinted_context()))
+            .await
+            .unwrap();
+        let status = h.stored().await.status;
+        assert!(!matches!(
+            status,
+            TransactionStatus::Failed | TransactionStatus::Canceled
+        ));
+    }
+    let stored = h.stored().await;
+    assert_eq!(stored.status, TransactionStatus::Confirmed);
+    let data = stored.network_data.get_evm_transaction_data().unwrap();
+    assert_eq!(data.hash.as_deref(), Some("A"));
+    assert_eq!(stored.hashes, ["A", "H1"]);
+}
+
+/// Arbitrum: worker 1's send is accepted but its write loses; a duplicate submit
+/// job gets "nonce too low". The hinted check records a sighting without a
+/// resend or reprice, and the receipt then confirms the record.
+#[tokio::test]
+async fn second_worker_nonce_too_low_on_arbitrum_never_fails_own_mined_tx() {
+    let h = Harness::new(tx(TransactionStatus::Sent), true, None).await;
+    add_arbitrum_successor(&h).await;
+    h.events.lock().unwrap().fault = Some(("post", false));
+    let stale = h.stored().await;
+    assert!(h
+        .worker
+        .submit_transaction(stale)
+        .await
+        .unwrap_err()
+        .is_concurrent_update_conflict());
+    h.events.lock().unwrap().error = Some("nonce too low");
+    h.worker.submit_transaction(h.stored().await).await.unwrap();
+    assert_eq!(h.events.lock().unwrap().sent.len(), 2);
+
+    h.events.lock().unwrap().chain_nonce = Some(8);
+    h.events.lock().unwrap().jobs.clear();
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(hinted_context()))
+        .await
+        .unwrap();
+    let stored = h.stored().await;
+    assert_eq!(stored.status, TransactionStatus::Submitted);
+    assert!(stored.metadata.unwrap().nonce_used_seen_at.is_some());
+    assert!(h.events.lock().unwrap().jobs.is_empty());
+
+    h.events.lock().unwrap().receipt = true;
+    h.cycle().await;
+    assert_eq!(h.stored().await.status, TransactionStatus::Confirmed);
+    let events = h.events.lock().unwrap();
+    assert_eq!(events.sent.len(), 2);
+    assert!(events.signs.is_empty());
+    assert_eq!(events.job_tx_ids, ["next"]);
+}
+
+/// A worker released and sent the bytes, a node accepted them, and the worker
+/// died before recording the send. The receipt confirms the record; without
+/// one, the stored bytes are sent again and a known answer records the send.
+#[tokio::test]
+async fn crash_after_accepted_send_is_confirmed_from_submitted_without_sent_at() {
+    for mined in [true, false] {
+        let h = Harness::new(tx(TransactionStatus::Submitted), false, None).await;
+        h.age_payload(30).await;
+        h.events.lock().unwrap().receipt = mined;
+        h.cycle().await;
+        let jobs = h.events.lock().unwrap().jobs.clone();
+        if mined {
+            assert_eq!(h.stored().await.status, TransactionStatus::Confirmed);
+            assert!(jobs.is_empty());
+            assert!(h.events.lock().unwrap().sent.is_empty());
+            continue;
+        }
+        assert!(matches!(jobs.as_slice(), [TransactionCommand::Submit]));
+        h.events.lock().unwrap().error = Some("already known");
+        h.run_job(TransactionCommand::Submit).await;
+        let stored = h.stored().await;
+        assert!(stored.sent_at.is_some());
+        assert_eq!(stored.metadata.unwrap_or_default().accepted_sends, 0);
+        assert_eq!(h.events.lock().unwrap().sent.len(), 1);
+    }
+}
+
+/// The breaker turns an accepted Submitted record into a NOOP during a receipt
+/// outage, but the original mined. The NOOP gets "nonce too low", and the
+/// original's receipt ends the record Confirmed.
+#[tokio::test]
+async fn breaker_noop_of_accepted_submitted_ends_by_the_mined_original() {
+    let mut record = mined();
+    record.status = TransactionStatus::Submitted;
+    let h = Harness::new(record, false, None).await;
+    h.events.lock().unwrap().receipt_error = true;
+    h.worker
+        .handle_transaction_status(h.stored().await, Some(breaker_context(25, 25)))
+        .await
+        .unwrap();
+    let data = h
+        .stored()
+        .await
+        .network_data
+        .get_evm_transaction_data()
+        .unwrap();
+    assert!(is_noop(&data));
+    assert!(matches!(
+        h.events.lock().unwrap().jobs.as_slice(),
+        [TransactionCommand::Resubmit]
+    ));
+
+    {
+        let mut events = h.events.lock().unwrap();
+        events.receipt_error = false;
+        events.error = Some("nonce too low");
+        events.chain_nonce = Some(8);
+        events.receipt_for = Some("A");
+    }
+    h.run_job(TransactionCommand::Resubmit).await;
+    for _ in 0..2 {
+        h.worker
+            .handle_transaction_status(h.stored().await, Some(hinted_context()))
+            .await
+            .unwrap();
+        let status = h.stored().await.status;
+        assert!(!matches!(
+            status,
+            TransactionStatus::Failed | TransactionStatus::Canceled
+        ));
+    }
+    let stored = h.stored().await;
+    assert_eq!(stored.status, TransactionStatus::Confirmed);
+    let data = stored.network_data.get_evm_transaction_data().unwrap();
+    assert_eq!(data.hash.as_deref(), Some("A"));
+    assert_eq!(stored.hashes, ["A", "H1"]);
+}
+
+/// Arbitrum: the record at nonce 7 is canceled while Pending with its nonce
+/// stored. The cancel queues the gap fill, and the successor at nonce 8 waits
+/// for it instead of sending into the gap.
+#[tokio::test]
+async fn successor_above_a_canceled_pending_nonce_waits_for_the_gap_fill() {
+    let h = Harness::new(tx(TransactionStatus::Pending), true, None).await;
+    add_arbitrum_successor(&h).await;
+    let next = h.repo.get_by_id("next".into()).await.unwrap();
+    h.repo
+        .partial_update_if_version(
+            next.id,
+            next.version,
+            TransactionUpdateRequest {
+                priced_at: Some((Utc::now() - Duration::seconds(30)).to_rfc3339()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.worker.cancel_transaction(h.stored().await).await.unwrap();
+    assert_eq!(h.stored().await.status, TransactionStatus::Canceled);
+    assert_eq!(h.events.lock().unwrap().health, 1);
+
+    let check_next = || async {
+        h.events.lock().unwrap().jobs.clear();
+        let next = h.repo.get_by_id("next".into()).await.unwrap();
+        h.worker
+            .handle_transaction_status(next, None)
+            .await
+            .unwrap();
+        h.events.lock().unwrap().jobs.clone()
+    };
+    assert!(check_next().await.is_empty());
+    assert!(h.events.lock().unwrap().sent.is_empty());
+
+    h.events.lock().unwrap().chain_nonce = Some(8);
+    // The Arbitrum price timer (20 s) is due, so delivery is a resubmit.
+    assert!(matches!(
+        check_next().await.as_slice(),
+        [TransactionCommand::Resubmit]
+    ));
+    assert_eq!(h.events.lock().unwrap().job_tx_ids, ["next"]);
+}
+
+/// The release write applied but its reply was lost; the redelivered submit job
+/// sends the stored bytes once.
+#[tokio::test]
+async fn lost_release_reply_with_redelivered_job_sends_stored_bytes_once() {
+    let h = Harness::new(tx(TransactionStatus::Sent), false, None).await;
+    h.events.lock().unwrap().fault = Some(("release", true));
+    assert!(h
+        .worker
+        .submit_transaction(h.stored().await)
+        .await
+        .unwrap_err()
+        .is_concurrent_update_conflict());
+    assert!(h.events.lock().unwrap().sent.is_empty());
+    h.run_job(TransactionCommand::Submit).await;
+    let stored = h.stored().await;
+    assert_eq!(h.events.lock().unwrap().sent, [vec![0]]);
+    assert_eq!(stored.hashes, ["A"]);
+    assert_eq!(stored.status, TransactionStatus::Submitted);
+    assert!(stored.sent_at.is_some());
+    assert!(h.events.lock().unwrap().signs.is_empty());
 }
