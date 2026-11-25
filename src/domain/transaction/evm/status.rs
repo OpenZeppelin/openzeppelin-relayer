@@ -369,6 +369,18 @@ where
                 }
             }
 
+            // A Mined record that lost its receipt: RPC lag, or a reorg that
+            // orphaned its block. Nothing returns it to delivery (#1007).
+            if tx.status == TransactionStatus::Mined {
+                warn!(
+                    tx_id = %tx.id,
+                    relayer_id = %tx.relayer_id,
+                    nonce = ?evm_data.nonce,
+                    tx_hash = %tx_hash,
+                    "mined transaction no longer has a receipt; RPC lag or a reorg"
+                );
+            }
+
             Ok(if tx.status == TransactionStatus::Sent {
                 TransactionStatus::Sent
             } else {
